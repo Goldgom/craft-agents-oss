@@ -56,6 +56,8 @@ import {
   downloadUv,
   buildMcpServers,
   getPlatformKey,
+  getBunDownloadName,
+  getUvDownloadName,
 } from './build/common';
 
 // ---------------------------------------------------------------------------
@@ -93,8 +95,15 @@ Options:
                          (default: ${process.arch === 'arm64' ? 'arm64' : 'x64'})
   --output=<path>        Output directory (default: dist/server)
   --compress             Create .tar.gz after assembly
-  --skip-download        Reuse existing Bun/uv binaries
+  --skip-download        Reuse existing Bun/uv binaries (pre-seed them for
+                         offline builds; see docs/build-guide.md for paths)
   --help                 Show this help message
+
+Environment variables:
+  CRAFT_GITHUB_MIRROR   GitHub download mirror prefix, e.g.
+                        https://ghproxy.net/ — for servers with poor
+                        connectivity to github.com.
+  http_proxy / https_proxy are honored by curl for all downloads.
 
 Examples:
   # Build for current platform
@@ -189,17 +198,24 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
   const { platform, arch, outputDir, skipDownload } = config;
   const uvDest = join(outputDir, 'resources', 'bin', 'uv');
 
-  if (skipDownload && existsSync(uvDest)) {
-    console.log('  uv already present, skipping download');
-    return;
-  }
-
   // Use common.ts downloadUv which writes to electronDir/resources/bin/{platform-arch}/
   // Then we'll copy the binary to our flat layout
   const platformKey = getPlatformKey(platform, arch);
   const electronUvPath = join(config.electronDir, 'resources', 'bin', platformKey, 'uv');
 
-  if (!existsSync(electronUvPath)) {
+  if (skipDownload) {
+    // --skip-download is authoritative: never hit the network.
+    if (!existsSync(electronUvPath)) {
+      throw new Error(
+        `--skip-download: uv binary not found at ${electronUvPath}\n` +
+        `Pre-seed it from a machine with good connectivity:\n` +
+        `  download ${UV_VERSION}/${getUvDownloadName(platform, arch)} from github.com/astral-sh/uv/releases,\n` +
+        `  extract the 'uv' binary and copy it to the path above.\n` +
+        `(Or drop --skip-download / set CRAFT_GITHUB_MIRROR.) See docs/build-guide.md.`,
+      );
+    }
+    console.log(`  uv pre-seeded at ${electronUvPath}, skipping download`);
+  } else if (!existsSync(electronUvPath)) {
     // Download using the shared helper
     const buildConfig: BuildConfig = {
       platform,
@@ -233,25 +249,34 @@ async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
   const { platform, arch, outputDir, skipDownload } = config;
   const runtimeDir = join(outputDir, 'vendor', 'bun');
   const bunDest = join(runtimeDir, 'bun');
+  const electronBunPath = join(config.electronDir, 'vendor', 'bun', 'bun');
 
-  if (skipDownload && existsSync(bunDest)) {
-    console.log('  Bun already present, skipping download');
-    return;
+  if (skipDownload) {
+    // --skip-download is authoritative: never hit the network.
+    if (!existsSync(electronBunPath)) {
+      throw new Error(
+        `--skip-download: Bun runtime not found at ${electronBunPath}\n` +
+        `Pre-seed it from a machine with good connectivity:\n` +
+        `  download ${BUN_VERSION}/${getBunDownloadName(platform, arch)}.zip from github.com/oven-sh/bun/releases,\n` +
+        `  extract the 'bun' binary and copy it to the path above.\n` +
+        `(Or drop --skip-download / set CRAFT_GITHUB_MIRROR.) See docs/build-guide.md.`,
+      );
+    }
+    console.log(`  Bun pre-seeded at ${electronBunPath}, skipping download`);
+  } else {
+    // Download to electron's vendor dir using shared helper, then copy
+    const buildConfig: BuildConfig = {
+      platform,
+      arch,
+      upload: false,
+      uploadLatest: false,
+      uploadScript: false,
+      rootDir: config.rootDir,
+      electronDir: config.electronDir,
+    };
+    await downloadBun(buildConfig);
   }
 
-  // Download to electron's vendor dir using shared helper, then copy
-  const buildConfig: BuildConfig = {
-    platform,
-    arch,
-    upload: false,
-    uploadLatest: false,
-    uploadScript: false,
-    rootDir: config.rootDir,
-    electronDir: config.electronDir,
-  };
-  await downloadBun(buildConfig);
-
-  const electronBunPath = join(config.electronDir, 'vendor', 'bun', 'bun');
   if (!existsSync(electronBunPath)) {
     throw new Error(`Bun binary not found after download at ${electronBunPath}`);
   }

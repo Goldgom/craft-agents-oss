@@ -100,13 +100,40 @@ export async function verifySha256(filePath: string, expectedHash: string): Prom
 }
 
 /**
+ * Resolve a GitHub download URL, optionally through a mirror for
+ * environments with poor connectivity to github.com.
+ *
+ * Set CRAFT_GITHUB_MIRROR to any proxy prefix that accepts the full URL
+ * appended after it, e.g.:
+ *   CRAFT_GITHUB_MIRROR=https://ghproxy.net/
+ *   CRAFT_GITHUB_MIRROR=https://ghfast.top/
+ *   CRAFT_GITHUB_MIRROR=https://mirror.ghproxy.com/
+ */
+export function githubUrl(url: string): string {
+  const mirror = process.env.CRAFT_GITHUB_MIRROR;
+  if (!mirror) return url;
+  const prefix = mirror.endsWith('/') ? mirror : `${mirror}/`;
+  return `${prefix}${url}`;
+}
+
+/**
  * Download and verify Bun binary
  * Uses curl for downloads (more reliable in CI than fetch + Bun.write)
+ *
+ * Skips when the binary is already provisioned in vendor/bun — pre-seed it
+ * from a machine with good connectivity for offline builds.
  */
 export async function downloadBun(config: BuildConfig): Promise<void> {
   const { platform, arch, electronDir } = config;
   const bunDownload = getBunDownloadName(platform, arch);
   const vendorDir = join(electronDir, 'vendor', 'bun');
+  const bunBinary = platform === 'win32' ? 'bun.exe' : 'bun';
+
+  // Skip when already provisioned (offline builds: pre-seed + --skip-download)
+  if (existsSync(join(vendorDir, bunBinary))) {
+    console.log(`Bun already present at ${join(vendorDir, bunBinary)}`);
+    return;
+  }
 
   console.log(`Downloading Bun ${BUN_VERSION} for ${platform}-${arch}...`);
 
@@ -118,8 +145,8 @@ export async function downloadBun(config: BuildConfig): Promise<void> {
   mkdirSync(tempDir, { recursive: true });
 
   try {
-    const zipUrl = `https://github.com/oven-sh/bun/releases/download/${BUN_VERSION}/${bunDownload}.zip`;
-    const checksumUrl = `https://github.com/oven-sh/bun/releases/download/${BUN_VERSION}/SHASUMS256.txt`;
+    const zipUrl = githubUrl(`https://github.com/oven-sh/bun/releases/download/${BUN_VERSION}/${bunDownload}.zip`);
+    const checksumUrl = githubUrl(`https://github.com/oven-sh/bun/releases/download/${BUN_VERSION}/SHASUMS256.txt`);
 
     // Download files using curl (more reliable in CI than fetch + Bun.write)
     const zipPath = join(tempDir, `${bunDownload}.zip`);
@@ -217,8 +244,8 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
   mkdirSync(tempDir, { recursive: true });
 
   try {
-    const assetUrl = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uvDownload}`;
-    const checksumUrl = `${assetUrl}.sha256`;
+    const assetUrl = githubUrl(`https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uvDownload}`);
+    const checksumUrl = githubUrl(`${assetUrl}.sha256`);
 
     const assetPath = join(tempDir, uvDownload);
     const checksumPath = join(tempDir, `${uvDownload}.sha256`);
