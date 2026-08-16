@@ -191,6 +191,21 @@ export interface IMessagingGatewayRegistry {
     domain: 'lark' | 'feishu'
   }): Promise<void>
 
+  /**
+   * Test WeCom (企业微信) smart-robot credentials by performing a real
+   * long-connection handshake (`aibot_subscribe`) and tearing it down.
+   */
+  testWeComCredentials(creds: {
+    botId: string
+    secret: string
+  }): Promise<{ success: boolean; botName?: string; error?: string }>
+
+  /** Save WeCom credentials and (re)initialize the long-connection adapter. */
+  saveWeComCredentials(workspaceId: string, creds: {
+    botId: string
+    secret: string
+  }): Promise<void>
+
   /** Disable a platform for a workspace, preserving WhatsApp auth state unless forgotten separately. */
   disconnectPlatform(workspaceId: string, platform: string): Promise<void>
 

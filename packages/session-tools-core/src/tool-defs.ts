@@ -243,7 +243,7 @@ export const ListMessagingChannelsSchema = z.object({
 });
 
 export const UnbindMessagingChannelSchema = z.object({
-  platform: z.enum(['telegram', 'whatsapp']).optional().describe('Platform to unbind. If omitted, unbinds all.'),
+  platform: z.enum(['telegram', 'whatsapp', 'lark', 'wecom']).optional().describe('Platform to unbind. If omitted, unbinds all.'),
 });
 
 export const ExportResourcesSchema = z.object({

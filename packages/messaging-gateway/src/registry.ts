@@ -30,6 +30,7 @@ import { PairingCodeManager } from './pairing'
 import { TelegramAdapter } from './adapters/telegram/index'
 import { WhatsAppAdapter, type WhatsAppEvent } from './adapters/whatsapp/index'
 import { LarkAdapter, parseLarkCredentials, type LarkCredentials } from './adapters/lark/index'
+import { WeComAdapter, parseWeComCredentials, type WeComCredentials } from './adapters/wecom/index'
 import { TopicRegistry } from './topic-registry'
 import type { SessionEvent } from './renderer'
 import type { EventSinkFn } from './event-fanout'
@@ -167,9 +168,24 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
       })
     }
 
+    if (isPlatformConfigured(config, 'wecom')) {
+      this.setPlatformRuntime(workspaceId, state, 'wecom', {
+        configured: true,
+        connected: false,
+        state: 'connecting',
+        lastError: undefined,
+      })
+      void this.tryConnectWeCom(workspaceId, state).catch((err) => {
+        this.log.error('background WeCom connect failed', {
+          event: 'wecom_connect_failed',
+          workspaceId,
+          error: err,
+        })
+      })
+    }
+
     if (isPlatformConfigured(config, 'whatsapp')) {
-      if (this.hasWhatsAppAuthState(workspaceId)) {
-        this.setPlatformRuntime(workspaceId, state, 'whatsapp', {
+      if (this.hasWhatsAppAuthState(workspaceId)) {        this.setPlatformRuntime(workspaceId, state, 'whatsapp', {
           configured: true,
           connected: false,
           state: 'connecting',
@@ -231,6 +247,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
         telegram: cloneRuntime(state.runtime.telegram),
         whatsapp: cloneRuntime(state.runtime.whatsapp),
         lark: cloneRuntime(state.runtime.lark),
+        wecom: cloneRuntime(state.runtime.wecom),
       },
     }
   }
@@ -250,6 +267,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
       await state.gateway.unregisterAdapter('telegram').catch(() => {})
       await state.gateway.unregisterAdapter('whatsapp').catch(() => {})
       await state.gateway.unregisterAdapter('lark').catch(() => {})
+      await state.gateway.unregisterAdapter('wecom').catch(() => {})
       state.whatsappOffEvent?.()
       state.whatsappOffEvent = undefined
       state.whatsapp = null
@@ -274,10 +292,17 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
         identity: undefined,
         lastError: undefined,
       })
+      this.setPlatformRuntime(workspaceId, state, 'wecom', {
+        configured: false,
+        connected: false,
+        state: 'disconnected',
+        identity: undefined,
+        lastError: undefined,
+      })
       return
     }
 
-    for (const platform of ['telegram', 'whatsapp', 'lark'] as const) {
+    for (const platform of ['telegram', 'whatsapp', 'lark', 'wecom'] as const) {
       const configured = isPlatformConfigured(cfg, platform)
       if (!configured && state.gateway.getAdapter(platform)) {
         await state.gateway.unregisterAdapter(platform).catch(() => {})
@@ -1015,6 +1040,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
         telegram: createRuntime('telegram', isPlatformConfigured(cfg, 'telegram')),
         whatsapp: createRuntime('whatsapp', isPlatformConfigured(cfg, 'whatsapp')),
         lark: createRuntime('lark', isPlatformConfigured(cfg, 'lark')),
+        wecom: createRuntime('wecom', isPlatformConfigured(cfg, 'wecom')),
       },
     }
     this.workspaces.set(workspaceId, state)
@@ -1090,6 +1116,150 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
         error: err,
       })
       this.setPlatformRuntime(workspaceId, state, 'lark', {
+        configured: true,
+        connected: false,
+        state: 'error',
+        lastError: err instanceof Error ? err.message : String(err),
+      })
+      throw err
+    }
+  }
+
+  /**
+   * Verify WeCom smart-robot credentials by performing a real long-
+   * connection handshake (`aibot_subscribe`) and tearing it down. The
+   * server returns a structured errcode/errmsg pair we forward to the user.
+   */
+  async testWeComCredentials(
+    creds: WeComCredentials,
+  ): Promise<{ success: boolean; botName?: string; error?: string }> {
+    if (!creds.botId || !creds.secret) {
+      return { success: false, error: 'Bot ID or Secret is empty' }
+    }
+    const adapter = new WeComAdapter()
+    try {
+      await adapter.initialize({
+        token: JSON.stringify(creds),
+        logger: this.log.child({ component: 'wecom-adapter-test' }),
+      })
+      return { success: true, botName: creds.botId }
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Network error',
+      }
+    } finally {
+      await adapter.destroy().catch(() => {})
+    }
+  }
+
+  async saveWeComCredentials(workspaceId: string, creds: WeComCredentials): Promise<void> {
+    if (!creds.botId || !creds.secret) throw new Error('Bot ID or Secret is empty')
+
+    const test = await this.testWeComCredentials(creds)
+    if (!test.success) throw new Error(test.error ?? 'Invalid WeCom credentials')
+
+    await this.opts.credentialManager.set(
+      {
+        type: 'messaging_bearer',
+        workspaceId,
+        name: 'wecom',
+      },
+      { value: JSON.stringify(creds) },
+    )
+
+    const state = this.workspaces.get(workspaceId) ?? this.bootstrapWorkspace(workspaceId)
+    state.configStore.update({
+      enabled: true,
+      platforms: { wecom: { enabled: true } },
+    })
+
+    this.setPlatformRuntime(workspaceId, state, 'wecom', {
+      configured: true,
+      connected: false,
+      state: 'connecting',
+      lastError: undefined,
+    })
+
+    await this.tryConnectWeCom(workspaceId, state)
+    await state.gateway.start()
+  }
+
+  private async tryConnectWeCom(workspaceId: string, state: WorkspaceState): Promise<void> {
+    const cred = await this.opts.credentialManager
+      .get({ type: 'messaging_bearer', workspaceId, name: 'wecom' })
+      .catch(() => null)
+
+    if (!cred?.value) {
+      this.setPlatformRuntime(workspaceId, state, 'wecom', {
+        configured: true,
+        connected: false,
+        state: 'error',
+        lastError: 'WeCom credentials are missing.',
+      })
+      return
+    }
+
+    let creds: WeComCredentials
+    try {
+      creds = parseWeComCredentials(cred.value)
+    } catch (err) {
+      this.setPlatformRuntime(workspaceId, state, 'wecom', {
+        configured: true,
+        connected: false,
+        state: 'error',
+        lastError: err instanceof Error ? err.message : 'WeCom credentials are malformed',
+      })
+      return
+    }
+
+    await state.gateway.unregisterAdapter('wecom').catch((err) => {
+      this.log.warn('unregisterAdapter(wecom) failed (non-fatal)', {
+        event: 'wecom_unregister_failed',
+        workspaceId,
+        error: err,
+      })
+    })
+
+    try {
+      const adapter = new WeComAdapter()
+      await adapter.initialize({
+        token: cred.value,
+        logger: this.log.child({
+          component: 'wecom-adapter',
+          workspaceId,
+          platform: 'wecom',
+        }),
+        // Keep the Settings badge truthful across drops / reconnects.
+        onWeComStateChange: ({ connected, lastError }: { connected: boolean; lastError?: string }) => {
+          const current = this.workspaces.get(workspaceId)
+          if (!current) return
+          this.setPlatformRuntime(workspaceId, current, 'wecom', {
+            configured: true,
+            connected,
+            state: connected ? 'connected' : 'connecting',
+            identity: connected ? state.botUsernames.wecom : undefined,
+            lastError,
+          })
+        },
+      })
+
+      state.botUsernames.wecom = creds.botId
+      state.gateway.registerAdapter(adapter)
+      this.setPlatformRuntime(workspaceId, state, 'wecom', {
+        configured: true,
+        connected: true,
+        state: 'connected',
+        identity: creds.botId,
+        lastError: undefined,
+      })
+    } catch (err) {
+      this.log.error('failed to connect WeCom', {
+        event: 'wecom_connect_failed',
+        workspaceId,
+        error: err,
+      })
+      this.setPlatformRuntime(workspaceId, state, 'wecom', {
         configured: true,
         connected: false,
         state: 'error',
@@ -1531,7 +1701,7 @@ function toBindingInfo(b: ChannelBinding): MessagingBindingInfo {
 }
 
 function isKnownPlatform(p: string): p is PlatformType {
-  return p === 'telegram' || p === 'whatsapp' || p === 'lark'
+  return p === 'telegram' || p === 'whatsapp' || p === 'lark' || p === 'wecom'
 }
 
 function capitalize(value: string): string {

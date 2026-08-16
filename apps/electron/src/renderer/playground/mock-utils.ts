@@ -34,7 +34,7 @@ type WhatsAppEventListener = (payload: { workspaceId: string; event: WhatsAppUiE
 
 const PLAYGROUND_WORKSPACE_ID = 'playground-workspace'
 
-type AllowListPlatform = 'telegram' | 'whatsapp' | 'lark'
+type AllowListPlatform = 'telegram' | 'whatsapp' | 'lark' | 'wecom'
 
 interface AllowListState {
   accessMode: PlatformAccessMode
@@ -81,6 +81,7 @@ const messagingMockState: MessagingMockState = {
     telegram: defaultAllowList(),
     whatsapp: defaultAllowList(),
     lark: defaultAllowList(),
+    wecom: defaultAllowList(),
   },
   platformStatusListeners: new Set(),
   bindingListeners: new Set(),
@@ -171,6 +172,7 @@ export const playgroundMessagingHandle: PlaygroundMessagingHandle = {
     messagingMockState.allowList.telegram = defaultAllowList()
     messagingMockState.allowList.whatsapp = defaultAllowList()
     messagingMockState.allowList.lark = defaultAllowList()
+    messagingMockState.allowList.wecom = defaultAllowList()
     emitPlatformStatus('telegram')
     emitPlatformStatus('whatsapp')
     emitBindingChanged()
@@ -194,6 +196,7 @@ export const playgroundAllowListHandle: PlaygroundAllowListHandle = {
     messagingMockState.allowList.telegram = defaultAllowList()
     messagingMockState.allowList.whatsapp = defaultAllowList()
     messagingMockState.allowList.lark = defaultAllowList()
+    messagingMockState.allowList.wecom = defaultAllowList()
   },
 }
 

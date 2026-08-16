@@ -27,7 +27,7 @@ import { navigate, routes } from '@/lib/navigate'
 import { useMenuComponents } from '@/components/ui/menu-context'
 import { messagingDialogAtom } from '@/atoms/messaging'
 
-export type MessagingPlatform = 'telegram' | 'whatsapp' | 'lark'
+export type MessagingPlatform = 'telegram' | 'whatsapp' | 'lark' | 'wecom'
 
 export interface UseMessagingConnectOptions {
   /** Session to bind the pairing code to. */
@@ -135,6 +135,9 @@ export function MessagingSessionMenuItem(props: MessagingSessionMenuItemProps) {
         </MenuItem>
         <MenuItem onClick={() => handleConnectMessaging('lark')}>
           <span>Lark / Feishu</span>
+        </MenuItem>
+        <MenuItem onClick={() => handleConnectMessaging('wecom')}>
+          <span>WeCom (企业微信)</span>
         </MenuItem>
       </SubContent>
     </Sub>

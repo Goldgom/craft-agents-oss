@@ -59,7 +59,7 @@ export async function handleListMessagingChannels(
 // ---------------------------------------------------------------------------
 
 export interface UnbindMessagingChannelArgs {
-  platform?: 'telegram' | 'whatsapp';
+  platform?: 'telegram' | 'whatsapp' | 'lark' | 'wecom';
 }
 
 export async function handleUnbindMessagingChannel(
