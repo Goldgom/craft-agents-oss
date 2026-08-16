@@ -40,8 +40,8 @@ import type {
  * `threadId` undefined, which the adapters' `threadParams()` helper turns
  * into a no-op spread.
  */
-function bindingOpts(binding: ChannelBinding): SendOptions {
-  return binding.threadId !== undefined ? { threadId: binding.threadId } : {}
+function bindingOpts(binding: ChannelBinding, extra?: Partial<SendOptions>): SendOptions {
+  return { ...(binding.threadId !== undefined ? { threadId: binding.threadId } : {}), ...extra }
 }
 import type { PlanTokenRegistry } from './plan-tokens'
 
@@ -235,6 +235,9 @@ export class Renderer {
           if (text.trim()) {
             await this.tryEditMessage(adapter, binding, state.streamingMessageId, text.trim(), state)
           }
+          // Segment is final — close the stream so the client stops
+          // animating it. The next segment opens a fresh message.
+          await this.finalizeMessage(adapter, binding, state.streamingMessageId)
         } else if (text.trim()) {
           await this.sendText(adapter, binding, text.trim())
         }
@@ -247,7 +250,15 @@ export class Renderer {
 
       case 'complete': {
         this.cancelEditTimer(state)
-        if (state.textBuffer.trim() && !state.streamingMessageId) {
+        const openId = state.streamingMessageId
+        if (openId && state.textBuffer.trim()) {
+          // Deltas arrived but the final edit timer never fired — flush the
+          // pending buffer into the open stream, then close it.
+          await this.tryEditMessage(adapter, binding, openId, state.textBuffer.trim(), state)
+          await this.finalizeMessage(adapter, binding, openId)
+        } else if (openId) {
+          await this.finalizeMessage(adapter, binding, openId)
+        } else if (state.textBuffer.trim()) {
           await this.sendText(adapter, binding, state.textBuffer.trim())
         }
         this.resetRun(state)
@@ -261,13 +272,15 @@ export class Renderer {
             typeof event.toolDisplayName === 'string' ? event.toolDisplayName : toolName
           if (state.streamingMessageId && state.textBuffer.trim()) {
             this.cancelEditTimer(state)
+            const flushedId = state.streamingMessageId
             await this.tryEditMessage(
               adapter,
               binding,
-              state.streamingMessageId,
+              flushedId,
               state.textBuffer.trim(),
               state,
             )
+            await this.finalizeMessage(adapter, binding, flushedId)
             state.streamingMessageId = null
             state.textBuffer = ''
             state.lastEditedLength = 0
@@ -288,7 +301,11 @@ export class Renderer {
   ): Promise<void> {
     if (!state.streamingMessageId && state.textBuffer.length > 0) {
       try {
-        const sent = await adapter.sendText(binding.channelId, state.textBuffer, bindingOpts(binding))
+        const sent = await adapter.sendText(
+          binding.channelId,
+          state.textBuffer,
+          bindingOpts(binding, { keepStreamOpen: true }),
+        )
         state.streamingMessageId = sent.messageId
         state.lastEditedLength = state.textBuffer.length
         this.scheduleEdit(state, binding, adapter)
@@ -383,19 +400,21 @@ export class Renderer {
         // assistant text so a tool-terminated run still delivers a message
         // instead of freezing the bubble on "thinking…".
         const finalText = (state.finalBuffer.trim() || state.lastAssistantText.trim())
-        if (state.progressMessageId && adapter.capabilities.messageEditing) {
+        const progressMessageId = state.progressMessageId
+        if (progressMessageId && adapter.capabilities.messageEditing) {
           if (finalText) {
             await this.tryEditMessage(
               adapter,
               binding,
-              state.progressMessageId,
+              progressMessageId,
               truncateForAdapter(finalText, adapter),
               state,
             )
           }
-          // If the run produced no assistant text at all, leave the last
-          // status in place rather than editing to an empty string — avoids
-          // Telegram "message is not modified" errors and keeps a trace.
+          // Close the stream so the WeCom client stops animating the final
+          // bubble. If the run produced no assistant text at all, leave the
+          // last status in place (not an empty edit) but still finalize.
+          await this.finalizeMessage(adapter, binding, progressMessageId)
         } else if (finalText) {
           // Adapter can't edit (WhatsApp) — send one message at the end.
           await this.sendText(adapter, binding, finalText)
@@ -419,7 +438,11 @@ export class Renderer {
   ): Promise<void> {
     if (!state.progressMessageId) {
       try {
-        const sent = await adapter.sendText(binding.channelId, status, bindingOpts(binding))
+        const sent = await adapter.sendText(
+          binding.channelId,
+          status,
+          bindingOpts(binding, { keepStreamOpen: true }),
+        )
         state.progressMessageId = sent.messageId
         state.progressStatus = status
       } catch {
@@ -493,13 +516,15 @@ export class Renderer {
     // message (progress-mode bubble stays in place as a separate message).
     if (state.streamingMessageId && state.textBuffer.trim()) {
       this.cancelEditTimer(state)
+      const flushedId = state.streamingMessageId
       await this.tryEditMessage(
         adapter,
         binding,
-        state.streamingMessageId,
+        flushedId,
         state.textBuffer.trim(),
         state,
       )
+      await this.finalizeMessage(adapter, binding, flushedId)
       state.streamingMessageId = null
       state.textBuffer = ''
       state.lastEditedLength = 0
@@ -630,6 +655,10 @@ Approve in the desktop app to continue.`,
   ): Promise<void> {
     const errorMsg = extractErrorMessage(event.error)
     this.cancelEditTimer(state)
+    // Close any open streams (progress bubble / streaming segment) so the
+    // error message lands as a distinct, non-animating message.
+    await this.finalizeMessage(adapter, binding, state.progressMessageId)
+    await this.finalizeMessage(adapter, binding, state.streamingMessageId)
     await adapter.sendText(binding.channelId, `❌ ${errorMsg}`, bindingOpts(binding))
     this.resetRun(state)
   }
@@ -704,6 +733,25 @@ Approve in the desktop app to continue.`,
       last = await adapter.sendText(binding.channelId, chunk, opts)
     }
     return last
+  }
+
+  /**
+   * Close a streaming message after the renderer's final edit. No-op on
+   * platforms without the `finalizeMessage` capability; errors are swallowed
+   * — an unclosed WeCom stream just animates until the platform's own
+   * 10-minute expiry, never fatal.
+   */
+  private async finalizeMessage(
+    adapter: PlatformAdapter,
+    binding: ChannelBinding,
+    messageId: string | null,
+  ): Promise<void> {
+    if (!messageId || !adapter.finalizeMessage) return
+    try {
+      await adapter.finalizeMessage(binding.channelId, messageId, bindingOpts(binding))
+    } catch {
+      // Non-fatal.
+    }
   }
 
   /** Clean up state for a removed binding. */

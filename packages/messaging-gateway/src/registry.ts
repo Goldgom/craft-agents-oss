@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type { PushTarget } from '@craft-agent/shared/protocol'
 import type { CredentialManager } from '@craft-agent/shared/credentials'
+import type { MessagingSendResult } from '@craft-agent/shared/agent'
 import type {
   ISessionManager,
   IMessagingGatewayRegistry,
@@ -116,6 +117,25 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
           error: result.error,
         })
       }
+    })
+
+    // Install the messaging tool bridge so the agent-facing session tools
+    // (list_messaging_channels, send_messaging_media, …) can drive the
+    // channels bound to a session. Same seam as the automation binder above.
+    opts.sessionManager.setMessagingBridge?.({
+      getBindings: (workspaceId, sessionId) =>
+        this.getBindings(workspaceId).filter((b) => b.sessionId === sessionId),
+      unbind: (workspaceId, sessionId, platform) => {
+        const state = this.workspaces.get(workspaceId)
+        if (!state) return 0
+        const removed = state.gateway
+          .getBindingStore()
+          .unbindSession(sessionId, platform as PlatformType | undefined)
+        if (removed > 0) this.emitBindingChanged(workspaceId)
+        return removed
+      },
+      sendMedia: (workspaceId, input) => this.sendMediaToSession(workspaceId, input),
+      sendTemplateCard: (workspaceId, input) => this.sendCardToSession(workspaceId, input),
     })
   }
 
@@ -833,6 +853,109 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
     const cleaned = phoneNumber.replace(/[^\d]/g, '')
     if (cleaned.length < 8) throw new Error('Phone number looks too short')
     await state.whatsapp.requestPairingCode(cleaned)
+  }
+
+  // -------------------------------------------------------------------------
+  // Messaging tool bridge (agent-facing session tools)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Deliver a media message to every enabled channel bound to `sessionId`.
+   * `file` kind goes through each adapter's `sendFile`; `voice` / `image` /
+   * `video` require the adapter's optional `sendMedia` (WeCom). Failures are
+   * collected per channel so one bad platform never loses the others.
+   */
+  private async sendMediaToSession(
+    workspaceId: string,
+    input: {
+      sessionId: string
+      kind: 'voice' | 'image' | 'video' | 'file'
+      data: Uint8Array
+      filename: string
+      caption?: string
+    },
+  ): Promise<MessagingSendResult> {
+    const state = this.workspaces.get(workspaceId)
+    const gateway = state?.gateway
+    if (!gateway) {
+      return { sent: 0, failed: 1, errors: ['Messaging is not configured for this workspace.'] }
+    }
+
+    const bindings = gateway
+      .getBindingStore()
+      .getAll()
+      .filter((b) => b.sessionId === input.sessionId && b.enabled)
+    if (bindings.length === 0) {
+      return { sent: 0, failed: 1, errors: ['No messaging channels bound to this session.'] }
+    }
+
+    const data = Buffer.from(input.data)
+    let sent = 0
+    const errors: string[] = []
+
+    for (const binding of bindings) {
+      const adapter = gateway.getAdapter(binding.platform)
+      const opts = binding.threadId !== undefined ? { threadId: binding.threadId } : undefined
+      if (!adapter) {
+        errors.push(`${binding.platform}: adapter not connected`)
+        continue
+      }
+      try {
+        if (input.kind === 'file') {
+          await adapter.sendFile(binding.channelId, data, input.filename, input.caption, opts)
+        } else if (adapter.sendMedia) {
+          await adapter.sendMedia(binding.channelId, input.kind, data, input.filename, input.caption, opts)
+        } else {
+          errors.push(`${binding.platform}: ${input.kind} messages are not supported`)
+          continue
+        }
+        sent += 1
+      } catch (err) {
+        errors.push(`${binding.platform}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    return { sent, failed: bindings.length - sent, errors }
+  }
+
+  /** Deliver a template card to every enabled channel bound to `sessionId`. */
+  private async sendCardToSession(
+    workspaceId: string,
+    input: { sessionId: string; card: Record<string, unknown> },
+  ): Promise<MessagingSendResult> {
+    const state = this.workspaces.get(workspaceId)
+    const gateway = state?.gateway
+    if (!gateway) {
+      return { sent: 0, failed: 1, errors: ['Messaging is not configured for this workspace.'] }
+    }
+
+    const bindings = gateway
+      .getBindingStore()
+      .getAll()
+      .filter((b) => b.sessionId === input.sessionId && b.enabled)
+    if (bindings.length === 0) {
+      return { sent: 0, failed: 1, errors: ['No messaging channels bound to this session.'] }
+    }
+
+    let sent = 0
+    const errors: string[] = []
+
+    for (const binding of bindings) {
+      const adapter = gateway.getAdapter(binding.platform)
+      const opts = binding.threadId !== undefined ? { threadId: binding.threadId } : undefined
+      if (!adapter?.sendTemplateCard) {
+        errors.push(`${binding.platform}: template cards are not supported`)
+        continue
+      }
+      try {
+        await adapter.sendTemplateCard(binding.channelId, input.card, opts)
+        sent += 1
+      } catch (err) {
+        errors.push(`${binding.platform}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    return { sent, failed: bindings.length - sent, errors }
   }
 
   private async startWhatsAppAdapter(

@@ -154,9 +154,12 @@ function textCallback(overrides: Record<string, unknown> = {}): SentFrame {
   }
 }
 
-async function connectedAdapter(server: FakeServer): Promise<WeComAdapter> {
+async function connectedAdapter(
+  server: FakeServer,
+  options: { streamSettleMs?: number } = {},
+): Promise<WeComAdapter> {
   const factory: WeComSocketFactory = () => server.createSocket()
-  const adapter = new WeComAdapter(factory, { reconnectBaseDelayMs: 5 })
+  const adapter = new WeComAdapter(factory, { reconnectBaseDelayMs: 5, ...options })
   await adapter.initialize({ token: CREDS })
   return adapter
 }
@@ -400,6 +403,157 @@ describe('WeComAdapter outbound', () => {
     )
     expect(fileFrame?.body.file).toEqual({ media_id: 'media-1' })
     expect(sent.messageId).toMatch(/^stream_/)
+
+    await adapter.destroy()
+  })
+
+  test('sendMedia uploads as voice and posts a voice message', async () => {
+    const server = makeServer()
+    const adapter = await connectedAdapter(server)
+    adapter.onMessage(async () => {})
+
+    server.sockets[0]!.push(textCallback())
+    await Bun.sleep(10)
+
+    const amr = Buffer.from('fake-amr-audio')
+    await adapter.sendMedia?.('user-1', 'voice', amr, 'reply.amr', 'Voice reply')
+
+    const init = server.frames.find((f) => f.cmd === 'aibot_upload_media_init')
+    expect(init?.body.type).toBe('voice')
+    expect(init?.body.filename).toBe('reply.amr')
+
+    const voiceFrame = server.frames.find(
+      (f) => f.cmd === 'aibot_respond_msg' && f.body.msgtype === 'voice',
+    )
+    expect(voiceFrame?.body.voice).toEqual({ media_id: 'media-1' })
+    // Caption is sent as a follow-up text stream.
+    expect(server.frames.some((f) => f.cmd === 'aibot_respond_msg' && f.body.msgtype === 'stream')).toBe(true)
+
+    await adapter.destroy()
+  })
+
+  test('sendTemplateCard posts a template_card reply and validates card_type', async () => {
+    const server = makeServer()
+    const adapter = await connectedAdapter(server)
+    adapter.onMessage(async () => {})
+
+    server.sockets[0]!.push(textCallback())
+    await Bun.sleep(10)
+
+    const card = {
+      card_type: 'text_notice',
+      main_title: { title: 'Hello', desc: 'Card description' },
+      sub_title_text: 'Details',
+    }
+    const sent = await adapter.sendTemplateCard?.('user-1', card)
+    expect(sent?.messageId).toMatch(/^stream_/)
+
+    const cardFrame = server.frames.find(
+      (f) => f.cmd === 'aibot_respond_msg' && f.body.msgtype === 'template_card',
+    )
+    expect(cardFrame?.body.template_card).toEqual(card)
+
+    // Card without card_type is rejected.
+    await expect(adapter.sendTemplateCard?.('user-1', { foo: 'bar' })).rejects.toThrow(/card_type/)
+
+    await adapter.destroy()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Stream finalization (WeCom clients animate unfinished streams)
+// ---------------------------------------------------------------------------
+
+describe('WeComAdapter stream finalization', () => {
+  function finishFrames(server: FakeServer, streamId: string): SentFrame[] {
+    return server.frames.filter(
+      (f) =>
+        f.cmd === 'aibot_respond_msg' &&
+        (f.body.stream as { id: string }).id === streamId &&
+        (f.body.stream as { finish: boolean }).finish,
+    )
+  }
+
+  async function primeChannel(server: FakeServer, adapter: WeComAdapter): Promise<void> {
+    adapter.onMessage(async () => {})
+    server.sockets[0]!.push(textCallback())
+    await Bun.sleep(10)
+  }
+
+  test('one-shot sendText auto-finishes after the settle window', async () => {
+    const server = makeServer()
+    const adapter = await connectedAdapter(server, { streamSettleMs: 20 })
+    await primeChannel(server, adapter)
+
+    const sent = await adapter.sendText('user-1', 'one-shot reply')
+    expect(finishFrames(server, sent.messageId)).toHaveLength(0)
+
+    await Bun.sleep(80)
+    const finished = finishFrames(server, sent.messageId)
+    expect(finished).toHaveLength(1)
+    expect((finished[0]!.body.stream as { content: string }).content).toBe('one-shot reply')
+
+    await adapter.destroy()
+  })
+
+  test('keepStreamOpen skips the auto-finish settle', async () => {
+    const server = makeServer()
+    const adapter = await connectedAdapter(server, { streamSettleMs: 20 })
+    await primeChannel(server, adapter)
+
+    const sent = await adapter.sendText('user-1', 'evolving bubble', { keepStreamOpen: true })
+    await Bun.sleep(80)
+
+    expect(finishFrames(server, sent.messageId)).toHaveLength(0)
+    // Still editable.
+    await adapter.editMessage('user-1', sent.messageId, 'still evolving')
+    const edits = server.frames.filter(
+      (f) =>
+        f.cmd === 'aibot_respond_msg' &&
+        (f.body.stream as { id: string }).id === sent.messageId &&
+        !(f.body.stream as { finish: boolean }).finish,
+    )
+    expect(edits).toHaveLength(2)
+
+    await adapter.destroy()
+  })
+
+  test('finalizeMessage closes the stream with finish=true and final content', async () => {
+    const server = makeServer()
+    const adapter = await connectedAdapter(server, { streamSettleMs: 20 })
+    await primeChannel(server, adapter)
+
+    const sent = await adapter.sendText('user-1', 'draft', { keepStreamOpen: true })
+    await adapter.editMessage('user-1', sent.messageId, 'final answer')
+    await adapter.finalizeMessage('user-1', sent.messageId)
+
+    const finished = finishFrames(server, sent.messageId)
+    expect(finished).toHaveLength(1)
+    expect((finished[0]!.body.stream as { content: string }).content).toBe('final answer')
+
+    // Idempotent — no duplicate finish frames.
+    await adapter.finalizeMessage('user-1', sent.messageId)
+    expect(finishFrames(server, sent.messageId)).toHaveLength(1)
+
+    await adapter.destroy()
+  })
+
+  test('editMessage cancels a pending settle', async () => {
+    const server = makeServer()
+    const adapter = await connectedAdapter(server, { streamSettleMs: 30 })
+    await primeChannel(server, adapter)
+
+    const sent = await adapter.sendText('user-1', 'thinking…')
+    await Bun.sleep(10)
+    // Edit inside the settle window — the stream is now renderer-driven.
+    await adapter.editMessage('user-1', sent.messageId, 'working…')
+    await Bun.sleep(60)
+
+    expect(finishFrames(server, sent.messageId)).toHaveLength(0)
+
+    // Explicit finalize still works afterwards.
+    await adapter.finalizeMessage('user-1', sent.messageId)
+    expect(finishFrames(server, sent.messageId)).toHaveLength(1)
 
     await adapter.destroy()
   })

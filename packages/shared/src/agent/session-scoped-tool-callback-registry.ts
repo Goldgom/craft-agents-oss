@@ -16,6 +16,44 @@ import type { BrowserPaneFns } from './browser-tools.ts';
 import type { AuthRequest } from '@craft-agent/session-tools-core';
 import { debug } from '../utils/debug.ts';
 
+/** Per-channel outcome summary returned by messaging send bridges. */
+export interface MessagingSendResult {
+  /** Channels that delivered successfully. */
+  sent: number;
+  /** Channels that failed. */
+  failed: number;
+  /** Per-channel failure messages (parallel to `failed` count). */
+  errors: string[];
+}
+
+/**
+ * Host-level messaging bridge installed by the messaging-gateway registry on
+ * the SessionManager (same seam as `setAutomationBinder`). SessionManager
+ * merges it into per-session tool callbacks so the session tools can list,
+ * unbind, and send media / template cards through bound chat channels.
+ */
+export interface MessagingToolBridge {
+  getBindings(
+    workspaceId: string,
+    sessionId: string,
+  ): Array<{ platform: string; channelId: string; threadId?: number; channelName?: string; enabled: boolean }>;
+  unbind(workspaceId: string, sessionId: string, platform?: string): number;
+  sendMedia(
+    workspaceId: string,
+    input: {
+      sessionId: string;
+      kind: 'voice' | 'image' | 'video' | 'file';
+      data: Uint8Array;
+      filename: string;
+      caption?: string;
+    },
+  ): Promise<MessagingSendResult>;
+  sendTemplateCard(
+    workspaceId: string,
+    input: { sessionId: string; card: Record<string, unknown> },
+  ): Promise<MessagingSendResult>;
+}
+
 /**
  * Callbacks that can be registered per-session
  */
@@ -83,6 +121,19 @@ export interface SessionScopedToolCallbacks {
   getMessagingBindingsFn?: (sessionId: string) => Array<{ platform: string; channelId: string; threadId?: number; channelName?: string; enabled: boolean }>;
   /** Unbind messaging channels from a session. Returns count of removed bindings. */
   unbindMessagingChannelFn?: (sessionId: string, platform?: string) => number;
+  /** Send a media message to the session's messaging channels. */
+  sendMessagingMediaFn?: (input: {
+    sessionId: string;
+    kind: 'voice' | 'image' | 'video' | 'file';
+    data: Uint8Array;
+    filename: string;
+    caption?: string;
+  }) => Promise<MessagingSendResult>;
+  /** Send a rich template card to the session's messaging channels. */
+  sendMessagingTemplateCardFn?: (input: {
+    sessionId: string;
+    card: Record<string, unknown>;
+  }) => Promise<MessagingSendResult>;
   /** Create a Craft Agents Task (board card + task.yaml + orchestrator session) without running it. */
   createTaskFn?: (
     input: import('@craft-agent/session-tools-core').CreateTaskInput

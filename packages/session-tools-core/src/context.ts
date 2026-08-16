@@ -438,6 +438,31 @@ export interface SessionToolContext {
   /** Unbind messaging channels from a session. Returns count of removed bindings. */
   unbindMessagingChannel?(sessionId: string, platform?: string): number;
 
+  /**
+   * Send a media message (voice / image / video / file) to every messaging
+   * channel bound to a session. Only platforms with native media support
+   * (WeCom) deliver; failures are collected per channel in `errors`.
+   */
+  sendMessagingMedia?(input: {
+    /** Target session. Defaults to the current session. */
+    sessionId?: string;
+    kind: 'voice' | 'image' | 'video' | 'file';
+    data: Uint8Array;
+    filename: string;
+    caption?: string;
+  }): Promise<{ sent: number; failed: number; errors: string[] }>;
+
+  /**
+   * Send a rich template card (WeCom `template_card`) to every messaging
+   * channel bound to a session. `card` must carry a `card_type` string
+   * (text_notice / news_notice / button_interaction / vote_interaction /
+   * multiple_interaction).
+   */
+  sendMessagingTemplateCard?(input: {
+    sessionId?: string;
+    card: Record<string, unknown>;
+  }): Promise<{ sent: number; failed: number; errors: string[] }>;
+
   // ============================================================
   // Session Paths (for transform_data / render_template)
   // ============================================================

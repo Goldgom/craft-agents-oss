@@ -161,6 +161,13 @@ export interface ButtonPress {
 export interface SendOptions {
   /** Telegram forum topic to post into. Undefined → DM or General topic. */
   threadId?: number
+  /**
+   * WeCom only: keep the reply stream open for later edits (`finish: false`
+   * until `finalizeMessage` is called). When unset, the adapter auto-finishes
+   * the stream shortly after sending — the right default for one-shot replies
+   * (commands, permission prompts) so the WeCom client stops animating them.
+   */
+  keepStreamOpen?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -200,12 +207,46 @@ export interface PlatformAdapter {
   sendFile(channelId: string, file: Buffer, filename: string, caption?: string, opts?: SendOptions): Promise<SentMessage>
 
   /**
+   * Send a media message (`voice` / `image` / `video`) where the platform
+   * supports it. The WeCom long-connection adapter uploads the blob via its
+   * three-step media upload and posts the corresponding message type;
+   * platforms without native media messages omit this method.
+   */
+  sendMedia?(
+    channelId: string,
+    kind: 'voice' | 'image' | 'video',
+    file: Buffer,
+    filename: string,
+    caption?: string,
+    opts?: SendOptions,
+  ): Promise<SentMessage>
+
+  /**
+   * Send a rich template card (WeCom `template_card`). The card shape is
+   * platform-specific — WeCom cards carry a `card_type` plus typed fields
+   * (text_notice, button_interaction, …). Platforms without cards omit this.
+   */
+  sendTemplateCard?(
+    channelId: string,
+    card: Record<string, unknown>,
+    opts?: SendOptions,
+  ): Promise<SentMessage>
+
+  /**
    * Clear the inline keyboard on a previously-sent message. Optional because
    * only platforms with inline-button support (currently Telegram) need it.
    * Errors are the caller's concern — most implementations should swallow
    * "message can't be edited" since it's non-fatal.
    */
   clearButtons?(channelId: string, messageId: string, opts?: SendOptions): Promise<void>
+
+  /**
+   * Mark a previously-sent message as complete. Only platforms with streaming
+   * message models (WeCom `stream` replies) need this — the renderer calls it
+   * after its final edit so the platform client stops animating the message.
+   * Idempotent; other platforms omit it.
+   */
+  finalizeMessage?(channelId: string, messageId: string, opts?: SendOptions): Promise<void>
 
   /**
    * Update the set of chats the adapter accepts inbound messages from at

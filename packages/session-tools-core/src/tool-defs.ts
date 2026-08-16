@@ -42,7 +42,7 @@ import { handleListBackgroundTasks } from './handlers/list-background-tasks.ts';
 import { handleCreateTask } from './handlers/create-task.ts';
 import { handleArchiveSession } from './handlers/archive-session.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
-import { handleListMessagingChannels, handleUnbindMessagingChannel } from './handlers/messaging.ts';
+import { handleListMessagingChannels, handleUnbindMessagingChannel, handleSendMessagingMedia, handleSendMessagingTemplateCard } from './handlers/messaging.ts';
 import { handleExportResources } from './handlers/export-resources.ts';
 import { handleImportResources } from './handlers/import-resources.ts';
 
@@ -244,6 +244,21 @@ export const ListMessagingChannelsSchema = z.object({
 
 export const UnbindMessagingChannelSchema = z.object({
   platform: z.enum(['telegram', 'whatsapp', 'lark', 'wecom']).optional().describe('Platform to unbind. If omitted, unbinds all.'),
+});
+
+export const SendMessagingMediaSchema = z.object({
+  sessionId: z.string().optional().describe('Target session ID. Defaults to the current session.'),
+  kind: z.enum(['voice', 'image', 'video', 'file']).describe('Media type. voice=amr ≤2MB, image=png/jpg/gif ≤10MB, video=mp4 ≤10MB, file ≤20MB'),
+  filePath: z.string().describe('Absolute path to the local media file to send.'),
+  filename: z.string().optional().describe('Display filename. Defaults to the basename of filePath.'),
+  caption: z.string().optional().describe('Optional text caption sent as a separate message after the media.'),
+});
+
+export const SendMessagingTemplateCardSchema = z.object({
+  sessionId: z.string().optional().describe('Target session ID. Defaults to the current session.'),
+  card: z
+    .record(z.string(), z.unknown())
+    .describe('WeCom template_card object. Must include card_type (text_notice | news_notice | button_interaction | vote_interaction | multiple_interaction) plus the matching typed fields.'),
 });
 
 export const ExportResourcesSchema = z.object({
@@ -541,11 +556,25 @@ Use list_sessions to find session IDs, or use the sessionId returned by spawn_se
 
 The target session receives your message with a sender envelope containing your session ID, so it can use send_agent_message to reply.`,
 
-  list_messaging_channels: `List messaging channels (Telegram, WhatsApp) bound to a session.
+  list_messaging_channels: `List messaging channels (Telegram, WhatsApp, Lark, WeCom) bound to a session.
 Shows which external chat apps are connected and can send/receive messages.`,
 
   unbind_messaging_channel: `Disconnect a messaging channel from the current session.
 Messages will no longer be forwarded between the chat app and this session.`,
+
+  send_messaging_media: `Send a media file (voice, image, video, or file) to every messaging channel bound to a session.
+
+Use this when the user asks to send audio, images, or attachments through the bot (e.g. 企业微信). The media file must already exist on disk — generate it first (e.g. TTS output via ffmpeg/espeak, charts, screenshots), then call this tool with its absolute path.
+
+Size limits follow WeCom: voice (amr) ≤2MB, image ≤10MB, video (mp4) ≤10MB, file ≤20MB. Channels on platforms without native media messages fail individually and are reported in the result.`,
+
+  send_messaging_template_card: `Send a rich WeCom template card (模板卡片) to every messaging channel bound to a session.
+
+Use this for deep interactive content: text notices, news notices, button lists, vote interactions. The card object must include a card_type string and the matching fields, e.g.:
+{"card_type": "text_notice", "main_title": {"title": "Title"}, "sub_title_text": "..."}
+or {"card_type": "button_interaction", "main_title": {"title": "Confirm?"}, "button_list": [{"text": "OK", "style": 1, "key": "ok"}]}.
+
+Channels on platforms without card support fail individually and are reported in the result.`,
 
   export_resources: `Package workspace integrations (MCP servers, API connections, skills, automations) into a portable JSON archive file.
 
@@ -638,6 +667,8 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   // Messaging gateway tools
   { name: 'list_messaging_channels', description: TOOL_DESCRIPTIONS.list_messaging_channels, inputSchema: ListMessagingChannelsSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListMessagingChannels },
   { name: 'unbind_messaging_channel', description: TOOL_DESCRIPTIONS.unbind_messaging_channel, inputSchema: UnbindMessagingChannelSchema, executionMode: 'registry', safeMode: 'block', handler: handleUnbindMessagingChannel },
+  { name: 'send_messaging_media', description: TOOL_DESCRIPTIONS.send_messaging_media, inputSchema: SendMessagingMediaSchema, executionMode: 'registry', safeMode: 'block', handler: handleSendMessagingMedia },
+  { name: 'send_messaging_template_card', description: TOOL_DESCRIPTIONS.send_messaging_template_card, inputSchema: SendMessagingTemplateCardSchema, executionMode: 'registry', safeMode: 'block', handler: handleSendMessagingTemplateCard },
   // Integration archive tools (package + one-click transfer of MCP/API resources)
   { name: 'export_resources', description: TOOL_DESCRIPTIONS.export_resources, inputSchema: ExportResourcesSchema, executionMode: 'registry', safeMode: 'block', handler: handleExportResources },
   { name: 'import_resources', description: TOOL_DESCRIPTIONS.import_resources, inputSchema: ImportResourcesSchema, executionMode: 'registry', safeMode: 'block', handler: handleImportResources },

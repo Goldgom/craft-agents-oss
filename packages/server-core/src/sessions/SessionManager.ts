@@ -8,7 +8,7 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
-import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
+import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
 import {
   resolveSessionConnection,
   createBackendFromConnection,
@@ -1276,6 +1276,13 @@ export class SessionManager implements ISessionManager {
   }) => Promise<void>
 
   /**
+   * Messaging tool bridge installed by the messaging-gateway registry. When
+   * set, every session's tool callbacks get list/unbind/send-media/send-card
+   * implementations so the messaging session tools work for agents.
+   */
+  private messagingToolBridge: MessagingToolBridge | null = null
+
+  /**
    * Centralized setter for session processing state.
    * Automatically notifies the power manager on transitions (true→false, false→true)
    * so callers don't need to remember to call onSessionStarted/onSessionStopped.
@@ -1305,6 +1312,14 @@ export class SessionManager implements ISessionManager {
     fn: (input: { workspaceId: string; sessionId: string; topicName: string }) => Promise<void>,
   ): void {
     this.automationBinder = fn
+  }
+
+  /**
+   * Install the messaging tool bridge (see `MessagingToolBridge`). Merged
+   * into each session's scoped tool callbacks at agent creation.
+   */
+  setMessagingBridge(bridge: MessagingToolBridge): void {
+    this.messagingToolBridge = bridge
   }
 
   private browserPaneManager: IBrowserPaneManager | null = null
@@ -4517,6 +4532,42 @@ export class SessionManager implements ISessionManager {
             managed.agent?.setPendingSourceActivationRestart({ sourceSlug, userMessage })
           }
           return { ok: true, availability: 'next-turn' as const }
+        },
+        // Messaging gateway tools — list/unbind bindings and send media or
+        // template cards through the channels bound to this session. The
+        // bridge is installed by the messaging-gateway registry; without it
+        // the fns stay absent and the tools report "not configured".
+        getMessagingBindingsFn: (sessionId) => {
+          const bridge = this.messagingToolBridge
+          if (!bridge) return []
+          return bridge.getBindings(managed.workspace.id, sessionId)
+        },
+        unbindMessagingChannelFn: (sessionId, platform) => {
+          const bridge = this.messagingToolBridge
+          if (!bridge) return 0
+          return bridge.unbind(managed.workspace.id, sessionId, platform)
+        },
+        sendMessagingMediaFn: (input) => {
+          const bridge = this.messagingToolBridge
+          if (!bridge) {
+            return Promise.resolve({
+              sent: 0,
+              failed: 1,
+              errors: ['Messaging is not configured for this workspace.'],
+            })
+          }
+          return bridge.sendMedia(managed.workspace.id, input)
+        },
+        sendMessagingTemplateCardFn: (input) => {
+          const bridge = this.messagingToolBridge
+          if (!bridge) {
+            return Promise.resolve({
+              sent: 0,
+              failed: 1,
+              errors: ['Messaging is not configured for this workspace.'],
+            })
+          }
+          return bridge.sendTemplateCard(managed.workspace.id, input)
         },
       })
 

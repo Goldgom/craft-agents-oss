@@ -133,6 +133,33 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'sendMessagingMedia', {
+    get() {
+      const fn = getSessionScopedToolCallbacks(sessionId)?.sendMessagingMediaFn;
+      if (!fn) return undefined;
+      return (input: {
+        sessionId?: string;
+        kind: 'voice' | 'image' | 'video' | 'file';
+        data: Uint8Array;
+        filename: string;
+        caption?: string;
+      }) => fn({ ...input, sessionId: input.sessionId ?? sessionId });
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
+  Object.defineProperty(context, 'sendMessagingTemplateCard', {
+    get() {
+      const fn = getSessionScopedToolCallbacks(sessionId)?.sendMessagingTemplateCardFn;
+      if (!fn) return undefined;
+      return (input: { sessionId?: string; card: Record<string, unknown> }) =>
+        fn({ ...input, sessionId: input.sessionId ?? sessionId });
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   Object.defineProperty(context, 'createTask', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.createTaskFn;

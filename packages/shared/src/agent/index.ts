@@ -23,6 +23,8 @@ export {
   mergeSessionScopedToolCallbacks,
   // Types
   type SessionScopedToolCallbacks,
+  type MessagingSendResult,
+  type MessagingToolBridge,
   type BrowserPaneFns,
   // Auth request types (unified auth flow)
   type AuthRequest,

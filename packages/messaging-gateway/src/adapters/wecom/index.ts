@@ -70,6 +70,13 @@ const SUBSCRIBE_TIMEOUT_MS = 10 * 1000
 const COMMAND_TIMEOUT_MS = 10 * 1000
 const RECONNECT_BASE_DELAY_MS = 1 * 1000
 const RECONNECT_MAX_DELAY_MS = 30 * 1000
+/**
+ * One-shot replies (commands, prompts) auto-finish after this quiet window.
+ * WeCom renders an unfinished `stream` as still streaming (blinking cursor),
+ * so a reply that nobody ever edits must be closed promptly. Renderer-driven
+ * evolving messages opt out via `SendOptions.keepStreamOpen`.
+ */
+const STREAM_SETTLE_MS = 3 * 1000
 const NOOP_LOGGER: MessagingLogger = {
   info: () => {},
   warn: () => {},
@@ -100,6 +107,8 @@ const defaultSocketFactory: WeComSocketFactory = (url) =>
 /** Tuning knobs — only `reconnectBaseDelayMs` matters outside tests. */
 export interface WeComAdapterOptions {
   reconnectBaseDelayMs?: number
+  /** Override the one-shot reply auto-finish delay (tests). */
+  streamSettleMs?: number
 }
 
 /**
@@ -140,6 +149,7 @@ export class WeComAdapter implements PlatformAdapter {
 
   private readonly createSocket: WeComSocketFactory
   private readonly reconnectBaseDelayMs: number
+  private readonly streamSettleMs: number
   private socket: WeComSocketLike | null = null
   private messageHandler: ((msg: IncomingMessage) => Promise<void>) | null = null
   private buttonHandler: ((press: ButtonPress) => Promise<void>) | null = null
@@ -158,6 +168,8 @@ export class WeComAdapter implements PlatformAdapter {
   private readonly pendingResponses = new Map<string, PendingResponse>()
   /** Live streams we created, keyed by stream id (for editMessage). */
   private readonly streams = new Map<string, StreamRecord>()
+  /** Auto-finish timers for one-shot streams, keyed by stream id. */
+  private readonly settleTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Per-channel context captured from the latest callback. */
   private readonly channels = new Map<string, ChannelContext>()
   /** Recent callback msgids for dedupe. */
@@ -166,6 +178,7 @@ export class WeComAdapter implements PlatformAdapter {
   constructor(createSocket: WeComSocketFactory = defaultSocketFactory, options: WeComAdapterOptions = {}) {
     this.createSocket = createSocket
     this.reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? RECONNECT_BASE_DELAY_MS
+    this.streamSettleMs = options.streamSettleMs ?? STREAM_SETTLE_MS
   }
 
   // -------------------------------------------------------------------------
@@ -191,6 +204,8 @@ export class WeComAdapter implements PlatformAdapter {
     this.heartbeatTimer = null
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = null
+    for (const timer of this.settleTimers.values()) clearTimeout(timer)
+    this.settleTimers.clear()
     this.rejectAllPending(new Error('Adapter destroyed'))
     this.streams.clear()
     this.channels.clear()
@@ -557,7 +572,7 @@ export class WeComAdapter implements PlatformAdapter {
   // Outbound — PlatformAdapter
   // -------------------------------------------------------------------------
 
-  async sendText(channelId: string, text: string, _opts?: SendOptions): Promise<SentMessage> {
+  async sendText(channelId: string, text: string, opts?: SendOptions): Promise<SentMessage> {
     const socket = this.requireSocket()
     const content = truncateUtf8(text, WECOM_MAX_CONTENT_BYTES)
     const channel = this.channels.get(channelId)
@@ -565,8 +580,10 @@ export class WeComAdapter implements PlatformAdapter {
     // Prefer responding to the latest callback in this channel — the reply
     // window is 24h and WeCom renders `stream` replies with markdown. The
     // stream stays unfinished (`finish: false`) so the renderer's
-    // `editMessage` updates it in place; the next send to this channel
-    // closes it via `finishActiveStream`.
+    // `editMessage` updates it in place. One-shot replies (no
+    // `keepStreamOpen`) auto-finish after the settle window so the WeCom
+    // client stops animating them; evolving bubbles are finalized by the
+    // renderer via `finalizeMessage`.
     if (channel?.lastReqId) {
       this.finishActiveStream(channelId)
       const streamId = makeStreamId()
@@ -576,6 +593,9 @@ export class WeComAdapter implements PlatformAdapter {
         finished: false,
         lastContent: content,
       })
+      if (!opts?.keepStreamOpen) {
+        this.scheduleSettle(streamId)
+      }
       await this.sendFrame(socket, {
         cmd: 'aibot_respond_msg',
         headers: { req_id: channel.lastReqId },
@@ -614,6 +634,9 @@ export class WeComAdapter implements PlatformAdapter {
       await this.sendText(channelId, text, _opts)
       return
     }
+    // An edited stream is renderer-driven — the renderer finalizes it. Drop
+    // any pending auto-finish so a slow progress bubble isn't closed early.
+    this.cancelSettle(messageId)
     const socket = this.requireSocket()
     const content = truncateUtf8(text, WECOM_MAX_CONTENT_BYTES)
     record.lastContent = content
@@ -627,11 +650,47 @@ export class WeComAdapter implements PlatformAdapter {
     })
   }
 
+  async finalizeMessage(channelId: string, messageId: string, _opts?: SendOptions): Promise<void> {
+    const record = this.streams.get(messageId)
+    if (!record || record.finished) return
+    this.cancelSettle(messageId)
+    record.finished = true
+    const socket = this.socket
+    if (!socket || !this.connected) return
+    await this.sendFrame(socket, {
+      cmd: 'aibot_respond_msg',
+      headers: { req_id: record.reqId },
+      body: {
+        msgtype: 'stream',
+        stream: { id: messageId, finish: true, content: record.lastContent },
+      },
+    }).catch(() => {})
+  }
+
+  /** Auto-finish a one-shot stream after the settle window. */
+  private scheduleSettle(streamId: string): void {
+    const timer = setTimeout(() => {
+      this.settleTimers.delete(streamId)
+      void this.finalizeMessage('', streamId).catch(() => {})
+    }, this.streamSettleMs)
+    timer.unref?.()
+    this.settleTimers.set(streamId, timer)
+  }
+
+  private cancelSettle(streamId: string): void {
+    const timer = this.settleTimers.get(streamId)
+    if (timer) {
+      clearTimeout(timer)
+      this.settleTimers.delete(streamId)
+    }
+  }
+
   /** Close the previous unfinished stream in `channelId` before a new send. */
   private finishActiveStream(channelId: string): void {
     for (const [streamId, record] of this.streams) {
       if (record.channelId !== channelId || record.finished) continue
       record.finished = true
+      this.cancelSettle(streamId)
       const socket = this.socket
       if (socket && this.connected) {
         void this.sendFrame(socket, {
@@ -668,19 +727,49 @@ export class WeComAdapter implements PlatformAdapter {
     file: Buffer,
     filename: string,
     caption?: string,
+    opts?: SendOptions,
+  ): Promise<SentMessage> {
+    return this.sendMediaMessage('file', channelId, file, filename, caption, opts)
+  }
+
+  async sendMedia(
+    channelId: string,
+    kind: 'voice' | 'image' | 'video',
+    file: Buffer,
+    filename: string,
+    caption?: string,
+    opts?: SendOptions,
+  ): Promise<SentMessage> {
+    return this.sendMediaMessage(kind, channelId, file, filename, caption, opts)
+  }
+
+  /**
+   * Upload `data` as `kind` (three-step aibot media upload) and post it as a
+   * response when a callback req_id exists for the channel, or as a proactive
+   * `aibot_send_msg` otherwise.
+   *
+   * WeCom media constraints: voice = amr ≤2MB, image = png/jpg/gif ≤10MB,
+   * video = mp4 ≤10MB, file ≤20MB.
+   */
+  private async sendMediaMessage(
+    kind: 'file' | 'image' | 'voice' | 'video',
+    channelId: string,
+    file: Buffer,
+    filename: string,
+    caption?: string,
     _opts?: SendOptions,
   ): Promise<SentMessage> {
     const socket = this.requireSocket()
-    const mediaId = await this.uploadMedia(socket, 'file', file, filename)
-
+    const mediaId = await this.uploadMedia(socket, kind, file, filename)
     const channel = this.channels.get(channelId)
+
     if (channel?.lastReqId) {
       await this.sendFrame(socket, {
         cmd: 'aibot_respond_msg',
         headers: { req_id: channel.lastReqId },
         body: {
-          msgtype: 'file',
-          file: { media_id: mediaId },
+          msgtype: kind,
+          [kind]: { media_id: mediaId },
         },
       })
       if (caption) await this.sendText(channelId, caption)
@@ -693,11 +782,44 @@ export class WeComAdapter implements PlatformAdapter {
       body: {
         chatid: channelId,
         chat_type: channel?.chatType ?? 0,
-        msgtype: 'file',
-        file: { media_id: mediaId },
+        msgtype: kind,
+        [kind]: { media_id: mediaId },
       },
     })
     if (caption) await this.sendText(channelId, caption)
+    return { platform: 'wecom', channelId, messageId: '' }
+  }
+
+  async sendTemplateCard(
+    channelId: string,
+    card: Record<string, unknown>,
+    _opts?: SendOptions,
+  ): Promise<SentMessage> {
+    if (!card || typeof card !== 'object' || typeof card.card_type !== 'string' || card.card_type.length === 0) {
+      throw new Error('WeCom template_card must be an object with a non-empty `card_type` string')
+    }
+    const socket = this.requireSocket()
+    const channel = this.channels.get(channelId)
+
+    if (channel?.lastReqId) {
+      await this.sendFrame(socket, {
+        cmd: 'aibot_respond_msg',
+        headers: { req_id: channel.lastReqId },
+        body: { msgtype: 'template_card', template_card: card },
+      })
+      return { platform: 'wecom', channelId, messageId: makeStreamId() }
+    }
+
+    await this.sendFrame(socket, {
+      cmd: 'aibot_send_msg',
+      headers: { req_id: makeReqId() },
+      body: {
+        chatid: channelId,
+        chat_type: channel?.chatType ?? 0,
+        msgtype: 'template_card',
+        template_card: card,
+      },
+    })
     return { platform: 'wecom', channelId, messageId: '' }
   }
 

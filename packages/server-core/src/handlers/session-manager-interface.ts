@@ -283,6 +283,14 @@ export interface ISessionManager {
   setAutomationBinder?(
     fn: (input: { workspaceId: string; sessionId: string; topicName: string }) => Promise<void>,
   ): void
+
+  /**
+   * Install the messaging tool bridge (list/unbind bindings, send media and
+   * template cards through bound channels). Wired by the messaging-gateway
+   * registry at construction time, merged into every session's tool callbacks
+   * so list_messaging_channels / send_messaging_media / … work for agents.
+   */
+  setMessagingBridge?(bridge: import('@craft-agent/shared/agent').MessagingToolBridge): void
 }
 
 /**
