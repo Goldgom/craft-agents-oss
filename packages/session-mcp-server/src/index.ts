@@ -33,6 +33,10 @@ import {
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeveloperFeedbackEnabled } from '@craft-agent/shared/feature-flags';
+import {
+  exportResources as exportResourcesImpl,
+  importResources as importResourcesImpl,
+} from '@craft-agent/shared/resources';
 // Import from session-tools-core
 import {
   type SessionToolContext,
@@ -247,6 +251,26 @@ function createCodexContext(config: SessionConfig): SessionToolContext {
       mkdirSync(feedbackDir, { recursive: true });
       const filePath = join(feedbackDir, `${feedback.id}.json`);
       writeFileSync(filePath, JSON.stringify(feedback, null, 2), 'utf-8');
+    },
+
+    // Resource bundle export/import (AI-driven 打包存档 / 一键导入).
+    // Credential cache files are managed by the main process, so source
+    // overwrite cleanup is a no-op here.
+    exportResources: (args) => {
+      const result = exportResourcesImpl(workspaceRootPath, {
+        sources: args.sources ?? 'all',
+        skills: args.skills ?? 'all',
+        automations: args.automations,
+      });
+      return { bundle: result.bundle as unknown, warnings: result.warnings };
+    },
+    importResources: async (bundle, mode) => {
+      const result = await importResourcesImpl(workspaceRootPath, bundle as never, mode, {
+        clearSourceCredentials: async () => {
+          // Credential cache handled by main process.
+        },
+      });
+      return result;
     },
 
     // Note: saveSourceConfig, validators, renderMermaid

@@ -442,6 +442,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   // resources — workspace resource export/import
   RPC_CHANNELS.resources.EXPORT,
   RPC_CHANNELS.resources.IMPORT,
+  RPC_CHANNELS.resources.EXPORT_TO_FILE,
+  RPC_CHANNELS.resources.IMPORT_FROM_FILE,
 
   // messaging — gateway channels run on workspace server
   RPC_CHANNELS.messaging.WA_REGISTER,

@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { DatabaseZap } from 'lucide-react'
+import { DatabaseZap, Download, Upload } from 'lucide-react'
+import { toast } from 'sonner'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { deriveConnectionStatus } from '@/components/ui/source-status-indicator'
 import { EntityPanel } from '@/components/ui/entity-panel'
@@ -63,6 +64,62 @@ export function SourcesListPanel({
   const [sendResourceSlug, setSendResourceSlug] = React.useState<string | null>(null)
   const [sendResourceLabel, setSendResourceLabel] = React.useState('')
 
+  // Bundle archive (打包存档 / 一键导入) state
+  const [bundleBusy, setBundleBusy] = React.useState<'export' | 'import' | null>(null)
+
+  const handleExportBundle = React.useCallback(async () => {
+    if (!activeWorkspaceId) return
+    setBundleBusy('export')
+    try {
+      const result = await window.electronAPI.exportResourcesToFile(activeWorkspaceId, {
+        sources: 'all',
+        skills: 'all',
+        automations: true,
+      })
+      if ('canceled' in result) return
+      toast.success(t('sourcesList.bundleExportedTitle'), {
+        description: result.filePath,
+      })
+    } catch (error) {
+      toast.error(t('sourcesList.bundleExportFailed'), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    } finally {
+      setBundleBusy(null)
+    }
+  }, [activeWorkspaceId, t])
+
+  const handleImportBundle = React.useCallback(async () => {
+    if (!activeWorkspaceId) return
+    setBundleBusy('import')
+    try {
+      const result = await window.electronAPI.importResourcesFromFile(activeWorkspaceId)
+      if (!result || 'canceled' in result) return
+      const imported = result.sources.imported.length + result.skills.imported.length + result.automations.imported.length
+      const skipped = result.sources.skipped.length + result.skills.skipped.length + result.automations.skipped.length
+      const failed = result.sources.failed.length + result.skills.failed.length + result.automations.failed.length
+      if (imported > 0) {
+        toast.success(t('sourcesList.bundleImportedTitle'), {
+          description: t('sourcesList.bundleImportedDetail', { imported, skipped, failed }),
+        })
+      } else if (skipped > 0) {
+        toast.info(t('sourcesList.bundleImportedTitle'), {
+          description: t('sourcesList.bundleImportedDetail', { imported, skipped, failed }),
+        })
+      } else {
+        toast.warning(t('sourcesList.bundleImportedTitle'), {
+          description: t('sourcesList.bundleImportedDetail', { imported, skipped, failed }),
+        })
+      }
+    } catch (error) {
+      toast.error(t('sourcesList.bundleImportFailed'), {
+        description: error instanceof Error ? error.message : undefined,
+      })
+    } finally {
+      setBundleBusy(null)
+    }
+  }, [activeWorkspaceId, t])
+
   const filteredSources = React.useMemo(() => {
     if (!sourceFilter) return sources
     return sources.filter(s => s.config.type === sourceFilter.sourceType)
@@ -79,6 +136,27 @@ export function SourcesListPanel({
 
   return (
     <>
+    {/* Bundle archive toolbar: package integrations into a portable file or import one */}
+    {activeWorkspaceId && (
+      <div className="flex items-center gap-2 px-3 pt-2">
+        <button
+          className="inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors disabled:opacity-50"
+          disabled={bundleBusy !== null}
+          onClick={() => void handleExportBundle()}
+        >
+          <Download className="h-3.5 w-3.5 mr-1.5" />
+          {t('sourcesList.exportBundle')}
+        </button>
+        <button
+          className="inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors disabled:opacity-50"
+          disabled={bundleBusy !== null}
+          onClick={() => void handleImportBundle()}
+        >
+          <Upload className="h-3.5 w-3.5 mr-1.5" />
+          {t('sourcesList.importBundle')}
+        </button>
+      </div>
+    )}
     <EntityPanel<LoadedSource>
       items={filteredSources}
       getId={(s) => s.config.slug}

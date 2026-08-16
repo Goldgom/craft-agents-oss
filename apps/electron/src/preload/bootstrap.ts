@@ -30,6 +30,7 @@ import {
   CLIENT_SHOW_IN_FOLDER,
   CLIENT_CONFIRM_DIALOG,
   CLIENT_OPEN_FILE_DIALOG,
+  CLIENT_SAVE_FILE_DIALOG,
   CLIENT_BROWSER_INVOKE,
   LOCAL_CLIENT_CAPABILITIES,
 } from '@craft-agent/server-core/transport'
@@ -175,6 +176,10 @@ client.handleCapability(CLIENT_CONFIRM_DIALOG, async (spec: ConfirmDialogSpec) =
 
 client.handleCapability(CLIENT_OPEN_FILE_DIALOG, async (spec: FileDialogSpec) => {
   return await ipcRenderer.invoke('__dialog:showOpenDialog', spec)
+})
+
+client.handleCapability(CLIENT_SAVE_FILE_DIALOG, async (spec: { title?: string; defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }) => {
+  return await ipcRenderer.invoke('__dialog:showSaveDialog', spec)
 })
 
 // Browser pane invocation. The remote server packages an IBrowserPaneManager

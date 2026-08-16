@@ -403,6 +403,8 @@ export const RPC_CHANNELS = {
   resources: {
     EXPORT: 'resources:export',
     IMPORT: 'resources:import',
+    EXPORT_TO_FILE: 'resources:exportToFile',
+    IMPORT_FROM_FILE: 'resources:importFromFile',
   },
   projects: {
     GET: 'projects:get',

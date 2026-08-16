@@ -59,6 +59,35 @@ export interface SessionToolCallbacks {
 }
 
 // ============================================================
+// Resource Bundle (export/import) Types
+// ============================================================
+
+/** Options for exporting workspace resources to a portable bundle. */
+export interface ExportResourcesArgs {
+  /** Source slugs to export, or 'all' for every source. */
+  sources?: string[] | 'all';
+  /** Skill slugs to export, or 'all' for every skill. */
+  skills?: string[] | 'all';
+  /** Automation IDs/names to export, 'all' for every automation, or true (= 'all'). */
+  automations?: boolean | string[] | 'all';
+}
+
+/** Per-resource-type import bucket (mirrors the shared ResourceImportResult shape). */
+export interface ImportBucket {
+  imported: string[];
+  skipped: string[];
+  failed: Array<{ id: string; error: string }>;
+  warnings: string[];
+}
+
+/** Result of importing a resource bundle into the workspace. */
+export interface ResourceImportSummary {
+  sources: ImportBucket;
+  skills: ImportBucket;
+  automations: ImportBucket;
+}
+
+// ============================================================
 // File System Interface
 // ============================================================
 
@@ -208,6 +237,18 @@ export interface SessionToolContext {
    * Save a source config to the workspace.
    */
   saveSourceConfig?(source: SourceConfig): void;
+
+  /**
+   * Export workspace resources (sources/skills/automations) to a portable
+   * bundle object. Provided by both the Claude and Codex contexts.
+   */
+  exportResources?(args: ExportResourcesArgs): { bundle: unknown; warnings: string[] };
+
+  /**
+   * Import a portable resource bundle into the workspace.
+   * Provided by both the Claude and Codex contexts.
+   */
+  importResources?(bundle: unknown, mode: 'skip' | 'overwrite'): Promise<ResourceImportSummary>;
 
   /**
    * Infer Google service from URL.

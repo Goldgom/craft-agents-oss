@@ -43,6 +43,8 @@ import { handleCreateTask } from './handlers/create-task.ts';
 import { handleArchiveSession } from './handlers/archive-session.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel } from './handlers/messaging.ts';
+import { handleExportResources } from './handlers/export-resources.ts';
+import { handleImportResources } from './handlers/import-resources.ts';
 
 // ============================================================
 // Canonical Zod Schemas
@@ -242,6 +244,18 @@ export const ListMessagingChannelsSchema = z.object({
 
 export const UnbindMessagingChannelSchema = z.object({
   platform: z.enum(['telegram', 'whatsapp']).optional().describe('Platform to unbind. If omitted, unbinds all.'),
+});
+
+export const ExportResourcesSchema = z.object({
+  filePath: z.string().describe('Absolute path of the archive file to write (e.g. /path/to/my-sources.craft-resources.json)'),
+  sources: z.union([z.array(z.string()), z.literal('all')]).optional().describe("Source slugs to export, or 'all' (default) for every MCP/API source"),
+  skills: z.union([z.array(z.string()), z.literal('all')]).optional().describe("Skill slugs to export, or 'all' for every skill"),
+  automations: z.union([z.boolean(), z.array(z.string()), z.literal('all')]).optional().describe("Automation IDs to export, true (= 'all'), or omit"),
+});
+
+export const ImportResourcesSchema = z.object({
+  filePath: z.string().describe('Absolute path of the resource archive file to import (e.g. /path/to/my-sources.craft-resources.json)'),
+  mode: z.enum(['skip', 'overwrite']).optional().describe("Conflict handling: 'skip' (default) keeps existing resources, 'overwrite' replaces them"),
 });
 
 // ============================================================
@@ -532,6 +546,20 @@ Shows which external chat apps are connected and can send/receive messages.`,
 
   unbind_messaging_channel: `Disconnect a messaging channel from the current session.
 Messages will no longer be forwarded between the chat app and this session.`,
+
+  export_resources: `Package workspace integrations (MCP servers, API connections, skills, automations) into a portable JSON archive file.
+
+Use this when the user asks to back up, archive, or move their MCP/API integrations to another workspace or machine. By default ALL sources (MCP + API), skills, and automations are exported unless you narrow the selection.
+
+Secrets are stripped automatically (auth headers, env vars, OAuth client secrets); the receiving side re-authenticates as needed.
+
+The written file can be imported later with the import_resources tool or via the Sources panel → Import bundle.`,
+
+  import_resources: `Import a portable resource archive file into the current workspace (one-click transfer of MCP servers, API connections, skills, and automations).
+
+Use this when the user provides a *.craft-resources.json archive, or asks to move integrations from another workspace.
+
+By default existing resources are kept ('skip'); pass mode: 'overwrite' to replace them. The archive must be the file written by export_resources or exported from the Sources panel.`,
 } as const;
 
 // ============================================================
@@ -610,6 +638,9 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   // Messaging gateway tools
   { name: 'list_messaging_channels', description: TOOL_DESCRIPTIONS.list_messaging_channels, inputSchema: ListMessagingChannelsSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListMessagingChannels },
   { name: 'unbind_messaging_channel', description: TOOL_DESCRIPTIONS.unbind_messaging_channel, inputSchema: UnbindMessagingChannelSchema, executionMode: 'registry', safeMode: 'block', handler: handleUnbindMessagingChannel },
+  // Integration archive tools (package + one-click transfer of MCP/API resources)
+  { name: 'export_resources', description: TOOL_DESCRIPTIONS.export_resources, inputSchema: ExportResourcesSchema, executionMode: 'registry', safeMode: 'block', handler: handleExportResources },
+  { name: 'import_resources', description: TOOL_DESCRIPTIONS.import_resources, inputSchema: ImportResourcesSchema, executionMode: 'registry', safeMode: 'block', handler: handleImportResources },
 ];
 
 export interface SessionToolFilterOptions {

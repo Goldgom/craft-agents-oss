@@ -6,6 +6,35 @@ This guide explains how to configure sources (MCP servers, APIs, local filesyste
 > - `craft-agent source --help`
 > - Canonical command reference: [craft-cli.md](./craft-cli.md)
 
+## Integration Bundles (打包存档 / 一键导入)
+
+MCP and API integrations can be packaged into a portable JSON archive
+(`*.craft-resources.json`) and imported into another workspace with one click —
+manually or by asking the agent.
+
+### Export / import manually
+
+1. Open the Sources panel.
+2. Click **Export integrations…** — a save dialog asks where to write the
+   archive. All MCP/API sources (plus skills and automations) are bundled.
+3. In another workspace, click **Import integrations…** and pick the archive.
+   Existing resources are kept by default (skipped); you can also transfer a
+   single source to another workspace via the source's ⋯ menu.
+
+### Export / import via AI
+
+Ask the agent, e.g. "把我的 MCP 和 API 集成打包存档到 D:\backup\my-sources.json",
+then in the target workspace "从 D:\backup\my-sources.json 导入集成". The agent
+uses the `export_resources` and `import_resources` tools, which write/read the
+same archive format as the UI.
+
+### Archive format & security
+
+- The archive is an envelope `{ format: "craft-resource-bundle", version: 1, bundle: … }`.
+- Source configs are sanitized on export: auth headers, `mcp.env`, OAuth client
+  secrets, and runtime auth state are stripped. Imported sources that need auth
+  will prompt for credentials again.
+
 ## Source Setup Process
 
 When a user wants to add a new source, follow this conversational setup process to create a tailored, well-documented integration.

@@ -62,8 +62,11 @@ import {
 import { isGoogleOAuthConfigured as isGoogleOAuthConfiguredImpl } from '../auth/google-oauth.ts';
 import { debug } from '../utils/debug.ts';
 import { getSessionPlansPath, getSessionPath, getSessionDataPath } from '../sessions/storage.ts';
+import {
+  exportResources as exportResourcesImpl,
+  importResources as importResourcesImpl,
+} from '../resources/resource-bundle.ts';
 import { updatePreferences as updatePreferencesImpl } from '../config/preferences.ts';
-
 // Re-export types that may be needed by consumers
 export type { SessionToolContext, SessionToolCallbacks } from '@craft-agent/session-tools-core';
 
@@ -262,6 +265,36 @@ export function createClaudeContext(options: ClaudeContextOptions): SessionToolC
     // MCP validation
     validateStdioMcpConnection,
     validateMcpConnection,
+
+    // Resource bundle export/import (AI-driven 打包存档 / 一键导入)
+    exportResources: (args) => {
+      const result = exportResourcesImpl(workspacePath, {
+        sources: args.sources ?? 'all',
+        skills: args.skills ?? 'all',
+        automations: args.automations,
+      });
+      return { bundle: result.bundle as unknown, warnings: result.warnings };
+    },
+    importResources: async (bundle, mode) => {
+      const { getCredentialManager, SOURCE_CREDENTIAL_TYPES } = await import('../credentials/index.ts');
+      const credManager = getCredentialManager();
+      const result = await importResourcesImpl(workspacePath, bundle as never, mode, {
+        clearSourceCredentials: async (wsId: string, sourceSlug: string) => {
+          for (const credType of SOURCE_CREDENTIAL_TYPES) {
+            try {
+              await credManager.delete({
+                type: credType,
+                workspaceId: wsId,
+                sourceId: sourceSlug,
+              });
+            } catch {
+              // Ignore errors for credential types that don't exist
+            }
+          }
+        },
+      });
+      return result;
+    },
 
     // Icon helpers (simplified - full implementation would use logo.ts)
     isIconUrl: (value: string): boolean => {

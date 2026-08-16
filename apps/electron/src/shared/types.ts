@@ -704,6 +704,15 @@ export interface ElectronAPI {
   // Resources (cross-workspace export/import)
   exportResources(workspaceId: string, options: ExportResourcesOptions): Promise<ExportResult>
   importResources(workspaceId: string, bundle: ResourceBundle, mode: ResourceImportMode): Promise<ResourceImportResult>
+  /** Export resources to a portable archive file. Shows a save dialog when filePath is omitted. */
+  exportResourcesToFile(workspaceId: string, options: ExportResourcesOptions, filePath?: string): Promise<
+    { canceled: true } |
+    { filePath: string; counts: { sources: number; skills: number; automations: number }; warnings: string[] }
+  >
+  /** Import resources from a portable archive file. Shows an open dialog when filePath is omitted. */
+  importResourcesFromFile(workspaceId: string, filePath?: string, mode?: ResourceImportMode): Promise<
+    { canceled: true } | ResourceImportResult
+  >
 
   // Messaging gateway — workspaceId is taken from the client handshake (ctx.workspaceId)
   getMessagingConfig(): Promise<{
