@@ -259,8 +259,11 @@ export function InputContainer({
         </div>
       )}
 
-      {/* Visible animated container */}
+      {/* Visible animated container. data-theme-area="chat" mounts the theme
+          pack chat texture on the input box itself (like a DSH composer
+          frame) instead of across the whole chat column. */}
       <motion.div
+        data-theme-area="chat"
         className={cn(
           "input-container relative rounded-[12px] overflow-hidden transition-colors",
           isFocusedPanel ? "shadow-middle" : "shadow-minimal",

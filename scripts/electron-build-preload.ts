@@ -7,8 +7,9 @@
  */
 
 import { spawn } from "bun";
-import { existsSync, statSync, mkdirSync } from "fs";
+import { existsSync, statSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
+import * as esbuild from "esbuild";
 
 const ROOT_DIR = join(import.meta.dir, "..");
 const DIST_DIR = join(ROOT_DIR, "apps/electron/dist");
@@ -55,7 +56,8 @@ async function waitForFileStable(filePath: string, timeoutMs = 10000): Promise<b
   return false;
 }
 
-// Verify a JavaScript file is syntactically valid
+// Verify a JavaScript file is syntactically valid (in-process esbuild parse;
+// `node --check` is avoided because bun's node shim can execute the file)
 async function verifyJsFile(filePath: string): Promise<{ valid: boolean; error?: string }> {
   if (!existsSync(filePath)) {
     return { valid: false, error: "File does not exist" };
@@ -66,20 +68,12 @@ async function verifyJsFile(filePath: string): Promise<{ valid: boolean; error?:
     return { valid: false, error: "File is empty" };
   }
 
-  const proc = spawn({
-    cmd: ["node", "--check", filePath],
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const stderr = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  if (exitCode !== 0) {
-    return { valid: false, error: stderr || "Syntax error" };
+  try {
+    esbuild.transformSync(readFileSync(filePath, "utf8"), { loader: "js" });
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, error: String(err) };
   }
-
-  return { valid: true };
 }
 
 async function buildEntry(entry: string, outfile: string): Promise<number> {

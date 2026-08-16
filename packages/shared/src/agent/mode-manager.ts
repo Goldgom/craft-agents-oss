@@ -196,7 +196,14 @@ function isPathWithinDirectory(targetPath: string, baseDir: string): boolean {
     return false;
   }
 
-  const realBase = existsSync(resolvedBase) ? realpathSync.native(resolvedBase) : resolvedBase;
+  // Anchor for symlink re-validation. When the base dir itself doesn't exist
+  // yet (e.g. a freshly-created session's plans folder, or a first write),
+  // fall back to its nearest existing ancestor's real path. Otherwise targets
+  // under a not-yet-created base were rejected because the ancestor walk
+  // escaped the (lexically valid) base and hit an unrelated existing dir.
+  const realBase = existsSync(resolvedBase)
+    ? realpathSync.native(resolvedBase)
+    : nearestExistingAncestorRealpath(resolvedBase);
 
   if (existsSync(resolvedTarget)) {
     const realTarget = realpathSync.native(resolvedTarget);
@@ -205,15 +212,24 @@ function isPathWithinDirectory(targetPath: string, baseDir: string): boolean {
 
   // Target may be a new file path. Validate using nearest existing ancestor
   // to prevent symlink escapes while still allowing legitimate new files.
-  let current = dirname(resolvedTarget);
+  const realTargetAncestor = nearestExistingAncestorRealpath(dirname(resolvedTarget));
+  return isWithin(realBase, realTargetAncestor);
+}
+
+/**
+ * Walk up from an absolute path to the nearest ancestor that exists on disk
+ * and return its real path. Terminates at the filesystem root, which always
+ * exists.
+ */
+function nearestExistingAncestorRealpath(path: string): string {
+  let current = path;
   while (true) {
     if (existsSync(current)) {
-      const realCurrent = realpathSync.native(current);
-      return isWithin(realBase, realCurrent);
+      return realpathSync.native(current);
     }
     const parent = dirname(current);
     if (parent === current) {
-      return false;
+      return current;
     }
     current = parent;
   }
@@ -1610,8 +1626,11 @@ export function extractBashWriteTarget(command: string): string | null {
 
   // Pattern 2: shell -c/-lc with inner redirect (Codex pattern, unquoted paths)
   // Match: /bin/zsh -lc "... > /path/to/file ..." or bash -c '... > /path ...'
+  // Windows paths (C:\dir\file) legitimately contain backslashes, so unlike the
+  // old char class we must NOT exclude \\ here — excluding it truncated targets
+  // at the first backslash (e.g. "C:") and broke the plans-folder exception.
   const shellExecMatch = command.match(
-    /(?:\/bin\/)?(?:zsh|bash|sh)\s+(?:-\w+\s+)*["'].*?>\s*([^\s'"\\]+)/
+    /(?:\/bin\/)?(?:zsh|bash|sh)\s+(?:-\w+\s+)*["'].*?>\s*([^\s'"]+)/
   );
   if (shellExecMatch?.[1] && shellExecMatch[1] !== '/dev/null') {
     return shellExecMatch[1];

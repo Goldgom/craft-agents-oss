@@ -173,6 +173,114 @@ Scenic mode benefits from semi-transparent surface colors:
 
 **Note:** Scenic themes automatically force dark mode for better contrast with background images.
 
+## Theme Packs
+
+Theme packs bundle artwork with a JSON manifest — background image, chat panel
+texture, sidebar texture, and basic style settings — so a single folder can
+restyle the whole window. Manage them in Settings → Appearance → Theme Packs
+(导入/删除/切换), or drop folders into the theme packs directory manually.
+
+### Storage Location
+
+```
+~/.craft-agent/theme-packs/<pack-id>/
+├── theme-pack.json     # manifest (see schema below)
+├── background.png      # optional: 背景图片
+├── chat.png            # optional: 聊天框贴图
+├── sidebar.png         # optional: 侧边栏贴图
+└── preview/light.webp  # optional previews shown in settings
+```
+
+### Manifest (theme-pack.json)
+
+```json
+{
+  "name": "星空漫游",
+  "author": "me",
+  "tagline": "深空背景 + 蕾丝侧栏",
+  "description": "…",
+  "version": 1,
+  "tags": ["space"],
+  "mode": "scenic",
+  "background": { "light": "background.png", "dark": "background-night.png" },
+  "backgroundImage": "background.png",
+  "chatTexture": "chat.png",
+  "sidebarTexture": "sidebar.png",
+  "characters": { "left": "char-left.png", "right": "char-right.png" },
+  "preview": { "light": "preview/light.webp", "dark": "preview/dark.webp" },
+  "style": {
+    "backgroundSize": "cover",
+    "backgroundPosition": "center",
+    "backgroundBlur": 0,
+    "chatOpacity": 0.9,
+    "chatBlend": "normal",
+    "sidebarOpacity": 0.85,
+    "sidebarBlend": "normal",
+    "textureSize": "auto",
+    "texturePosition": "center",
+    "textureRepeat": "no-repeat",
+    "chatTextureSize": "auto",
+    "chatTexturePosition": "center bottom",
+    "sidebarTextureSize": "auto",
+    "sidebarTexturePosition": "top left",
+    "borderRadius": "12px"
+  },
+  "colors": {
+    "accent": "oklch(0.58 0.22 293)",
+    "background": "oklch(0.15 0.02 270 / 0.8)",
+    "dark": { "accent": "oklch(0.65 0.22 293)" }
+  }
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `name` / `nameEn` | Display name |
+| `author`, `tagline`, `description`, `tags` | Metadata |
+| `mode` | `"scenic"` (full-window artwork) or `"solid"` |
+| `background.light` / `background.dark` | Background images per color mode (win over `backgroundImage`) |
+| `backgroundImage` | Single background image (used when `background` is absent) |
+| `chatTexture` | Chat texture — pasted onto the input box (composer frame) |
+| `sidebarTexture` | Sidebar texture, path relative to the pack dir |
+| `characters` | Character standees (立绘): `{ "left": …, "right": … }` anchored to the window bottom corners |
+| `preview.light` / `preview.dark` | Thumbnails shown in Settings → Appearance |
+| `style` | Basic style settings (sizes, opacities, blend modes, radius) — all optional |
+| `colors` | Same 6-color + surface system as preset themes, incl. `dark` overrides |
+
+Textures are **constrained to their natural size by default**
+(`textureSize: "auto"`) — they are never stretched or cropped to cover the
+panel. `texturePosition` / `textureSize` set both areas at once;
+`chatTexturePosition`/`chatTextureSize` and `sidebarTexturePosition`/
+`sidebarTextureSize` override each area individually. Character standees use
+`characterHeight` / `characterBottom` / `characterOpacity` (defaults mirror
+DSH: `clamp(560px, 96vh, 1180px)` height, slightly tucked below the edge).
+
+### DSH Skin Compatibility
+
+Folders that follow the DeepSeek Harness Web GUI skin layout are detected
+automatically — you can import e.g. the `maid-atelier` folder from
+[Small-tailqwq/dsh-deep-whale](https://github.com/Small-tailqwq/dsh-deep-whale)
+directly:
+
+- `skin.json` metadata is mapped to the pack manifest
+  (`id` → pack id, `name`/`nameEn`, `author`, `tagline`, `description`,
+  `tags`, `accent` → `colors.accent`, `preview.light`/`dark` → previews).
+- Artwork is discovered by filename convention under `assets/`:
+  `*palace-day*`/`*day*` → light background, `*palace-night*`/`*night*` →
+  dark background, `*sidebar*` → sidebar texture, `*composer*`/`*frame*` →
+  chat texture, `*maid-left*`/`*character-left*`/`*chibi-left*` → left
+  character standee (right analog for the right side).
+- The skin is imported in scenic mode with a subtle glass overlay. Layout
+  follows the skin's own conventions: the backdrop is anchored
+  `center top / cover`, the sidebar corner sprite is drawn at its fixed
+  `130px` size in the top-left corner, the composer frame is pasted onto
+  the input box (width-fit, top-anchored), and character standees hang from
+  the window's bottom corners behind the app UI.
+
+**Security note:** only the declarative `skin.json` and image files are read.
+A DSH skin's executable plugin code (`lib/`, `src/`) is copied verbatim but
+never loaded or executed by Craft.
+
 ## Default Theme
 
 The built-in default theme uses OKLCH colors optimized for accessibility:

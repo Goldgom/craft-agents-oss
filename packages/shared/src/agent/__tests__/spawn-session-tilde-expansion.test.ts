@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, normalize } from 'node:path';
 import type { SpawnSessionRequest, SpawnSessionResult } from '../base-agent.ts';
 import { TestAgent, createMockBackendConfig } from './test-utils.ts';
 
@@ -65,7 +65,7 @@ describe('preExecuteSpawnSession workingDirectory normalization', () => {
 
   it('leaves absolute paths unchanged (aside from normalization)', async () => {
     await agent.invokeSpawn({ prompt: 'hi', workingDirectory: '/tmp/abs/path' });
-    expect(captured[0]?.workingDirectory).toBe('/tmp/abs/path');
+    expect(captured[0]?.workingDirectory).toBe(normalize('/tmp/abs/path'));
   });
 
   it('resolves relative paths against cwd', async () => {

@@ -30,6 +30,11 @@ export interface PanelProps {
   className?: string
   /** Optional inline styles */
   style?: React.CSSProperties
+  /**
+   * Semantic area hint used by theme packs to target textures
+   * (e.g. 'sidebar', 'chat'). Rendered as data-theme-area.
+   */
+  dataThemeArea?: string
   /** Panel content */
   children: React.ReactNode
 }
@@ -42,10 +47,12 @@ export function Panel({
   width,
   className,
   style,
+  dataThemeArea,
   children,
 }: PanelProps) {
   return (
     <div
+      data-theme-area={dataThemeArea}
       className={cn(
         // Base styles shared by all panels
         // Note: No rounded corners here - parent container handles clipping via overflow-hidden

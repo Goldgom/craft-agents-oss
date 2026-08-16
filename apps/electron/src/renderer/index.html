@@ -18,6 +18,10 @@
       document.head.appendChild(s);
     }
   </script>
+  <!-- Theme pack character standees (立绘) — fixed stage below the app UI,
+       above the scenic background. Placed before #root so app content paints
+       over the figures. -->
+  <div id="theme-pack-character-stage"></div>
   <div id="root">
     <!-- Initial loading state: visible until React mounts and replaces #root contents.
          Prevents blank screen on cold start / post-update launch when code cache is stale. -->

@@ -344,6 +344,72 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
   })
 
   // ============================================================
+  // Theme packs (background + chat/sidebar textures + style JSON).
+  // Also compatible with DSH skin folders (skin.json + assets/*.webp).
+  // Only declarative files are read — plugin JS is never executed.
+  // ============================================================
+
+  server.handle(RPC_CHANNELS.theme.GET_PACKS, async () => {
+    const { listThemePacks } = await import('@craft-agent/shared/config')
+    return listThemePacks()
+  })
+
+  server.handle(RPC_CHANNELS.theme.GET_PACKS_DIR, async () => {
+    const { getThemePacksDir } = await import('@craft-agent/shared/config')
+    return getThemePacksDir()
+  })
+
+  server.handle(RPC_CHANNELS.theme.GET_PACK, async (_ctx, packId: string) => {
+    const { loadThemePack } = await import('@craft-agent/shared/config')
+    return loadThemePack(packId)
+  })
+
+  server.handle(RPC_CHANNELS.theme.GET_SELECTED_PACK, async () => {
+    const { getSelectedThemePackId, loadThemePack } = await import('@craft-agent/shared/config')
+    const id = getSelectedThemePackId()
+    return id ? loadThemePack(id) : null
+  })
+
+  server.handle(RPC_CHANNELS.theme.SET_SELECTED_PACK, async (ctx, packId: string | null) => {
+    const { setSelectedThemePackId } = await import('@craft-agent/shared/config')
+    setSelectedThemePackId(packId)
+    pushTyped(server, RPC_CHANNELS.theme.PACK_CHANGED, { to: 'all' }, { packId })
+  })
+
+  server.handle(RPC_CHANNELS.theme.GET_PACK_ASSET, async (_ctx, packId: string, asset: string) => {
+    const { readThemePackAsset } = await import('@craft-agent/shared/config')
+    return readThemePackAsset(packId, asset)
+  })
+
+  server.handle(RPC_CHANNELS.theme.IMPORT_PACK_FOLDER, async (ctx) => {
+    const { requestClientOpenFileDialog } = await import('@craft-agent/server-core/transport')
+    const result = await requestClientOpenFileDialog(server, ctx.clientId, {
+      properties: ['openDirectory'],
+      title: 'Select Theme Pack Folder',
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const { importThemePackFromFolder } = await import('@craft-agent/shared/config')
+    const pack = importThemePackFromFolder(result.filePaths[0])
+    if (pack) {
+      pushTyped(server, RPC_CHANNELS.theme.PACK_CHANGED, { to: 'all' }, { packId: pack.id, imported: true })
+    }
+    return pack
+  })
+
+  server.handle(RPC_CHANNELS.theme.DELETE_PACK, async (ctx, packId: string) => {
+    const { deleteThemePack } = await import('@craft-agent/shared/config')
+    const deleted = deleteThemePack(packId)
+    if (deleted) {
+      pushTyped(server, RPC_CHANNELS.theme.PACK_CHANGED, { to: 'all' }, { packId, deleted: true })
+    }
+    return deleted
+  })
+
+  server.handle(RPC_CHANNELS.theme.BROADCAST_PACK_CHANGE, async (ctx, packId: string | null) => {
+    pushTyped(server, RPC_CHANNELS.theme.PACK_CHANGED, { to: 'all' }, { packId })
+  })
+
+  // ============================================================
   // Views
   // ============================================================
 

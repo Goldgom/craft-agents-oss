@@ -41,6 +41,7 @@ import type {
   AuthRequestEvent,
   AuthCompletedEvent,
   UsageUpdateEvent,
+  SourceActivatedEvent,
   Effect,
 } from '../types'
 import type { Message } from '../../../shared/types'
@@ -233,6 +234,35 @@ export function handleStatus(
           statusType: event.statusType,
         },
       },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle source_activated - a source was auto-activated mid-turn.
+ * Renders as a small centered info notice (role: 'info'), NOT as a user
+ * message. The server re-sends the original message hidden, so the only
+ * transcript footprint is this notice plus the model's new response.
+ */
+export function handleSourceActivated(
+  state: SessionState,
+  event: SourceActivatedEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  const infoMessage: Message = {
+    id: generateMessageId(),
+    role: 'info',
+    content: `[${event.sourceSlug} activated]`,
+    timestamp: Date.now(),
+    infoLevel: 'success',
+  }
+
+  return {
+    state: {
+      session: appendMessage(session, infoMessage),
       streaming,
     },
     effects: [],

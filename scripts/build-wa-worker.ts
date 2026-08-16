@@ -18,8 +18,9 @@
 
 import { spawn } from "bun";
 import { execSync } from "child_process";
-import { existsSync, mkdirSync, statSync } from "fs";
+import { existsSync, mkdirSync, statSync, readFileSync } from "fs";
 import { join } from "path";
+import * as esbuild from "esbuild";
 
 /**
  * Resolve a short git SHA for the build, suffixed with `+dirty` when the
@@ -53,15 +54,13 @@ async function verifyJsFile(filePath: string): Promise<{ valid: boolean; error?:
   const stats = statSync(filePath);
   if (stats.size === 0) return { valid: false, error: "File is empty" };
 
-  const proc = spawn({
-    cmd: ["node", "--check", filePath],
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const stderr = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) return { valid: false, error: stderr || "Syntax error" };
-  return { valid: true };
+  // In-process esbuild parse (avoids bun's node shim executing the file)
+  try {
+    esbuild.transformSync(readFileSync(filePath, "utf8"), { loader: "js" });
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, error: String(err) };
+  }
 }
 
 async function main(): Promise<void> {

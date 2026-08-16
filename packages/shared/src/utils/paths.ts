@@ -38,6 +38,13 @@ export function expandPath(inputPath: string, basePath?: string): string {
     expanded = join(home, expanded.slice(2));
   }
 
+  // Handle ~\ prefix. Historically double-applying toPortablePath on Windows
+  // produced `~\...` (normalize turns ~/ into ~\ there) — accept it on read
+  // so sessions written by older builds still resolve.
+  if (expanded.startsWith('~\\')) {
+    expanded = join(home, expanded.slice(2));
+  }
+
   // Handle ${HOME} and $HOME variables
   expanded = expanded.replace(/\$\{HOME\}/g, home);
   expanded = expanded.replace(/\$HOME(?=\/|$)/g, home);
@@ -65,6 +72,14 @@ export function expandPath(inputPath: string, basePath?: string): string {
  */
 export function toPortablePath(absolutePath: string): string {
   if (!absolutePath) return absolutePath;
+
+  // Already portable (~ prefix) — return unchanged. Re-normalizing here is
+  // NOT safe on Windows: normalize('~/AppData\\x') yields '~\\AppData\\x',
+  // which expandPath historically couldn't expand back. Double application
+  // happens when persistence-queue and createSessionHeader both convert.
+  if (absolutePath.startsWith('~')) {
+    return absolutePath;
+  }
 
   const home = homedir();
   const normalized = normalize(absolutePath);

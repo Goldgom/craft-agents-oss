@@ -349,8 +349,8 @@ html[data-scenic]::before {
   position: fixed;
   inset: 0;
   background-image: var(--background-image);
-  background-size: cover;
-  background-position: center;
+  background-size: var(--theme-pack-bg-size, cover);
+  background-position: var(--theme-pack-bg-position, center);
   background-repeat: no-repeat;
   z-index: -2;
   pointer-events: none;
@@ -372,8 +372,8 @@ html.dark[data-scenic]::after {
 html[data-scenic][data-theme-override]::before {
   background: transparent;
   background-image: var(--background-image);
-  background-size: cover;
-  background-position: center;
+  background-size: var(--theme-pack-bg-size, cover);
+  background-position: var(--theme-pack-bg-position, center);
   background-repeat: no-repeat;
 }
 
@@ -381,6 +381,97 @@ html[data-scenic][data-theme-override]::before {
    Panels with bg-background will become translucent glass */
 html[data-scenic] {
   --background: oklch(0.2 0.005 270 / 0.55);
+}
+
+/* =============================================================================
+   THEME PACK TEXTURES
+
+   Theme packs provide optional chat/sidebar textures rendered as low-z
+   overlays behind panel content (painted under the glass panels in scenic
+   mode). Targeted via [data-theme-area] hooks set by the app shell.
+============================================================================= */
+
+html[data-theme-pack] [data-theme-area="chat"],
+html[data-theme-pack] [data-theme-area="sidebar"] {
+  position: relative;
+}
+
+html[data-theme-pack] [data-theme-area="chat"]::before,
+html[data-theme-pack] [data-theme-area="sidebar"]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  /* Constrain textures to their natural size by default ('auto'), never
+     stretched or cropped to cover the panel. */
+  background-size: var(--theme-pack-texture-size, auto);
+  background-position: var(--theme-pack-texture-position, center);
+  background-repeat: var(--theme-pack-texture-repeat, no-repeat);
+}
+
+html[data-theme-pack] [data-theme-area="chat"]::before {
+  background-image: var(--theme-pack-chat-texture, none);
+  opacity: var(--theme-pack-chat-opacity, 0.9);
+  background-blend-mode: var(--theme-pack-chat-blend, normal);
+  background-size: var(--theme-pack-chat-size, var(--theme-pack-texture-size, auto));
+  background-position: var(--theme-pack-chat-position, var(--theme-pack-texture-position, center));
+  /* The chat texture sits on the input box: paint it above the box's own
+     background but below its content (later positioned siblings win by DOM
+     order), so the frame wraps the input without covering the text. */
+  z-index: 0;
+  border-radius: inherit;
+}
+
+html[data-theme-pack] [data-theme-area="sidebar"]::before {
+  background-image: var(--theme-pack-sidebar-texture, none);
+  opacity: var(--theme-pack-sidebar-opacity, 0.85);
+  background-blend-mode: var(--theme-pack-sidebar-blend, normal);
+  background-size: var(--theme-pack-sidebar-size, var(--theme-pack-texture-size, auto));
+  background-position: var(--theme-pack-sidebar-position, var(--theme-pack-texture-position, center));
+}
+
+/* =============================================================================
+   THEME PACK CHARACTER STANDEES (立绘)
+
+   Fixed bottom-anchored figures (DSH-style character stage). The stage is
+   declared in index.html BEFORE #root: both are positioned at z-index 0, and
+   tree order lets the app UI paint above the figures while they stay above
+   the scenic background and its dark overlay.
+============================================================================= */
+
+#theme-pack-character-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  display: none;
+}
+
+html[data-theme-pack] #theme-pack-character-stage {
+  display: block;
+}
+
+#theme-pack-character-stage img {
+  position: absolute;
+  bottom: var(--theme-pack-char-bottom, clamp(-34px, -2.4vh, -12px));
+  height: var(--theme-pack-char-height, clamp(560px, 96vh, 1180px));
+  width: auto;
+  max-width: none;
+  object-fit: contain;
+  object-position: center bottom;
+  opacity: var(--theme-pack-char-opacity, 0.92);
+  filter: saturate(1.04) brightness(1.06) contrast(1.02)
+    drop-shadow(0 20px 24px rgba(27, 44, 91, 0.14));
+}
+
+#theme-pack-character-stage img[data-char='left'] {
+  left: 0;
+}
+
+#theme-pack-character-stage img[data-char='right'] {
+  right: 0;
 }
 
 /* Inter Font - Opt-in via data-font="inter" attribute

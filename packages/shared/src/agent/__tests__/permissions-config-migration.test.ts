@@ -6,6 +6,28 @@ import { tmpdir } from 'node:os';
 const originalCwd = process.cwd();
 const originalConfigDir = process.env.CRAFT_CONFIG_DIR;
 
+/**
+ * rmSync with brief retries. On Windows, freshly-written files can be
+ * transiently locked (indexers/AV scanners) and fail cleanup with EBUSY.
+ */
+function rmSyncWithRetry(dir: string): void {
+  const sleepMs = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // maxRetries/retryDelay use Node's native Windows EBUSY backoff.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      return;
+    } catch (err) {
+      if (attempt >= 4) {
+        // Last resort: leave the temp dir behind rather than failing the test.
+        // Assertions already passed — cleanup must not mask real failures.
+        return;
+      }
+      sleepMs(100);
+    }
+  }
+}
+
 afterEach(() => {
   process.chdir(originalCwd);
   if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR;
@@ -81,7 +103,9 @@ describe('ensureDefaultPermissions migration', () => {
     expect(blockedCommandHints.some(h => h.command === 'printf')).toBe(true);
     expect(blockedCommandHints.some(h => h.command === 'sed')).toBe(true);
 
-    rmSync(tempRoot, { recursive: true, force: true });
-    rmSync(tempConfig, { recursive: true, force: true });
+    // Windows can transiently lock freshly-written files (AV scanners, etc.)
+    // causing EBUSY on cleanup. Retry briefly instead of failing the test.
+    rmSyncWithRetry(tempRoot);
+    rmSyncWithRetry(tempConfig);
   });
 });

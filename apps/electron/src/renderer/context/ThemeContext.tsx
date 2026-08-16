@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import * as storage from '@/lib/local-storage'
 import {
   resolveTheme,
@@ -10,6 +11,13 @@ import {
   type ThemeFile,
   type ShikiThemeConfig,
 } from '@config/theme'
+import {
+  DEFAULT_THEME_PACK_STYLE,
+} from '@config/theme-pack-style'
+import type {
+  ThemePack,
+  ThemePackAsset,
+} from '@config/theme-pack'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 export type FontFamily = 'inter' | 'system'
@@ -62,6 +70,24 @@ interface ThemeContextType {
   shikiTheme: string
   /** Shiki theme configuration (light/dark variants) */
   shikiConfig: ShikiThemeConfig
+
+  // Theme packs (background + chat/sidebar textures + style JSON; dsh skin.json compatible)
+  /** All installed theme packs */
+  themePacks: ThemePack[]
+  /** Currently selected theme pack id (null = no pack) */
+  themePackId: string | null
+  /** The active pack's manifest */
+  activeThemePack: ThemePack | null
+  /** Display name of the active pack */
+  themePackName: string | null
+  /** Reload installed pack list */
+  refreshThemePacks: () => void
+  /** Select a theme pack (null disables) */
+  setThemePack: (packId: string | null) => void
+  /** Import a pack/skin folder via native dialog */
+  importThemePack: () => Promise<ThemePack | null>
+  /** Delete an installed pack */
+  deleteThemePack: (packId: string) => Promise<boolean>
 }
 
 interface StoredTheme {
@@ -160,6 +186,17 @@ export function ThemeProvider({
   const [themeResolvedFrom, setThemeResolvedFrom] = useState<'none' | 'ipc' | 'fallback'>('none')
   const [themeLoadError, setThemeLoadError] = useState<string | null>(null)
 
+  // === Theme pack state ===
+  const [themePacks, setThemePacks] = useState<ThemePack[]>([])
+  const [themePackId, setThemePackId] = useState<string | null>(null)
+  const [activeThemePack, setActiveThemePack] = useState<ThemePack | null>(null)
+  const [packAssets, setPackAssets] = useState<{
+    background: ThemePackAsset | null
+    chat: ThemePackAsset | null
+    sidebar: ThemePackAsset | null
+    characters: { left: ThemePackAsset | null; right: ThemePackAsset | null }
+  }>({ background: null, chat: null, sidebar: null, characters: { left: null, right: null } })
+
   // === Derived values ===
   const resolvedMode = mode === 'system' ? systemPreference : mode
   // Effective theme: preview > workspace override > app default
@@ -245,15 +282,25 @@ export function ThemeProvider({
     }
   }, [effectiveColorTheme])
 
-  // Resolve theme (preset → final)
+  // Resolve theme (preset → pack colors win → final)
   const resolvedTheme = useMemo(() => {
-    return resolveTheme(presetTheme ?? undefined)
-  }, [presetTheme])
+    const packColors = activeThemePack?.manifest.colors
+    const base = packColors ? { ...presetTheme, ...packColors } : presetTheme
+    return resolveTheme(base ?? undefined)
+  }, [presetTheme, activeThemePack])
 
-  // Determine scenic mode (background image with glass panels)
+  // Determine scenic mode (background image with glass panels).
+  // A pack is scenic when it declares a background (light/dark pair or single image).
   const isScenic = useMemo(() => {
+    if (activeThemePack) {
+      return Boolean(
+        activeThemePack.manifest.background?.light ||
+        activeThemePack.manifest.background?.dark ||
+        activeThemePack.manifest.backgroundImage
+      )
+    }
     return resolvedTheme.mode === 'scenic' && !!resolvedTheme.backgroundImage
-  }, [resolvedTheme])
+  }, [resolvedTheme, activeThemePack])
 
   // Dark-only themes (e.g. Dracula) force dark mode regardless of system mode
   const isDarkOnlyTheme = presetTheme?.supportedModes?.length === 1 && presetTheme.supportedModes[0] === 'dark'
@@ -336,15 +383,63 @@ export function ThemeProvider({
     // Set scenic mode data attribute for CSS targeting
     if (isScenic) {
       root.dataset.scenic = 'true'
-      if (resolvedTheme.backgroundImage) {
-        root.style.setProperty('--background-image', `url("${resolvedTheme.backgroundImage}")`)
+      const bgImage = packAssets.background?.dataUrl ?? resolvedTheme.backgroundImage
+      if (bgImage) {
+        root.style.setProperty('--background-image', `url("${bgImage}")`)
       }
     } else {
       delete root.dataset.scenic
       root.style.removeProperty('--background-image')
     }
 
-  }, [presetTheme, resolvedMode, systemPreference, isScenic, resolvedTheme, isDarkFromMode])
+    // Theme pack texture + style variables
+    const style = { ...DEFAULT_THEME_PACK_STYLE, ...(activeThemePack?.manifest.style ?? {}) }
+    const setPackVar = (name: string, value: string | undefined) => {
+      if (value !== undefined && value !== '') root.style.setProperty(name, value)
+      else root.style.removeProperty(name)
+    }
+    if (activeThemePack) {
+      root.dataset.themePack = 'true'
+      setPackVar('--theme-pack-chat-texture', packAssets.chat?.dataUrl ? `url("${packAssets.chat.dataUrl}")` : undefined)
+      setPackVar('--theme-pack-sidebar-texture', packAssets.sidebar?.dataUrl ? `url("${packAssets.sidebar.dataUrl}")` : undefined)
+      setPackVar('--theme-pack-chat-opacity', String(style.chatOpacity))
+      setPackVar('--theme-pack-chat-blend', style.chatBlend)
+      setPackVar('--theme-pack-sidebar-opacity', String(style.sidebarOpacity))
+      setPackVar('--theme-pack-sidebar-blend', style.sidebarBlend)
+      setPackVar('--theme-pack-texture-size', style.textureSize)
+      setPackVar('--theme-pack-texture-position', style.texturePosition)
+      setPackVar('--theme-pack-texture-repeat', style.textureRepeat)
+      setPackVar('--theme-pack-chat-size', style.chatTextureSize)
+      setPackVar('--theme-pack-chat-position', style.chatTexturePosition)
+      setPackVar('--theme-pack-sidebar-size', style.sidebarTextureSize)
+      setPackVar('--theme-pack-sidebar-position', style.sidebarTexturePosition)
+      setPackVar('--theme-pack-char-height', style.characterHeight)
+      setPackVar('--theme-pack-char-bottom', style.characterBottom)
+      setPackVar('--theme-pack-char-opacity', String(style.characterOpacity))
+      setPackVar('--theme-pack-radius', style.borderRadius)
+      setPackVar('--theme-pack-blur', `${style.backgroundBlur}px`)
+      setPackVar('--theme-pack-bg-size', style.backgroundSize)
+      setPackVar('--theme-pack-bg-position', style.backgroundPosition)
+    } else {
+      delete root.dataset.themePack
+      for (const name of [
+        '--theme-pack-chat-texture', '--theme-pack-sidebar-texture',
+        '--theme-pack-chat-opacity', '--theme-pack-chat-blend',
+        '--theme-pack-sidebar-opacity', '--theme-pack-sidebar-blend',
+        '--theme-pack-texture-size', '--theme-pack-texture-position',
+        '--theme-pack-texture-repeat',
+        '--theme-pack-chat-size', '--theme-pack-chat-position',
+        '--theme-pack-sidebar-size', '--theme-pack-sidebar-position',
+        '--theme-pack-char-height', '--theme-pack-char-bottom',
+        '--theme-pack-char-opacity',
+        '--theme-pack-radius', '--theme-pack-blur',
+        '--theme-pack-bg-size', '--theme-pack-bg-position',
+      ]) {
+        root.style.removeProperty(name)
+      }
+    }
+
+  }, [presetTheme, resolvedMode, systemPreference, isScenic, resolvedTheme, isDarkFromMode, activeThemePack, packAssets])
 
   // Inject CSS variables
   useEffect(() => {
@@ -486,6 +581,125 @@ export function ThemeProvider({
     return cleanup
   }, [activeWorkspaceId])
 
+  // === Theme pack loading ===
+
+  const refreshThemePacks = useCallback(() => {
+    window.electronAPI?.getThemePacks?.().then(setThemePacks).catch(() => setThemePacks([]))
+  }, [])
+
+  useEffect(() => {
+    refreshThemePacks()
+    window.electronAPI?.getSelectedThemePack?.().then((pack) => {
+      setThemePackId(pack?.id ?? null)
+      setActiveThemePack(pack)
+    }).catch(() => {
+      setThemePackId(null)
+      setActiveThemePack(null)
+    })
+
+    const cleanup = window.electronAPI?.onThemePackChange?.((payload) => {
+      refreshThemePacks()
+      if (payload.packId) {
+        window.electronAPI?.getThemePack?.(payload.packId).then((pack) => {
+          setThemePackId(pack?.id ?? null)
+          setActiveThemePack(pack)
+        }).catch(() => {})
+      } else {
+        setThemePackId(null)
+        setActiveThemePack(null)
+      }
+    })
+    return cleanup
+  }, [refreshThemePacks])
+
+  // Load pack artwork as data URLs (re-loads when the active pack or dark mode changes)
+  useEffect(() => {
+    const pack = activeThemePack
+    if (!pack) {
+      setPackAssets({ background: null, chat: null, sidebar: null, characters: { left: null, right: null } })
+      return
+    }
+    let cancelled = false
+    const backgroundRef = isDark
+      ? (pack.manifest.background?.dark ?? pack.manifest.background?.light)
+      : (pack.manifest.background?.light ?? pack.manifest.background?.dark)
+    const refs = {
+      background: backgroundRef ?? pack.manifest.backgroundImage,
+      chat: pack.manifest.chatTexture,
+      sidebar: pack.manifest.sidebarTexture,
+      charLeft: pack.manifest.characters?.left,
+      charRight: pack.manifest.characters?.right,
+    }
+    void (async () => {
+      const [bg, chat, sidebar, charLeft, charRight] = await Promise.all([
+        refs.background ? window.electronAPI?.getThemePackAsset?.(pack.id, refs.background) ?? null : null,
+        refs.chat ? window.electronAPI?.getThemePackAsset?.(pack.id, refs.chat) ?? null : null,
+        refs.sidebar ? window.electronAPI?.getThemePackAsset?.(pack.id, refs.sidebar) ?? null : null,
+        refs.charLeft ? window.electronAPI?.getThemePackAsset?.(pack.id, refs.charLeft) ?? null : null,
+        refs.charRight ? window.electronAPI?.getThemePackAsset?.(pack.id, refs.charRight) ?? null : null,
+      ])
+      if (!cancelled) {
+        setPackAssets({ background: bg, chat, sidebar, characters: { left: charLeft, right: charRight } })
+      }
+    })()
+    return () => { cancelled = true }
+  }, [activeThemePack, isDark])
+
+  // === Theme pack setters ===
+
+  const setThemePack = useCallback((packId: string | null) => {
+    setThemePackId(packId)
+    window.electronAPI?.setSelectedThemePack?.(packId)
+    if (packId) {
+      window.electronAPI?.getThemePack?.(packId).then((pack) => {
+        setActiveThemePack(pack)
+      }).catch(() => {})
+    } else {
+      setActiveThemePack(null)
+    }
+  }, [])
+
+  const importThemePack = useCallback(async (): Promise<ThemePack | null> => {
+    const pack = await window.electronAPI?.importThemePackFolder?.() ?? null
+    if (pack) {
+      refreshThemePacks()
+      setThemePack(pack.id)
+    }
+    return pack
+  }, [refreshThemePacks, setThemePack])
+
+  const deleteThemePack = useCallback(async (packId: string): Promise<boolean> => {
+    const ok = (await window.electronAPI?.deleteThemePack?.(packId)) ?? false
+    if (ok) {
+      refreshThemePacks()
+      if (themePackId === packId) {
+        setThemePackId(null)
+        setActiveThemePack(null)
+      }
+    }
+    return ok
+  }, [refreshThemePacks, themePackId])
+
+  const themePackName = activeThemePack?.manifest.name ?? null
+
+  // Character standees (立绘) — rendered through the fixed stage element
+  // declared in index.html (before #root so app UI paints above them).
+  const characterStage =
+    typeof document !== 'undefined' &&
+    (packAssets.characters.left || packAssets.characters.right)
+      ? createPortal(
+          <>
+            {packAssets.characters.left?.dataUrl ? (
+              <img data-char="left" alt="" src={packAssets.characters.left.dataUrl} />
+            ) : null}
+            {packAssets.characters.right?.dataUrl ? (
+              <img data-char="right" alt="" src={packAssets.characters.right.dataUrl} />
+            ) : null}
+          </>,
+          document.getElementById('theme-pack-character-stage') ?? document.body,
+        )
+      : null
+
   return (
     <ThemeContext.Provider
       value={{
@@ -519,9 +733,20 @@ export function ThemeProvider({
         isScenic,
         shikiTheme,
         shikiConfig,
+
+        // Theme packs
+        themePacks,
+        themePackId,
+        activeThemePack,
+        themePackName,
+        refreshThemePacks,
+        setThemePack,
+        importThemePack,
+        deleteThemePack,
       }}
     >
       {children}
+      {characterStage}
     </ThemeContext.Provider>
   )
 }

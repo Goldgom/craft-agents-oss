@@ -49,6 +49,7 @@ import {
   handleAuthRequest,
   handleAuthCompleted,
   handleUsageUpdate,
+  handleSourceActivated,
 } from './handlers/session'
 
 /**
@@ -216,8 +217,8 @@ export function processEvent(
 
     case 'source_activated':
       // Server-side handles the auto-retry now (craft-agents-oss#804); the renderer
-      // just receives the event for UI feedback. See SessionManager.processEvent.
-      return { state, effects: [] }
+      // shows the activation as a small centered notice (role: 'info').
+      return handleSourceActivated(state, event)
 
     case 'usage_update':
       return handleUsageUpdate(state, event)

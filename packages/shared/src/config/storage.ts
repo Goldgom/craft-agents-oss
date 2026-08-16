@@ -87,6 +87,8 @@ export interface StoredConfig {
   networkProxy?: import('./types.ts').NetworkProxySettings;
   // Windows: path to Git Bash (bash.exe) for the SDK subprocess
   gitBashPath?: string;
+  // Selected theme pack id (theme-packs/<id>/). Undefined = no pack.
+  themePack?: string;
   // User chose "Setup later" during onboarding — skip showing onboarding on next launch
   setupDeferred?: boolean;
   // Server mode — embedded remote server settings
@@ -1530,6 +1532,28 @@ export function setColorTheme(themeId: string): void {
   const config = loadStoredConfig();
   if (!config) return;
   config.colorTheme = themeId;
+  saveConfig(config);
+}
+
+/**
+ * Get the currently selected theme pack id, or null when no pack is active.
+ */
+export function getSelectedThemePackId(): string | null {
+  const config = loadStoredConfig();
+  return config?.themePack ?? null;
+}
+
+/**
+ * Set the selected theme pack id (pass null to disable).
+ */
+export function setSelectedThemePackId(packId: string | null): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  if (packId) {
+    config.themePack = packId;
+  } else {
+    delete config.themePack;
+  }
   saveConfig(config);
 }
 

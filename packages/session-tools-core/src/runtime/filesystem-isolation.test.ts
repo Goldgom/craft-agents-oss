@@ -2,7 +2,8 @@ import { describe, it, expect } from 'bun:test';
 import { buildDarwinSandboxProfile } from './filesystem-isolation.ts';
 
 describe('buildDarwinSandboxProfile', () => {
-  it('includes session subpath write allow', () => {
+  // macOS-only feature; session paths are Windows drive paths here.
+  it.skipIf(process.platform === 'win32')('includes session subpath write allow', () => {
     const profile = buildDarwinSandboxProfile('/tmp/craft-session');
     expect(profile).toContain('(allow file-write* (subpath "/tmp/craft-session"))');
     expect(profile).not.toContain('(deny network*)');

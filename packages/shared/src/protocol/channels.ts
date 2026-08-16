@@ -126,6 +126,17 @@ export const RPC_CHANNELS = {
     GET_ALL_WORKSPACE_THEMES: 'theme:getAllWorkspaceThemes',
     BROADCAST_WORKSPACE_THEME: 'theme:broadcastWorkspaceTheme',
     WORKSPACE_THEME_CHANGED: 'theme:workspaceThemeChanged',
+    // Theme packs (background + textures + style JSON)
+    GET_PACKS: 'theme:getPacks',
+    GET_PACKS_DIR: 'theme:getPacksDir',
+    GET_PACK: 'theme:getPack',
+    GET_SELECTED_PACK: 'theme:getSelectedPack',
+    SET_SELECTED_PACK: 'theme:setSelectedPack',
+    GET_PACK_ASSET: 'theme:getPackAsset',
+    IMPORT_PACK_FOLDER: 'theme:importPackFolder',
+    DELETE_PACK: 'theme:deletePack',
+    BROADCAST_PACK_CHANGE: 'theme:broadcastPackChange',
+    PACK_CHANGED: 'theme:packChanged',
   },
   system: {
     VERSIONS: 'system:versions',

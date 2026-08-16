@@ -51,8 +51,7 @@ export interface MainContentPanelProps {
   /** Whether both sidebar and navigator are hidden (focus mode / CMD+.) */
   isSidebarAndNavigatorHidden?: boolean
   /** Optional className for the container */
-  className?: string
-  /**
+  className?: string  /**
    * Override the navigation state for this panel.
    * When provided, this panel renders based on the override instead of the global NavigationState.
    * Used by PanelSlot to render panels in the panel stack.

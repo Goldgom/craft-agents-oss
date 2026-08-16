@@ -8325,7 +8325,10 @@ export class SessionManager implements ISessionManager {
           // so a legacy renderer's duplicate RPC arriving ~50ms later gets dropped.
           // The pending slot is cleared by the deadline check in sendMessage, by the
           // next matching sendMessage that drops as a duplicate, or by session deletion.
-          this.sendMessage(sessionId, messageWithSuffix).catch(err => {
+          // `hidden: true` keeps this re-send out of the transcript UI — it is a
+          // duplicate of the user's original message, and the renderer shows the
+          // activation as a small centered notice from the source_activated event.
+          this.sendMessage(sessionId, messageWithSuffix, [], [], { hidden: true }).catch(err => {
             sessionLog.error(`Auto-retry sendMessage failed for ${sessionId}:`, err)
           })
         }, 100)

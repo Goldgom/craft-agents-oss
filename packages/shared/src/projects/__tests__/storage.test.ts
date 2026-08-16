@@ -40,7 +40,9 @@ describe('sanitizeAssetFilename', () => {
   });
 
   it('strips path separators and leading dots so an upload stays in the assets dir', () => {
-    expect(sanitizeAssetFilename('..\\..\\etc\\passwd')).toBe('etcpasswd');
+    // Windows basename() splits on `\`, so the remaining segment differs by platform.
+    const expected = process.platform === 'win32' ? 'passwd' : 'etcpasswd';
+    expect(sanitizeAssetFilename('..\\..\\etc\\passwd')).toBe(expected);
   });
 
   it('falls back to a generated name when the input reduces to empty', () => {

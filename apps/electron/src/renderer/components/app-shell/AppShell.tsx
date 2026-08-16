@@ -2383,6 +2383,7 @@ function AppShellContent({
               style={{ width: sidebarWidth }}
               className="h-full font-sans relative"
               data-focus-zone="sidebar"
+              data-theme-area="sidebar"
               tabIndex={sidebarFocused ? 0 : -1}
               onKeyDown={handleSidebarKeyDown}
             >

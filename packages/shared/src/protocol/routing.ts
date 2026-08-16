@@ -85,6 +85,18 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.theme.BROADCAST_WORKSPACE_THEME,
   RPC_CHANNELS.theme.WORKSPACE_THEME_CHANGED,
 
+  // theme packs — local install dir (~/.craft-agent/theme-packs) + native folder dialog
+  RPC_CHANNELS.theme.GET_PACKS,
+  RPC_CHANNELS.theme.GET_PACKS_DIR,
+  RPC_CHANNELS.theme.GET_PACK,
+  RPC_CHANNELS.theme.GET_SELECTED_PACK,
+  RPC_CHANNELS.theme.SET_SELECTED_PACK,
+  RPC_CHANNELS.theme.GET_PACK_ASSET,
+  RPC_CHANNELS.theme.IMPORT_PACK_FOLDER,
+  RPC_CHANNELS.theme.DELETE_PACK,
+  RPC_CHANNELS.theme.BROADCAST_PACK_CHANGE,
+  RPC_CHANNELS.theme.PACK_CHANGED,
+
   // update — local auto-update
   RPC_CHANNELS.update.CHECK,
   RPC_CHANNELS.update.GET_INFO,

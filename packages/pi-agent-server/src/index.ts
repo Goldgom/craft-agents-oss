@@ -73,6 +73,7 @@ import { buildCallLlmRequest, withTimeout, LLM_QUERY_TIMEOUT_MS } from '../../sh
 import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
+import { resolveBashShellPath } from './bash-shell-path.ts';
 import { createWebFetchTool } from './tools/web-fetch.ts';
 import { resolveSearchProvider } from './tools/search/resolve-provider.ts';
 import { createSearchTool } from './tools/search/create-search-tool.ts';
@@ -116,6 +117,8 @@ interface InitMessage {
   customEndpoint?: { api: CustomEndpointApi; supportsImages?: boolean };
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
   piAuth?: { provider: string; credential: PiCredential };
+  /** Windows: globally configured Git Bash path (config.json gitBashPath) for the built-in bash tool */
+  gitBashPath?: string;
 }
 
 interface RuntimeConfigUpdateMessage {
@@ -557,9 +560,20 @@ async function ensureSession(): Promise<AgentSession> {
   //     our hooked versions take effect (permissions + large-response summarization).
   //   - Do NOT pass tool *objects* to `tools` — `allowedToolNames = new Set(options.tools)`
   //     then `.has(name)` returns false for every string lookup → zero tools active.
+  // Windows: point the Pi SDK's built-in bash tool at the globally configured
+  // Git Bash path (config.json gitBashPath). The SDK otherwise only searches
+  // hardcoded Program Files locations + PATH, which misses per-user Git
+  // installs (e.g. %LOCALAPPDATA%\Programs\Git) → "No bash shell found".
+  const bashShellPath = resolveBashShellPath(
+    initConfig?.gitBashPath,
+    process.env.CLAUDE_CODE_GIT_BASH_PATH,
+  );
+  if (bashShellPath) {
+    debugLog(`Bash tool using configured Git Bash: ${bashShellPath}`);
+  }
   const builtinDefs = [
     createReadToolDefinition(cwd),
-    createBashToolDefinition(cwd),
+    createBashToolDefinition(cwd, bashShellPath ? { shellPath: bashShellPath } : undefined),
     createEditToolDefinition(cwd),
     createWriteToolDefinition(cwd),
     createGrepToolDefinition(cwd),
@@ -1621,36 +1635,59 @@ async function handleSetThinkingLevel(msg: Extract<InboundMessage, { type: 'set_
   }
 }
 
+/**
+ * Grace period (ms) between aborting in-flight work and process exit.
+ * Disposing the session fires the Pi SDK's abort → killProcessTree (taskkill
+ * /T on Windows) for any running bash tool child, but those kills are
+ * asynchronous. Exiting immediately orphaned bash.exe → python.exe/bun.exe
+ * children as Windows zombie processes, so give the kills time to complete.
+ */
+const SHUTDOWN_GRACE_MS = 300;
+
+/**
+ * Best-effort cleanup shared by every exit path (shutdown message, stdin
+ * close, uncaught exceptions). Must never throw.
+ */
+function exitAfterCleanup(exitCode: number): void {
+  try {
+    // Unsubscribe events
+    if (unsubscribeEvents) {
+      unsubscribeEvents();
+      unsubscribeEvents = null;
+    }
+
+    // Dispose session — aborts in-flight agent runs, which triggers the SDK's
+    // killProcessTree for running bash tool children.
+    if (piSession) {
+      piSession.dispose();
+      piSession = null;
+    }
+
+    // Stop callback server
+    stopCallbackServer();
+
+    // Reject pending promises
+    for (const [, pending] of pendingPreToolUse) {
+      pending.resolve({ action: 'block', reason: 'Server shutting down' });
+    }
+    pendingPreToolUse.clear();
+
+    for (const [, pending] of pendingToolExecutions) {
+      pending.resolve({ content: 'Server shutting down', isError: true });
+    }
+    pendingToolExecutions.clear();
+  } catch (error) {
+    debugLog(`Cleanup before exit failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  // Give the SDK's async child kills (taskkill on Windows) a moment to reap
+  // bash/python/bun grandchildren before the process exits.
+  setTimeout(() => process.exit(exitCode), SHUTDOWN_GRACE_MS);
+}
+
 function handleShutdown(): void {
   debugLog('Shutdown requested');
-
-  // Unsubscribe events
-  if (unsubscribeEvents) {
-    unsubscribeEvents();
-    unsubscribeEvents = null;
-  }
-
-  // Dispose session
-  if (piSession) {
-    piSession.dispose();
-    piSession = null;
-  }
-
-  // Stop callback server
-  stopCallbackServer();
-
-  // Reject pending promises
-  for (const [, pending] of pendingPreToolUse) {
-    pending.resolve({ action: 'block', reason: 'Server shutting down' });
-  }
-  pendingPreToolUse.clear();
-
-  for (const [, pending] of pendingToolExecutions) {
-    pending.resolve({ content: 'Server shutting down', isError: true });
-  }
-  pendingToolExecutions.clear();
-
-  process.exit(0);
+  exitAfterCleanup(0);
 }
 
 // ============================================================
@@ -1783,7 +1820,7 @@ function main(): void {
     } catch {
       // stdout may be broken — swallow to avoid re-triggering
     }
-    process.exit(1);
+    exitAfterCleanup(1);
   });
 
   process.on('unhandledRejection', (reason) => {
@@ -1794,7 +1831,7 @@ function main(): void {
     } catch {
       // stdout may be broken — swallow to avoid re-triggering
     }
-    process.exit(1);
+    exitAfterCleanup(1);
   });
 }
 

@@ -1584,6 +1584,92 @@ export const ThemeOverrideSchema = z.object({
   );
 
 /**
+ * Zod schema for DSH skin.json (declarative metadata only).
+ * Executable plugin fields are intentionally not represented.
+ */
+export const DshSkinSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  nameEn: z.string().optional(),
+  author: z.string().optional(),
+  tagline: z.string().optional(),
+  description: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  accent: z.string().optional(),
+  bodyAttr: z.string().optional(),
+  preview: z.object({
+    light: z.string().optional(),
+    dark: z.string().optional(),
+  }).optional(),
+  order: z.number().optional(),
+}).passthrough();
+
+const ThemePackStyleSchema = z.object({
+  backgroundSize: z.string().optional(),
+  backgroundPosition: z.string().optional(),
+  backgroundBlur: z.number().min(0).max(50).optional(),
+  chatOpacity: z.number().min(0).max(1).optional(),
+  chatBlend: z.string().optional(),
+  sidebarOpacity: z.number().min(0).max(1).optional(),
+  sidebarBlend: z.string().optional(),
+  textureSize: z.string().optional(),
+  texturePosition: z.string().optional(),
+  textureRepeat: z.string().optional(),
+  chatTextureSize: z.string().optional(),
+  chatTexturePosition: z.string().optional(),
+  sidebarTextureSize: z.string().optional(),
+  sidebarTexturePosition: z.string().optional(),
+  characterHeight: z.string().optional(),
+  characterBottom: z.string().optional(),
+  characterOpacity: z.number().min(0).max(1).optional(),
+  borderRadius: z.string().optional(),
+}).passthrough();
+
+/**
+ * Zod schema for theme-pack.json manifests.
+ * Colors are validated by ThemeOverrideSchema semantics but loosened to
+ * allow pack metadata alongside.
+ */
+export const ThemePackManifestSchema = z.object({
+  name: z.string().min(1, 'Theme pack name is required'),
+  nameEn: z.string().optional(),
+  author: z.string().optional(),
+  tagline: z.string().optional(),
+  description: z.string().optional(),
+  version: z.number().optional(),
+  tags: z.array(z.string()).optional(),
+  preview: z.object({
+    light: z.string().optional(),
+    dark: z.string().optional(),
+  }).optional(),
+  background: z.object({
+    light: z.string().optional(),
+    dark: z.string().optional(),
+  }).optional(),
+  backgroundImage: z.string().optional(),
+  chatTexture: z.string().optional(),
+  sidebarTexture: z.string().optional(),
+  characters: z.object({
+    left: z.string().optional(),
+    right: z.string().optional(),
+  }).optional(),
+  style: ThemePackStyleSchema.optional(),
+  colors: z.object({}).passthrough().optional(),
+  source: z.enum(['dsh']).optional(),
+}).passthrough();
+
+/**
+ * Validate a raw theme pack manifest object.
+ */
+export function validateThemePackManifest(raw: unknown): { valid: true; manifest: import('./theme-pack.ts').ThemePackManifest } | { valid: false; error: string } {
+  const result = ThemePackManifestSchema.safeParse(raw);
+  if (!result.success) {
+    return { valid: false, error: result.error.issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; ') };
+  }
+  return { valid: true, manifest: result.data as import('./theme-pack.ts').ThemePackManifest };
+}
+
+/**
  * Zod schema for preset theme files.
  * Validates theme structure and requires at least one color property.
  */

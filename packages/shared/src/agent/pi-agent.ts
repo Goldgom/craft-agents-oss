@@ -37,7 +37,7 @@ import { getModelById } from '../config/models.ts';
 
 // BaseAgent provides common functionality
 import { BaseAgent } from './base-agent.ts';
-import type { Workspace } from '../config/storage.ts';
+import { getGitBashPath, type Workspace } from '../config/storage.ts';
 
 // Event adapter
 import { PiEventAdapter } from './backend/pi/event-adapter.ts';
@@ -100,6 +100,9 @@ import type { RtkContext } from './core/rtk-rewrite.ts';
 
 // Workspace slug extraction for skill qualification
 import { extractWorkspaceSlug } from '../utils/workspace.ts';
+
+// Process tree reaping (Windows taskkill /T /F, POSIX group kill)
+import { killProcessTree, killProcessTreeAsync } from '../utils/process-tree.ts';
 
 // LLM tool types
 import { LLM_QUERY_TIMEOUT_MS, type LLMQueryRequest, type LLMQueryResult } from './llm-tool.ts';
@@ -556,6 +559,10 @@ export class PiAgent extends BaseAgent {
       providerType: this.config.providerType,
       authType: this.config.authType,
       workspaceId: this.config.workspace.id,
+      // Windows: propagate the globally configured Git Bash path so the Pi
+      // SDK's built-in bash tool uses the same shell as the Claude backend
+      // (per-user Git installs are missed by the SDK's Program Files search).
+      gitBashPath: getGitBashPath()?.trim() || undefined,
       piAuth,
       baseUrl: runtime.baseUrl,
       customEndpoint: runtime.customEndpoint,
@@ -2433,11 +2440,35 @@ export class PiAgent extends BaseAgent {
       // stdin may already be closed
     }
 
-    child.kill('SIGTERM');
-    let result = await Promise.race([
+    // Give the subprocess a chance to process the shutdown message and exit on
+    // its own (its shutdown handler aborts in-flight tool executions and waits
+    // a grace period for bash children to be reaped before exiting).
+    let result: { code: number | null; signal: string | null } | null = await Promise.race([
       waitForExit,
       new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
     ]);
+
+    if (!result && this.subprocess === child) {
+      if (process.platform === 'win32' && pid) {
+        // Windows: child.kill('SIGTERM') is TerminateProcess — it neither runs
+        // the child's cleanup nor kills the bash tool's grandchildren
+        // (bash.exe → python.exe/bun.exe/...). Reap the whole tree with
+        // taskkill /T /F instead so no zombie processes are left behind.
+        this.debug(`Pi subprocess ${pid} did not exit after ${timeoutMs}ms; killing process tree`);
+        try {
+          await killProcessTreeAsync(pid);
+        } catch (err) {
+          this.debug(`Process tree kill failed for pid ${pid}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      } else {
+        this.debug(`Pi subprocess ${pid ?? '(unknown pid)'} did not exit after ${timeoutMs}ms; sending SIGTERM`);
+        child.kill('SIGTERM');
+      }
+      result = await Promise.race([
+        waitForExit,
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 1_000)),
+      ]);
+    }
 
     if (!result && this.subprocess === child) {
       this.debug(`Pi subprocess ${pid ?? '(unknown pid)'} did not exit after ${timeoutMs}ms; sending SIGKILL`);
@@ -2484,7 +2515,16 @@ export class PiAgent extends BaseAgent {
       } catch {
         // stdin may already be closed
       }
-      this.subprocess.kill('SIGTERM');
+      const pid = this.subprocess.pid;
+      if (process.platform === 'win32' && pid) {
+        // Windows: SIGTERM is TerminateProcess — no signal handler runs, so
+        // the subprocess can't clean up and its bash tool children
+        // (bash.exe → python.exe/bun.exe/...) are orphaned as zombies.
+        // taskkill /T /F kills the entire tree.
+        killProcessTree(pid);
+      } else {
+        this.subprocess.kill('SIGTERM');
+      }
       this.subprocess = null;
     }
 

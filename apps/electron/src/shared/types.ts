@@ -542,6 +542,17 @@ export interface ElectronAPI {
   setWorkspaceColorTheme(workspaceId: string, themeId: string | null): Promise<void>
   getAllWorkspaceThemes(): Promise<Record<string, string | undefined>>
 
+  // Theme packs (background + chat/sidebar textures + style JSON; DSH skin.json compatible)
+  getThemePacks(): Promise<import('@config/theme-pack').ThemePack[]>
+  getThemePacksDir(): Promise<string>
+  getThemePack(packId: string): Promise<import('@config/theme-pack').ThemePack | null>
+  getSelectedThemePack(): Promise<import('@config/theme-pack').ThemePack | null>
+  setSelectedThemePack(packId: string | null): Promise<void>
+  getThemePackAsset(packId: string, asset: string): Promise<import('@config/theme-pack').ThemePackAsset | null>
+  importThemePackFolder(): Promise<import('@config/theme-pack').ThemePack | null>
+  deleteThemePack(packId: string): Promise<boolean>
+  onThemePackChange(callback: (payload: { packId: string | null; imported?: boolean; deleted?: boolean }) => void): () => void
+
   // Theme change listeners
   onAppThemeChange(callback: (theme: import('@config/theme').ThemeOverrides | null) => void): () => void
 

@@ -16,9 +16,11 @@ import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopo
 import { useTheme } from '@/context/ThemeContext'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { routes } from '@/lib/navigate'
-import { Monitor, Sun, Moon } from 'lucide-react'
+import { Monitor, Sun, Moon, FolderOpen, PackagePlus, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { ToolIconMapping } from '../../../shared/types'
+import type { ThemePack } from '@config/theme-pack'
 
 import {
   SettingsSection,
@@ -120,6 +122,12 @@ export default function AppearanceSettingsPage() {
     setWorkspaceColorTheme,
     themeLoadError,
     themeResolvedFrom,
+    themePacks,
+    themePackId,
+    activeThemePack,
+    setThemePack,
+    importThemePack,
+    deleteThemePack,
   } = useTheme()
   const { workspaces, sessionStatuses } = useAppShellContext()
 
@@ -128,6 +136,39 @@ export default function AppearanceSettingsPage() {
 
   // Preset themes for the color theme dropdown
   const [presetThemes, setPresetThemes] = useState<PresetTheme[]>([])
+
+  // Theme pack previews (pack id -> data URL of the light preview)
+  const [packPreviews, setPackPreviews] = useState<Record<string, string>>({})
+  useEffect(() => {
+    let cancelled = false
+    const loadPreviews = async () => {
+      const previews: Record<string, string> = {}
+      for (const pack of themePacks) {
+        const ref = pack.manifest.preview?.light ?? pack.manifest.preview?.dark
+        if (!ref) continue
+        const asset = await window.electronAPI?.getThemePackAsset?.(pack.id, ref)
+        if (asset?.dataUrl) previews[pack.id] = asset.dataUrl
+      }
+      if (!cancelled) setPackPreviews(previews)
+    }
+    void loadPreviews()
+    return () => { cancelled = true }
+  }, [themePacks])
+
+  const [importingPack, setImportingPack] = useState(false)
+  const handleImportPack = useCallback(async () => {
+    setImportingPack(true)
+    try {
+      await importThemePack()
+    } finally {
+      setImportingPack(false)
+    }
+  }, [importThemePack])
+
+  const handleOpenPacksFolder = useCallback(async () => {
+    const dir = await window.electronAPI?.getThemePacksDir?.()
+    if (dir) window.electronAPI?.showInFolder?.(dir)
+  }, [])
 
   // Per-workspace theme overrides (workspaceId -> themeId or undefined)
   const [workspaceThemes, setWorkspaceThemes] = useState<Record<string, string | undefined>>({})
@@ -432,6 +473,102 @@ export default function AppearanceSettingsPage() {
                   </SettingsCard>
                 </SettingsSection>
               )}
+
+              {/* Theme Packs */}
+              <SettingsSection
+                title={t("settings.appearance.themePacks")}
+                description={t("settings.appearance.themePacksDesc")}
+              >
+                <SettingsCard>
+                  <SettingsRow label={t("settings.appearance.themePackActive")}>
+                    <SettingsMenuSelect
+                      value={themePackId ?? 'none'}
+                      onValueChange={(value) => setThemePack(value === 'none' ? null : value)}
+                      options={[
+                        { value: 'none', label: t("settings.appearance.themePackNone") },
+                        ...themePacks.map((pack) => ({
+                          value: pack.id,
+                          label: pack.manifest.name || pack.id,
+                        })),
+                      ]}
+                    />
+                  </SettingsRow>
+
+                  {themePacks.length > 0 && (
+                    <div className="flex flex-col gap-2 py-2">
+                      {themePacks.map((pack: ThemePack) => (
+                        <div
+                          key={pack.id}
+                          className={
+                            "flex items-center gap-3 rounded-lg border px-3 py-2 " +
+                            (pack.id === themePackId
+                              ? "border-accent bg-accent/5"
+                              : "border-foreground/10")
+                          }
+                        >
+                          {packPreviews[pack.id] ? (
+                            <img
+                              src={packPreviews[pack.id]}
+                              alt={pack.manifest.name}
+                              className="h-12 w-20 rounded object-cover"
+                            />
+                          ) : (
+                            <div className="h-12 w-20 rounded bg-foreground/5" />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate text-sm font-medium">
+                              {pack.manifest.name}
+                              {pack.source === 'dsh' && (
+                                <Info_Badge color="muted" className="ml-2">dsh</Info_Badge>
+                              )}
+                            </div>
+                            {(pack.manifest.tagline || pack.manifest.author) && (
+                              <div className="truncate text-xs text-muted-foreground">
+                                {pack.manifest.tagline ?? pack.manifest.author}
+                              </div>
+                            )}
+                          </div>
+                          {pack.id === themePackId ? (
+                            <Info_Badge color="success">{t("settings.appearance.themePackInUse")}</Info_Badge>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setThemePack(pack.id)}
+                            >
+                              {t("settings.appearance.themePackApply")}
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={t("settings.appearance.themePackDelete")}
+                            onClick={() => void deleteThemePack(pack.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleImportPack()}
+                      disabled={importingPack}
+                    >
+                      <PackagePlus className="mr-1.5 h-4 w-4" />
+                      {t("settings.appearance.themePackImport")}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => void handleOpenPacksFolder()}>
+                      <FolderOpen className="mr-1.5 h-4 w-4" />
+                      {t("settings.appearance.themePackOpenFolder")}
+                    </Button>
+                  </div>
+                </SettingsCard>
+              </SettingsSection>
 
               {/* Interface */}
               <SettingsSection title={t("settings.appearance.interface")}>
