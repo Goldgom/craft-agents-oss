@@ -187,6 +187,16 @@ export const CHANNEL_MAP = {
   getWorkspaceSettings: invoke(RPC_CHANNELS.workspace.SETTINGS_GET),
   updateWorkspaceSetting: invoke(RPC_CHANNELS.workspace.SETTINGS_UPDATE),
 
+  // Workspace Preference Prompts (全局提示词)
+  getWorkspacePrompts: invoke(RPC_CHANNELS.settings.PROMPTS_GET),
+  saveWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_SAVE),
+  deleteWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_DELETE),
+  generateWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_GENERATE),
+
+  // Data migration (跨系统迁移数据)
+  exportAllData: invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA),
+  importAllData: invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA),
+
   // Folder dialog
   openFolderDialog: invoke(RPC_CHANNELS.dialog.OPEN_FOLDER),
 

@@ -11,6 +11,7 @@ import {
   Keyboard,
   MessageSquare,
   Palette,
+  ScrollText,
   Server,
   ShieldCheck,
   Sparkles,
@@ -27,6 +28,7 @@ export const AiSettingsIcon = ({ className }: IconProps) => <Sparkles className=
 export const AppearanceIcon = ({ className }: IconProps) => <Palette className={className} />
 export const InputIcon = ({ className }: IconProps) => <Keyboard className={className} />
 export const WorkspaceIcon = ({ className }: IconProps) => <Building2 className={className} />
+export const PromptsIcon = ({ className }: IconProps) => <ScrollText className={className} />
 export const PermissionsIcon = ({ className }: IconProps) => <ShieldCheck className={className} />
 export const LabelsIcon = ({ className }: IconProps) => <Tag className={className} />
 export const MessagingSettingsIcon = ({ className }: IconProps) => <MessageSquare className={className} />
@@ -44,6 +46,7 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   appearance: AppearanceIcon,
   input: InputIcon,
   workspace: WorkspaceIcon,
+  prompts: PromptsIcon,
   permissions: PermissionsIcon,
   labels: LabelsIcon,
   messaging: MessagingSettingsIcon,

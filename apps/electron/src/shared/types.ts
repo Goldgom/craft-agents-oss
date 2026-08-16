@@ -32,6 +32,41 @@ import type { ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels';
 export type { ThinkingLevel };
 export { THINKING_LEVELS, DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels';
 
+// Workspace preference prompts (全局提示词)
+import type { WorkspacePrompt } from '@craft-agent/shared/workspaces';
+export type { WorkspacePrompt };
+
+/** Payload for creating/updating a workspace preference prompt. */
+export interface WorkspacePromptInput {
+  id?: string;
+  title: string;
+  content: string;
+  enabled?: boolean;
+  source?: 'manual' | 'ai';
+}
+
+/** Response of the data-migration export (全局数据导出). */
+export interface ExportAllDataResponse {
+  canceled: boolean;
+  success?: boolean;
+  destPath?: string;
+  bytes?: number;
+  fileCount?: number;
+  workspaceCount?: number;
+  warnings?: string[];
+  error?: string;
+}
+
+/** Response of the data-migration import (全局数据导入). */
+export interface ImportAllDataResponse {
+  canceled: boolean;
+  success?: boolean;
+  fileCount?: number;
+  importedWorkspaces?: Array<{ id: string; name: string; slug?: string; rootPath: string }>;
+  warnings?: string[];
+  error?: string;
+}
+
 export type {
   CoreMessage as Message,
   CoreMessageRole as MessageRole,
@@ -451,6 +486,16 @@ export interface ElectronAPI {
   // Workspace Settings (per-workspace configuration)
   getWorkspaceSettings(workspaceId: string): Promise<WorkspaceSettings | null>
   updateWorkspaceSetting<K extends keyof WorkspaceSettings>(workspaceId: string, key: K, value: WorkspaceSettings[K]): Promise<void>
+
+  // Workspace Preference Prompts (全局提示词)
+  getWorkspacePrompts(workspaceId: string): Promise<WorkspacePrompt[]>
+  saveWorkspacePrompt(workspaceId: string, prompt: WorkspacePromptInput): Promise<WorkspacePrompt>
+  deleteWorkspacePrompt(workspaceId: string, promptId: string): Promise<{ success: boolean }>
+  generateWorkspacePrompt(workspaceId: string, description: string): Promise<{ title: string; content: string }>
+
+  // Data migration (跨系统迁移数据)
+  exportAllData(): Promise<ExportAllDataResponse>
+  importAllData(): Promise<ImportAllDataResponse>
 
   // Folder dialog
   openFolderDialog(): Promise<string | null>

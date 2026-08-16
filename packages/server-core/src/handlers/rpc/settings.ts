@@ -9,11 +9,19 @@ import { getWorkspaceOrThrow } from '@craft-agent/server-core/handlers'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { requestClientOpenFileDialog } from '@craft-agent/server-core/transport'
+import { requestClientSaveFileDialog } from '@craft-agent/server-core/transport'
 import { isValidWorkingDirectory } from '../../utils/path-validation'
+import type { WorkspacePrompt } from '@craft-agent/shared/workspaces'
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.workspace.SETTINGS_GET,
   RPC_CHANNELS.workspace.SETTINGS_UPDATE,
+  RPC_CHANNELS.settings.PROMPTS_GET,
+  RPC_CHANNELS.settings.PROMPTS_SAVE,
+  RPC_CHANNELS.settings.PROMPTS_DELETE,
+  RPC_CHANNELS.settings.PROMPTS_GENERATE,
+  RPC_CHANNELS.settings.EXPORT_ALL_DATA,
+  RPC_CHANNELS.settings.IMPORT_ALL_DATA,
   RPC_CHANNELS.preferences.READ,
   RPC_CHANNELS.preferences.WRITE,
   RPC_CHANNELS.drafts.GET,
@@ -46,6 +54,55 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.rtk.GET_STATUS,
   RPC_CHANNELS.rtk.GET_GAIN,
 ] as const
+
+/**
+ * Build the one-shot generation request for an AI-authored workspace
+ * preference prompt. The model must answer with a strict JSON object.
+ */
+function buildWorkspacePromptGenerationPrompt(description: string): string {
+  return `You are helping a user create a workspace preference prompt for their AI coding assistant.
+
+A workspace preference is a standing instruction that is injected into every conversation in the workspace. It should describe conventions the assistant must follow (style, terminology, architecture, constraints, workflow, environment notes, etc.).
+
+Based on the user's description below, write a concise, reusable preference. Write the content as imperative instructions for the assistant (e.g. "Always use...", "Never...", "Prefer..."). Use the language the user used in the description.
+
+Reply with ONLY a JSON object (no markdown fences, no commentary) in exactly this shape:
+{"title": "<short title, at most 60 characters>", "content": "<the preference instructions, 2-8 sentences>"}
+
+User's description:
+${description}`
+}
+
+/**
+ * Parse the model's JSON answer, tolerating markdown fences and surrounding
+ * prose. Falls back to using the raw text as content when JSON parsing fails.
+ */
+function parseGeneratedWorkspacePrompt(
+  raw: string,
+  titleMax: number,
+  contentMax: number,
+): { title: string; content: string } {
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim()
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  if (start !== -1 && end > start) {
+    try {
+      const obj = JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>
+      const title = String(obj.title ?? '').trim().slice(0, titleMax)
+      const content = String(obj.content ?? '').trim().slice(0, contentMax)
+      if (title && content) return { title, content }
+    } catch {
+      // fall through to raw-text fallback
+    }
+  }
+  return {
+    title: raw.slice(0, 60) || 'Workspace preference',
+    content: raw.slice(0, contentMax),
+  }
+}
 
 export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): void {
   // ============================================================
@@ -367,5 +424,224 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   server.handle(RPC_CHANNELS.settings.GET_NETWORK_PROXY, async () => {
     const { getNetworkProxySettings } = await import('@craft-agent/shared/config/storage')
     return getNetworkProxySettings()
+  })
+
+  // ============================================================
+  // Workspace Preference Prompts (全局提示词)
+  // ============================================================
+
+  // List all preference prompts for a workspace
+  server.handle(RPC_CHANNELS.settings.PROMPTS_GET, async (_ctx, workspaceId: string) => {
+    const workspace = getWorkspaceOrThrow(workspaceId)
+    const { loadWorkspacePrompts } = await import('@craft-agent/shared/workspaces')
+    return loadWorkspacePrompts(workspace.rootPath)
+  })
+
+  // Upsert a preference prompt (manual or AI-generated)
+  server.handle(RPC_CHANNELS.settings.PROMPTS_SAVE, async (_ctx, workspaceId: string, input: unknown): Promise<WorkspacePrompt> => {
+    const workspace = getWorkspaceOrThrow(workspaceId)
+    const { loadWorkspaceConfig, saveWorkspaceConfig, loadWorkspacePrompts, WORKSPACE_PROMPT_LIMITS } = await import('@craft-agent/shared/workspaces')
+    const { randomUUID } = await import('node:crypto')
+
+    if (!input || typeof input !== 'object') {
+      throw new Error('Invalid prompt payload')
+    }
+    const raw = input as Record<string, unknown>
+    const title = String(raw.title ?? '').trim()
+    const content = String(raw.content ?? '').trim()
+    if (!title) throw new Error('Prompt title is required')
+    if (!content) throw new Error('Prompt content is required')
+    if (title.length > WORKSPACE_PROMPT_LIMITS.titleMax) {
+      throw new Error(`Prompt title must be at most ${WORKSPACE_PROMPT_LIMITS.titleMax} characters`)
+    }
+    if (content.length > WORKSPACE_PROMPT_LIMITS.contentMax) {
+      throw new Error(`Prompt content must be at most ${WORKSPACE_PROMPT_LIMITS.contentMax} characters`)
+    }
+
+    const config = loadWorkspaceConfig(workspace.rootPath)
+    if (!config) {
+      throw new Error(`Failed to load workspace config: ${workspaceId}`)
+    }
+    const prompts = loadWorkspacePrompts(workspace.rootPath)
+    const existingId = typeof raw.id === 'string' ? raw.id : null
+    const existing = existingId ? prompts.find(p => p.id === existingId) : undefined
+
+    if (!existing && prompts.length >= WORKSPACE_PROMPT_LIMITS.maxPrompts) {
+      throw new Error(`At most ${WORKSPACE_PROMPT_LIMITS.maxPrompts} preference prompts per workspace`)
+    }
+
+    const now = Date.now()
+    const prompt: WorkspacePrompt = {
+      id: existing?.id ?? randomUUID(),
+      title,
+      content,
+      enabled: existing
+        ? (raw.enabled === undefined ? existing.enabled : Boolean(raw.enabled))
+        : raw.enabled !== false,
+      source: existing
+        ? (raw.source === 'ai' ? 'ai' : existing.source)
+        : (raw.source === 'ai' ? 'ai' : 'manual'),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    const next = prompts.filter(p => p.id !== prompt.id)
+    next.push(prompt)
+    config.prompts = next
+    saveWorkspaceConfig(workspace.rootPath, config)
+    deps.platform.logger.info(`Workspace preference prompt saved: ${prompt.title} (${workspaceId})`)
+    return prompt
+  })
+
+  // Delete a preference prompt
+  server.handle(RPC_CHANNELS.settings.PROMPTS_DELETE, async (_ctx, workspaceId: string, id: string) => {
+    const workspace = getWorkspaceOrThrow(workspaceId)
+    const { loadWorkspaceConfig, saveWorkspaceConfig, loadWorkspacePrompts } = await import('@craft-agent/shared/workspaces')
+    const config = loadWorkspaceConfig(workspace.rootPath)
+    if (!config) {
+      throw new Error(`Failed to load workspace config: ${workspaceId}`)
+    }
+    const remaining = loadWorkspacePrompts(workspace.rootPath).filter(p => p.id !== id)
+    config.prompts = remaining
+    saveWorkspaceConfig(workspace.rootPath, config)
+    deps.platform.logger.info(`Workspace preference prompt deleted: ${id} (${workspaceId})`)
+    return { success: true }
+  })
+
+  // AI-generate a preference prompt from a description via a hidden one-shot session
+  server.handle(RPC_CHANNELS.settings.PROMPTS_GENERATE, async (_ctx, workspaceId: string, description: string) => {
+    const workspace = getWorkspaceOrThrow(workspaceId)
+    const { WORKSPACE_PROMPT_LIMITS } = await import('@craft-agent/shared/workspaces')
+
+    const desc = String(description ?? '').trim()
+    if (!desc) throw new Error('A description is required to generate a preference prompt')
+    if (desc.length > WORKSPACE_PROMPT_LIMITS.descriptionMax) {
+      throw new Error(`Description must be at most ${WORKSPACE_PROMPT_LIMITS.descriptionMax} characters`)
+    }
+
+    // One-shot hidden session: the workspace's default model/connection answers
+    // the generation request, then we parse the JSON result and delete the session.
+    const session = await deps.sessionManager.createSession(
+      workspaceId,
+      { name: 'Generate workspace preference', hidden: true },
+      { emitCreatedEvent: false },
+    )
+
+    try {
+      const finalText = await new Promise<string>((resolve, reject) => {
+        let settled = false
+        const settle = (fn: () => void) => {
+          if (settled) return
+          settled = true
+          fn()
+        }
+        const timeout = setTimeout(() => {
+          settle(() => {
+            unsubscribe()
+            reject(new Error('Prompt generation timed out'))
+          })
+        }, 120_000)
+        const unsubscribe = deps.sessionManager.onSessionComplete((evt) => {
+          if (evt.sessionId !== session.id) return
+          settle(() => {
+            clearTimeout(timeout)
+            unsubscribe()
+            if (evt.reason === 'complete' && evt.finalText?.trim()) resolve(evt.finalText.trim())
+            else reject(new Error(`Prompt generation failed (${evt.reason})`))
+          })
+        })
+        void deps.sessionManager.sendMessage(session.id, buildWorkspacePromptGenerationPrompt(desc)).catch((err: unknown) => {
+          settle(() => {
+            clearTimeout(timeout)
+            unsubscribe()
+            reject(err instanceof Error ? err : new Error(String(err)))
+          })
+        })
+      })
+
+      const { title, content } = parseGeneratedWorkspacePrompt(finalText, WORKSPACE_PROMPT_LIMITS.titleMax, WORKSPACE_PROMPT_LIMITS.contentMax)
+      return { title, content }
+    } finally {
+      // Best-effort cleanup of the hidden one-shot session
+      await deps.sessionManager.archiveSession(session.id).catch(() => {})
+      await deps.sessionManager.deleteSession(session.id).catch(() => {})
+    }
+  })
+
+  // ============================================================
+  // Data Migration — export all workspaces and settings
+  // ============================================================
+
+  // Ask the client for a save location, then export the entire app state
+  // (global settings + every workspace) to a portable ZIP archive.
+  server.handle(RPC_CHANNELS.settings.EXPORT_ALL_DATA, async (ctx) => {
+    const stamp = new Date().toISOString().slice(0, 10)
+    const dialogResult = await requestClientSaveFileDialog(server, ctx.clientId, {
+      title: 'Export Craft Agent data',
+      defaultPath: `craft-agent-backup-${stamp}.zip`,
+      filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+    })
+    if (dialogResult.canceled || !dialogResult.filePath) {
+      return { canceled: true }
+    }
+
+    try {
+      const { exportAllData } = await import('@craft-agent/shared/migration')
+      const result = await exportAllData({ destPath: dialogResult.filePath })
+      deps.platform.logger.info(
+        `Data export complete: ${result.workspaceCount} workspace(s), ${result.fileCount} file(s) → ${result.destPath} (${result.bytes} bytes)`,
+      )
+      return {
+        canceled: false,
+        success: true,
+        destPath: result.destPath,
+        bytes: result.bytes,
+        fileCount: result.fileCount,
+        workspaceCount: result.workspaceCount,
+        warnings: result.warnings,
+      }
+    } catch (error) {
+      deps.platform.logger.error('Data export failed', error)
+      return {
+        canceled: false,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  })
+
+  // Ask the client for a backup archive, then restore all workspaces and
+  // settings onto this machine (cross-platform path remapping included).
+  server.handle(RPC_CHANNELS.settings.IMPORT_ALL_DATA, async (ctx) => {
+    const dialogResult = await requestClientOpenFileDialog(server, ctx.clientId, {
+      title: 'Import Craft Agent data',
+      properties: ['openFile'],
+      filters: [{ name: 'Craft Agent backup', extensions: ['zip'] }],
+    })
+    if (dialogResult.canceled || !dialogResult.filePaths[0]) {
+      return { canceled: true }
+    }
+
+    try {
+      const { importAllData } = await import('@craft-agent/shared/migration')
+      const result = await importAllData({ sourcePath: dialogResult.filePaths[0] })
+      deps.platform.logger.info(
+        `Data import complete: ${result.importedWorkspaces.length} workspace(s), ${result.fileCount} file(s)`,
+      )
+      return {
+        canceled: false,
+        success: true,
+        fileCount: result.fileCount,
+        importedWorkspaces: result.importedWorkspaces,
+        warnings: result.warnings,
+      }
+    } catch (error) {
+      deps.platform.logger.error('Data import failed', error)
+      return {
+        canceled: false,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
   })
 }

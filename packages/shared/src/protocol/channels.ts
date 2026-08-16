@@ -236,6 +236,12 @@ export const RPC_CHANNELS = {
     GET_SERVER_CONFIG: 'settings:getServerConfig',
     SET_SERVER_CONFIG: 'settings:setServerConfig',
     GET_SERVER_STATUS: 'settings:getServerStatus',
+    PROMPTS_GET: 'settings:getWorkspacePrompts',
+    PROMPTS_SAVE: 'settings:saveWorkspacePrompt',
+    PROMPTS_DELETE: 'settings:deleteWorkspacePrompt',
+    PROMPTS_GENERATE: 'settings:generateWorkspacePrompt',
+    EXPORT_ALL_DATA: 'settings:exportAllData',
+    IMPORT_ALL_DATA: 'settings:importAllData',
   },
   pi: {
     GET_API_KEY_PROVIDERS: 'pi:getApiKeyProviders',

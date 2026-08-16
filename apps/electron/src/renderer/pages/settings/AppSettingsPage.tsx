@@ -14,12 +14,15 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Download, Upload } from 'lucide-react'
+import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
 import { Spinner } from '@craft-agent/ui'
+import { useAppShellContext } from '@/context/AppShellContext'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { NetworkProxySettings } from '../../../shared/types'
 
@@ -88,12 +91,21 @@ function validateProxyUrl(url: string): string | undefined {
   }
 }
 
+/** Human-readable byte size for the export toast. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
+}
+
 // ============================================
 // Main Component
 // ============================================
 
 export default function AppSettingsPage() {
   const { t } = useTranslation()
+  const appShellContext = useAppShellContext()
 
   // Notifications state
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
@@ -198,6 +210,57 @@ export default function AppSettingsPage() {
     setProxyForm(savedProxyForm)
     setProxyError(undefined)
   }, [savedProxyForm])
+
+  // Data migration export/import
+  const [exporting, setExporting] = useState(false)
+  const [importing, setImporting] = useState(false)
+
+  const handleExportAllData = useCallback(async () => {
+    setExporting(true)
+    try {
+      const res = await window.electronAPI.exportAllData()
+      if (res.canceled) return
+      if (res.success) {
+        toast.success(
+          t('settings.data.exportSuccess', {
+            path: res.destPath,
+            size: formatBytes(res.bytes ?? 0),
+            workspaces: res.workspaceCount ?? 0,
+          }),
+        )
+      } else {
+        toast.error(res.error ?? t('settings.data.exportError'))
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.data.exportError'))
+    } finally {
+      setExporting(false)
+    }
+  }, [t])
+
+  const handleImportAllData = useCallback(async () => {
+    setImporting(true)
+    try {
+      const res = await window.electronAPI.importAllData()
+      if (res.canceled) return
+      if (res.success) {
+        toast.success(
+          t('settings.data.importSuccess', {
+            workspaces: res.importedWorkspaces?.length ?? 0,
+            files: res.fileCount ?? 0,
+          }),
+        )
+        // New workspaces were added to config — refresh the workspace list.
+        await appShellContext.onRefreshWorkspaces?.()
+      } else {
+        toast.error(res.error ?? t('settings.data.importError'))
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.data.importError'))
+    } finally {
+      setImporting(false)
+    }
+  }, [appShellContext, t])
 
   return (
     <div className="h-full flex flex-col">
@@ -305,6 +368,59 @@ export default function AppSettingsPage() {
                       </Button>
                     </SettingsCardFooter>
                   )}
+                </SettingsCard>
+              </SettingsSection>
+
+              {/* Data */}
+              <SettingsSection title={t("settings.data.title")} description={t("settings.data.exportDesc")}>
+                <SettingsCard divided>
+                  <SettingsRow
+                    label={t("settings.data.export")}
+                    description={t("settings.data.credentialsNote")}
+                    action={
+                      <Button
+                        size="sm"
+                        onClick={handleExportAllData}
+                        disabled={exporting || importing}
+                      >
+                        {exporting ? (
+                          <>
+                            <Spinner className="mr-1.5" />
+                            {t("settings.data.exporting")}
+                          </>
+                        ) : (
+                          <>
+                            <Download className="h-3.5 w-3.5 mr-1.5" />
+                            {t("settings.data.exportAction")}
+                          </>
+                        )}
+                      </Button>
+                    }
+                  />
+                  <SettingsRow
+                    label={t("settings.data.import")}
+                    description={t("settings.data.importDesc")}
+                    action={
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleImportAllData}
+                        disabled={exporting || importing}
+                      >
+                        {importing ? (
+                          <>
+                            <Spinner className="mr-1.5" />
+                            {t("settings.data.importing")}
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="h-3.5 w-3.5 mr-1.5" />
+                            {t("settings.data.importAction")}
+                          </>
+                        )}
+                      </Button>
+                    }
+                  />
                 </SettingsCard>
               </SettingsSection>
 

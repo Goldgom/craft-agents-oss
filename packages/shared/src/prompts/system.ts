@@ -12,6 +12,10 @@ import { formatBytes } from '../utils/binary-detection.ts';
 import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
+import {
+  loadEnabledWorkspacePrompts,
+  formatWorkspacePromptsForPrompt,
+} from '../workspaces/prompts.ts';
 
 /** Maximum size of CLAUDE.md file to include (10KB) */
 const MAX_CONTEXT_FILE_SIZE = 10 * 1024;
@@ -371,6 +375,13 @@ export function getSystemPrompt(
   // Optional workspace-project context (injected after preferences, before debug+context-files)
   const projectBlock = projectContext ? formatProjectContextForPrompt(projectContext) : '';
 
+  // Workspace preference prompts (全局提示词) — enabled entries are injected
+  // live, so toggling a preference applies from the next message without a
+  // session restart.
+  const workspacePromptsBlock = workspaceRootPath
+    ? formatWorkspacePromptsForPrompt(loadEnabledWorkspacePrompts(workspaceRootPath))
+    : '';
+
   // Fall back to the user's current preference when callers don't pin/pass a value,
   // so forgetting the argument can't silently re-enable the co-author trailer (see #576).
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference();
@@ -379,7 +390,7 @@ export function getSystemPrompt(
   // to enable prompt caching. The system prompt stays static and cacheable.
   // Safe Mode context is also in user messages for the same reason.
   const basePrompt = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy);
-  const fullPrompt = `${basePrompt}${preferences}${projectBlock}${debugContext}${projectContextFiles}`;
+  const fullPrompt = `${basePrompt}${preferences}${workspacePromptsBlock}${projectBlock}${debugContext}${projectContextFiles}`;
 
   debug('[getSystemPrompt] full prompt length:', fullPrompt.length);
 

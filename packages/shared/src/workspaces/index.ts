@@ -7,10 +7,20 @@
 // Types
 export type {
   WorkspaceConfig,
+  WorkspacePrompt,
   CreateWorkspaceInput,
   LoadedWorkspace,
   WorkspaceSummary,
 } from './types.ts';
+
+// Preference prompts (全局提示词)
+export {
+  WORKSPACE_PROMPT_LIMITS,
+  normalizeWorkspacePrompt,
+  loadWorkspacePrompts,
+  loadEnabledWorkspacePrompts,
+  formatWorkspacePromptsForPrompt,
+} from './prompts.ts';
 
 // Storage functions
 export {

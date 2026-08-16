@@ -220,6 +220,12 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.GET_SERVER_CONFIG,
   RPC_CHANNELS.settings.SET_SERVER_CONFIG,
   RPC_CHANNELS.settings.GET_SERVER_STATUS,
+  RPC_CHANNELS.settings.PROMPTS_GET,
+  RPC_CHANNELS.settings.PROMPTS_SAVE,
+  RPC_CHANNELS.settings.PROMPTS_DELETE,
+  RPC_CHANNELS.settings.PROMPTS_GENERATE,
+  RPC_CHANNELS.settings.EXPORT_ALL_DATA,
+  RPC_CHANNELS.settings.IMPORT_ALL_DATA,
 ])
 
 // ---------------------------------------------------------------------------

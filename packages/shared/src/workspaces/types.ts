@@ -15,6 +15,24 @@ import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
 
 /**
+ * A workspace-wide preference prompt. Injected into every conversation in the
+ * workspace (when enabled) so agents consistently follow the workspace's
+ * conventions — style, terminology, constraints, environment notes, etc.
+ *
+ * Created manually or AI-generated from a short description in the UI.
+ */
+export interface WorkspacePrompt {
+  id: string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  /** How the prompt was authored. */
+  source: 'manual' | 'ai';
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
  * Local MCP server configuration
  * Controls whether stdio-based (local subprocess) MCP servers can be spawned.
  */
@@ -56,6 +74,12 @@ export interface WorkspaceConfig {
    * Resolution order: ENV (CRAFT_LOCAL_MCP_ENABLED) > workspace config > default (true)
    */
   localMcpServers?: LocalMcpConfig;
+
+  /**
+   * Global preference prompts injected into every conversation in this
+   * workspace. Each entry can be toggled on/off independently.
+   */
+  prompts?: WorkspacePrompt[];
 
   createdAt: number;
   updatedAt: number;
