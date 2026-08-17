@@ -12,6 +12,7 @@ import {
   cpSync,
   lstatSync,
   readdirSync,
+  readFileSync,
 } from 'fs';
 import { join, dirname } from 'path';
 import { createHash } from 'crypto';
@@ -551,8 +552,7 @@ export function copyPiAgentServer(config: BuildConfig): void {
   const piDestDir = join(electronDir, 'resources', 'pi-agent-server');
 
   if (!existsSync(join(piSourceDir, 'index.js'))) {
-    console.warn(`Warning: Pi agent server not found at ${piSourceDir}/index.js. Pi SDK sessions will not work.`);
-    return;
+    throw new Error(`Pi agent server not found at ${piSourceDir}/index.js. Run the Pi server build before packaging.`);
   }
 
   console.log('Copying Pi Agent Server...');
@@ -565,7 +565,12 @@ export function copyPiAgentServer(config: BuildConfig): void {
   const koffiSource = join(rootDir, 'node_modules', 'koffi');
 
   if (!existsSync(koffiSource)) {
-    console.warn('  Warning: koffi not found in node_modules. Pi SDK sessions may not work.');
+    const bundleSource = readFileSync(join(piSourceDir, 'index.js'), 'utf8');
+    const requiresKoffi = bundleSource.includes('"koffi"') || bundleSource.includes("'koffi'");
+    if (requiresKoffi) {
+      throw new Error('The Pi bundle imports koffi, but koffi is not installed. Packaging cannot continue.');
+    }
+    console.log('  Pi bundle has no koffi dependency; skipping native koffi resources');
     return;
   }
 
@@ -672,7 +677,7 @@ export function verifyMcpServersExist(config: BuildConfig): void {
     throw new Error(`Session MCP server not found at ${sessionPath}`);
   }
   if (!existsSync(piPath)) {
-    console.warn(`Warning: Pi agent server not found at ${piPath}. Pi SDK sessions will not work.`);
+    throw new Error(`Pi agent server not found at ${piPath}. Refusing to create an incomplete package.`);
   }
 }
 

@@ -57,6 +57,22 @@ describe('resolveServerPath fallback', () => {
     const paths = resolveBackendRuntimePaths(hostRuntime);
     expect(paths.piServerPath).toBe(join(primaryDir, 'index.js'));
   });
+
+  it('falls back to the Pi TypeScript entrypoint when the dev build is missing', () => {
+    const appRoot = join(tmpBase, 'source-fallback', 'apps', 'electron', 'dist');
+    const sourcePath = join(tmpBase, 'source-fallback', 'packages', 'pi-agent-server', 'src', 'index.ts');
+    mkdirSync(join(sourcePath, '..'), { recursive: true });
+    writeFileSync(sourcePath, '// dev stub');
+
+    const hostRuntime: BackendHostRuntimeContext = {
+      appRootPath: appRoot,
+      resourcesPath: appRoot,
+      isPackaged: false,
+    };
+
+    const paths = resolveBackendRuntimePaths(hostRuntime);
+    expect(paths.piServerPath).toBe(sourcePath);
+  });
 });
 
 describe('resolveRipgrepPath', () => {

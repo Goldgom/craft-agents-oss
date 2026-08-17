@@ -22,7 +22,7 @@ import {
   StyledDropdownMenuItem,
 } from "@/components/ui/styled-dropdown"
 import { cn } from "@/lib/utils"
-import { Check, ChevronDown, Eye, EyeOff, Loader2 } from "lucide-react"
+import { Check, ChevronDown, Eye, EyeOff, Loader2, RefreshCw } from "lucide-react"
 import { pickTierDefaults, resolveTierModels, type PiModelInfo } from "./tier-models"
 import {
   resolveCustomEndpointPayload,
@@ -203,6 +203,8 @@ export function ApiKeyInput({
   const [connectionDefaultModel, setConnectionDefaultModel] = useState(initialValues?.connectionDefaultModel ?? '')
   const [customApi, setCustomApi] = useState<CustomEndpointApi>(initialValues?.customApi ?? 'openai-completions')
   const [modelError, setModelError] = useState<string | null>(null)
+  const [listModelsLoading, setListModelsLoading] = useState(false)
+  const [listModelsError, setListModelsError] = useState<string | null>(null)
 
   // Bedrock auth state
   const [bedrockAuthMethod, setBedrockAuthMethod] = useState<'iam_credentials' | 'environment'>('iam_credentials')
@@ -284,6 +286,7 @@ export function ApiKeyInput({
       setBaseUrl(preset.url)
     }
     setModelError(null)
+    setListModelsError(null)
     // Pre-fill recommended model for Ollama; clear for all others
     // (Default provider presets hide the field entirely, others default to provider model IDs when empty)
     if (preset.key === 'ollama') {
@@ -316,6 +319,7 @@ export function ApiKeyInput({
     setActivePreset(nextPresetState.activePreset)
     setLastNonCustomPreset(nextPresetState.lastNonCustomPreset)
     setModelError(null)
+    setListModelsError(null)
     if (!connectionDefaultModel.trim()) {
       if (presetKey === 'ollama') {
         setConnectionDefaultModel('qwen3-coder')
@@ -328,6 +332,33 @@ export function ApiKeyInput({
       } else if (presetKey === 'openrouter' || presetKey === 'vercel-ai-gateway' || presetKey === 'custom') {
         setConnectionDefaultModel(providerType === 'openai' ? COMPAT_OPENAI_DEFAULTS : COMPAT_ANTHROPIC_DEFAULTS)
       }
+    }
+  }
+
+  const handleListCustomModels = async () => {
+    const endpoint = baseUrl.trim()
+    if (!endpoint) {
+      setListModelsError(t('apiSetup.baseUrlRequired'))
+      return
+    }
+    setListModelsLoading(true)
+    setListModelsError(null)
+    try {
+      const result = await window.electronAPI.listCustomModels({
+        baseUrl: endpoint,
+        apiKey: apiKey.trim() || undefined,
+        api: customApi,
+      })
+      if (result.models.length === 0) {
+        setListModelsError(result.error ?? t('apiSetup.listModelsFailed'))
+        return
+      }
+      setConnectionDefaultModel(result.models.map(model => model.id).join(', '))
+      setModelError(null)
+    } catch (error) {
+      setListModelsError(error instanceof Error ? error.message : t('apiSetup.listModelsFailed'))
+    } finally {
+      setListModelsLoading(false)
     }
   }
 
@@ -784,12 +815,31 @@ export function ApiKeyInput({
         </div>
       ) : !isDefaultProviderPreset && (
         <div className="space-y-2">
-          <Label htmlFor="connection-default-model" className="text-muted-foreground font-normal">
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="connection-default-model" className="text-muted-foreground font-normal">
             Default Model{' '}
             <span className="text-foreground/30">
               · {!isBedrock && baseUrl.trim() ? 'required' : 'optional'}
             </span>
-          </Label>
+            </Label>
+            {!isBedrock && baseUrl.trim() && (
+              <button
+                type="button"
+                onClick={handleListCustomModels}
+                disabled={isDisabled || listModelsLoading}
+                title={t('apiSetup.listModels')}
+                className={cn(
+                  "inline-flex h-6 items-center gap-1 rounded-[6px] px-2 text-[12px] font-medium",
+                  "text-foreground/50 hover:bg-foreground/5 hover:text-foreground",
+                  "focus:outline-none focus:ring-1 focus:ring-foreground/20",
+                  (isDisabled || listModelsLoading) && "pointer-events-none opacity-50"
+                )}
+              >
+                {listModelsLoading ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                {listModelsLoading ? t('apiSetup.loadingModels') : t('apiSetup.listModels')}
+              </button>
+            )}
+          </div>
           <div className={cn(
             "rounded-md shadow-minimal transition-colors",
             "bg-foreground-2 focus-within:bg-background",
@@ -810,6 +860,9 @@ export function ApiKeyInput({
           </div>
           {modelError && (
             <p className="text-xs text-destructive">{modelError}</p>
+          )}
+          {listModelsError && (
+            <p className="text-xs text-destructive">{listModelsError}</p>
           )}
           <p className="text-xs text-foreground/30">
             Comma-separated list. The first model is the default. The last is used for summarization.

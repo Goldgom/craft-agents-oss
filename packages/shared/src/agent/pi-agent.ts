@@ -14,6 +14,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { FileAttachment } from '../utils/files.ts';
@@ -429,7 +430,12 @@ export class PiAgent extends BaseAgent {
     const runtime = getBackendRuntime(this.config);
     const piServerPath = runtime.paths?.piServer;
     if (!piServerPath) {
-      throw new Error('piServerPath not configured. Cannot spawn Pi subprocess.');
+      throw new Error(
+        'Pi server entrypoint is not configured. Rebuild the Pi server or run in development with the repository present.',
+      );
+    }
+    if (!existsSync(piServerPath)) {
+      throw new Error(`Pi server entrypoint does not exist: ${piServerPath}`);
     }
 
     const nodePath = runtime.paths?.node || process.execPath;

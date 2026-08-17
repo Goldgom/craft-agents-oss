@@ -1,4 +1,4 @@
-import { RPC_CHANNELS, type LlmConnectionSetup } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type LlmConnectionSetup, type ListCustomModelsParams, type ListCustomModelsResult } from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { setSetupDeferred } from '@craft-agent/shared/config/storage'
@@ -17,6 +17,110 @@ import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
 
 // Local OAuth state
 let copilotOAuthAbort: AbortController | null = null
+
+const CUSTOM_MODELS_REQUEST_TIMEOUT_MS = 15_000
+
+/** Resolve the provider's conventional model-list endpoint from the configured base URL. */
+export function resolveCustomModelsUrl(baseUrl: string, api: ListCustomModelsParams['api']): string {
+  const trimmed = baseUrl.trim()
+  if (!trimmed) throw new Error('Base URL is required')
+
+  let url: URL
+  try {
+    url = new URL(trimmed)
+  } catch {
+    throw new Error('Base URL is not a valid URL')
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Base URL must use HTTP or HTTPS')
+  }
+  if (url.username || url.password) {
+    throw new Error('Base URL must not contain credentials')
+  }
+
+  const path = url.pathname.replace(/\/+$/, '')
+  if (/\/models$/i.test(path)) {
+    url.pathname = path
+  } else if (api === 'anthropic-messages' && !/\/v1$/i.test(path)) {
+    url.pathname = `${path}/v1/models`
+  } else {
+    url.pathname = `${path}/models`
+  }
+  url.search = ''
+  url.hash = ''
+  return url.toString()
+}
+
+function extractCustomModels(payload: unknown): Array<{ id: string; name: string }> {
+  const record = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : undefined
+  const entries = Array.isArray(payload)
+    ? payload
+    : Array.isArray(record?.data)
+      ? record.data
+      : Array.isArray(record?.models)
+        ? record.models
+        : []
+
+  const models: Array<{ id: string; name: string }> = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    const item = typeof entry === 'string'
+      ? { id: entry }
+      : entry !== null && typeof entry === 'object' ? entry as Record<string, unknown> : undefined
+    const id = typeof item?.id === 'string' ? item.id.trim()
+      : typeof item?.model === 'string' ? item.model.trim()
+        : typeof item?.name === 'string' ? item.name.trim() : ''
+    if (!id || seen.has(id)) continue
+    const name = typeof item?.name === 'string' && item.name.trim() ? item.name.trim() : id
+    seen.add(id)
+    models.push({ id, name })
+  }
+  return models
+}
+
+async function listCustomModels(params: ListCustomModelsParams): Promise<ListCustomModelsResult> {
+  let endpoint: string
+  try {
+    endpoint = resolveCustomModelsUrl(params.baseUrl, params.api)
+  } catch (error) {
+    return { models: [], error: error instanceof Error ? error.message : 'Invalid base URL' }
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CUSTOM_MODELS_REQUEST_TIMEOUT_MS)
+  try {
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    if (params.api === 'anthropic-messages') {
+      if (params.apiKey?.trim()) headers['x-api-key'] = params.apiKey.trim()
+      headers['anthropic-version'] = '2023-06-01'
+    } else if (params.apiKey?.trim()) {
+      headers.Authorization = `Bearer ${params.apiKey.trim()}`
+    }
+
+    const response = await fetch(endpoint, { method: 'GET', headers, signal: controller.signal })
+    if (!response.ok) {
+      const detail = (await response.text()).trim().replace(/\s+/g, ' ').slice(0, 200)
+      return { models: [], error: `Provider returned ${response.status}${detail ? `: ${detail}` : ''}` }
+    }
+    let payload: unknown
+    try {
+      payload = await response.json()
+    } catch {
+      return { models: [], error: 'Provider returned an invalid JSON response' }
+    }
+    const models = extractCustomModels(payload)
+    return models.length > 0
+      ? { models }
+      : { models: [], error: 'Provider response did not contain any model IDs' }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return { models: [], error: 'Request timed out' }
+    }
+    return { models: [], error: error instanceof Error ? error.message : 'Failed to fetch models' }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.llmConnections.LIST,
@@ -40,6 +144,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.copilot.LOGOUT,
   RPC_CHANNELS.settings.SETUP_LLM_CONNECTION,
   RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP,
+  RPC_CHANNELS.settings.LIST_CUSTOM_MODELS,
   RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS,
   RPC_CHANNELS.pi.GET_PROVIDER_BASE_URL,
   RPC_CHANNELS.pi.GET_PROVIDER_MODELS,
@@ -374,6 +479,12 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       deps.platform.logger?.info(`[testLlmConnectionSetup] Elapsed: ${elapsed}ms, threw: ${msg.slice(0, 1000)}`)
       return { success: false, error: parseTestConnectionError(msg) }
     }
+  })
+
+  // Discover models from an arbitrary custom endpoint. This runs on the owning
+  // workspace server so remote workspaces use the server's network and secrets.
+  server.handle(RPC_CHANNELS.settings.LIST_CUSTOM_MODELS, async (_ctx, params: ListCustomModelsParams): Promise<ListCustomModelsResult> => {
+    return listCustomModels(params)
   })
 
   // ============================================================

@@ -616,6 +616,18 @@ export interface TestLlmConnectionResult {
   error?: string
 }
 
+/** Parameters for discovering models from an arbitrary OpenAI/Anthropic-compatible endpoint. */
+export interface ListCustomModelsParams {
+  baseUrl: string
+  apiKey?: string
+  api: 'openai-completions' | 'anthropic-messages'
+}
+
+export interface ListCustomModelsResult {
+  models: Array<{ id: string; name: string }>
+  error?: string
+}
+
 // ---------------------------------------------------------------------------
 // Source / skill types
 // ---------------------------------------------------------------------------

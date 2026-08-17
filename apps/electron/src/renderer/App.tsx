@@ -331,14 +331,14 @@ export default function App() {
    * remote server and are reachable via the remote server management page).
    * In thin-client remote mode the list comes from the remote server itself.
    */
-  const applyWorkspaceFilter = (list: Workspace[]): Workspace[] => {
+  const applyWorkspaceFilter = useCallback((list: Workspace[]): Workspace[] => {
     if (serverContext?.mode === 'remote') return list
     return list.filter((w) => !w.remoteServer)
-  }
+  }, [serverContext?.mode])
 
-  const applyAndSetWorkspaces = (list: Workspace[]) => {
+  const applyAndSetWorkspaces = useCallback((list: Workspace[]) => {
     setWorkspaces(applyWorkspaceFilter(list))
-  }
+  }, [applyWorkspaceFilter, setWorkspaces])
 
   // Derive workspace slug for SDK skill qualification
   const windowWorkspaceSlug = useMemo(() => {

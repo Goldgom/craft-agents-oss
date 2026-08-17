@@ -175,10 +175,24 @@ function resolveServerPath(hostRuntime: BackendHostRuntimeContext, serverName: s
       join(hostRuntime.appRootPath, 'dist', 'resources', serverName, 'index.js'),
     ]);
   }
-  return resolveUpwards(
+  const builtPath = resolveUpwards(
     hostRuntime.appRootPath,
     join('packages', serverName, 'dist', 'index.js'),
+    10,
   );
+  if (builtPath) return builtPath;
+
+  // `electron:dev` normally builds the Pi server first, but keep the local
+  // workflow usable when dist/ was cleaned or a build was interrupted. Bun
+  // can execute the TypeScript entry directly; packaged apps never use this.
+  if (serverName === 'pi-agent-server') {
+    return resolveUpwards(
+      hostRuntime.appRootPath,
+      join('packages', serverName, 'src', 'index.ts'),
+      10,
+    );
+  }
+  return undefined;
 }
 
 /**

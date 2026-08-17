@@ -241,7 +241,8 @@ async function buildMcpServers(): Promise<void> {
 
   // Build Pi agent server with bun (not esbuild) because its Pi SDK deps are ESM-only.
   // esbuild with packages:external leaves them as require() calls which fail at runtime.
-  // Optional: skip if package directory is missing (e.g., not synced to OSS).
+  // Pi sessions require this server; fail during startup if the package is missing
+  // instead of letting the first chat fail with an unresolved runtime path.
   if (existsSync(join(PI_AGENT_SERVER_DIR, "src"))) {
     const piResult = await buildPiAgentServer();
     if (!piResult.success) {
@@ -251,6 +252,16 @@ async function buildMcpServers(): Promise<void> {
     console.log("✅ Pi agent server built");
   } else {
     console.log("⏭️  Pi agent server skipped (package not found)");
+  }
+
+  const piOutput = await verifyJsFile(PI_AGENT_SERVER_OUTPUT);
+  if (!piOutput.valid) {
+    console.error(
+      "Pi agent server entrypoint is unusable after the dev build:",
+      piOutput.error,
+      PI_AGENT_SERVER_OUTPUT,
+    );
+    process.exit(1);
   }
 }
 
