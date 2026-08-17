@@ -217,6 +217,10 @@ export class WsRpcServer implements RpcServer {
   }
 
   invokeClient(clientId: string, channel: string, ...args: any[]): Promise<any> {
+    return this.invokeClientWithTimeout(clientId, channel, 30_000, ...args)
+  }
+
+  invokeClientWithTimeout(clientId: string, channel: string, timeoutMs: number, ...args: any[]): Promise<any> {
     return new Promise((resolve, reject) => {
       const client = this.clients.get(clientId)
 
@@ -239,10 +243,10 @@ export class WsRpcServer implements RpcServer {
       const id = randomUUID()
       const timeout = setTimeout(() => {
         this.pendingInvokes.delete(id)
-        const err = new Error(`Client request timeout: ${channel} (30000ms)`)
+        const err = new Error(`Client request timeout: ${channel} (${timeoutMs}ms)`)
         ;(err as any).code = 'CLIENT_REQUEST_TIMEOUT'
         reject(err)
-      }, 30_000)
+      }, timeoutMs)
 
       this.pendingInvokes.set(id, { clientId, resolve, reject, timeout })
 
@@ -496,6 +500,7 @@ export class WsRpcServer implements RpcServer {
                   clientId: prevClient.id,
                   registeredChannels: [...this.handlers.keys()],
                   reconnected: true,
+                  supportsAppPing: true,
                 }
                 this.safeSend(ws, serializeEnvelope(ack))
 
@@ -520,6 +525,7 @@ export class WsRpcServer implements RpcServer {
                   registeredChannels: [...this.handlers.keys()],
                   reconnected: true,
                   stale: true,
+                  supportsAppPing: true,
                 }
                 this.safeSend(ws, serializeEnvelope(ack))
 
@@ -579,6 +585,7 @@ export class WsRpcServer implements RpcServer {
           serverVersion: this.serverVersion || undefined,
           clientId,
           registeredChannels: [...this.handlers.keys()],
+          supportsAppPing: true,
         }
         this.safeSend(ws, serializeEnvelope(ack))
 
@@ -606,7 +613,12 @@ export class WsRpcServer implements RpcServer {
         return
       }
 
-      if (envelope.type === 'request') {
+      if (envelope.type === 'ping') {
+        // App-level heartbeat — reply immediately so the client can measure
+        // round-trip liveness and detect silent drops (30s keepalive).
+        const response: MessageEnvelope = { id: envelope.id, type: 'pong' }
+        this.safeSend(ws, serializeEnvelope(response))
+      } else if (envelope.type === 'request') {
         await this.onRequest(client, envelope)
       } else if (envelope.type === 'response') {
         this.onClientResponse(envelope)

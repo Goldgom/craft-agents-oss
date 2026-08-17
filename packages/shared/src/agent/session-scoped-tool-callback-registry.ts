@@ -89,6 +89,16 @@ export interface SessionScopedToolCallbacks {
    */
   browserPaneFns?: BrowserPaneFns;
 
+  /**
+   * Client shell bridge for the `localbash` tool — executes a command on the
+   * user's LOCAL machine via the `client:runShell` capability. Set by the
+   * server host (SessionManager) when a capable client is connected; falls
+   * back to host execution otherwise.
+   */
+  runLocalShellFn?: (
+    args: import('@craft-agent/session-tools-core').ShellExecArgs,
+  ) => Promise<import('@craft-agent/session-tools-core').ShellExecResult>;
+
   /** Set labels on a session (defaults to current). */
   setSessionLabelsFn?: (sessionId: string | undefined, labels: string[]) => void | Promise<void>;
   /** Set status on a session (defaults to current). */

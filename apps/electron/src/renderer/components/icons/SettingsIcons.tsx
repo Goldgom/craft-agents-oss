@@ -8,6 +8,7 @@
 
 import {
   Building2,
+  Cloud,
   Keyboard,
   MessageSquare,
   Palette,
@@ -32,6 +33,7 @@ export const PromptsIcon = ({ className }: IconProps) => <ScrollText className={
 export const PermissionsIcon = ({ className }: IconProps) => <ShieldCheck className={className} />
 export const LabelsIcon = ({ className }: IconProps) => <Tag className={className} />
 export const MessagingSettingsIcon = ({ className }: IconProps) => <MessageSquare className={className} />
+export const RemoteServersIcon = ({ className }: IconProps) => <Cloud className={className} />
 export const ServerSettingsIcon = ({ className }: IconProps) => <Server className={className} />
 export const ShortcutsIcon = ({ className }: IconProps) => <Keyboard className={className} />
 export const PreferencesIcon = ({ className }: IconProps) => <UserCircle className={className} />
@@ -50,6 +52,7 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   permissions: PermissionsIcon,
   labels: LabelsIcon,
   messaging: MessagingSettingsIcon,
+  remoteServers: RemoteServersIcon,
   server: ServerSettingsIcon,
   shortcuts: ShortcutsIcon,
   preferences: PreferencesIcon,

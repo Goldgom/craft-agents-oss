@@ -189,6 +189,9 @@ export type {
   SendDeveloperFeedbackArgs,
 } from './handlers/index.ts';
 
+// Shell execution (runshell / localbash)
+export { executeShell, type ShellExecArgs, type ShellExecResult } from './shell.ts';
+
 // Tool definitions — single source of truth
 export {
   // Individual Zod schemas
@@ -203,6 +206,8 @@ export {
   UpdatePreferencesSchema,
   TransformDataSchema,
   ScriptSandboxSchema,
+  RunShellSchema,
+  LocalBashSchema,
   RenderTemplateSchema,
   // Browser tool schema
   BrowserToolSchema,

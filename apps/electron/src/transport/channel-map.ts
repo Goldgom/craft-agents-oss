@@ -197,6 +197,15 @@ export const CHANNEL_MAP = {
   exportAllData: invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA),
   importAllData: invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA),
 
+  // Remote server management (远程服务器管理)
+  getRemoteServers: invoke(RPC_CHANNELS.remoteServers.LIST),
+  saveRemoteServer: invoke(RPC_CHANNELS.remoteServers.SAVE),
+  deleteRemoteServer: invoke(RPC_CHANNELS.remoteServers.DELETE),
+  testRemoteServer: invoke(RPC_CHANNELS.remoteServers.TEST),
+  listRemoteServerWorkspaces: invoke(RPC_CHANNELS.remoteServers.LIST_WORKSPACES),
+  createRemoteServerWorkspace: invoke(RPC_CHANNELS.remoteServers.CREATE_WORKSPACE),
+  openRemoteServerWorkspace: invoke(RPC_CHANNELS.remoteServers.OPEN_WORKSPACE),
+
   // Folder dialog
   openFolderDialog: invoke(RPC_CHANNELS.dialog.OPEN_FOLDER),
 

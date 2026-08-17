@@ -28,6 +28,30 @@ export const CLIENT_SAVE_FILE_DIALOG = 'client:saveFileDialog'
 /** Capability: drive a local `BrowserPaneManager` instance for a remote agent. */
 export const CLIENT_BROWSER_INVOKE = 'client:browser:invoke'
 
+/**
+ * Capability: run a shell command on the CLIENT machine on behalf of the
+ * server (powers the `localbash` session tool in remote mode).
+ */
+export const CLIENT_RUN_SHELL = 'client:runShell'
+
+/** Request shape for CLIENT_RUN_SHELL. */
+export interface ClientShellRequest {
+  command: string
+  cwd?: string
+  timeoutMs?: number
+}
+
+/** Result shape returned by CLIENT_RUN_SHELL. */
+export interface ClientShellResult {
+  command: string
+  cwd: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  timedOut: boolean
+  truncated: boolean
+}
+
 /** All capabilities a local Electron client advertises on handshake. */
 export const LOCAL_CLIENT_CAPABILITIES: readonly string[] = [
   CLIENT_OPEN_EXTERNAL,
@@ -37,6 +61,7 @@ export const LOCAL_CLIENT_CAPABILITIES: readonly string[] = [
   CLIENT_OPEN_FILE_DIALOG,
   CLIENT_SAVE_FILE_DIALOG,
   CLIENT_BROWSER_INVOKE,
+  CLIENT_RUN_SHELL,
 ]
 
 // ---------------------------------------------------------------------------

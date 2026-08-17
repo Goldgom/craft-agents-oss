@@ -188,6 +188,14 @@ export interface SessionToolContext {
   /** Absolute path to workspace folder (~/.craft-agent/workspaces/{id}) */
   workspacePath: string;
 
+  /**
+   * Client shell bridge for `localbash` — executes a command on the user's
+   * LOCAL machine. Wired lazily from the session-scoped tool callback
+   * registry by attachSessionSelfManagementBindings; undefined when no
+   * client with the `client:runShell` capability is connected.
+   */
+  runLocalShellFn?: (args: import('./shell.ts').ShellExecArgs) => Promise<import('./shell.ts').ShellExecResult>;
+
   /** Path to sources folder within workspace */
   get sourcesPath(): string;
 

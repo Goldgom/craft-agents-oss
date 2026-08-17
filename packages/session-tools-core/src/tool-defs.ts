@@ -32,6 +32,7 @@ import { handleCredentialPrompt } from './handlers/credential-prompt.ts';
 import { handleUpdatePreferences } from './handlers/update-preferences.ts';
 import { handleTransformData } from './handlers/transform-data.ts';
 import { handleScriptSandbox } from './handlers/script-sandbox.ts';
+import { handleRunShell, handleLocalBash } from './handlers/shell-tools.ts';
 import { handleRenderTemplate } from './handlers/render-template.ts';
 import { handleSendDeveloperFeedback } from './handlers/send-developer-feedback.ts';
 import { handleSetSessionLabels } from './handlers/set-session-labels.ts';
@@ -145,6 +146,18 @@ export const ScriptSandboxSchema = z.object({
   inputFiles: z.array(z.string()).optional().describe('Optional input file paths relative to the session directory.'),
   stdin: z.string().optional().describe('Optional stdin payload passed to the script process.'),
   timeoutMs: z.number().min(1).max(15000).optional().describe('Optional timeout in milliseconds (default 5000, max 15000).'),
+});
+
+export const RunShellSchema = z.object({
+  command: z.string().describe('Shell command to execute on the server that hosts this session (remote mode: the remote server; local mode: this machine).'),
+  cwd: z.string().optional().describe('Working directory for the command. Defaults to the session working directory or workspace root.'),
+  timeoutMs: z.number().min(1000).max(600000).optional().describe('Timeout in milliseconds (default 120000).'),
+});
+
+export const LocalBashSchema = z.object({
+  command: z.string().describe('Shell command to execute on the CLIENT machine (the user\'s local computer), e.g. to read local files or run local tools. In remote mode this runs on the client; in local mode it is equivalent to runshell.'),
+  cwd: z.string().optional().describe('Working directory on the client machine. Defaults to the session working directory or workspace root.'),
+  timeoutMs: z.number().min(1000).max(600000).optional().describe('Timeout in milliseconds (default 120000).'),
 });
 
 export const RenderTemplateSchema = z.object({
@@ -417,6 +430,30 @@ Use this for short Python/Node/Bun snippets when strict Explore-mode Bash parsin
 - Timeout is capped (default 5000ms, max 15000ms)
 - Network/filesystem isolation is required in all permission modes; if unavailable, execution is blocked`,
 
+  runshell: `Run a shell command on the server that hosts this session.
+
+In remote mode this executes on the remote server (its filesystem, its installed tools); in local mode it executes on this machine. Use this for anything the agent's own environment must do — building, testing, reading server-side files.
+
+**Behavior:**
+- Command runs through the platform shell (/bin/sh or cmd.exe)
+- Working directory defaults to the session working directory (or workspace root)
+- stdout/stderr and the exit code are returned; output is capped at 200k chars
+- Non-zero exit codes are reported as errors
+- Default timeout 120s (max 600s)
+
+**Remote vs local:** prefer this tool for server-side work. To reach the CLIENT machine (e.g. read files on the user's computer while a session runs remotely), use \`localbash\` instead.`,
+
+  localbash: `Run a shell command on the CLIENT machine (the user's local computer).
+
+In remote mode the agent runs on a server, but this tool executes on the machine where the user's app is open — for reading local files, running local commands, or transferring data between client and server (capture output and continue with it in the agent).
+
+**Behavior:**
+- In remote mode the command is forwarded to the connected client via the client:runShell bridge
+- In local mode it behaves exactly like \`runshell\`
+- When no client bridge is available the tool reports an error instead of silently running elsewhere
+- stdout/stderr and the exit code are returned; output is capped at 200k chars
+- Default timeout 120s (max 600s)`,
+
   render_template: `Render a source's HTML template with data.
 
 Use this when a source provides HTML templates for rich rendering of its data (e.g., issue detail views, email threads, ticket summaries).
@@ -647,6 +684,8 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'update_user_preferences', description: TOOL_DESCRIPTIONS.update_user_preferences, inputSchema: UpdatePreferencesSchema, executionMode: 'registry', safeMode: 'block', handler: handleUpdatePreferences },
   { name: 'transform_data', description: TOOL_DESCRIPTIONS.transform_data, inputSchema: TransformDataSchema, executionMode: 'registry', safeMode: 'allow', handler: handleTransformData },
   { name: 'script_sandbox', description: TOOL_DESCRIPTIONS.script_sandbox, inputSchema: ScriptSandboxSchema, executionMode: 'registry', safeMode: 'allow', handler: handleScriptSandbox },
+  { name: 'runshell', description: TOOL_DESCRIPTIONS.runshell, inputSchema: RunShellSchema, executionMode: 'registry', safeMode: 'block', handler: handleRunShell },
+  { name: 'localbash', description: TOOL_DESCRIPTIONS.localbash, inputSchema: LocalBashSchema, executionMode: 'registry', safeMode: 'block', handler: handleLocalBash },
   { name: 'render_template', description: TOOL_DESCRIPTIONS.render_template, inputSchema: RenderTemplateSchema, executionMode: 'registry', safeMode: 'allow', handler: handleRenderTemplate },
   { name: 'send_developer_feedback', description: TOOL_DESCRIPTIONS.send_developer_feedback, inputSchema: SendDeveloperFeedbackSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSendDeveloperFeedback },
   { name: 'call_llm', description: TOOL_DESCRIPTIONS.call_llm, inputSchema: CallLlmSchema, executionMode: 'backend', safeMode: 'allow', readOnly: true, handler: null },

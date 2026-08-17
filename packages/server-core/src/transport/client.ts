@@ -13,6 +13,8 @@ import {
   PROTOCOL_VERSION,
   REQUEST_TIMEOUT_MS,
   SEQUENCE_ACK_INTERVAL_MS,
+  CLIENT_HEARTBEAT_INTERVAL_MS,
+  CLIENT_HEARTBEAT_TIMEOUT_MS,
   isErrorCode,
   type ErrorCode,
   type MessageEnvelope,
@@ -72,6 +74,8 @@ export interface TransportConnectionState {
   nextRetryInMs?: number
   lastError?: TransportConnectionError
   lastClose?: TransportCloseInfo
+  /** Timestamp of the last successful heartbeat round-trip (ping→pong). */
+  lastHeartbeatAt?: number
   updatedAt: number
 }
 
@@ -94,6 +98,10 @@ export interface WsRpcClientOptions {
   autoReconnect?: boolean
   /** Handshake/connect timeout in ms. Default: 10_000 */
   connectTimeout?: number
+  /** Client heartbeat ping interval in ms. Default: CLIENT_HEARTBEAT_INTERVAL_MS (30_000). */
+  heartbeatIntervalMs?: number
+  /** Client heartbeat pong watchdog in ms. Default: CLIENT_HEARTBEAT_TIMEOUT_MS (15_000). */
+  heartbeatTimeoutMs?: number
   /** Capabilities to advertise on handshake. Handlers must be registered via handleCapability(). */
   clientCapabilities?: string[]
   /** Runtime mode — local embedded or remote thin-client connection. */
@@ -125,6 +133,12 @@ export class WsRpcClient implements RpcClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private connectTimer: ReturnType<typeof setTimeout> | null = null
   private backoffResetTimer: ReturnType<typeof setTimeout> | null = null
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private heartbeatPendingId: string | null = null
+  private heartbeatPendingTimer: ReturnType<typeof setTimeout> | null = null
+  private lastHeartbeatAt = 0
+  /** Set from handshake_ack — only servers that advertise app-level ping support get client heartbeats. */
+  private serverSupportsAppPing = false
   private destroyed = false
   /** Set when server sends shuttingDown — prevents reconnection attempts. */
   private permanentlyClosed = false
@@ -145,6 +159,8 @@ export class WsRpcClient implements RpcClient {
   private readonly maxReconnectDelay: number
   private readonly autoReconnect: boolean
   private readonly connectTimeout: number
+  private readonly heartbeatIntervalMs: number
+  private readonly heartbeatTimeoutMs: number
   private readonly mode: TransportMode
   private readonly tlsRejectUnauthorized: boolean
 
@@ -158,6 +174,8 @@ export class WsRpcClient implements RpcClient {
     this.maxReconnectDelay = opts?.maxReconnectDelay ?? 30_000
     this.autoReconnect = opts?.autoReconnect ?? true
     this.connectTimeout = opts?.connectTimeout ?? 10_000
+    this.heartbeatIntervalMs = opts?.heartbeatIntervalMs ?? CLIENT_HEARTBEAT_INTERVAL_MS
+    this.heartbeatTimeoutMs = opts?.heartbeatTimeoutMs ?? CLIENT_HEARTBEAT_TIMEOUT_MS
     this.mode = opts?.mode ?? this.inferMode(url)
     this.tlsRejectUnauthorized = opts?.tlsRejectUnauthorized ?? true
 
@@ -466,6 +484,7 @@ export class WsRpcClient implements RpcClient {
       clearTimeout(this.backoffResetTimer)
       this.backoffResetTimer = null
     }
+    this.stopHeartbeat()
 
     this.manualReconnectRequested = false
     this.currentHandshakeWasReconnect = false
@@ -500,6 +519,73 @@ export class WsRpcClient implements RpcClient {
   }
 
   // -------------------------------------------------------------------------
+  // Heartbeat (app-level keepalive)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Every 30s send a `ping` envelope; if the server does not reply with a
+   * matching `pong` within CLIENT_HEARTBEAT_TIMEOUT_MS the connection is
+   * declared dead and closed so auto-reconnect kicks in. This keeps the
+   * connection alive through idle NATs and detects silent drops without
+   * waiting for a request timeout.
+   *
+   * Only starts when the server advertised `supportsAppPing` in
+   * handshake_ack — older server builds reject unknown envelope types and
+   * would close the connection on every ping (they still run their own
+   * WS-level keepalive, so liveness is not lost).
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    if (!this.serverSupportsAppPing) return
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.connected || !this.ws) return
+      if (this.heartbeatPendingId) return // previous ping still awaiting pong
+
+      const id = crypto.randomUUID()
+      this.heartbeatPendingId = id
+      this.heartbeatPendingTimer = setTimeout(() => {
+        if (this.heartbeatPendingId !== id) return
+        this.heartbeatPendingId = null
+        this.heartbeatPendingTimer = null
+
+        const elapsed = this.lastHeartbeatAt ? Date.now() - this.lastHeartbeatAt : null
+        const err = this.createConnectionError(
+          'timeout',
+          elapsed
+            ? `Heartbeat lost — no pong within ${this.heartbeatTimeoutMs}ms (last pong ${Math.round(elapsed / 1000)}s ago)`
+            : `Heartbeat lost — no pong within ${this.heartbeatTimeoutMs}ms`,
+          'HEARTBEAT_TIMEOUT',
+        )
+        this.connectError = err
+        this.setConnectionState({
+          status: 'reconnecting',
+          lastError: this.toErrorState(err),
+          attempt: this.reconnectAttempt,
+        })
+        // Close the socket — onDisconnect schedules the reconnect.
+        try {
+          this.ws?.close(4000, 'heartbeat timeout')
+        } catch { /* ws close errors are non-fatal */ }
+      }, this.heartbeatTimeoutMs)
+
+      const ping: MessageEnvelope = { id, type: 'ping' }
+      this.trySendEnvelope(this.ws, ping)
+    }, this.heartbeatIntervalMs)
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+    if (this.heartbeatPendingTimer) {
+      clearTimeout(this.heartbeatPendingTimer)
+      this.heartbeatPendingTimer = null
+    }
+    this.heartbeatPendingId = null
+  }
+
+  // -------------------------------------------------------------------------
   // Message handling
   // -------------------------------------------------------------------------
 
@@ -520,6 +606,7 @@ export class WsRpcClient implements RpcClient {
         this.pendingReconnect = null
         this.clientId = envelope.clientId ?? null
         this._serverVersion = envelope.serverVersion ?? null
+        this.serverSupportsAppPing = envelope.supportsAppPing === true
         this.serverChannels = envelope.registeredChannels
           ? new Set(envelope.registeredChannels)
           : null
@@ -546,6 +633,7 @@ export class WsRpcClient implements RpcClient {
           lastClose: undefined,
         })
         this.startAckTimer()
+        this.startHeartbeat()
         this.resolveReady?.()
         this.resolveReady = null
         this.rejectReady = null
@@ -597,6 +685,20 @@ export class WsRpcClient implements RpcClient {
             attempt: this.reconnectAttempt,
           })
           this.failReady(err)
+        }
+        break
+      }
+
+      case 'pong': {
+        // Heartbeat reply — clear the watchdog and record liveness.
+        if (envelope.id && envelope.id === this.heartbeatPendingId) {
+          this.heartbeatPendingId = null
+          if (this.heartbeatPendingTimer) {
+            clearTimeout(this.heartbeatPendingTimer)
+            this.heartbeatPendingTimer = null
+          }
+          this.lastHeartbeatAt = Date.now()
+          this.setConnectionState({ lastHeartbeatAt: this.lastHeartbeatAt })
         }
         break
       }
@@ -693,6 +795,8 @@ export class WsRpcClient implements RpcClient {
   // -------------------------------------------------------------------------
 
   private onDisconnect(closeEvent?: { code?: number; reason?: string; wasClean?: boolean }): void {
+    this.stopHeartbeat()
+
     if (this.clientId) {
       this.pendingReconnect = {
         clientId: this.clientId,

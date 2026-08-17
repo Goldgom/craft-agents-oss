@@ -172,9 +172,13 @@ function assembleResources(config: ServerBuildConfig): void {
     }
   }
 
-  // MCP servers
+  // MCP servers + Pi agent subprocess
+  // NOTE: pi-agent-server is required at runtime by the Pi backend (the
+  // runtime-resolver looks for resources/pi-agent-server/index.js in packaged
+  // builds). Without it, Pi/DeepSeek/GitHub Copilot connections fail with
+  // "piServerPath not configured. Cannot spawn Pi subprocess."
   console.log('  Copying MCP servers...');
-  for (const server of ['session-mcp-server', 'bridge-mcp-server']) {
+  for (const server of ['session-mcp-server', 'bridge-mcp-server', 'pi-agent-server']) {
     const src = join(srcResources, server);
     if (existsSync(src)) {
       cpSync(src, join(destResources, server), { recursive: true });
@@ -187,6 +191,14 @@ function assembleResources(config: ServerBuildConfig): void {
     const destSessionServer = join(destResources, 'session-mcp-server');
     mkdirSync(destSessionServer, { recursive: true });
     copyFileSync(sessionServerDist, join(destSessionServer, 'index.js'));
+  }
+
+  // Also copy pi-agent-server from packages/ build output (dev path fallback)
+  const piServerDist = join(config.rootDir, 'packages', 'pi-agent-server', 'dist', 'index.js');
+  if (existsSync(piServerDist)) {
+    const destPiServer = join(destResources, 'pi-agent-server');
+    mkdirSync(destPiServer, { recursive: true });
+    copyFileSync(piServerDist, join(destPiServer, 'index.js'));
   }
 }
 

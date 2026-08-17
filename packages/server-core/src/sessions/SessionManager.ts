@@ -1,5 +1,6 @@
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
-import { CLIENT_BROWSER_INVOKE } from '@craft-agent/server-core/transport'
+import { CLIENT_BROWSER_INVOKE, CLIENT_RUN_SHELL, type ClientShellResult } from '@craft-agent/server-core/transport'
+import { executeShell, type ShellExecArgs } from '@craft-agent/session-tools-core'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
@@ -1430,6 +1431,22 @@ export class SessionManager implements ISessionManager {
     if (!fallback) return null
     this.browserHostByCanvas.set(sid, fallback)
     return fallback
+  }
+
+  /**
+   * Find a connected client for the session's workspace that advertises
+   * `client:runShell` — powers the `localbash` tool in remote mode. Returns
+   * null when no client is connected (e.g. headless server without UI).
+   */
+  private getRunShellClient(sid: string): string | null {
+    if (!this.rpcServer) return null
+    const session = this.sessions.get(sid)
+    if (!session) return null
+    const candidates = this.rpcServer.findClientsWithCapability(
+      CLIENT_RUN_SHELL,
+      { workspaceId: session.workspace.id },
+    )
+    return candidates[0] ?? null
   }
 
   /** Returns a strictly increasing timestamp (ms). When Date.now() collides with
@@ -4295,6 +4312,24 @@ export class SessionManager implements ISessionManager {
 
       // Wire up session self-management tools (set_session_labels, set_session_status, etc.)
       mergeSessionScopedToolCallbacks(managed.id, {
+        // localbash — execute a shell command on the CLIENT machine when one
+        // is connected (remote mode). Falls back to this host (embedded/local
+        // server shares the client's machine) so local sessions keep working.
+        runLocalShellFn: async (args: ShellExecArgs): Promise<ClientShellResult> => {
+          const clientId = this.getRunShellClient(managed.id)
+          if (clientId && this.rpcServer) {
+            // Allow the client a bit more time than the shell timeout itself.
+            const timeoutMs = Math.min((args.timeoutMs ?? 120_000) + 15_000, 600_000)
+            const result = (await this.rpcServer.invokeClientWithTimeout!(
+              clientId,
+              CLIENT_RUN_SHELL,
+              timeoutMs,
+              { command: args.command, cwd: args.cwd, timeoutMs: args.timeoutMs },
+            )) as ClientShellResult
+            return result
+          }
+          return await executeShell(args)
+        },
         setSessionLabelsFn: async (sessionId: string | undefined, labels: string[]) => {
           await this.setSessionLabels(sessionId ?? managed.id, labels)
         },

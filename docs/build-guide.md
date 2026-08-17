@@ -293,3 +293,9 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
    （设置 → App → 数据），导出为 ZIP 后可在任意平台导入，路径会自动重映射。
 5. **多平台发布流程**：正式发布建议按“各平台原生环境编译 → 上传产物与更新清单 →
    install-app.ps1 / install-app.sh 拉取安装”的顺序执行。
+6. **Pi 后端依赖 pi-agent-server**：服务器产物中必须包含
+   `resources/pi-agent-server/index.js`（构建脚本自动组装）。若启动后测试
+   DeepSeek / GitHub Copilot 等 Pi 系连接报 “piServerPath not configured”，
+   说明该文件缺失——用新版构建脚本重新编译，或把仓库中
+   `packages/pi-agent-server/dist/index.js` 复制到服务器安装目录的
+   `resources/pi-agent-server/index.js`。

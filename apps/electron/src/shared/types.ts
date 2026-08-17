@@ -45,6 +45,17 @@ export interface WorkspacePromptInput {
   source?: 'manual' | 'ai';
 }
 
+// Remote server management (远程服务器管理)
+import type { RemoteServerProfileInfo } from '@craft-agent/shared/config';
+export type { RemoteServerProfileInfo };
+
+/** Remote workspace DTO returned by server:getWorkspaces. */
+export interface RemoteWorkspaceInfo {
+  id: string;
+  name: string;
+  slug?: string;
+}
+
 /** Response of the data-migration export (全局数据导出). */
 export interface ExportAllDataResponse {
   canceled: boolean;
@@ -496,6 +507,15 @@ export interface ElectronAPI {
   // Data migration (跨系统迁移数据)
   exportAllData(): Promise<ExportAllDataResponse>
   importAllData(): Promise<ImportAllDataResponse>
+
+  // Remote server management (远程服务器管理)
+  getRemoteServers(): Promise<RemoteServerProfileInfo[]>
+  saveRemoteServer(input: { id?: string; name: string; url: string; token?: string }): Promise<RemoteServerProfileInfo>
+  deleteRemoteServer(id: string): Promise<{ success: boolean }>
+  testRemoteServer(input: { id?: string; url?: string; token?: string }): Promise<{ ok: boolean; error?: string; serverVersion?: string }>
+  listRemoteServerWorkspaces(profileId: string): Promise<{ ok: boolean; error?: string; workspaces?: RemoteWorkspaceInfo[] }>
+  createRemoteServerWorkspace(profileId: string, name: string): Promise<{ ok: boolean; error?: string; workspace?: { id: string; name: string; slug?: string } }>
+  openRemoteServerWorkspace(profileId: string, remoteWorkspaceId: string): Promise<{ ok: boolean; error?: string; workspaceId?: string }>
 
   // Folder dialog
   openFolderDialog(): Promise<string | null>

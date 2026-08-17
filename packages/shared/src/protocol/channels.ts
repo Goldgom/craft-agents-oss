@@ -7,6 +7,15 @@ export const RPC_CHANNELS = {
   remote: {
     TEST_CONNECTION: 'remote:testConnection',
   },
+  remoteServers: {
+    LIST: 'remoteServers:list',
+    SAVE: 'remoteServers:save',
+    DELETE: 'remoteServers:delete',
+    TEST: 'remoteServers:test',
+    LIST_WORKSPACES: 'remoteServers:listWorkspaces',
+    CREATE_WORKSPACE: 'remoteServers:createWorkspace',
+    OPEN_WORKSPACE: 'remoteServers:openWorkspace',
+  },
   server: {
     GET_WORKSPACES: 'server:getWorkspaces',
     CREATE_WORKSPACE: 'server:createWorkspace',

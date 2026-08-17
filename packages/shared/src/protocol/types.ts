@@ -16,6 +16,8 @@ export type MessageType =
   | 'event'
   | 'error'
   | 'sequence_ack'
+  | 'ping'
+  | 'pong'
 
 export interface MessageEnvelope {
   /** Correlation ID. UUIDv4 for requests; echoed in responses. */
@@ -60,6 +62,8 @@ export interface MessageEnvelope {
   stale?: boolean
   /** Server app version, sent in handshake_ack. Clients can use this for compatibility checks. */
   serverVersion?: string
+  /** True when the server understands app-level ping/pong heartbeats. Clients must only send `ping` when this is set — older servers reject unknown envelope types. */
+  supportsAppPing?: boolean
 }
 
 export interface WireError {
@@ -153,6 +157,14 @@ export const HEARTBEAT_INTERVAL_MS = 30_000
 
 /** Client that misses this many pongs gets terminated. */
 export const HEARTBEAT_MAX_MISSED = 2
+
+/**
+ * App-level client heartbeat: the client sends a `ping` envelope every 30s
+ * and expects a `pong` reply. When no pong arrives within this timeout the
+ * connection is declared dead and the client reconnects.
+ */
+export const CLIENT_HEARTBEAT_INTERVAL_MS = 30_000
+export const CLIENT_HEARTBEAT_TIMEOUT_MS = 15_000
 
 /** Default request timeout in ms. */
 export const REQUEST_TIMEOUT_MS = 30_000

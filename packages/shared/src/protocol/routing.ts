@@ -17,6 +17,13 @@ import { RPC_CHANNELS } from './channels'
 export const LOCAL_ONLY_CHANNELS = new Set<string>([
   // remote — local connectivity management (reaches out to remote server from local app)
   RPC_CHANNELS.remote.TEST_CONNECTION,
+  RPC_CHANNELS.remoteServers.LIST,
+  RPC_CHANNELS.remoteServers.SAVE,
+  RPC_CHANNELS.remoteServers.DELETE,
+  RPC_CHANNELS.remoteServers.TEST,
+  RPC_CHANNELS.remoteServers.LIST_WORKSPACES,
+  RPC_CHANNELS.remoteServers.CREATE_WORKSPACE,
+  RPC_CHANNELS.remoteServers.OPEN_WORKSPACE,
 
   // workspaces — local workspace CRUD (workspace list is local config)
   RPC_CHANNELS.workspaces.GET,

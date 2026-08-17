@@ -16,6 +16,8 @@ export interface RpcServer {
   handle(channel: string, handler: HandlerFn): void
   push(channel: string, target: PushTarget, ...args: any[]): void
   invokeClient(clientId: string, channel: string, ...args: any[]): Promise<any>
+  /** Invoke a client capability with a custom response timeout. */
+  invokeClientWithTimeout?(clientId: string, channel: string, timeoutMs: number, ...args: any[]): Promise<any>
   updateClientWorkspace?(clientId: string, workspaceId: string): void
 
   /** Whether a connected client advertised the given capability on handshake. */

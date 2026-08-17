@@ -32,6 +32,7 @@ import {
   CLIENT_OPEN_FILE_DIALOG,
   CLIENT_SAVE_FILE_DIALOG,
   CLIENT_BROWSER_INVOKE,
+  CLIENT_RUN_SHELL,
   LOCAL_CLIENT_CAPABILITIES,
 } from '@craft-agent/server-core/transport'
 import type { ConfirmDialogSpec, FileDialogSpec, BrowserCapabilityRequest } from '@craft-agent/server-core/transport'
@@ -188,6 +189,12 @@ client.handleCapability(CLIENT_SAVE_FILE_DIALOG, async (spec: { title?: string; 
 // `apps/electron/src/main/browser-pane-manager.ts:registerCapabilityIpc()`.
 client.handleCapability(CLIENT_BROWSER_INVOKE, async (req: BrowserCapabilityRequest) => {
   return await ipcRenderer.invoke('__browser:invoke', req)
+})
+
+// `localbash` — the remote server asks THIS machine to run a shell command on
+// behalf of the agent (remote-mode local execution bridge).
+client.handleCapability(CLIENT_RUN_SHELL, async (req: { command: string; cwd?: string; timeoutMs?: number }) => {
+  return await ipcRenderer.invoke('__shell:run', req)
 })
 
 // ---------------------------------------------------------------------------

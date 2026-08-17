@@ -45,6 +45,16 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  // localbash client bridge — executes shell commands on the user's LOCAL
+  // machine when the session runs on a remote server.
+  Object.defineProperty(context, 'runLocalShellFn', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.runLocalShellFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   Object.defineProperty(context, 'setSessionStatus', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.setSessionStatusFn;

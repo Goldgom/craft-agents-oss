@@ -557,6 +557,18 @@ app.whenReady().then(async () => {
       return { canceled: result.canceled, filePath: result.filePath }
     })
 
+    // `localbash` bridge — the remote server asks THIS machine to run a shell
+    // command on behalf of the agent. Cwd defaults to the local process cwd;
+    // the caller (SessionManager) passes the session's working directory.
+    ipcMain.handle('__shell:run', async (_event, req: { command: string; cwd?: string; timeoutMs?: number }) => {
+      const { executeShell } = await import('@craft-agent/session-tools-core')
+      return await executeShell({
+        command: String(req.command ?? ''),
+        cwd: typeof req.cwd === 'string' ? req.cwd : undefined,
+        timeoutMs: typeof req.timeoutMs === 'number' ? req.timeoutMs : undefined,
+      })
+    })
+
     if (!isClientOnly) {
       // Restore persisted Git Bash path on Windows (must happen before any SDK subprocess spawn)
       if (process.platform === 'win32') {
@@ -1161,7 +1173,26 @@ app.whenReady().then(async () => {
     mainLog.info('Messaging gateway log path:', getMessagingGatewayLogFilePath())
   } catch (error) {
     mainLog.error('Failed to initialize app:', error instanceof Error ? error.message : error, (error as any)?.stack)
-    // Continue anyway - the app will show errors in the UI
+
+    // If bootstrap failed before any window was created, the app would
+    // otherwise linger as a silent background process with no UI (e.g. the
+    // server lock conflict). Surface the failure explicitly instead:
+    // packaged builds quit after the dialog (nothing else can render);
+    // dev builds stay alive so the watcher can hot-restart once fixed.
+    if (!process.env.CRAFT_HEADLESS && BrowserWindow.getAllWindows().length === 0) {
+      const detail = error instanceof Error ? error.message : String(error)
+      try {
+        dialog.showMessageBoxSync({
+          type: 'error',
+          title: 'Craft Agents failed to start / Craft Agents 启动失败',
+          message: 'App initialization failed / 应用初始化失败',
+          detail,
+        })
+      } catch {
+        // Ignore dialog failures — the log above already has the details.
+      }
+      if (app.isPackaged) app.quit()
+    }
   }
 
   // macOS: Re-create window when dock icon is clicked
