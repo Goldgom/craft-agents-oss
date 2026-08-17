@@ -19,9 +19,12 @@ export const RPC_CHANNELS = {
   server: {
     GET_WORKSPACES: 'server:getWorkspaces',
     CREATE_WORKSPACE: 'server:createWorkspace',
+    DELETE_WORKSPACE: 'server:deleteWorkspace',
     GET_STATUS: 'server:getStatus',
     GET_HEALTH: 'server:getHealth',
     GET_ACTIVE_SESSIONS: 'server:getActiveSessions',
+    RESTART: 'server:restart',
+    RELOAD_MCP_SERVERS: 'server:reloadMcpServers',
     SHUTTING_DOWN: 'server:shuttingDown',
     STATUS_CHANGED: 'server:statusChanged',
     HOME_DIR: 'server:homeDir',

@@ -25,6 +25,7 @@ import type {
 } from '@craft-agent/shared/protocol'
 import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
+import type { McpReloadResult } from '@craft-agent/core/types'
 
 export interface ISessionManager {
   // ---------------------------------------------------------------------------
@@ -257,6 +258,8 @@ export interface ISessionManager {
   getWorkspaceAutomationSummary(workspaceId: string): { automationCount: number; schedulerRunning: boolean }
   /** Active sessions across all workspaces (sessions with running backend processes). */
   getActiveSessionsInfo(): ActiveSessionInfo[]
+  /** Force-reconnect MCP/API source runtimes now, or after active turns finish. */
+  reloadMcpServers(workspaceId?: string): Promise<McpReloadResult>
 
   // ---------------------------------------------------------------------------
   // Auth

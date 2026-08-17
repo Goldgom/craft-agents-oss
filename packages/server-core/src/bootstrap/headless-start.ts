@@ -55,12 +55,15 @@ export interface ServerBootstrapOptions<TSessionManager, THandlerDeps> {
    * When provided, the WsRpcServer serves HTTP (e.g. WebUI) on the same port.
    */
   httpHandler?: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void
+  /** Gracefully terminate with the host's restart exit code. */
+  requestRestart?: () => Promise<void> | void
 }
 
 export interface ServerHandlerContext {
   getConnectedClientCount: () => number
   serverId: string
   startedAt: number
+  requestRestart?: () => Promise<void> | void
 }
 
 export interface ServerInstance<TSessionManager> {
@@ -411,6 +414,7 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
     getConnectedClientCount: () => wsServer.getConnectedClientCount(),
     serverId: options.serverId ?? 'headless',
     startedAt,
+    requestRestart: options.requestRestart,
   }
 
   options.registerAllRpcHandlers(wsServer, deps, serverHandlerContext)

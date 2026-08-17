@@ -46,6 +46,7 @@ export function WorkspaceCreationScreen({
   // Start at 'remote' step directly when reconnecting
   const [step, setStep] = useState<CreationStep>(reconnectWorkspace ? 'remote' : 'choice')
   const [isCreating, setIsCreating] = useState(false)
+  const [isRemoteMode, setIsRemoteMode] = useState(false)
   const [dimensions, setDimensions] = useState({ width: 1920, height: 1080 })
 
   // Track window dimensions for shader
@@ -56,6 +57,12 @@ export function WorkspaceCreationScreen({
     updateDimensions()
     window.addEventListener('resize', updateDimensions)
     return () => window.removeEventListener('resize', updateDimensions)
+  }, [])
+
+  useEffect(() => {
+    window.electronAPI.getStartupContext()
+      .then((context) => setIsRemoteMode(context.mode === 'remote'))
+      .catch(() => setIsRemoteMode(false))
   }, [])
 
   // Wrap onClose to prevent closing during creation
@@ -69,7 +76,18 @@ export function WorkspaceCreationScreen({
   const handleCreateWorkspace = useCallback(async (folderPath: string, name: string, remoteServer?: { url: string; token: string; remoteWorkspaceId: string }) => {
     setIsCreating(true)
     try {
-      const workspace = await window.electronAPI.createWorkspace(folderPath, name, remoteServer)
+      let workspace: Workspace
+      if (isRemoteMode && !remoteServer) {
+        const created = await window.electronAPI.createServerWorkspace(name, folderPath)
+        const refreshed = await window.electronAPI.getWorkspaces()
+        workspace = refreshed.find((candidate) => candidate.id === created.id) ?? {
+          ...created,
+          rootPath: folderPath,
+          createdAt: Date.now(),
+        }
+      } else {
+        workspace = await window.electronAPI.createWorkspace(folderPath, name, remoteServer)
+      }
       onWorkspaceCreated(workspace)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
@@ -79,7 +97,7 @@ export function WorkspaceCreationScreen({
     } finally {
       setIsCreating(false)
     }
-  }, [onWorkspaceCreated])
+  }, [isRemoteMode, onWorkspaceCreated, t])
 
   const handleReconnectWorkspace = useCallback(async (workspaceId: string, remoteServer: { url: string; token: string; remoteWorkspaceId: string }) => {
     if (!onReconnectWorkspace) {
@@ -101,7 +119,6 @@ export function WorkspaceCreationScreen({
           <AddWorkspaceStep_Choice
             onCreateNew={() => setStep('create')}
             onOpenFolder={() => setStep('open')}
-            onConnectRemote={() => setStep('remote')}
           />
         )
 
@@ -111,6 +128,7 @@ export function WorkspaceCreationScreen({
             onBack={() => setStep('choice')}
             onCreate={handleCreateWorkspace}
             isCreating={isCreating}
+            isRemoteMode={isRemoteMode}
           />
         )
 

@@ -16,6 +16,7 @@ interface AddWorkspaceStep_CreateNewProps {
   onBack: () => void
   onCreate: (folderPath: string, name: string) => Promise<void>
   isCreating: boolean
+  isRemoteMode?: boolean
 }
 
 /**
@@ -28,7 +29,8 @@ interface AddWorkspaceStep_CreateNewProps {
 export function AddWorkspaceStep_CreateNew({
   onBack,
   onCreate,
-  isCreating
+  isCreating,
+  isRemoteMode = false,
 }: AddWorkspaceStep_CreateNewProps) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
@@ -40,8 +42,11 @@ export function AddWorkspaceStep_CreateNew({
 
   // Get home directory on mount
   useEffect(() => {
-    window.electronAPI.getHomeDir().then(setHomeDir)
-  }, [])
+    const getHome = isRemoteMode
+      ? window.electronAPI.getServerHomeDir()
+      : window.electronAPI.getHomeDir()
+    getHome.then(setHomeDir).catch(() => setHomeDir(''))
+  }, [isRemoteMode])
 
   const slug = slugify(name)
   const defaultBasePath = homeDir ? `${homeDir}/.craft-agent/workspaces` : null
@@ -61,8 +66,10 @@ export function AddWorkspaceStep_CreateNew({
     const validateSlug = async () => {
       setIsValidating(true)
       try {
-        const result = await window.electronAPI.checkWorkspaceSlug(slug)
-        if (result.exists) {
+        const exists = isRemoteMode
+          ? (await window.electronAPI.getServerWorkspaces()).some((workspace) => workspace.slug === slug)
+          : (await window.electronAPI.checkWorkspaceSlug(slug)).exists
+        if (exists) {
           setError(`A workspace named "${slug}" already exists`)
         } else {
           setError(null)
@@ -77,7 +84,7 @@ export function AddWorkspaceStep_CreateNew({
     // Debounce validation
     const timeout = setTimeout(validateSlug, 300)
     return () => clearTimeout(timeout)
-  }, [slug])
+  }, [slug, isRemoteMode])
 
   const handleFolderSelected = useCallback((path: string) => {
     setCustomPath(path)

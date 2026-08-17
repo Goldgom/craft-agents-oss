@@ -258,7 +258,13 @@ $MainArgs = @(
     # the app on load (ERR_INVALID_ARG_VALUE). Externalize it so Node loads it natively
     # as ESM — the SDK core is staged into the app's node_modules above (step 4).
     # Must stay in sync with package.json build:main and scripts/electron-dev.ts.
-    "--external:@anthropic-ai/claude-agent-sdk"
+    "--external:@anthropic-ai/claude-agent-sdk",
+    # Keep optional/native and legacy fetch dependencies aligned with every
+    # other main-process build entrypoint. cpu-features is optional in ssh2;
+    # the shim selects its portable JavaScript implementation.
+    "--alias:node-fetch=./apps/electron/src/main/shims/node-fetch.cjs",
+    "--alias:abort-controller=./apps/electron/src/main/shims/abort-controller.cjs",
+    "--alias:cpu-features=./apps/electron/src/main/shims/cpu-features.cjs"
 )
 # Add OAuth defines if env vars are set
 if ($env:GOOGLE_OAUTH_CLIENT_ID) {

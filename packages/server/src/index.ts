@@ -48,6 +48,7 @@ import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@cra
 import { initModelRefreshService, setFetcherPlatform } from '@craft-agent/server-core/model-fetchers'
 import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/services'
 import type { HandlerDeps } from '@craft-agent/server-core/handlers'
+import type { ServerInstance } from '@craft-agent/server-core/bootstrap'
 
 process.env.CRAFT_IS_PACKAGED ??= 'false'
 
@@ -162,6 +163,36 @@ const waNodeBin = process.env.CRAFT_MESSAGING_NODE_BIN ?? 'node'
 // Built inside createHandlerDeps (needs sessionManager), populated with the WS
 // publisher after bootstrapServer resolves.
 let messagingHandle: MessagingBootstrapHandle | null = null
+let healthServer: Awaited<ReturnType<typeof startHealthHttpServer>> | null = null
+let resolveServerInstance!: (value: ServerInstance<SessionManager>) => void
+const serverInstanceReady = new Promise<ServerInstance<SessionManager>>((resolve) => {
+  resolveServerInstance = resolve
+})
+let shutdownPromise: Promise<void> | null = null
+
+const shutdown = (exitCode = 0): Promise<void> => {
+  if (shutdownPromise) return shutdownPromise
+  shutdownPromise = (async () => {
+    const activeInstance = await serverInstanceReady
+    webuiHandler?.dispose()
+    healthServer?.stop()
+    if (messagingHandle) {
+      try {
+        await messagingHandle.dispose()
+      } catch (error) {
+        console.error('[messaging] dispose failed:', error)
+      }
+    }
+    await activeInstance.stop()
+    process.exit(exitCode)
+  })()
+  return shutdownPromise
+}
+
+// systemd's generated unit uses Restart=on-failure and Docker deployments use
+// restart: unless-stopped, so a dedicated non-zero exit performs a true host-
+// managed process restart without spawning a competing unmanaged child.
+const SERVER_RESTART_EXIT_CODE = 42
 
 const instance = await (async () => {
   try {
@@ -247,12 +278,14 @@ const instance = await (async () => {
         }
       },
       cleanupClientResources: cleanupSessionFileWatchForClient,
+      requestRestart: () => shutdown(SERVER_RESTART_EXIT_CODE),
     })
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
 })()
+resolveServerInstance(instance)
 
 // ---------------------------------------------------------------------------
 // Messaging post-bootstrap: bind the WS publisher and initialize local
@@ -303,7 +336,7 @@ if (webuiHandler) {
 
 // Start HTTP health endpoint if CRAFT_HEALTH_PORT is set
 const healthPort = parseInt(process.env.CRAFT_HEALTH_PORT ?? '0', 10)
-const healthServer = await startHealthHttpServer({
+healthServer = await startHealthHttpServer({
   port: healthPort,
   deps: { sessionManager: instance.sessionManager },
   wsServer: instance.wsServer,
@@ -340,19 +373,5 @@ if (!isLocalBind && instance.protocol === 'ws') {
   }
 }
 
-const shutdown = async () => {
-  webuiHandler?.dispose()
-  healthServer?.stop()
-  if (messagingHandle) {
-    try {
-      await messagingHandle.dispose()
-    } catch (error) {
-      console.error('[messaging] dispose failed:', error)
-    }
-  }
-  await instance.stop()
-  process.exit(0)
-}
-
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)
+process.on('SIGINT', () => { void shutdown() })
+process.on('SIGTERM', () => { void shutdown() })

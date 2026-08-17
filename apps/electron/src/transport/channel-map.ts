@@ -68,6 +68,7 @@ export const CHANNEL_MAP = {
   // Server-level workspace operations (REMOTE_ELIGIBLE)
   getServerWorkspaces: invoke(RPC_CHANNELS.server.GET_WORKSPACES),
   createServerWorkspace: invoke(RPC_CHANNELS.server.CREATE_WORKSPACE),
+  deleteServerWorkspace: invoke(RPC_CHANNELS.server.DELETE_WORKSPACE),
 
   // Window management
   getWindowWorkspace: invoke(RPC_CHANNELS.window.GET_WORKSPACE),

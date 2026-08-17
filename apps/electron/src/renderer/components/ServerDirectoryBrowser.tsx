@@ -126,7 +126,7 @@ export function ServerDirectoryBrowser({
         }
       } else {
         // Manual mode — fetch home dir for platform detection
-        const homeDir = await window.electronAPI.getHomeDir()
+        const homeDir = await window.electronAPI.getServerHomeDir()
         setServerHomePath(homeDir)
       }
     }

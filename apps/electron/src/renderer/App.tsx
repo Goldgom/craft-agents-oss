@@ -1121,6 +1121,10 @@ export default function App() {
   // session content after stale reconnects.
   useEffect(() => {
     const cleanup = window.electronAPI.onReconnected(async (isStale: boolean) => {
+      await refreshLlmConnections().catch((error) => {
+        rendererLog.warn('[App] Failed to refresh LLM connections after reconnect:', error)
+      })
+
       if (!isStale) {
         // Server replayed buffered events — we're caught up, nothing to do
         console.info('[App] Reconnected with event replay — no refresh needed')
@@ -1170,7 +1174,7 @@ export default function App() {
     })
 
     return cleanup
-  }, [store, sessionSelection.selected, refreshSessionFromServer, refreshSessionListMetadataFromServer])
+  }, [store, sessionSelection.selected, refreshSessionFromServer, refreshSessionListMetadataFromServer, refreshLlmConnections])
 
   // Listen for menu bar events
   useEffect(() => {

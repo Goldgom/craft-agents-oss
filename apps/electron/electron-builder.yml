@@ -4,6 +4,13 @@ copyright: Copyright © 2026 Craft Docs Ltd.
 
 electronVersion: "39.2.7"
 
+# The Electron main process is bundled by esbuild and native/runtime assets are
+# staged explicitly below. Rebuilding the workspace dependency tree is both
+# unnecessary and incorrect for optional modules such as ssh2's cpu-features,
+# which is deliberately replaced by a portable JavaScript fallback at bundle
+# time.
+npmRebuild: false
+
 # Hook to compile macOS 26+ Liquid Glass icon after packaging
 afterPack: scripts/afterPack.cjs
 

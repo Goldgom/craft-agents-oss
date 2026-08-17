@@ -28,6 +28,28 @@ export interface ServerStatus {
     heapTotal: number
     rss: number
   }
+  restart: {
+    pending: boolean
+    requestedAt?: number
+    activeSessions: number
+    activeWorkspaceIds: string[]
+  }
+}
+
+export interface ServerRestartResult {
+  accepted: boolean
+  status: 'restarting' | 'delayed' | 'already_pending' | 'unsupported'
+  requestedAt?: number
+  activeSessions: number
+  activeWorkspaceIds: string[]
+}
+
+export interface McpReloadResult {
+  workspaceIds: string[]
+  reloadedSessionIds: string[]
+  deferredSessionIds: string[]
+  freshOnNextUseSessionIds: string[]
+  failures: Array<{ sessionId: string; error: string }>
 }
 
 export interface ServerHealth {

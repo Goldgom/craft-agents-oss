@@ -2,19 +2,23 @@ import { existsSync } from 'node:fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
-import { addWorkspace, setActiveWorkspace } from '@craft-agent/shared/config'
+import { addWorkspace, removeWorkspace, setActiveWorkspace } from '@craft-agent/shared/config'
 import { getDefaultWorkspacesDir, ensureDefaultWorkspacesDir } from '@craft-agent/shared/workspaces'
-import type { ServerStatus, ServerHealth } from '@craft-agent/core/types'
+import type { ServerStatus, ServerHealth, ServerRestartResult } from '@craft-agent/core/types'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import type { ServerHandlerContext } from '../../bootstrap/headless-start'
+import { isValidWorkspaceRootPath } from '../../utils/path-validation'
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.server.GET_WORKSPACES,
   RPC_CHANNELS.server.CREATE_WORKSPACE,
+  RPC_CHANNELS.server.DELETE_WORKSPACE,
   RPC_CHANNELS.server.GET_STATUS,
   RPC_CHANNELS.server.GET_HEALTH,
   RPC_CHANNELS.server.GET_ACTIVE_SESSIONS,
+  RPC_CHANNELS.server.RESTART,
+  RPC_CHANNELS.server.RELOAD_MCP_SERVERS,
   RPC_CHANNELS.server.HOME_DIR,
 ] as const
 
@@ -24,6 +28,35 @@ export function registerServerHandlers(
   ctx: ServerHandlerContext,
 ): void {
   const { sessionManager } = deps
+  let restartRequestedAt: number | undefined
+  let restartStarted = false
+  let unsubscribeRestartWaiter: (() => void) | undefined
+
+  const getRestartActivity = () => {
+    const active = sessionManager.getActiveSessionsInfo()
+    return {
+      activeSessions: active.length,
+      activeWorkspaceIds: Array.from(new Set(active.map((session) => session.workspaceId))),
+    }
+  }
+
+  const attemptPendingRestart = (): void => {
+    if (!restartRequestedAt || restartStarted || !ctx.requestRestart) return
+    if (sessionManager.getActiveSessionCount() > 0) return
+
+    // Let the RPC response and the final session-complete event flush before
+    // the host closes WebSocket connections and exits.
+    setTimeout(() => {
+      if (!restartRequestedAt || restartStarted || sessionManager.getActiveSessionCount() > 0) return
+      restartStarted = true
+      unsubscribeRestartWaiter?.()
+      unsubscribeRestartWaiter = undefined
+      Promise.resolve(ctx.requestRestart?.()).catch((error) => {
+        restartStarted = false
+        deps.platform.logger.error('[server:restart] Restart failed', error)
+      })
+    }, 100)
+  }
 
   // -----------------------------------------------------------------------
   // Workspace discovery (moved from workspace.ts — server-level, no workspace context)
@@ -35,7 +68,7 @@ export function registerServerHandlers(
     return workspaces
   })
 
-  server.handle(RPC_CHANNELS.server.CREATE_WORKSPACE, async (_ctx, name: string) => {
+  server.handle(RPC_CHANNELS.server.CREATE_WORKSPACE, async (_ctx, name: string, requestedRootPath?: string) => {
     if (!name?.trim()) throw new Error('Workspace name is required')
     const trimmed = name.trim()
 
@@ -45,14 +78,24 @@ export function registerServerHandlers(
       .replace(/^-|-$/g, '')
       || 'workspace'
 
-    ensureDefaultWorkspacesDir()
-    const baseDir = getDefaultWorkspacesDir()
-    let rootPath = join(baseDir, slug)
-    let uniqueSlug = slug
-    let counter = 1
-    while (existsSync(rootPath)) {
-      uniqueSlug = `${slug}-${counter++}`
-      rootPath = join(baseDir, uniqueSlug)
+    let rootPath: string
+    if (requestedRootPath?.trim()) {
+      rootPath = requestedRootPath.trim()
+      const validation = isValidWorkspaceRootPath(rootPath)
+      if (!validation.valid) throw new Error(validation.reason!)
+
+      const existing = sessionManager.getWorkspaces().find((workspace) => workspace.rootPath === rootPath)
+      if (existing) throw new Error(`A workspace already exists at ${rootPath}`)
+    } else {
+      ensureDefaultWorkspacesDir()
+      const baseDir = getDefaultWorkspacesDir()
+      rootPath = join(baseDir, slug)
+      let uniqueSlug = slug
+      let counter = 1
+      while (existsSync(rootPath)) {
+        uniqueSlug = `${slug}-${counter++}`
+        rootPath = join(baseDir, uniqueSlug)
+      }
     }
 
     const workspace = addWorkspace({ name: trimmed, rootPath })
@@ -61,6 +104,22 @@ export function registerServerHandlers(
 
     const { rootPath: _rp, createdAt: _ca, ...info } = workspace
     return info
+  })
+
+  server.handle(RPC_CHANNELS.server.DELETE_WORKSPACE, async (requestContext, workspaceId: string) => {
+    if (!workspaceId) throw new Error('Workspace ID is required')
+    if (requestContext.workspaceId === workspaceId) {
+      throw new Error('Cannot remove the active workspace')
+    }
+    if (sessionManager.getActiveSessionCount(workspaceId) > 0) {
+      throw new Error('Cannot remove a workspace while it has active sessions')
+    }
+
+    const removed = await removeWorkspace(workspaceId)
+    if (removed) {
+      deps.platform.logger.info(`Removed workspace ${workspaceId} (server:deleteWorkspace)`)
+    }
+    return removed
   })
 
   // -----------------------------------------------------------------------
@@ -93,6 +152,11 @@ export function registerServerHandlers(
         heapTotal: mem.heapTotal,
         rss: mem.rss,
       },
+      restart: {
+        pending: restartRequestedAt !== undefined,
+        requestedAt: restartRequestedAt,
+        ...getRestartActivity(),
+      },
     }
 
     return status
@@ -113,6 +177,50 @@ export function registerServerHandlers(
   server.handle(RPC_CHANNELS.server.GET_ACTIVE_SESSIONS, async () => {
     return sessionManager.getActiveSessionsInfo()
   })
+
+  server.handle(RPC_CHANNELS.server.RESTART, async () => {
+    const activity = getRestartActivity()
+    if (!ctx.requestRestart) {
+      return {
+        accepted: false,
+        status: 'unsupported',
+        ...activity,
+      } satisfies ServerRestartResult
+    }
+
+    if (restartRequestedAt !== undefined) {
+      return {
+        accepted: true,
+        status: 'already_pending',
+        requestedAt: restartRequestedAt,
+        ...activity,
+      } satisfies ServerRestartResult
+    }
+
+    restartRequestedAt = Date.now()
+    unsubscribeRestartWaiter = sessionManager.onSessionComplete(() => attemptPendingRestart())
+    attemptPendingRestart()
+
+    deps.platform.logger.info(
+      activity.activeSessions > 0
+        ? `[server:restart] Delayed until ${activity.activeSessions} active session(s) finish`
+        : '[server:restart] Restart scheduled',
+    )
+    return {
+      accepted: true,
+      status: activity.activeSessions > 0 ? 'delayed' : 'restarting',
+      requestedAt: restartRequestedAt,
+      ...activity,
+    } satisfies ServerRestartResult
+  })
+
+  server.handle(
+    RPC_CHANNELS.server.RELOAD_MCP_SERVERS,
+    async (_ctx, input?: string | { workspaceId?: string }) => {
+      const workspaceId = typeof input === 'string' ? input : input?.workspaceId
+      return sessionManager.reloadMcpServers(workspaceId)
+    },
+  )
 
   // -----------------------------------------------------------------------
   // Server Home Directory (REMOTE_ELIGIBLE — returns this server's home)

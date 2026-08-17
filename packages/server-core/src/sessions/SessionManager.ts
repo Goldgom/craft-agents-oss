@@ -1210,6 +1210,9 @@ export class SessionManager implements ISessionManager {
   private deltaFlushTimers: Map<string, NodeJS.Timeout> = new Map()
   // Config watchers for live updates (sources, etc.) - one per workspace
   private configWatchers: Map<string, ConfigWatcher> = new Map()
+  // Coalesced forced MCP reloads for sessions that were busy when a config
+  // change or explicit reload request arrived.
+  private pendingMcpReloadSessionIds = new Set<string>()
   // Automation systems for workspace event automations - one per workspace (includes scheduler, diffing, and handlers)
   private automationSystems: Map<string, AutomationSystem> = new Map()
   // Pending credential request resolvers (keyed by requestId)
@@ -1817,12 +1820,70 @@ export class SessionManager implements ISessionManager {
     for (const [_, managed] of this.sessions) {
       if (managed.workspace.rootPath === workspaceRootPath) {
         if (managed.isProcessing) {
-          sessionLog.info(`Skipping source reload for session ${managed.id} (processing)`)
+          this.pendingMcpReloadSessionIds.add(managed.id)
+          sessionLog.info(`Deferring source reload for session ${managed.id} until processing completes`)
           continue
         }
         await this.reloadSessionSources(managed)
       }
     }
+  }
+
+  /**
+   * Force-reconnect MCP/API sources for all live session runtimes in scope.
+   * Busy sessions are queued and reloaded after their message queue drains;
+   * sessions without an agent naturally load fresh configuration on next use.
+   */
+  async reloadMcpServers(workspaceId?: string): Promise<import('@craft-agent/core/types').McpReloadResult> {
+    const workspaces = this.getWorkspaces()
+    const targetWorkspaces = workspaceId
+      ? workspaces.filter((workspace) => workspace.id === workspaceId)
+      : workspaces
+
+    if (workspaceId && targetWorkspaces.length === 0) {
+      throw new Error(`Workspace not found: ${workspaceId}`)
+    }
+
+    const targetIds = new Set(targetWorkspaces.map((workspace) => workspace.id))
+    const result: import('@craft-agent/core/types').McpReloadResult = {
+      workspaceIds: Array.from(targetIds),
+      reloadedSessionIds: [],
+      deferredSessionIds: [],
+      freshOnNextUseSessionIds: [],
+      failures: [],
+    }
+
+    for (const managed of this.sessions.values()) {
+      if (!targetIds.has(managed.workspace.id)) continue
+
+      if (managed.isProcessing) {
+        this.pendingMcpReloadSessionIds.add(managed.id)
+        result.deferredSessionIds.push(managed.id)
+        continue
+      }
+      if (!managed.agent) {
+        result.freshOnNextUseSessionIds.push(managed.id)
+        continue
+      }
+
+      try {
+        await this.reloadSessionSources(managed, true)
+        result.reloadedSessionIds.push(managed.id)
+      } catch (error) {
+        result.failures.push({
+          sessionId: managed.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    sessionLog.info(
+      `MCP reload requested: ${result.reloadedSessionIds.length} reloaded, ` +
+      `${result.deferredSessionIds.length} deferred, ` +
+      `${result.freshOnNextUseSessionIds.length} fresh on next use, ` +
+      `${result.failures.length} failed`,
+    )
+    return result
   }
 
   private broadcastSourcesChanged(workspaceId: string, sources: LoadedSource[]): void {
@@ -1877,11 +1938,18 @@ export class SessionManager implements ISessionManager {
    * Called by ConfigWatcher when source files change on disk.
    * If agent is null (session hasn't sent any messages), skip - fresh build happens on next message.
    */
-  private async reloadSessionSources(managed: ManagedSession): Promise<void> {
+  private async reloadSessionSources(managed: ManagedSession, forceReconnect = false): Promise<void> {
     if (!managed.agent) return  // No agent = nothing to update (fresh build on next message)
 
     const workspaceRootPath = managed.workspace.rootPath
     sessionLog.info(`Reloading sources for session ${managed.id}`)
+
+    // sync() deliberately preserves connections when their serialized config
+    // is unchanged. An explicit reload must also pick up changed MCP server
+    // code behind the same command/URL, so tear down the pool first.
+    if (forceReconnect && managed.mcpPool) {
+      await managed.mcpPool.disconnectAll()
+    }
 
     // Reload all sources from disk (craft-agents-docs is always available as MCP server)
     const allSources = loadAllSources(workspaceRootPath)
@@ -5559,33 +5627,47 @@ export class SessionManager implements ISessionManager {
   async updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string): Promise<void> {
     sessionLog.info(`[updateSessionModel] sessionId=${sessionId}, model=${model}, connection=${connection}`)
     const managed = this.sessions.get(sessionId)
-    if (managed) {
-      managed.model = model ?? undefined
-      // Also update connection if provided and not already locked
-      if (connection && !managed.connectionLocked) {
-        managed.llmConnection = connection
-      }
-      // Persist to disk (include connection if it was updated)
-      const updates: { model?: string; llmConnection?: string } = { model: model ?? undefined }
-      if (connection && !managed.connectionLocked) {
-        updates.llmConnection = connection
-      }
-      await updateSessionMetadata(managed.workspace.rootPath, sessionId, updates)
-      // Update agent model if it already exists (takes effect on next query)
-      if (managed.agent) {
-        // Fallback chain: session model > workspace default > connection default
-        const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
-        const sessionConn = resolveSessionConnection(managed.llmConnection, wsConfig?.defaults?.defaultLlmConnection)
-        const effectiveModel = model ?? wsConfig?.defaults?.model ?? sessionConn?.defaultModel!
-        sessionLog.info(`[updateSessionModel] Calling agent.setModel(${effectiveModel}) [agent exists=${!!managed.agent}, connectionLocked=${managed.connectionLocked}]`)
-        managed.agent.setModel(effectiveModel)
-      } else {
-        sessionLog.info(`[updateSessionModel] No agent yet, model will apply on next agent creation`)
-      }
-      // Notify renderer of the model change
-      this.sendEvent({ type: 'session_model_changed', sessionId, model }, managed.workspace.id)
-      sessionLog.info(`Session ${sessionId} model updated to: ${model ?? '(global config)'}`)
+    if (!managed) {
+      throw new Error(`Session ${sessionId} not found`)
     }
+    if (managed.workspace.id !== workspaceId) {
+      throw new Error(`Session ${sessionId} does not belong to workspace ${workspaceId}`)
+    }
+
+    const connectionChanged = Boolean(connection && !managed.connectionLocked && connection !== managed.llmConnection)
+    managed.model = model ?? undefined
+    // Also update connection if provided and not already locked
+    if (connection && !managed.connectionLocked) {
+      managed.llmConnection = connection
+    }
+    // Persist to disk (include connection if it was updated)
+    const updates: { model?: string; llmConnection?: string } = { model: model ?? undefined }
+    if (connection && !managed.connectionLocked) {
+      updates.llmConnection = connection
+    }
+    await updateSessionMetadata(managed.workspace.rootPath, sessionId, updates)
+    // Update agent model if it already exists (takes effect on next query)
+    if (managed.agent) {
+      // Fallback chain: session model > workspace default > connection default
+      const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+      const sessionConn = resolveSessionConnection(managed.llmConnection, wsConfig?.defaults?.defaultLlmConnection)
+      const effectiveModel = model ?? wsConfig?.defaults?.model ?? sessionConn?.defaultModel!
+      sessionLog.info(`[updateSessionModel] Calling agent.setModel(${effectiveModel}) [agent exists=${!!managed.agent}, connectionLocked=${managed.connectionLocked}]`)
+      managed.agent.setModel(effectiveModel)
+    } else {
+      sessionLog.info(`[updateSessionModel] No agent yet, model will apply on next agent creation`)
+    }
+    // Notify renderer of the model change
+    this.sendEvent({ type: 'session_model_changed', sessionId, model }, managed.workspace.id)
+    if (connectionChanged && connection) {
+      this.sendEvent({
+        type: 'connection_changed',
+        sessionId,
+        connectionSlug: connection,
+        supportsBranching: resolveSupportsBranching(managed),
+      }, managed.workspace.id)
+    }
+    sessionLog.info(`Session ${sessionId} model updated to: ${model ?? '(global config)'}`)
   }
 
   /**
@@ -6813,6 +6895,15 @@ export class SessionManager implements ISessionManager {
         // real `task_completed` will arrive when the agent actually finishes.
         backgroundTasksAlive: this.keepBackgroundTasksAlive,
       }, managed.workspace.id)
+
+      if (this.pendingMcpReloadSessionIds.delete(sessionId)) {
+        try {
+          await this.reloadSessionSources(managed, true)
+          sessionLog.info(`Completed deferred MCP reload for session ${sessionId}`)
+        } catch (error) {
+          sessionLog.error(`Deferred MCP reload failed for session ${sessionId}:`, error)
+        }
+      }
 
       // Tasks Conductor seam: signal true completion (queue empty) with the stop
       // reason + this turn's final assistant message, so the Conductor can advance
@@ -9131,6 +9222,7 @@ export class SessionManager implements ISessionManager {
     this.pendingCredentialResolvers.clear()
     this.pendingPermissionRequests.clear()
     this.adminRememberApprovals.clear()
+    this.pendingMcpReloadSessionIds.clear()
 
     // Clean up session-scoped tool callbacks for all sessions
     for (const sessionId of this.sessions.keys()) {

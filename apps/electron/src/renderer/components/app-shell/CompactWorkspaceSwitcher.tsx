@@ -131,10 +131,16 @@ export function CompactWorkspaceSwitcher({
       toast.error(t('toast.cannotRemoveActiveWorkspace'))
       return
     }
-    const removed = await window.electronAPI.removeWorkspace(workspace.id)
-    if (removed) {
-      toast.success(t('toast.removedWorkspace', { name: workspace.name }))
-      onWorkspaceRemoved?.()
+    try {
+      const removed = await window.electronAPI.removeWorkspace(workspace.id)
+      if (removed) {
+        toast.success(t('toast.removedWorkspace', { name: workspace.name }))
+        onWorkspaceRemoved?.()
+      }
+    } catch (error) {
+      toast.error(t('common.error'), {
+        description: error instanceof Error ? error.message : 'Unknown error',
+      })
     }
   }, [activeWorkspaceId, onWorkspaceRemoved, t])
 

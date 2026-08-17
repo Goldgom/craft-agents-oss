@@ -283,11 +283,17 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   }, [sessionId, onAttachmentsChange])
 
   // Session model change handler - persists per-session model and connection
-  const handleModelChange = React.useCallback((model: string, connection?: string) => {
+  const handleModelChange = React.useCallback(async (model: string, connection?: string) => {
     if (activeWorkspaceId) {
-      window.electronAPI.setSessionModel(sessionId, activeWorkspaceId, model, connection)
+      try {
+        await window.electronAPI.setSessionModel(sessionId, activeWorkspaceId, model, connection)
+      } catch (error) {
+        toast.error(t('toast.failedToSaveSetting', { setting: t('common.model') }), {
+          description: error instanceof Error ? error.message : 'Unknown error',
+        })
+      }
     }
-  }, [sessionId, activeWorkspaceId])
+  }, [sessionId, activeWorkspaceId, t])
 
   // Session connection change handler - can only change before first message
   const handleConnectionChange = React.useCallback(async (connectionSlug: string) => {

@@ -362,7 +362,8 @@ export interface ElectronAPI {
 
   // Server-level workspace operations (for thin client / remote workspace discovery)
   getServerWorkspaces(): Promise<WorkspaceInfo[]>
-  createServerWorkspace(name: string): Promise<WorkspaceInfo>
+  createServerWorkspace(name: string, rootPath?: string): Promise<WorkspaceInfo>
+  deleteServerWorkspace(workspaceId: string): Promise<boolean>
 
   testRemoteConnection(url: string, token: string): Promise<{
     ok: boolean
