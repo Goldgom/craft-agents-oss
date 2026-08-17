@@ -1,6 +1,6 @@
 {
   "name": "craft-agent",
-  "version": "0.12.1-community.0",
+  "version": "1.0.0-community",
   "license": "Apache-2.0",
   "description": "Claude Code-like agent for Craft documents",
   "type": "module",
@@ -17,8 +17,7 @@
   ],
   "workspaces": [
     "packages/*",
-    "apps/*",
-    "!apps/online-docs"
+    "apps/*"
   ],
   "scripts": {
     "test": "bun test && for f in $(find . -name '*.isolated.ts' -not -path './node_modules/*'); do bun test \"$f\" || exit 1; done",
@@ -60,9 +59,8 @@
     "electron:build:renderer": "bun run scripts/electron-build-renderer.ts",
     "electron:build:resources": "bun run scripts/electron-build-resources.ts",
     "build:wa-worker": "bun run scripts/build-wa-worker.ts",
-    "build:qqbot-worker": "bun run scripts/build-qqbot-worker.ts",
     "electron:build:assets": "cd apps/electron && bun scripts/copy-assets.ts",
-    "electron:build": "bun run build:qqbot-worker && bun run electron:build:main && bun run electron:build:preload && bun run electron:build:renderer && bun run electron:build:resources && bun run electron:build:assets",
+    "electron:build": "bun run electron:build:main && bun run electron:build:preload && bun run electron:build:renderer && bun run electron:build:resources && bun run electron:build:assets",
     "electron:start": "bun run electron:build && electron apps/electron",
     "electron:dev": "bun run scripts/electron-dev.ts",
     "electron:dev:terminal": "bun run scripts/electron-dev.ts --terminal",
@@ -80,7 +78,6 @@
     "electron:dist:dev:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.yml --mac",
     "electron:dist:dev:win": "CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --win",
     "electron:dist:dev:linux": "CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --linux",
-    "android:build": "powershell -ExecutionPolicy Bypass -File apps/android/build.ps1",
     "playground:dev": "lsof -ti:5173 | xargs kill -9 2>/dev/null; vite dev --config apps/electron/vite.config.ts --open /playground.html",
     "viewer:dev": "lsof -ti:5174 | xargs kill -9 2>/dev/null; vite dev --config apps/viewer/vite.config.ts --open /s/tz5-13I84pwK_he",
     "viewer:typecheck": "cd apps/viewer && bun run typecheck",
@@ -96,7 +93,9 @@
     "marketing:dev": "vite dev --config apps/marketing/vite.config.ts",
     "marketing:build": "vite build --config apps/marketing/vite.config.ts",
     "marketing:preview": "vite preview --config apps/marketing/vite.config.ts",
-    "docs:dev": "cd apps/online-docs && npm install && npx mintlify dev",
+    "docs:dev": "cd apps/docs-site && bun run dev",
+    "docs:build": "cd apps/docs-site && bun run build",
+    "docs:preview": "cd apps/docs-site && bun run preview",
     "build": "bun run scripts/build.ts",
     "release": "bun run scripts/release.ts",
     "check-version": "bun run scripts/check-version.ts",

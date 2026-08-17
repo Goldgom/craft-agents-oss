@@ -1,6 +1,6 @@
 {
   "name": "@craft-agent/messaging-gateway",
-  "version": "0.12.1-community.0",
+  "version": "1.0.0-community",
   "license": "Apache-2.0",
   "description": "Messaging gateway for Craft Agent — Telegram & WhatsApp",
   "type": "module",
@@ -15,16 +15,13 @@
   "dependencies": {
     "@craft-agent/core": "workspace:*",
     "@craft-agent/messaging-whatsapp-worker": "workspace:*",
-    "@craft-agent/messaging-qqbot-worker": "workspace:*",
     "@craft-agent/server-core": "workspace:*",
     "@craft-agent/shared": "workspace:*",
     "@larksuiteoapi/node-sdk": "^1.62.1",
-    "grammy": "^1.35.0",
-    "ws": "^8.19.0"
+    "grammy": "^1.35.0"
   },
   "devDependencies": {
     "typescript": "^5.8.2",
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.1"
+    "@types/node": "^22.0.0"
   }
 }
