@@ -371,7 +371,16 @@ ipcMain.handle('data:importFromLocalFile', async (_event, filePath: string) => {
   const bytes = readFileSync(filePath)
   mainLog.info(`[data-import] local file ${filePath} (${(size / (1024 * 1024)).toFixed(1)} MB)`)
 
-  if (!process.env.CRAFT_SERVER_URL) {
+  // In thin-client mode the target comes from the startup environment. In
+  // normal mode, the active workspace may still be owned by a remote server;
+  // route the local backup there instead of importing it into this machine.
+  const activeWorkspaceId = windowManager?.getWorkspaceForWindow(_event.sender.id)
+  const activeWorkspace = activeWorkspaceId ? getWorkspaceByNameOrId(activeWorkspaceId) : undefined
+  const remoteTarget = process.env.CRAFT_SERVER_URL
+    ? { url: process.env.CRAFT_SERVER_URL, token: process.env.CRAFT_SERVER_TOKEN ?? '' }
+    : activeWorkspace?.remoteServer
+
+  if (!remoteTarget) {
     // Local mode — the embedded server owns the data and runs in THIS process.
     const { importAllData } = await import('@craft-agent/shared/migration')
     try {
@@ -397,8 +406,8 @@ ipcMain.handle('data:importFromLocalFile', async (_event, filePath: string) => {
   // Thin-client remote mode — stream the bundle to the remote server.
   const { connectToRemote } = await import('./handlers/workspace')
   const { client, error } = await connectToRemote(
-    process.env.CRAFT_SERVER_URL,
-    process.env.CRAFT_SERVER_TOKEN ?? '',
+    remoteTarget.url,
+    remoteTarget.token,
   )
   if (!client) {
     return { canceled: false, success: false, error: error ?? 'Connection failed' }

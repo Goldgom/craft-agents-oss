@@ -7,11 +7,11 @@
 
 ## 一、环境准备（所有平台通用）
 
-| 依赖 | 版本要求 | 说明 |
-| --- | --- | --- |
-| Bun | ≥ 1.0（仓库开发用 1.3.x） | 包管理器与运行时 |
-| Node.js | ≥ 18 | `npx esbuild` / `npx vite` / electron-builder 需要 |
-| Git | 任意 | 拉取依赖 |
+| 依赖    | 版本要求                   | 说明                                                   |
+| ------- | -------------------------- | ------------------------------------------------------ |
+| Bun     | ≥ 1.0（仓库开发用 1.3.x） | 包管理器与运行时                                       |
+| Node.js | ≥ 18                      | `npx esbuild` / `npx vite` / electron-builder 需要 |
+| Git     | 任意                       | 拉取依赖                                               |
 
 ```bash
 # 1. 克隆仓库并安装依赖（在仓库根目录）
@@ -66,12 +66,12 @@ apps/electron/release/
 
 ### 常见问题
 
-| 现象 | 处理 |
-| --- | --- |
-| `ERROR: SDK core not found` | 先在仓库根目录执行 `bun install` |
-| `ERROR: @vscode/ripgrep not installed` | `bun pm trust @vscode/ripgrep` 后重装 |
-| EBUSY / 文件被占用 | 脚本已内置 3 次重试；确认杀毒软件未锁定 `vendor/bun/bun.exe` |
-| 杀毒软件拖慢或误报 | 把 `apps/electron/release`、`vendor` 加入扫描排除项 |
+| 现象                                     | 处理                                                          |
+| ---------------------------------------- | ------------------------------------------------------------- |
+| `ERROR: SDK core not found`            | 先在仓库根目录执行`bun install`                             |
+| `ERROR: @vscode/ripgrep not installed` | `bun pm trust @vscode/ripgrep` 后重装                       |
+| EBUSY / 文件被占用                       | 脚本已内置 3 次重试；确认杀毒软件未锁定`vendor/bun/bun.exe` |
+| 杀毒软件拖慢或误报                       | 把`apps/electron/release`、`vendor` 加入扫描排除项        |
 
 ---
 
@@ -156,12 +156,12 @@ bun run scripts/build-server.ts --platform=darwin --arch=arm64 --compress
 
 参数说明：
 
-| 参数 | 取值 | 说明 |
-| --- | --- | --- |
-| `--platform` | `darwin` / `linux` | 目标平台（默认当前平台） |
-| `--arch` | `x64` / `arm64` | 目标架构（默认当前架构） |
-| `--compress` | 布尔 | 构建完成后打包为 `.tar.gz` |
-| `--skip-download` | 布尔 | 复用已有 Bun/uv 二进制 |
+| 参数                | 取值                   | 说明                        |
+| ------------------- | ---------------------- | --------------------------- |
+| `--platform`      | `darwin` / `linux` | 目标平台（默认当前平台）    |
+| `--arch`          | `x64` / `arm64`    | 目标架构（默认当前架构）    |
+| `--compress`      | 布尔                   | 构建完成后打包为`.tar.gz` |
+| `--skip-download` | 布尔                   | 复用已有 Bun/uv 二进制      |
 
 快捷命令（等价封装）：
 
@@ -250,10 +250,10 @@ bun run server:build:linux-x64
 
 在一台能联网的机器上下载这两个文件，解压后 `scp` 到服务器对应路径：
 
-| 运行时 | 下载地址 | 解压后放到 |
-| --- | --- | --- |
-| Bun | `https://github.com/oven-sh/bun/releases/download/bun-v1.3.9/bun-linux-x64-baseline.zip` | `apps/electron/vendor/bun/bun` |
-| uv | `https://github.com/astral-sh/uv/releases/download/0.10.6/uv-x86_64-unknown-linux-gnu.tar.gz` | `apps/electron/resources/bin/linux-x64/uv` |
+| 运行时 | 下载地址                                                                                        | 解压后放到                                   |
+| ------ | ----------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Bun    | `https://github.com/oven-sh/bun/releases/download/bun-v1.3.9/bun-linux-x64-baseline.zip`      | `apps/electron/vendor/bun/bun`             |
+| uv     | `https://github.com/astral-sh/uv/releases/download/0.10.6/uv-x86_64-unknown-linux-gnu.tar.gz` | `apps/electron/resources/bin/linux-x64/uv` |
 
 ```bash
 # 服务器上预置完成后执行（跳过 GitHub 下载）
@@ -267,13 +267,13 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 
 ## 六、产物与版本速查
 
-| 目标 | 命令 | 产物 |
-| --- | --- | --- |
-| Windows 客户端 | `cd apps/electron && bun run dist:win` | `apps/electron/release/Craft-Agents-x64.exe` |
-| macOS 客户端 | `cd apps/electron && bash scripts/build-dmg.sh <arm64\|x64>` | `apps/electron/release/Craft-Agents-<arch>.dmg/.zip` |
-| Linux 客户端 | `cd apps/electron && bash scripts/build-linux.sh <x64\|arm64>` | `apps/electron/release/Craft-Agents-<arch>.AppImage` |
-| 服务器（原生） | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `craft-server-<ver>-<platform>-<arch>.tar.gz` |
-| 服务器（Docker） | `docker buildx build -f Dockerfile.server -t craft-agent-server .` | 容器镜像 |
+| 目标             | 命令                                                                               | 产物                                                               |
+| ---------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Windows 客户端   | `cd apps/electron && bun run dist:win`                                           | `apps/electron/release/Craft-Agents-x64.exe`                     |
+| macOS 客户端     | `cd apps/electron && bash scripts/build-dmg.sh <arm64\|x64>`                      | `apps/electron/release/Craft-Agents-<arch>.dmg/.zip`             |
+| Linux 客户端     | `cd apps/electron && bash scripts/build-linux.sh <x64\|arm64>`                    | `apps/electron/release/Craft-Agents-<arch>.AppImage`             |
+| 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `craft-server-<ver>-<platform>-<arch>.tar.gz` |
+| 服务器（Docker） | `docker buildx build -f Dockerfile.server -t craft-agent-server .`               | 容器镜像                                                           |
 
 版本号取自 `apps/electron/package.json`（当前 `0.12.0-community.1`），产物命名统一为
 `Craft-Agents-<arch>.<ext>` / `craft-server-<version>-<platform>-<arch>.tar.gz`。

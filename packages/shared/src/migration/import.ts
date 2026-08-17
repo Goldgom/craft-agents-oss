@@ -16,6 +16,7 @@
  */
 
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -25,6 +26,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs';
 import { join, dirname } from 'path';
@@ -124,9 +126,21 @@ function remapPathUnderOldRoot(
 function moveDir(src: string, dest: string): void {
   try {
     renameSync(src, dest);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
     cpSync(src, dest, { recursive: true });
     rmSync(src, { recursive: true, force: true });
+  }
+}
+
+/** Move a file across filesystems when rename(2) returns EXDEV. */
+function moveFile(src: string, dest: string): void {
+  try {
+    renameSync(src, dest);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    copyFileSync(src, dest);
+    unlinkSync(src);
   }
 }
 
@@ -339,7 +353,7 @@ export async function importAllData(
       const src = join(staging, 'config', name);
       const dst = join(configDir, name);
       if (existsSync(src) && !existsSync(dst)) {
-        renameSync(src, dst);
+        moveFile(src, dst);
       }
     }
     const stagedPermissions = join(staging, 'config', 'permissions');
@@ -350,7 +364,7 @@ export async function importAllData(
         const src = join(stagedPermissions, name);
         const dst = join(dstPermissions, name);
         if (!existsSync(dst)) {
-          renameSync(src, dst);
+          moveFile(src, dst);
         }
       }
     }
@@ -358,7 +372,7 @@ export async function importAllData(
     if (existsSync(stagedCredentials)) {
       const dstCredentials = join(configDir, 'credentials.enc');
       if (!existsSync(dstCredentials)) {
-        renameSync(stagedCredentials, dstCredentials);
+        moveFile(stagedCredentials, dstCredentials);
       } else {
         warnings.push(
           'credentials.enc was not restored because one already exists locally.',
