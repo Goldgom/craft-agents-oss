@@ -14,17 +14,32 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Download, Upload } from 'lucide-react'
+import { Download, Upload, HardDrive, Cloud } from 'lucide-react'
 import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { routes } from '@/lib/navigate'
 import { Spinner } from '@craft-agent/ui'
 import { useAppShellContext } from '@/context/AppShellContext'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
-import type { NetworkProxySettings } from '../../../shared/types'
+import type { NetworkProxySettings, ImportAllDataResponse } from '../../../shared/types'
 
 import {
   SettingsSection,
@@ -238,10 +253,10 @@ export default function AppSettingsPage() {
     }
   }, [t])
 
-  const handleImportAllData = useCallback(async () => {
+  const handleImportAllData = useCallback(async (operation: () => Promise<ImportAllDataResponse>) => {
     setImporting(true)
     try {
-      const res = await window.electronAPI.importAllData()
+      const res = await operation()
       if (res.canceled) return
       if (res.success) {
         toast.success(
@@ -261,6 +276,36 @@ export default function AppSettingsPage() {
       setImporting(false)
     }
   }, [appShellContext, t])
+
+  // ── Import source chooser: 本地文件 / 远程文件 ───────────────────────────
+  const [importSourceOpen, setImportSourceOpen] = useState(false)
+  const [remotePathOpen, setRemotePathOpen] = useState(false)
+  const [remotePath, setRemotePath] = useState('')
+
+  const handleImportLocalFile = useCallback(async () => {
+    setImportSourceOpen(false)
+    try {
+      const paths = await window.electronAPI.openFileDialog()
+      const first = paths?.[0]
+      if (!first) return
+      await handleImportAllData(() => window.electronAPI.importAllDataFromLocalFile(first))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.data.importError'))
+    }
+  }, [handleImportAllData, t])
+
+  const handleOpenRemotePathDialog = useCallback(() => {
+    setImportSourceOpen(false)
+    setRemotePath('')
+    setRemotePathOpen(true)
+  }, [])
+
+  const handleImportRemotePath = useCallback(async () => {
+    const path = remotePath.trim()
+    if (!path) return
+    setRemotePathOpen(false)
+    await handleImportAllData(() => window.electronAPI.importAllDataFromPath(path))
+  }, [remotePath, handleImportAllData])
 
   return (
     <div className="h-full flex flex-col">
@@ -401,28 +446,68 @@ export default function AppSettingsPage() {
                     label={t("settings.data.import")}
                     description={t("settings.data.importDesc")}
                     action={
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={handleImportAllData}
-                        disabled={exporting || importing}
-                      >
-                        {importing ? (
-                          <>
-                            <Spinner className="mr-1.5" />
-                            {t("settings.data.importing")}
-                          </>
-                        ) : (
-                          <>
-                            <Upload className="h-3.5 w-3.5 mr-1.5" />
-                            {t("settings.data.importAction")}
-                          </>
-                        )}
-                      </Button>
+                      <DropdownMenu open={importSourceOpen} onOpenChange={setImportSourceOpen}>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={exporting || importing}
+                          >
+                            {importing ? (
+                              <>
+                                <Spinner className="mr-1.5" />
+                                {t("settings.data.importing")}
+                              </>
+                            ) : (
+                              <>
+                                <Upload className="h-3.5 w-3.5 mr-1.5" />
+                                {t("settings.data.importAction")}
+                              </>
+                            )}
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuLabel className="text-xs text-foreground/50">
+                            {t("settings.data.importSourceTitle")}
+                          </DropdownMenuLabel>
+                          <DropdownMenuItem onSelect={() => void handleImportLocalFile()}>
+                            <HardDrive className="h-3.5 w-3.5" />
+                            {t("settings.data.importLocalFile")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={handleOpenRemotePathDialog}>
+                            <Cloud className="h-3.5 w-3.5" />
+                            {t("settings.data.importRemoteFile")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     }
                   />
                 </SettingsCard>
               </SettingsSection>
+
+              {/* Remote import path dialog (远程文件) */}
+              <Dialog open={remotePathOpen} onOpenChange={setRemotePathOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("settings.data.remotePathTitle")}</DialogTitle>
+                    <DialogDescription>{t("settings.data.remotePathDesc")}</DialogDescription>
+                  </DialogHeader>
+                  <SettingsInput
+                    value={remotePath}
+                    onChange={setRemotePath}
+                    placeholder={t("settings.data.remotePathPlaceholder")}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void handleImportRemotePath() }}
+                  />
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setRemotePathOpen(false)}>
+                      {t("common.cancel")}
+                    </Button>
+                    <Button onClick={() => void handleImportRemotePath()} disabled={!remotePath.trim() || importing}>
+                      {t("settings.data.importAction")}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
               {/* About */}
               <SettingsSection title={t("settings.about.title")}>

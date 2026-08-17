@@ -88,6 +88,27 @@ export class RoutedClient implements RpcClient {
     this.workspaceIdMapping = null
   }
 
+  /**
+   * Rebuild the remote workspace client from fresh config.
+   * Used when the user edits a remote workspace's server link — the existing
+   * WsRpcClient holds the OLD url/token, so plain reconnectNow() would keep
+   * dialing the stale endpoint. This creates a brand-new client and swaps it in.
+   */
+  rebuildRemoteClient(remoteServer: RemoteServerConfig): void {
+    if (!this.clientFactory) return
+
+    const newClient = this.clientFactory(remoteServer)
+    // Keep the local→remote id mapping in sync with the new config.
+    if (this.workspaceIdMapping) {
+      this.workspaceIdMapping = {
+        localId: this.workspaceIdMapping.localId,
+        remoteId: remoteServer.remoteWorkspaceId,
+      }
+    }
+    newClient.connect()
+    this.swapWorkspaceClient(newClient)
+  }
+
   // -------------------------------------------------------------------------
   // RpcClient interface
   // -------------------------------------------------------------------------

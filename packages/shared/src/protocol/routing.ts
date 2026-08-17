@@ -357,6 +357,11 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP,
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
+  // data migration import — runs on the server that owns the active workspace
+  // (remote-path import reads a server-side file; payload import receives the
+  // bundle streamed from the client via chunked transfer).
+  RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PATH,
+  RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD,
 
   // pi — provider config on workspace server
   RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS,

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useTheme } from '@/hooks/useTheme'
 import type { ThemeOverrides } from '@config/theme'
 import { useSetAtom, useStore, useAtomValue, useAtom } from 'jotai'
-import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState } from '../shared/types'
+import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState, StartupServerContext } from '../shared/types'
 import type { SessionDraft, DraftAttachmentRef } from '@craft-agent/shared/config'
 import type { SessionOptions, SessionOptionUpdates } from './hooks/useSessionOptions'
 import { defaultSessionOptions, mergeSessionOptions } from './hooks/useSessionOptions'
@@ -14,6 +14,7 @@ import { AppShell } from '@/components/app-shell/AppShell'
 import type { AppShellContextType } from '@/context/AppShellContext'
 import { OnboardingWizard, ReauthScreen } from '@/components/onboarding'
 import { WorkspacePicker } from '@/components/workspace'
+import ServerPickerPage from './pages/ServerPickerPage'
 import { ResetConfirmationDialog } from '@/components/ResetConfirmationDialog'
 import { SplashScreen } from '@/components/SplashScreen'
 import { TooltipProvider } from '@craft-agent/ui'
@@ -85,7 +86,7 @@ import { rendererLog } from '@/lib/logger'
 import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
 
-type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'ready'
+type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'server-picker' | 'ready'
 
 /** Type for the Jotai store returned by useStore() */
 type JotaiStore = ReturnType<typeof getDefaultStore>
@@ -291,6 +292,10 @@ export default function App() {
   const [appState, setAppState] = useState<AppState>('loading')
   const [setupNeeds, setSetupNeeds] = useState<SetupNeeds | null>(null)
 
+  // Current server context — local embedded server, thin-client remote server,
+  // or picker (startup location = 无服务).
+  const [serverContext, setServerContext] = useState<StartupServerContext | null>(null)
+
   // Per-session Jotai atom setters for isolated updates
   // NOTE: No sessionsAtom - we don't store a Session[] array anywhere to prevent memory leaks
   // Instead we use:
@@ -319,6 +324,21 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   // Window's workspace ID — shared atom so Root/ThemeProvider stays in sync on switch
   const [windowWorkspaceId, setWindowWorkspaceId] = useAtom(windowWorkspaceIdAtom)
+
+  /**
+   * Workspace isolation: when running on the local server, remote-server
+   * workspace stubs are hidden from the workspace list (they belong to their
+   * remote server and are reachable via the remote server management page).
+   * In thin-client remote mode the list comes from the remote server itself.
+   */
+  const applyWorkspaceFilter = (list: Workspace[]): Workspace[] => {
+    if (serverContext?.mode === 'remote') return list
+    return list.filter((w) => !w.remoteServer)
+  }
+
+  const applyAndSetWorkspaces = (list: Workspace[]) => {
+    setWorkspaces(applyWorkspaceFilter(list))
+  }
 
   // Derive workspace slug for SDK skill qualification
   const windowWorkspaceSlug = useMemo(() => {
@@ -670,16 +690,16 @@ export default function App() {
         // Switch to workspace in-place (no window close/reopen)
         await window.electronAPI.switchWorkspace(ws[0].id)
         setWindowWorkspaceId(ws[0].id)
-        setWorkspaces(ws)
+        applyAndSetWorkspaces(ws)
       } else {
-        setWorkspaces(ws)
+        applyAndSetWorkspaces(ws)
       }
     } catch (error) {
       console.error('[App] Failed to load workspaces after onboarding:', error)
       // Still transition to ready — the app can recover via reconnect
     }
     setAppState('ready')
-  }, [])
+  }, [applyAndSetWorkspaces])
 
   // Onboarding hook — onConfigSaved fires immediately when billing is saved,
   // ensuring connection state updates before the wizard closes.
@@ -706,10 +726,19 @@ export default function App() {
     setShowResetDialog(true)
   }, [])
 
-  // Check auth state and get window's workspace ID on mount
+  // Check server context + auth state and get window's workspace ID on mount
   useEffect(() => {
     const initialize = async () => {
       try {
+        // Server context first — in picker mode no local service is running and
+        // none of the server APIs below would answer.
+        const ctx = await window.electronAPI.getStartupContext().catch(() => null)
+        setServerContext(ctx)
+        if (ctx?.mode === 'picker') {
+          setAppState('server-picker')
+          return
+        }
+
         // Get this window's workspace ID (passed via URL query param from main process)
         const wsId = await window.electronAPI.getWindowWorkspace()
         setWindowWorkspaceId(wsId)
@@ -760,7 +789,7 @@ export default function App() {
   useEffect(() => {
     if (appState !== 'ready') return
 
-    window.electronAPI.getWorkspaces().then(setWorkspaces)
+    window.electronAPI.getWorkspaces().then(applyAndSetWorkspaces)
     window.electronAPI.getNotificationsEnabled().then(setNotificationsEnabled).catch(() => {})
 
     // Show actionable toast for missing system dependencies (Windows only)
@@ -792,7 +821,7 @@ export default function App() {
     })
     // Load app-level theme
     window.electronAPI.getAppTheme().then(setAppTheme)
-  }, [appState, loadSessionsFromServer, resolveDefaultConnectionSlug])
+  }, [appState, loadSessionsFromServer, resolveDefaultConnectionSlug, applyAndSetWorkspaces])
 
   // Subscribe to theme change events (live updates when theme.json changes)
   useEffect(() => {
@@ -1830,8 +1859,8 @@ export default function App() {
 
   // Handle workspace refresh (e.g., after icon upload)
   const handleRefreshWorkspaces = useCallback(() => {
-    window.electronAPI.getWorkspaces().then(setWorkspaces)
-  }, [])
+    window.electronAPI.getWorkspaces().then(applyAndSetWorkspaces)
+  }, [applyAndSetWorkspaces])
 
   // Handle cancel during onboarding
   const handleOnboardingCancel = useCallback(() => {
@@ -2015,6 +2044,12 @@ export default function App() {
         </ModalProvider>
       </DismissibleLayerProvider>
     )
+  }
+
+  // Startup server picker — startup location is "无服务": no local service was
+  // bootstrapped; the user picks which service to enter for this launch.
+  if (appState === 'server-picker') {
+    return <ServerPickerPage />
   }
 
   // Workspace picker — thin client with no workspace selected

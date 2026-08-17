@@ -251,6 +251,8 @@ export const RPC_CHANNELS = {
     PROMPTS_GENERATE: 'settings:generateWorkspacePrompt',
     EXPORT_ALL_DATA: 'settings:exportAllData',
     IMPORT_ALL_DATA: 'settings:importAllData',
+    IMPORT_ALL_DATA_FROM_PATH: 'settings:importAllDataFromPath',
+    IMPORT_ALL_DATA_FROM_PAYLOAD: 'settings:importAllDataFromPayload',
   },
   pi: {
     GET_API_KEY_PROVIDERS: 'pi:getApiKeyProviders',

@@ -196,6 +196,7 @@ export const CHANNEL_MAP = {
   // Data migration (跨系统迁移数据)
   exportAllData: invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA),
   importAllData: invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA),
+  importAllDataFromPath: invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PATH),
 
   // Remote server management (远程服务器管理)
   getRemoteServers: invoke(RPC_CHANNELS.remoteServers.LIST),

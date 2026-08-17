@@ -28,6 +28,12 @@ type ApiToChannelMapKeys = Exclude<
   | 'onTransferProgress' // direct IPC listener — chunk upload progress
   | 'changeLanguage' // direct IPC to main process — syncs i18n language
   | 'getFilePath' // renderer-local — webUtils.getPathForFile, no IPC round-trip
+  | 'getStartupContext' // direct IPC to main — server context / relaunch flow
+  | 'switchServer' // direct IPC to main — restart-based service switching
+  | 'selectStartupServer' // direct IPC to main — startup picker selection
+  | 'getStartupLocation' // direct IPC to main — local startup preference
+  | 'setStartupLocation' // direct IPC to main — local startup preference
+  | 'importAllDataFromLocalFile' // direct IPC to main — reads local file + ships to active server
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

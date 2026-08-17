@@ -6,8 +6,9 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Copy, Eye, EyeOff, AlertTriangle, RotateCw } from 'lucide-react'
+import { Copy, Eye, EyeOff, AlertTriangle, RotateCw, HardDrive, Cloud, Check, Ban } from 'lucide-react'
 import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -15,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@craft-agent/ui'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { ServerConfig, ServerStatus } from '@craft-agent/shared/config/server-config'
+import type { RemoteServerProfileInfo } from '../../../shared/types'
 
 import {
   SettingsSection,
@@ -75,18 +77,27 @@ export default function ServerSettingsPage() {
   const [tokenVisible, setTokenVisible] = useState(false)
   const [error, setError] = useState<string>()
 
+  // ── Startup server location (启动服务器位置) ────────────────────────────
+  const [startupLocation, setStartupLocationState] = useState<string>('local')
+  const [startupProfiles, setStartupProfiles] = useState<RemoteServerProfileInfo[]>([])
+  const [savingLocation, setSavingLocation] = useState(false)
+
   const isDirty = JSON.stringify(form) !== JSON.stringify(savedForm)
 
   const loadSettings = useCallback(async () => {
     try {
-      const [config, serverStatus] = await Promise.all([
+      const [config, serverStatus, location, profiles] = await Promise.all([
         window.electronAPI.getServerConfig(),
         window.electronAPI.getServerStatus(),
+        window.electronAPI.getStartupLocation().catch(() => 'local'),
+        window.electronAPI.getRemoteServers().catch(() => [] as RemoteServerProfileInfo[]),
       ])
       const formState = configToForm(config)
       setForm(formState)
       setSavedForm(formState)
       setStatus(serverStatus)
+      setStartupLocationState(location)
+      setStartupProfiles(profiles)
     } catch (err) {
       console.error('Failed to load server settings:', err)
     } finally {
@@ -154,6 +165,43 @@ export default function ServerSettingsPage() {
     }
   }
 
+  const handleSetStartupLocation = async (value: string) => {
+    if (savingLocation || value === startupLocation) return
+    setSavingLocation(true)
+    try {
+      await window.electronAPI.setStartupLocation(value)
+      setStartupLocationState(value)
+      toast.success(t('settings.server.startupSaved'))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.server.startupFailed'))
+    } finally {
+      setSavingLocation(false)
+    }
+  }
+
+  const StartupLocationOption = ({ value, icon, title, subtitle }: {
+    value: string
+    icon: ReactNode
+    title: string
+    subtitle: string
+  }) => (
+    <button
+      type="button"
+      disabled={savingLocation}
+      onClick={() => void handleSetStartupLocation(value)}
+      className="w-full flex items-center gap-3 rounded-lg border border-border/50 px-3 py-2.5 text-left transition-colors hover:bg-foreground/5 disabled:opacity-60"
+    >
+      <span className="shrink-0 h-8 w-8 rounded-md bg-foreground/5 flex items-center justify-center text-foreground/70">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-foreground">{title}</span>
+        <span className="block text-xs text-foreground/50 truncate">{subtitle}</span>
+      </span>
+      {startupLocation === value && <Check className="h-4 w-4 shrink-0 text-foreground/70" />}
+    </button>
+  )
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -171,6 +219,41 @@ export default function ServerSettingsPage() {
       <PanelHeader title={t("settings.server.title")} />
       <ScrollArea className="flex-1">
         <div className="px-5 py-7 max-w-3xl mx-auto space-y-5">
+
+          {/* Startup server location — 启动服务器位置 */}
+          <SettingsSection
+            title={t("settings.server.startupLocation")}
+            description={t("settings.server.startupLocationDesc")}
+          >
+            <SettingsCard divided>
+              <div className="px-4 py-3 space-y-2">
+                <StartupLocationOption
+                  value="none"
+                  icon={<Ban className="h-4 w-4" />}
+                  title={t("settings.server.startupNone")}
+                  subtitle={t("settings.server.startupNoneDesc")}
+                />
+                <StartupLocationOption
+                  value="local"
+                  icon={<HardDrive className="h-4 w-4" />}
+                  title={t("settings.server.startupLocal")}
+                  subtitle={t("settings.server.startupLocalDesc")}
+                />
+                {startupProfiles.map((profile) => (
+                  <StartupLocationOption
+                    key={profile.id}
+                    value={profile.id}
+                    icon={<Cloud className="h-4 w-4" />}
+                    title={profile.name}
+                    subtitle={profile.url}
+                  />
+                ))}
+                <p className="text-[11px] text-foreground/40 pt-1">
+                  {t("settings.server.startupHint")}
+                </p>
+              </div>
+            </SettingsCard>
+          </SettingsSection>
 
           {/* Enable toggle + restart banner */}
           <SettingsSection title={t("settings.server.remoteAccess")}>

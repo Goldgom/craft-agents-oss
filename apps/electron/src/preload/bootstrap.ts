@@ -55,10 +55,61 @@ interface TransportClient extends RpcClient {
 // Connection setup
 // ---------------------------------------------------------------------------
 
+// ── Picker mode (startup server location = 无服务) ───────────────────────────
+// Checked FIRST: in picker mode the local service was NOT bootstrapped, so the
+// main process has no __get-ws-port/__get-web-contents-id listeners. Expose
+// only the minimal API the server picker page needs; no WS clients are created.
+const startupContext: { mode?: 'picker' | 'normal' } = ipcRenderer.sendSync('__get-startup-context')
+const isPickerMode = startupContext?.mode === 'picker'
+
+if (isPickerMode) {
+  // Real methods the picker page needs.
+  const pickerApi: Record<string, unknown> = {
+    // Sync flag read by the renderer ROOT so it can render the picker page
+    // without ever mounting the full App (which expects a live server).
+    startupMode: 'picker',
+    getRuntimeEnvironment: (): 'electron' | 'web' => 'electron',
+    getStartupContext: () => ipcRenderer.invoke('__get-server-context'),
+    getRemoteServers: () => ipcRenderer.invoke('__picker-get-profiles'),
+    selectStartupServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
+    switchServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
+    getStartupLocation: () => ipcRenderer.invoke('__get-startup-location'),
+    setStartupLocation: (value: string) => ipcRenderer.invoke('__set-startup-location', value),
+  }
+
+  // Safe stubs for the remaining ElectronAPI surface. The App shell mounts and
+  // runs several effects before it learns it is in picker mode — these keep
+  // those calls from throwing on a missing method.
+  const extraKeys = [
+    'getTransportConnectionState',
+    'onTransportConnectionStateChanged',
+    'reconnectTransport',
+    'getFilePath',
+    'changeLanguage',
+    'relaunchApp',
+    'removeWorkspace',
+    'getSystemWarnings',
+    'performOAuth',
+    'onTransferProgress',
+    'invokeOnServer',
+    'transferSessionToWorkspace',
+    'isChannelAvailable',
+  ]
+  for (const key of new Set([...Object.keys(CHANNEL_MAP), ...extraKeys])) {
+    if (pickerApi[key] !== undefined) continue
+    pickerApi[key] = key.startsWith('on')
+      ? () => () => {}
+      : async () => undefined
+  }
+
+  contextBridge.exposeInMainWorld('electronAPI', pickerApi)
+} else {
+
 const webContentsId: number = ipcRenderer.sendSync('__get-web-contents-id')
 const isClientOnly = !!process.env.CRAFT_SERVER_URL
 
 let client: TransportClient
+let routedClient: RoutedClient | null = null
 
 if (isClientOnly) {
   // ── Thin-client mode ───────────────────────────────────────────────────
@@ -132,7 +183,7 @@ if (isClientOnly) {
     initialWorkspaceClient = localClient
   }
 
-  const routedClient = new RoutedClient(localClient, initialWorkspaceClient)
+  routedClient = new RoutedClient(localClient, initialWorkspaceClient)
 
   // Set workspace ID mapping if initial workspace is remote
   if (remoteConfig) {
@@ -273,7 +324,21 @@ client.onConnectionStateChanged((state) => {
   return client.onConnectionStateChanged(callback)
 }
 ;(api as any).reconnectTransport = async () => {
-  client.reconnectNow()
+  if (isClientOnly) {
+    client.reconnectNow()
+    return
+  }
+
+  // The workspace client holds a snapshot of the remote server config taken
+  // when the window opened. If the user edited the server link since then,
+  // rebuild the remote client from the CURRENT config instead of re-dialing
+  // the stale URL.
+  const remoteConfig: RemoteServerConfig | null = ipcRenderer.sendSync('__get-workspace-remote-config')
+  if (remoteConfig && typeof remoteConfig.url === 'string' && routedClient) {
+    routedClient.rebuildRemoteClient(remoteConfig)
+  } else {
+    client.reconnectNow()
+  }
 }
 
 // ── performOAuth ─────────────────────────────────────────────────────────
@@ -456,4 +521,21 @@ client.onConnectionStateChanged((state) => {
   }
 }
 
+// ── Server switching + startup location (direct IPC to main) ─────────────
+// These are client-local concerns (relaunch / local preference) — they bypass
+// WS RPC so they keep working in thin-client remote mode where the local
+// embedded server is not running.
+;(api as ElectronAPI).startupMode = 'normal'
+;(api as ElectronAPI).getStartupContext = () => ipcRenderer.invoke('__get-server-context')
+;(api as ElectronAPI).switchServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
+;(api as ElectronAPI).selectStartupServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
+;(api as ElectronAPI).getStartupLocation = () => ipcRenderer.invoke('__get-startup-location')
+;(api as ElectronAPI).setStartupLocation = (value: string) => ipcRenderer.invoke('__set-startup-location', value)
+// Profile list is client-local too — overrides the CHANNEL_MAP entry so it
+// works identically in thin-client remote mode.
+;(api as ElectronAPI).getRemoteServers = () => ipcRenderer.invoke('__picker-get-profiles')
+;(api as ElectronAPI).importAllDataFromLocalFile = (path: string) => ipcRenderer.invoke('data:importFromLocalFile', path)
+
 contextBridge.exposeInMainWorld('electronAPI', api)
+
+} // end if (!isPickerMode)

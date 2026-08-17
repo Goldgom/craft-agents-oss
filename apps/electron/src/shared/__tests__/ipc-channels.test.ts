@@ -267,6 +267,8 @@ const EXPECTED_CHANNELS: string[] = [
   'settings:getServerStatus',
   'settings:getWorkspacePrompts',
   'settings:importAllData',
+  'settings:importAllDataFromPath',
+  'settings:importAllDataFromPayload',
   'settings:saveWorkspacePrompt',
   'settings:setDefaultThinkingLevel',
   'settings:setNetworkProxy',

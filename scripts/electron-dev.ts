@@ -589,16 +589,6 @@ async function main(): Promise<void> {
   // 5. Start Electron (build already verified)
   console.log("🚀 Starting Electron...\n");
 
-  const electronProc = spawn({
-    cmd: [ELECTRON_BIN, "apps/electron"],
-    cwd: ROOT_DIR,
-    stdin: "ignore",
-    stdout: "inherit",
-    stderr: "inherit",
-    env: getElectronEnv(),
-  });
-  processes.push(electronProc);
-
   // Handle cleanup on exit
   const cleanup = async () => {
     console.log("\n🛑 Shutting down...");
@@ -629,8 +619,26 @@ async function main(): Promise<void> {
     process.on("SIGHUP", () => cleanup());
   }
 
-  // Wait for electron to exit (main process)
-  await electronProc.exited;
+  // Wait for electron to exit (main process). Exit code 42 means the app
+  // requested a restart (server switching / startup picker choice) — respawn
+  // Electron while keeping Vite and the watchers alive.
+  const RESTART_EXIT_CODE = 42
+  for (;;) {
+    const electronProc = spawn({
+      cmd: [ELECTRON_BIN, "apps/electron"],
+      cwd: ROOT_DIR,
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+      env: getElectronEnv(),
+    });
+    processes.push(electronProc);
+
+    const exitCode = await electronProc.exited;
+    if (exitCode !== RESTART_EXIT_CODE) break
+    console.log("\n🔄 Electron requested restart (server switch) — relaunching...\n");
+  }
+
   await cleanup();
 }
 

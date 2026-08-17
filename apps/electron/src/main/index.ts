@@ -81,8 +81,8 @@ if (persistedUiLanguage) {
 const machineId = createHash('sha256').update(hostname() + homedir()).digest('hex').slice(0, 16)
 Sentry.setUser({ id: machineId })
 
-import { join, delimiter } from 'path'
-import { existsSync, readFileSync } from 'fs'
+import { join, delimiter, basename } from 'path'
+import { existsSync, readFileSync, statSync } from 'fs'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
 import { registerAllRpcHandlers } from './handlers/index'
@@ -98,7 +98,8 @@ import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/s
 import { createApplicationMenu } from './menu'
 import { WindowManager } from './window-manager'
 import { loadWindowState, saveWindowState } from './window-state'
-import { getWorkspaces, getWorkspaceByNameOrId, loadStoredConfig, addWorkspace, saveConfig } from '@craft-agent/shared/config'
+import { getWorkspaces, getWorkspaceByNameOrId, loadStoredConfig, addWorkspace, saveConfig, getStartupServerLocation, setStartupServerLocation } from '@craft-agent/shared/config'
+import { loadRemoteServerProfiles, getRemoteServerProfile, toProfileInfo, type RemoteServerProfile } from '@craft-agent/shared/config/remote-servers'
 import { getDefaultWorkspacesDir } from '@craft-agent/shared/workspaces'
 import { initializeDocs } from '@craft-agent/shared/docs'
 import { initializeReleaseNotes } from '@craft-agent/shared/release-notes'
@@ -223,6 +224,204 @@ let messagingHandle: MessagingBootstrapHandle | null = null
 
 // Store pending deep link if app not ready yet (cold start)
 let pendingDeepLink: string | null = null
+
+// ---------------------------------------------------------------------------
+// Startup server location (启动服务器位置) + runtime server switching.
+//
+// Preference values: 'none' (picker only — no local service at startup),
+// 'local' (default: embedded local server), or a remote-server profile id.
+// Switching servers is restart-based: the choice is persisted and the app
+// relaunches with CRAFT_SERVER_URL/TOKEN set (thin-client mode) or unset.
+// ---------------------------------------------------------------------------
+
+const STARTUP_LOCATION_NONE = 'none'
+const STARTUP_LOCATION_LOCAL = 'local'
+
+/**
+ * 'none' means: do NOT bootstrap the local service — open only the frontend
+ * picker so the user chooses which service to enter for this launch.
+ * A relaunch with CRAFT_SERVER_URL set overrides picker mode (the user
+ * already picked a remote service).
+ */
+const pickerMode = getStartupServerLocation() === STARTUP_LOCATION_NONE && !process.env.CRAFT_SERVER_URL
+
+/** Resolve the persisted startup location to a remote profile (if any). */
+function resolveStartupRemoteProfile(): RemoteServerProfile | null {
+  const location = getStartupServerLocation()
+  if (!location || location === STARTUP_LOCATION_NONE || location === STARTUP_LOCATION_LOCAL) return null
+  return getRemoteServerProfile(location) ?? null
+}
+
+// Apply a remote-profile startup BEFORE whenReady so the existing thin-client
+// (CRAFT_SERVER_URL) path takes over without bootstrapping the local service.
+{
+  const profile = resolveStartupRemoteProfile()
+  if (profile) {
+    process.env.CRAFT_SERVER_URL = profile.url
+    process.env.CRAFT_SERVER_TOKEN = profile.token
+    process.env.CRAFT_SERVER_PROFILE_ID = profile.id
+    process.env.CRAFT_SERVER_PROFILE_NAME = profile.name
+  }
+}
+
+export interface StartupServerContext {
+  mode: 'picker' | 'local' | 'remote'
+  serverUrl?: string
+  profileId?: string
+  profileName?: string
+}
+
+function getServerContext(): StartupServerContext {
+  if (pickerMode) return { mode: 'picker' }
+  if (process.env.CRAFT_SERVER_URL) {
+    let profileName = process.env.CRAFT_SERVER_PROFILE_NAME
+    if (!profileName) {
+      try {
+        profileName = new URL(process.env.CRAFT_SERVER_URL).hostname
+      } catch { /* keep undefined */ }
+    }
+    return {
+      mode: 'remote',
+      serverUrl: process.env.CRAFT_SERVER_URL,
+      profileId: process.env.CRAFT_SERVER_PROFILE_ID,
+      profileName,
+    }
+  }
+  return { mode: 'local' }
+}
+
+async function relaunchWithServer(target: string): Promise<void> {
+  if (target === STARTUP_LOCATION_LOCAL || target === STARTUP_LOCATION_NONE) {
+    delete process.env.CRAFT_SERVER_URL
+    delete process.env.CRAFT_SERVER_TOKEN
+    delete process.env.CRAFT_SERVER_PROFILE_ID
+    delete process.env.CRAFT_SERVER_PROFILE_NAME
+    setStartupServerLocation(target)
+  } else {
+    const profile = getRemoteServerProfile(target)
+    if (!profile) throw new Error('Remote server profile not found')
+    setStartupServerLocation(target)
+    process.env.CRAFT_SERVER_URL = profile.url
+    process.env.CRAFT_SERVER_TOKEN = profile.token
+    process.env.CRAFT_SERVER_PROFILE_ID = profile.id
+    process.env.CRAFT_SERVER_PROFILE_NAME = profile.name
+  }
+
+  mainLog.info(`[server-switch] Relaunching with target=${target}`)
+
+  if (!app.isPackaged) {
+    // Dev: the electron-dev watcher owns Vite and respawns Electron when it
+    // exits with code 42 — a plain app.relaunch() would orphan the relaunched
+    // instance without the dev server. The persisted preference drives the
+    // next boot's server mode (resolveStartupRemoteProfile reads it).
+    mainLog.info('[server-switch] dev mode — exiting with restart code for the dev watcher')
+    app.exit(42)
+    return
+  }
+
+  app.relaunch()
+  app.exit(0)
+}
+
+// Client-local IPC used by both the startup picker and the menu-bar switcher.
+// Registered at module scope so they work even when the local service is not
+// bootstrapped (picker mode / thin-client remote mode).
+ipcMain.on('__get-startup-context', (e) => {
+  e.returnValue = { mode: pickerMode ? 'picker' : 'normal' }
+})
+ipcMain.handle('__get-server-context', async () => {
+  const ctx = getServerContext()
+  mainLog.info(`[server-context] mode=${ctx.mode}${ctx.profileName ? ` profile=${ctx.profileName}` : ''}`)
+  return ctx
+})
+ipcMain.handle('__picker-get-profiles', async () => {
+  const profiles = loadRemoteServerProfiles().map(toProfileInfo)
+  mainLog.info(`[picker] renderer requested profiles (${profiles.length})`)
+  return profiles
+})
+ipcMain.handle('__select-startup-server', async (_event, target: string) => {
+  await relaunchWithServer(target)
+  return { success: true }
+})
+ipcMain.handle('__get-startup-location', async () => getStartupServerLocation() ?? STARTUP_LOCATION_LOCAL)
+ipcMain.handle('__set-startup-location', async (_event, value: string) => {
+  if (
+    value !== STARTUP_LOCATION_NONE
+    && value !== STARTUP_LOCATION_LOCAL
+    && !getRemoteServerProfile(value)
+  ) {
+    throw new Error('Unknown startup server location')
+  }
+  setStartupServerLocation(value)
+  return { success: true }
+})
+
+// ── Data migration import from a LOCAL file (本地文件导入) ──────────────
+// The renderer picks a file on THIS machine; this handler reads it and runs
+// the import on the server that owns the active workspace:
+//   - local mode: import in-process (same config dir as the embedded server)
+//   - thin-client remote mode: ship the bundle to the remote server via the
+//     chunked transfer pipeline (small bundles go as a direct payload call)
+ipcMain.handle('data:importFromLocalFile', async (_event, filePath: string) => {
+  if (!filePath || typeof filePath !== 'string' || !existsSync(filePath)) {
+    return { canceled: false, success: false, error: 'Import file not found' }
+  }
+
+  const size = statSync(filePath).size
+  const bytes = readFileSync(filePath)
+  mainLog.info(`[data-import] local file ${filePath} (${(size / (1024 * 1024)).toFixed(1)} MB)`)
+
+  if (!process.env.CRAFT_SERVER_URL) {
+    // Local mode — the embedded server owns the data and runs in THIS process.
+    const { importAllData } = await import('@craft-agent/shared/migration')
+    try {
+      const result = await importAllData({ sourcePath: filePath })
+      mainLog.info(`[data-import] complete: ${result.importedWorkspaces.length} workspace(s), ${result.fileCount} file(s)`)
+      return {
+        canceled: false,
+        success: true,
+        fileCount: result.fileCount,
+        importedWorkspaces: result.importedWorkspaces,
+        warnings: result.warnings,
+      }
+    } catch (error) {
+      mainLog.error('[data-import] failed:', error)
+      return {
+        canceled: false,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
+  // Thin-client remote mode — stream the bundle to the remote server.
+  const { connectToRemote } = await import('./handlers/workspace')
+  const { client, error } = await connectToRemote(
+    process.env.CRAFT_SERVER_URL,
+    process.env.CRAFT_SERVER_TOKEN ?? '',
+  )
+  if (!client) {
+    return { canceled: false, success: false, error: error ?? 'Connection failed' }
+  }
+
+  try {
+    const { invokeChunked, CHUNKED_TRANSFER_THRESHOLD } = await import('./chunked-rpc')
+    const payload = { bundleBase64: bytes.toString('base64'), fileName: basename(filePath) }
+    if (bytes.length < CHUNKED_TRANSFER_THRESHOLD) {
+      return await client.invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD, payload)
+    }
+    return await invokeChunked(client, RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD, [payload], 0)
+  } catch (err) {
+    mainLog.error('[data-import] remote transfer failed:', err)
+    return {
+      canceled: false,
+      success: false,
+      error: err instanceof Error ? err.message : 'Unknown error',
+    }
+  } finally {
+    client.destroy()
+  }
+})
 
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
 // Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Craft Agents [1]")
@@ -458,6 +657,16 @@ app.whenReady().then(async () => {
 
     // Create the application menu (needs windowManager for New Window action)
     createApplicationMenu(windowManager)
+
+    // ── Picker mode (启动位置 = 无服务) ────────────────────────────────────
+    // No local service is bootstrapped — open only the frontend, which renders
+    // the server picker. Choosing a service relaunches the app (see
+    // __select-startup-server above).
+    if (pickerMode) {
+      mainLog.info('[picker] Startup server location is "none" — skipping local service bootstrap, showing server picker')
+      await createInitialWindows()
+      return
+    }
 
     // When CRAFT_SERVER_URL is set, this Electron instance is a thin client —
     // it only creates windows whose preload connects to the remote server.

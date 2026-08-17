@@ -4,16 +4,13 @@
  * Manages the client's registry of remote Craft Agent servers:
  *   - add/edit/delete server profiles (URL + token + name)
  *   - test connectivity
- *   - list the remote server's workspaces and open each one in an
- *     independent instance window
- *   - create new workspaces ON the remote server (separate from local
- *     workspace creation — remote data stays on the server)
+ *   - switch the application directly to a configured remote server
  */
 
 import * as React from 'react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Cloud, Pencil, Plus, RefreshCw, Trash2, ExternalLink } from 'lucide-react'
+import { Cloud, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -32,7 +29,6 @@ import { routes } from '@/lib/navigate'
 import {
   SettingsSection,
   SettingsCard,
-  SettingsRow,
   SettingsInput,
   SettingsSecretInput,
 } from '@/components/settings'
@@ -42,12 +38,6 @@ import type { RemoteServerProfileInfo } from '../../../shared/types'
 export const meta: DetailsPageMeta = {
   navigator: 'settings',
   slug: 'remoteServers',
-}
-
-interface RemoteWs {
-  id: string
-  name: string
-  slug?: string
 }
 
 export default function RemoteServersPage() {
@@ -64,14 +54,8 @@ export default function RemoteServersPage() {
   const [token, setToken] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Per-profile state
   const [testingId, setTestingId] = useState<string | null>(null)
-  const [workspacesByProfile, setWorkspacesByProfile] = useState<Record<string, RemoteWs[] | null>>({})
-  const [loadingWsId, setLoadingWsId] = useState<string | null>(null)
-  const [createOpenId, setCreateOpenId] = useState<string | null>(null)
-  const [newWsName, setNewWsName] = useState('')
-  const [creatingWs, setCreatingWs] = useState(false)
-  const [openingId, setOpeningId] = useState<string | null>(null)
+  const [switchingId, setSwitchingId] = useState<string | null>(null)
 
   const loadProfiles = React.useCallback(async () => {
     try {
@@ -146,55 +130,15 @@ export default function RemoteServersPage() {
     }
   }
 
-  const handleListWorkspaces = async (profileId: string) => {
-    setLoadingWsId(profileId)
+  const handleSwitch = async (profile: RemoteServerProfileInfo) => {
+    if (switchingId) return
+    setSwitchingId(profile.id)
     try {
-      const res = await window.electronAPI.listRemoteServerWorkspaces(profileId)
-      if (res.ok) {
-        setWorkspacesByProfile(prev => ({ ...prev, [profileId]: res.workspaces ?? [] }))
-      } else {
-        setWorkspacesByProfile(prev => ({ ...prev, [profileId]: null }))
-        toast.error(res.error ?? t('settings.remoteServers.errors.listWs'))
-      }
+      await window.electronAPI.switchServer(profile.id)
     } catch (err) {
-      setWorkspacesByProfile(prev => ({ ...prev, [profileId]: null }))
-      toast.error(err instanceof Error ? err.message : t('settings.remoteServers.errors.listWs'))
+      toast.error(err instanceof Error ? err.message : t('serverSwitcher.switchFailed'))
     } finally {
-      setLoadingWsId(null)
-    }
-  }
-
-  const handleCreateWorkspace = async (profileId: string) => {
-    if (!newWsName.trim()) return
-    setCreatingWs(true)
-    try {
-      const res = await window.electronAPI.createRemoteServerWorkspace(profileId, newWsName.trim())
-      if (res.ok) {
-        toast.success(t('settings.remoteServers.toasts.wsCreated', { name: res.workspace?.name ?? newWsName }))
-        setCreateOpenId(null)
-        setNewWsName('')
-        await handleListWorkspaces(profileId)
-      } else {
-        toast.error(res.error ?? t('settings.remoteServers.errors.createWs'))
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('settings.remoteServers.errors.createWs'))
-    } finally {
-      setCreatingWs(false)
-    }
-  }
-
-  const handleOpen = async (profile: RemoteServerProfileInfo, remoteWs: RemoteWs) => {
-    setOpeningId(`${profile.id}:${remoteWs.id}`)
-    try {
-      const res = await window.electronAPI.openRemoteServerWorkspace(profile.id, remoteWs.id)
-      if (!res.ok) {
-        toast.error(res.error ?? t('settings.remoteServers.errors.openWs'))
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('settings.remoteServers.errors.openWs'))
-    } finally {
-      setOpeningId(null)
+      setSwitchingId(null)
     }
   }
 
@@ -229,9 +173,7 @@ export default function RemoteServersPage() {
                     <p className="text-xs text-foreground/50">{t('settings.remoteServers.emptyHint')}</p>
                   </div>
                 ) : (
-                  profiles.map(profile => {
-                    const ws = workspacesByProfile[profile.id]
-                    return (
+                  profiles.map(profile => (
                       <div key={profile.id} className="px-4 py-3 space-y-2">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
@@ -254,42 +196,15 @@ export default function RemoteServersPage() {
                         <div className="flex items-center gap-2">
                           <Button
                             size="sm"
-                            variant="outline"
-                            disabled={loadingWsId === profile.id}
-                            onClick={() => void handleListWorkspaces(profile.id)}
+                            disabled={switchingId === profile.id}
+                            onClick={() => void handleSwitch(profile)}
                           >
-                            {loadingWsId === profile.id ? <Spinner className="h-3.5 w-3.5 mr-1.5" /> : null}
-                            {t('settings.remoteServers.listWs')}
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={() => { setCreateOpenId(profile.id); setNewWsName('') }}>
-                            <Plus className="h-3.5 w-3.5 mr-1.5" />
-                            {t('settings.remoteServers.newWs')}
+                            {switchingId === profile.id ? <Spinner className="h-3.5 w-3.5 mr-1.5" /> : <Cloud className="h-3.5 w-3.5 mr-1.5" />}
+                            {t('serverSwitcher.ariaLabel')}
                           </Button>
                         </div>
-
-                        {Array.isArray(ws) && ws.length === 0 && (
-                          <p className="text-xs text-foreground/50">{t('settings.remoteServers.noWs')}</p>
-                        )}
-                        {Array.isArray(ws) && ws.map(remoteWs => (
-                          <SettingsRow
-                            key={remoteWs.id}
-                            label={remoteWs.name}
-                            description={remoteWs.slug ? `/${remoteWs.slug}` : undefined}
-                            action={
-                              <Button
-                                size="sm"
-                                onClick={() => void handleOpen(profile, remoteWs)}
-                                disabled={openingId === `${profile.id}:${remoteWs.id}`}
-                              >
-                                {openingId === `${profile.id}:${remoteWs.id}` ? <Spinner className="h-3.5 w-3.5 mr-1.5" /> : <ExternalLink className="h-3.5 w-3.5 mr-1.5" />}
-                                {t('settings.remoteServers.openInstance')}
-                              </Button>
-                            }
-                          />
-                        ))}
                       </div>
-                    )
-                  })
+                  ))
                 )}
               </SettingsCard>
             </SettingsSection>
@@ -335,33 +250,6 @@ export default function RemoteServersPage() {
             </Button>
             <Button onClick={() => void handleSave()} disabled={saving || !name.trim() || !url.trim()}>
               {saving ? <Spinner className="h-4 w-4" /> : t('common.save')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* New remote workspace dialog */}
-      <Dialog open={createOpenId !== null} onOpenChange={(open) => !open && setCreateOpenId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('settings.remoteServers.newWsTitle')}</DialogTitle>
-            <DialogDescription>{t('settings.remoteServers.newWsDesc')}</DialogDescription>
-          </DialogHeader>
-          <div className="py-2">
-            <SettingsInput
-              label={t('settings.remoteServers.newWsNameLabel')}
-              value={newWsName}
-              onChange={setNewWsName}
-              placeholder={t('settings.remoteServers.newWsNamePlaceholder')}
-              inCard
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setCreateOpenId(null)} disabled={creatingWs}>
-              {t('common.cancel')}
-            </Button>
-            <Button onClick={() => void handleCreateWorkspace(createOpenId!)} disabled={creatingWs || !newWsName.trim()}>
-              {creatingWs ? <Spinner className="h-4 w-4" /> : t('settings.remoteServers.create')}
             </Button>
           </DialogFooter>
         </DialogContent>

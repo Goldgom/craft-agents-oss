@@ -29,6 +29,7 @@ import { BrowserTabStrip } from "../browser/BrowserTabStrip"
 import type { Workspace } from "../../../shared/types"
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher"
 import { CompactWorkspaceSwitcher } from "./CompactWorkspaceSwitcher"
+import { ServerSwitcher } from "./ServerSwitcher"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
 import { AppMenu } from "../AppMenu"
 
@@ -167,6 +168,9 @@ export function TopBar({
           onToggleFocusMode={onToggleFocusMode}
         />
         </div>
+
+        {/* Server switcher — 当前运行服务端 (本机服务器 / 远程服务) */}
+        <ServerSwitcher />
 
         {/* Back / Forward / Workspace selector (moved from center).
             In compact mode the back/forward buttons are dropped — the iOS-style

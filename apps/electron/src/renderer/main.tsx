@@ -5,6 +5,7 @@ import * as Sentry from '@sentry/react'
 import { captureConsoleIntegration } from '@sentry/react'
 import { Provider as JotaiProvider, useAtomValue } from 'jotai'
 import App from './App'
+import ServerPickerPage from './pages/ServerPickerPage'
 import { ThemeProvider } from './context/ThemeContext'
 import { windowWorkspaceIdAtom } from './atoms/sessions'
 import { Toaster } from '@/components/ui/sonner'
@@ -112,15 +113,20 @@ function CrashFallback() {
 
 /**
  * Root component - loads workspace ID for theme context and renders App
- * App.tsx handles window mode detection internally (main vs tab-content)
+ * App.tsx handles window mode detection internally (main vs tab-content).
+ *
+ * Picker mode: the local service was skipped at startup (启动位置 = 无服务).
+ * The full App is NEVER mounted in this mode — it expects a live server and
+ * would fail on missing APIs. The server picker page renders directly.
  */
 function Root() {
   // Shared atom — written by App on init & workspace switch, read here for ThemeProvider
   const workspaceId = useAtomValue(windowWorkspaceIdAtom)
+  const startupMode = window.electronAPI?.startupMode
 
   return (
     <ThemeProvider activeWorkspaceId={workspaceId}>
-      <App />
+      {startupMode === 'picker' ? <ServerPickerPage /> : <App />}
       <Toaster />
     </ThemeProvider>
   )

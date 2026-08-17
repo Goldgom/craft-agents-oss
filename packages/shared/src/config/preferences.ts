@@ -39,6 +39,12 @@ export interface UserPreferences {
    * Not user-editable; not exposed via the `update_user_preferences` tool.
    */
   uiLanguage?: LanguageCode;
+  /**
+   * Startup server location: 'none' (picker only — no local service),
+   * 'local' (embedded local server), or a remote server profile id.
+   * Read by the Electron main process before server bootstrap.
+   */
+  startupServerLocation?: string;
   // When the preferences were last updated
   updatedAt?: number;
 }
@@ -89,6 +95,21 @@ export function updatePreferences(updates: Partial<UserPreferences>): UserPrefer
 
 export function getPreferencesPath(): string {
   return PREFERENCES_FILE;
+}
+
+/**
+ * Read the startup server location preference.
+ * Returns undefined when unset — callers treat undefined as 'local' (default).
+ */
+export function getStartupServerLocation(): string | undefined {
+  return loadPreferences().startupServerLocation;
+}
+
+/** Persist the startup server location preference. */
+export function setStartupServerLocation(location: string): void {
+  const current = loadPreferences();
+  if (current.startupServerLocation === location) return;
+  savePreferences({ ...current, startupServerLocation: location });
 }
 
 /**

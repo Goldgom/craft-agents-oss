@@ -56,6 +56,14 @@ export interface RemoteWorkspaceInfo {
   slug?: string;
 }
 
+/** Current server context for the menu-bar server switcher / startup picker. */
+export interface StartupServerContext {
+  mode: 'picker' | 'local' | 'remote'
+  serverUrl?: string
+  profileId?: string
+  profileName?: string
+}
+
 /** Response of the data-migration export (全局数据导出). */
 export interface ExportAllDataResponse {
   canceled: boolean;
@@ -411,6 +419,19 @@ export interface ElectronAPI {
   onTransportConnectionStateChanged(callback: (state: TransportConnectionState) => void): () => void
   reconnectTransport(): Promise<void>
 
+  // ── Startup server location + server switching (direct IPC to main) ────
+  /** Sync preload-local flag: 'picker' when the local service was skipped at startup. */
+  startupMode?: 'picker' | 'normal'
+  /** Current server context: local embedded server, thin-client remote server, or picker. */
+  getStartupContext(): Promise<StartupServerContext>
+  /** Switch the running service (restart-based): 'local', 'none', or a remote profile id. */
+  switchServer(target: string): Promise<{ success: boolean }>
+  /** Alias for switchServer — used by the startup server picker page. */
+  selectStartupServer(target: string): Promise<{ success: boolean }>
+  /** Persisted startup server location preference ('local' | 'none' | profileId). */
+  getStartupLocation(): Promise<string>
+  setStartupLocation(value: string): Promise<{ success: boolean }>
+
   /** Fired after a WebSocket reconnect. isStale=true means buffer was evicted — full refresh needed. */
   onReconnected(callback: (isStale: boolean) => void): () => void
 
@@ -507,6 +528,10 @@ export interface ElectronAPI {
   // Data migration (跨系统迁移数据)
   exportAllData(): Promise<ExportAllDataResponse>
   importAllData(): Promise<ImportAllDataResponse>
+  /** Import from a path on the SERVER that owns the active workspace (远程文件). */
+  importAllDataFromPath(path: string): Promise<ImportAllDataResponse>
+  /** Import from a LOCAL file: main reads the file and ships it to the active server (本地文件). */
+  importAllDataFromLocalFile(path: string): Promise<ImportAllDataResponse>
 
   // Remote server management (远程服务器管理)
   getRemoteServers(): Promise<RemoteServerProfileInfo[]>

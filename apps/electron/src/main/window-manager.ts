@@ -378,10 +378,24 @@ export class WindowManager {
       if (VITE_DEV_SERVER_URL && failLoadRetries < 5) {
         failLoadRetries++
         windowLog.info(`Retrying Vite dev server (attempt ${failLoadRetries}/5)...`)
-        setTimeout(() => {
+
+        const retryLoad = () => {
+          if (window.isDestroyed() || window.webContents.isDestroyed()) return
           const params = new URLSearchParams({ workspaceId }).toString()
           window.loadURL(`${VITE_DEV_SERVER_URL}?${params}`)
-        }, 1000)
+        }
+
+        setTimeout(() => {
+          // If a navigation is still in flight (e.g. Vite re-optimizing
+          // dependencies triggers a reload), calling loadURL immediately
+          // aborts it with ERR_ABORTED and the retry chain churns. Wait for
+          // the in-flight load to settle first.
+          if (!window.webContents.isDestroyed() && window.webContents.isLoading()) {
+            window.webContents.once('did-stop-loading', () => setTimeout(retryLoad, 500))
+          } else {
+            retryLoad()
+          }
+        }, 1500)
       } else {
         window.loadFile(join(__dirname, 'renderer/index.html'), { query: { workspaceId } })
       }

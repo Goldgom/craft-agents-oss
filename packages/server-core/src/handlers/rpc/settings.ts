@@ -1,8 +1,10 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { dirname } from 'path'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { dirname, join } from 'path'
+import { tmpdir } from 'node:os'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, getDefaultThinkingLevel, setDefaultThinkingLevel } from '@craft-agent/shared/config'
 import { isValidThinkingLevel, normalizeThinkingLevel, THINKING_LEVEL_IDS } from '@craft-agent/shared/agent/thinking-levels'
+import { setTransferableHandler } from './transfer'
 
 const VALID_THINKING_LEVELS_LIST = THINKING_LEVEL_IDS.map(id => `'${id}'`).join(', ')
 import { getWorkspaceOrThrow } from '@craft-agent/server-core/handlers'
@@ -22,6 +24,8 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.settings.PROMPTS_GENERATE,
   RPC_CHANNELS.settings.EXPORT_ALL_DATA,
   RPC_CHANNELS.settings.IMPORT_ALL_DATA,
+  RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PATH,
+  RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD,
   RPC_CHANNELS.preferences.READ,
   RPC_CHANNELS.preferences.WRITE,
   RPC_CHANNELS.drafts.GET,
@@ -622,26 +626,62 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       return { canceled: true }
     }
 
-    try {
-      const { importAllData } = await import('@craft-agent/shared/migration')
-      const result = await importAllData({ sourcePath: dialogResult.filePaths[0] })
-      deps.platform.logger.info(
-        `Data import complete: ${result.importedWorkspaces.length} workspace(s), ${result.fileCount} file(s)`,
-      )
-      return {
-        canceled: false,
-        success: true,
-        fileCount: result.fileCount,
-        importedWorkspaces: result.importedWorkspaces,
-        warnings: result.warnings,
-      }
-    } catch (error) {
-      deps.platform.logger.error('Data import failed', error)
-      return {
-        canceled: false,
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      }
-    }
+    return runImportFromPath(dialogResult.filePaths[0])
   })
+
+  // Import from a path on THIS server's filesystem (远程文件 — the client
+  // typed/selected a path that exists on the machine hosting the workspace).
+  server.handle(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PATH, async (_ctx, sourcePath: string) => {
+    if (!sourcePath || typeof sourcePath !== 'string') {
+      return { canceled: false, success: false, error: 'Import path is required' }
+    }
+    return runImportFromPath(sourcePath)
+  })
+
+  // Import from a bundle streamed from the client (本地文件 — the client
+  // picked a file on the user's machine and shipped it here via chunked
+  // transfer). Registered as transferable so large archives go through the
+  // transfer:start/chunk/commit pipeline.
+  const importFromPayloadHandler = async (_ctx: unknown, payload: { bundleBase64: string; fileName?: string }) => {
+    if (!payload || typeof payload.bundleBase64 !== 'string' || payload.bundleBase64.length === 0) {
+      return { canceled: false, success: false, error: 'Missing bundle payload' }
+    }
+
+    const tmpDir = mkdtempSync(join(tmpdir(), 'craft-import-'))
+    const tmpPath = join(tmpDir, payload.fileName && /^[a-zA-Z0-9._-]+$/.test(payload.fileName) ? payload.fileName : 'bundle.zip')
+    try {
+      writeFileSync(tmpPath, Buffer.from(payload.bundleBase64, 'base64'))
+      return await runImportFromPath(tmpPath)
+    } finally {
+      try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
+  }
+  server.handle(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD, importFromPayloadHandler)
+  // Also register as transferable so chunked transfer can invoke it on commit
+  setTransferableHandler(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD, importFromPayloadHandler)
+}
+
+/**
+ * Shared import runner — restores all workspaces and settings from a ZIP
+ * archive path on THIS machine. Used by all three import entry points.
+ */
+async function runImportFromPath(sourcePath: string) {
+  try {
+    const { importAllData } = await import('@craft-agent/shared/migration')
+    const result = await importAllData({ sourcePath })
+    return {
+      canceled: false,
+      success: true,
+      fileCount: result.fileCount,
+      importedWorkspaces: result.importedWorkspaces,
+      warnings: result.warnings,
+    }
+  } catch (error) {
+    console.error('[DataImport] import failed:', error)
+    return {
+      canceled: false,
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }
+  }
 }

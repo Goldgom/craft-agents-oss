@@ -21,7 +21,7 @@ import {
   toProfileInfo,
   type RemoteServerProfile,
 } from '@craft-agent/shared/config/remote-servers'
-import { getWorkspaces, addWorkspace } from '@craft-agent/shared/config'
+import { getWorkspaces, addWorkspace, updateWorkspaceRemoteServer } from '@craft-agent/shared/config'
 import { getDefaultWorkspacesDir, generateUniqueWorkspacePath } from '@craft-agent/shared/workspaces'
 import { join } from 'path'
 import type { RpcServer } from '@craft-agent/server-core/transport'
@@ -64,7 +64,22 @@ function findOrCreateRemoteStub(
   const existing = getWorkspaces().find(
     (w) => w.remoteServer?.remoteWorkspaceId === remoteWorkspace.id,
   )
-  if (existing) return existing
+  if (existing) {
+    // Keep the stub in sync with the profile — the user may have changed the
+    // server URL/token since the instance was first opened. Stale snapshots
+    // cause reconnect loops against the old endpoint.
+    if (
+      existing.remoteServer
+      && (existing.remoteServer.url !== profile.url || existing.remoteServer.token !== profile.token)
+    ) {
+      updateWorkspaceRemoteServer(existing.id, {
+        url: profile.url,
+        token: profile.token,
+        remoteWorkspaceId: existing.remoteServer.remoteWorkspaceId,
+      })
+    }
+    return getWorkspaces().find((w) => w.id === existing.id) ?? existing
+  }
 
   const slug = remoteWorkspace.slug || remoteWorkspace.name
   const rootPath = generateUniqueWorkspacePath(slug, getDefaultWorkspacesDir())
@@ -88,7 +103,29 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
   server.handle(
     RPC_CHANNELS.remoteServers.SAVE,
     async (_ctx, input: { id?: string; name: string; url: string; token?: string }) => {
+      const previous = input.id ? getRemoteServerProfile(input.id) : undefined
       const profile = upsertRemoteServerProfile(input)
+
+      // Propagate URL/token changes to remote workspace stubs that were
+      // created from this profile — otherwise instances keep connecting to
+      // the old endpoint after the user edits the server link.
+      if (previous && (previous.url !== profile.url || previous.token !== profile.token)) {
+        for (const ws of getWorkspaces()) {
+          const rs = ws.remoteServer
+          if (!rs) continue
+          const boundToProfile =
+            rs.url === previous.url
+            && (previous.token ? rs.token === previous.token : true)
+          if (boundToProfile) {
+            updateWorkspaceRemoteServer(ws.id, {
+              url: profile.url,
+              token: profile.token,
+              remoteWorkspaceId: rs.remoteWorkspaceId,
+            })
+          }
+        }
+      }
+
       return toProfileInfo(profile)
     },
   )
