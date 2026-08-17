@@ -138,6 +138,7 @@ function buildMainProcess(config: BuildConfig): void {
     // electron-build-main.ts, and apps/electron/package.json build:main.
     '--alias:node-fetch=./apps/electron/src/main/shims/node-fetch.cjs',
     '--alias:abort-controller=./apps/electron/src/main/shims/abort-controller.cjs',
+    '--alias:cpu-features=./apps/electron/src/main/shims/cpu-features.cjs',
   ];
 
   // Add OAuth defines if env vars are set

@@ -99,7 +99,7 @@ import { createApplicationMenu } from './menu'
 import { WindowManager } from './window-manager'
 import { loadWindowState, saveWindowState } from './window-state'
 import { getWorkspaces, getWorkspaceByNameOrId, loadStoredConfig, addWorkspace, saveConfig, getStartupServerLocation, setStartupServerLocation } from '@craft-agent/shared/config'
-import { loadRemoteServerProfiles, getRemoteServerProfile, toProfileInfo, type RemoteServerProfile } from '@craft-agent/shared/config/remote-servers'
+import { loadRemoteServerProfiles, getRemoteServerProfile, upsertRemoteServerProfile, deleteRemoteServerProfile, markRemoteServerConnected, toProfileInfo, type RemoteServerProfile, type RemoteServerSftpInput } from '@craft-agent/shared/config/remote-servers'
 import { getDefaultWorkspacesDir } from '@craft-agent/shared/workspaces'
 import { initializeDocs } from '@craft-agent/shared/docs'
 import { initializeReleaseNotes } from '@craft-agent/shared/release-notes'
@@ -209,6 +209,18 @@ registerPiModelResolver((piAuthProvider) =>
 const DEEPLINK_SCHEME = process.env.CRAFT_DEEPLINK_SCHEME || 'craftagents'
 
 let windowManager: WindowManager | null = null
+
+function getActiveRemoteProfile(webContentsId: number): RemoteServerProfile | undefined {
+  const startupProfileId = process.env.CRAFT_SERVER_PROFILE_ID
+  if (startupProfileId) return getRemoteServerProfile(startupProfileId)
+
+  const workspaceId = windowManager?.getWorkspaceForWindow(webContentsId)
+  const remote = workspaceId ? getWorkspaceByNameOrId(workspaceId)?.remoteServer : undefined
+  if (!remote) return undefined
+  return loadRemoteServerProfiles().find((profile) =>
+    profile.url === remote.url && (!profile.token || profile.token === remote.token),
+  )
+}
 let sessionManager: SessionManager | null = null
 let browserPaneManager: BrowserPaneManager | null = null
 let oauthFlowStore: OAuthFlowStore | null = null
@@ -338,6 +350,30 @@ ipcMain.handle('__picker-get-profiles', async () => {
   const profiles = loadRemoteServerProfiles().map(toProfileInfo)
   mainLog.info(`[picker] renderer requested profiles (${profiles.length})`)
   return profiles
+})
+ipcMain.handle('__remote-servers:save', async (_event, input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput }) => {
+  return toProfileInfo(upsertRemoteServerProfile(input))
+})
+ipcMain.handle('__remote-servers:delete', async (_event, id: string) => {
+  return { success: deleteRemoteServerProfile(id) }
+})
+ipcMain.handle('__remote-servers:test', async (_event, input: { id?: string; url?: string; token?: string }) => {
+  const profile = input.id
+    ? getRemoteServerProfile(input.id)
+    : input.url
+      ? { id: 'adhoc', name: 'adhoc', url: input.url, token: input.token ?? '', createdAt: 0, updatedAt: 0 }
+      : undefined
+  if (!profile) return { ok: false, error: 'Remote server profile not found' }
+
+  const { connectToRemote } = await import('./handlers/workspace')
+  const { client, error } = await connectToRemote(profile.url, profile.token)
+  if (!client) return { ok: false, error: error ?? 'Connection failed' }
+  try {
+    if (profile.id !== 'adhoc') markRemoteServerConnected(profile.id)
+    return { ok: true, serverVersion: client.getServerVersion?.() ?? undefined }
+  } finally {
+    client.destroy()
+  }
 })
 ipcMain.handle('__select-startup-server', async (_event, target: string) => {
   await relaunchWithServer(target)
@@ -785,6 +821,31 @@ app.whenReady().then(async () => {
         cwd: typeof req.cwd === 'string' ? req.cwd : undefined,
         timeoutMs: typeof req.timeoutMs === 'number' ? req.timeoutMs : undefined,
       })
+    })
+
+    ipcMain.handle('__sftp:test', async (_event, profileId: string) => {
+      const profile = getRemoteServerProfile(profileId)
+      if (!profile) return { ok: false, error: 'Remote server profile not found' }
+      try {
+        const { testSftpConnection } = await import('./sftp')
+        return await testSftpConnection(profile)
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    })
+
+    ipcMain.handle('__sftp:transfer-profile', async (_event, profileId: string, req: import('./sftp').SftpTransferRequest) => {
+      const profile = getRemoteServerProfile(profileId)
+      if (!profile) throw new Error('Remote server profile not found')
+      const { transferSftpFile } = await import('./sftp')
+      return await transferSftpFile(profile, req)
+    })
+
+    ipcMain.handle('__sftp:transfer-active', async (event, req: import('./sftp').SftpTransferRequest) => {
+      const profile = getActiveRemoteProfile(event.sender.id)
+      if (!profile) throw new Error('No SFTP profile is configured for the active remote server')
+      const { transferSftpFile } = await import('./sftp')
+      return await transferSftpFile(profile, req)
     })
 
     if (!isClientOnly) {

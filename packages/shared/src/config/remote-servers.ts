@@ -26,6 +26,35 @@ export interface RemoteServerProfile {
   updatedAt: number;
   /** Last successful connection attempt (epoch ms). */
   lastConnectedAt?: number;
+  /** Optional client-local SFTP connection used for file transfers. */
+  sftp?: RemoteServerSftpConfig;
+}
+
+export type RemoteServerSftpAuthMethod = 'password' | 'privateKey';
+
+export interface RemoteServerSftpConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: RemoteServerSftpAuthMethod;
+  password?: string;
+  privateKeyPath?: string;
+  passphrase?: string;
+  /** Remote paths are restricted to this root. Empty means the SSH home directory. */
+  remoteRoot?: string;
+}
+
+export interface RemoteServerSftpInput {
+  enabled: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  authMethod?: RemoteServerSftpAuthMethod;
+  password?: string;
+  privateKeyPath?: string;
+  passphrase?: string;
+  remoteRoot?: string;
 }
 
 /** Public profile DTO — token is stripped for renderer consumption. */
@@ -37,19 +66,31 @@ export interface RemoteServerProfileInfo {
   updatedAt: number;
   lastConnectedAt?: number;
   hasToken: boolean;
+  sftp?: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    username: string;
+    authMethod: RemoteServerSftpAuthMethod;
+    privateKeyPath?: string;
+    remoteRoot?: string;
+    hasPassword: boolean;
+    hasPassphrase: boolean;
+  };
 }
 
-const REMOTE_SERVERS_FILE = join(CONFIG_DIR, 'remote-servers.json');
-
 export function getRemoteServersPath(): string {
-  return REMOTE_SERVERS_FILE;
+  // Read the override dynamically so tests and embedded clients can isolate
+  // their local profile registry even if config modules were loaded earlier.
+  return join(process.env.CRAFT_CONFIG_DIR || CONFIG_DIR, 'remote-servers.json');
 }
 
 /** Load all profiles (raw, including tokens — main process only). */
 export function loadRemoteServerProfiles(): RemoteServerProfile[] {
-  if (!existsSync(REMOTE_SERVERS_FILE)) return [];
+  const remoteServersFile = getRemoteServersPath();
+  if (!existsSync(remoteServersFile)) return [];
   try {
-    const parsed = JSON.parse(readFileSync(REMOTE_SERVERS_FILE, 'utf-8')) as unknown;
+    const parsed = JSON.parse(readFileSync(remoteServersFile, 'utf-8')) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
@@ -66,7 +107,7 @@ export function loadRemoteServerProfiles(): RemoteServerProfile[] {
 }
 
 function persistProfiles(profiles: RemoteServerProfile[]): void {
-  atomicWriteFileSync(REMOTE_SERVERS_FILE, JSON.stringify(profiles, null, 2));
+  atomicWriteFileSync(getRemoteServersPath(), JSON.stringify(profiles, null, 2));
 }
 
 /** Normalize a ws/wss URL. Throws on invalid input. */
@@ -79,7 +120,7 @@ export function normalizeServerUrl(input: string): string {
 }
 
 export function upsertRemoteServerProfile(
-  input: { id?: string; name: string; url: string; token?: string },
+  input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput },
 ): RemoteServerProfile {
   const name = input.name.trim();
   if (!name) throw new Error('Server name is required');
@@ -88,6 +129,7 @@ export function upsertRemoteServerProfile(
   const profiles = loadRemoteServerProfiles();
   const existing = input.id ? profiles.find((p) => p.id === input.id) : undefined;
   const now = Date.now();
+  const sftp = normalizeSftpConfig(input.sftp, existing?.sftp, url);
 
   const profile: RemoteServerProfile = {
     id: existing?.id ?? crypto.randomUUID(),
@@ -98,12 +140,59 @@ export function upsertRemoteServerProfile(
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     lastConnectedAt: existing?.lastConnectedAt,
+    ...(sftp ? { sftp } : {}),
   };
 
   const next = profiles.filter((p) => p.id !== profile.id);
   next.push(profile);
   persistProfiles(next);
   return profile;
+}
+
+function normalizeSftpConfig(
+  input: RemoteServerSftpInput | undefined,
+  existing: RemoteServerSftpConfig | undefined,
+  serverUrl: string,
+): RemoteServerSftpConfig | undefined {
+  if (input === undefined) return existing;
+
+  const inferredHost = new URL(serverUrl).hostname;
+  const host = (input.host ?? existing?.host ?? inferredHost).trim();
+  const port = input.port ?? existing?.port ?? 22;
+  const username = (input.username ?? existing?.username ?? '').trim();
+  const authMethod = input.authMethod ?? existing?.authMethod ?? 'password';
+
+  if (!host) throw new Error('SFTP host is required');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('SFTP port must be between 1 and 65535');
+  }
+  if (input.enabled && !username) throw new Error('SFTP username is required');
+
+  const password = input.password?.trim() || existing?.password;
+  const privateKeyPath = input.privateKeyPath?.trim() || existing?.privateKeyPath;
+  const passphrase = input.passphrase?.trim() || existing?.passphrase;
+  const remoteRoot = input.remoteRoot !== undefined
+    ? input.remoteRoot.trim()
+    : existing?.remoteRoot;
+
+  if (input.enabled && authMethod === 'password' && !password) {
+    throw new Error('SFTP password is required');
+  }
+  if (input.enabled && authMethod === 'privateKey' && !privateKeyPath) {
+    throw new Error('SFTP private key path is required');
+  }
+
+  return {
+    enabled: input.enabled,
+    host,
+    port,
+    username,
+    authMethod,
+    ...(password ? { password } : {}),
+    ...(privateKeyPath ? { privateKeyPath } : {}),
+    ...(passphrase ? { passphrase } : {}),
+    ...(remoteRoot ? { remoteRoot } : {}),
+  };
 }
 
 export function deleteRemoteServerProfile(id: string): boolean {
@@ -136,5 +225,20 @@ export function toProfileInfo(profile: RemoteServerProfile): RemoteServerProfile
     updatedAt: profile.updatedAt,
     lastConnectedAt: profile.lastConnectedAt,
     hasToken: profile.token.length > 0,
+    ...(profile.sftp
+      ? {
+          sftp: {
+            enabled: profile.sftp.enabled,
+            host: profile.sftp.host,
+            port: profile.sftp.port,
+            username: profile.sftp.username,
+            authMethod: profile.sftp.authMethod,
+            ...(profile.sftp.privateKeyPath ? { privateKeyPath: profile.sftp.privateKeyPath } : {}),
+            ...(profile.sftp.remoteRoot ? { remoteRoot: profile.sftp.remoteRoot } : {}),
+            hasPassword: Boolean(profile.sftp.password),
+            hasPassphrase: Boolean(profile.sftp.passphrase),
+          },
+        }
+      : {}),
   };
 }

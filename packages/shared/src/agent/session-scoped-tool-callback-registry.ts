@@ -99,6 +99,11 @@ export interface SessionScopedToolCallbacks {
     args: import('@craft-agent/session-tools-core').ShellExecArgs,
   ) => Promise<import('@craft-agent/session-tools-core').ShellExecResult>;
 
+  /** Client-owned SFTP bridge for transferring files without exposing credentials to the server. */
+  transferSftpFileFn?: (
+    args: import('@craft-agent/session-tools-core').SftpTransferArgs,
+  ) => Promise<import('@craft-agent/session-tools-core').SftpTransferResult>;
+
   /** Set labels on a session (defaults to current). */
   setSessionLabelsFn?: (sessionId: string | undefined, labels: string[]) => void | Promise<void>;
   /** Set status on a session (defaults to current). */

@@ -34,6 +34,10 @@ type ApiToChannelMapKeys = Exclude<
   | 'getStartupLocation' // direct IPC to main — local startup preference
   | 'setStartupLocation' // direct IPC to main — local startup preference
   | 'importAllDataFromLocalFile' // direct IPC to main — reads local file + ships to active server
+  | 'testRemoteServerSftp'
+  | 'transferRemoteServerFile'
+  | 'pickSftpUploadFile'
+  | 'pickSftpDownloadDestination'
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

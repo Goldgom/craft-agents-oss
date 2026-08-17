@@ -355,6 +355,7 @@ async function main(): Promise<void> {
       // fails every Telegram API call with a TypeError.
       "--alias:node-fetch=./apps/electron/src/main/shims/node-fetch.cjs",
       "--alias:abort-controller=./apps/electron/src/main/shims/abort-controller.cjs",
+      "--alias:cpu-features=./apps/electron/src/main/shims/cpu-features.cjs",
       ...buildDefines,
     ],
     cwd: ROOT_DIR,

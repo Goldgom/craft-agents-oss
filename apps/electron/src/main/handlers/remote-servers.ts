@@ -20,6 +20,7 @@ import {
   markRemoteServerConnected,
   toProfileInfo,
   type RemoteServerProfile,
+  type RemoteServerSftpInput,
 } from '@craft-agent/shared/config/remote-servers'
 import { getWorkspaces, addWorkspace, updateWorkspaceRemoteServer } from '@craft-agent/shared/config'
 import { getDefaultWorkspacesDir, generateUniqueWorkspacePath } from '@craft-agent/shared/workspaces'
@@ -102,7 +103,7 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
 
   server.handle(
     RPC_CHANNELS.remoteServers.SAVE,
-    async (_ctx, input: { id?: string; name: string; url: string; token?: string }) => {
+    async (_ctx, input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput }) => {
       const previous = input.id ? getRemoteServerProfile(input.id) : undefined
       const profile = upsertRemoteServerProfile(input)
 

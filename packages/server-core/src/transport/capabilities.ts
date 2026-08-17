@@ -34,6 +34,9 @@ export const CLIENT_BROWSER_INVOKE = 'client:browser:invoke'
  */
 export const CLIENT_RUN_SHELL = 'client:runShell'
 
+/** Capability: transfer a file between the client and its configured remote server over SFTP. */
+export const CLIENT_SFTP_TRANSFER = 'client:sftpTransfer'
+
 /** Request shape for CLIENT_RUN_SHELL. */
 export interface ClientShellRequest {
   command: string
@@ -52,6 +55,20 @@ export interface ClientShellResult {
   truncated: boolean
 }
 
+export interface ClientSftpTransferRequest {
+  direction: 'upload' | 'download'
+  localPath: string
+  remotePath: string
+}
+
+export interface ClientSftpTransferResult {
+  success: true
+  direction: 'upload' | 'download'
+  localPath: string
+  remotePath: string
+  bytes: number
+}
+
 /** All capabilities a local Electron client advertises on handshake. */
 export const LOCAL_CLIENT_CAPABILITIES: readonly string[] = [
   CLIENT_OPEN_EXTERNAL,
@@ -62,6 +79,7 @@ export const LOCAL_CLIENT_CAPABILITIES: readonly string[] = [
   CLIENT_SAVE_FILE_DIALOG,
   CLIENT_BROWSER_INVOKE,
   CLIENT_RUN_SHELL,
+  CLIENT_SFTP_TRANSFER,
 ]
 
 // ---------------------------------------------------------------------------

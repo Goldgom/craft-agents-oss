@@ -29,8 +29,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { tmpdir } from 'os';
+import { randomUUID } from 'crypto';
 import { unzipSync } from 'fflate';
 import { CONFIG_DIR } from '../config/paths.ts';
 import { readJsonFileSync, atomicWriteFileSync } from '../utils/files.ts';
@@ -133,14 +134,18 @@ function moveDir(src: string, dest: string): void {
   }
 }
 
-/** Move a file across filesystems when rename(2) returns EXDEV. */
-function moveFile(src: string, dest: string): void {
+/** Copy into the destination filesystem, then atomically publish the file there. */
+export function moveFileIntoPlace(src: string, dest: string): void {
+  const tempDest = join(
+    dirname(dest),
+    `.${basename(dest)}.craft-import-${process.pid}-${randomUUID()}.tmp`,
+  );
   try {
-    renameSync(src, dest);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
-    copyFileSync(src, dest);
+    copyFileSync(src, tempDest);
+    renameSync(tempDest, dest);
     unlinkSync(src);
+  } finally {
+    rmSync(tempDest, { force: true });
   }
 }
 
@@ -353,7 +358,7 @@ export async function importAllData(
       const src = join(staging, 'config', name);
       const dst = join(configDir, name);
       if (existsSync(src) && !existsSync(dst)) {
-        moveFile(src, dst);
+        moveFileIntoPlace(src, dst);
       }
     }
     const stagedPermissions = join(staging, 'config', 'permissions');
@@ -364,7 +369,7 @@ export async function importAllData(
         const src = join(stagedPermissions, name);
         const dst = join(dstPermissions, name);
         if (!existsSync(dst)) {
-          moveFile(src, dst);
+          moveFileIntoPlace(src, dst);
         }
       }
     }
@@ -372,7 +377,7 @@ export async function importAllData(
     if (existsSync(stagedCredentials)) {
       const dstCredentials = join(configDir, 'credentials.enc');
       if (!existsSync(dstCredentials)) {
-        moveFile(stagedCredentials, dstCredentials);
+        moveFileIntoPlace(stagedCredentials, dstCredentials);
       } else {
         warnings.push(
           'credentials.enc was not restored because one already exists locally.',

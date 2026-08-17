@@ -33,6 +33,7 @@ import {
   CLIENT_SAVE_FILE_DIALOG,
   CLIENT_BROWSER_INVOKE,
   CLIENT_RUN_SHELL,
+  CLIENT_SFTP_TRANSFER,
   LOCAL_CLIENT_CAPABILITIES,
 } from '@craft-agent/server-core/transport'
 import type { ConfirmDialogSpec, FileDialogSpec, BrowserCapabilityRequest } from '@craft-agent/server-core/transport'
@@ -246,6 +247,10 @@ client.handleCapability(CLIENT_BROWSER_INVOKE, async (req: BrowserCapabilityRequ
 // behalf of the agent (remote-mode local execution bridge).
 client.handleCapability(CLIENT_RUN_SHELL, async (req: { command: string; cwd?: string; timeoutMs?: number }) => {
   return await ipcRenderer.invoke('__shell:run', req)
+})
+
+client.handleCapability(CLIENT_SFTP_TRANSFER, async (req: { direction: 'upload' | 'download'; localPath: string; remotePath: string }) => {
+  return await ipcRenderer.invoke('__sftp:transfer-active', req)
 })
 
 // ---------------------------------------------------------------------------
@@ -534,7 +539,30 @@ client.onConnectionStateChanged((state) => {
 // Profile list is client-local too — overrides the CHANNEL_MAP entry so it
 // works identically in thin-client remote mode.
 ;(api as ElectronAPI).getRemoteServers = () => ipcRenderer.invoke('__picker-get-profiles')
+if (isClientOnly) {
+  ;(api as ElectronAPI).saveRemoteServer = (input) => ipcRenderer.invoke('__remote-servers:save', input)
+  ;(api as ElectronAPI).deleteRemoteServer = (id: string) => ipcRenderer.invoke('__remote-servers:delete', id)
+  ;(api as ElectronAPI).testRemoteServer = (input) => ipcRenderer.invoke('__remote-servers:test', input)
+}
 ;(api as ElectronAPI).importAllDataFromLocalFile = (path: string) => ipcRenderer.invoke('data:importFromLocalFile', path)
+;(api as ElectronAPI).testRemoteServerSftp = (profileId: string) => ipcRenderer.invoke('__sftp:test', profileId)
+;(api as ElectronAPI).transferRemoteServerFile = (profileId, request) => ipcRenderer.invoke('__sftp:transfer-profile', profileId, request)
+;(api as ElectronAPI).pickSftpUploadFile = async () => {
+  const result = await ipcRenderer.invoke('__dialog:showOpenDialog', {
+    title: 'Select file to upload',
+    properties: ['openFile'],
+    filters: [{ name: 'All Files', extensions: ['*'] }],
+  })
+  return result.canceled ? null : result.filePaths[0] ?? null
+}
+;(api as ElectronAPI).pickSftpDownloadDestination = async (defaultName?: string) => {
+  const result = await ipcRenderer.invoke('__dialog:showSaveDialog', {
+    title: 'Save downloaded file',
+    ...(defaultName ? { defaultPath: defaultName } : {}),
+    filters: [{ name: 'All Files', extensions: ['*'] }],
+  })
+  return result.canceled ? null : result.filePath ?? null
+}
 
 contextBridge.exposeInMainWorld('electronAPI', api)
 

@@ -22,6 +22,7 @@ const DIST_DIR = join(ELECTRON_DIR, "dist");
 const MAIN_PROCESS_ALIAS: Record<string, string> = {
   "node-fetch": join(ROOT_DIR, "apps/electron/src/main/shims/node-fetch.cjs"),
   "abort-controller": join(ROOT_DIR, "apps/electron/src/main/shims/abort-controller.cjs"),
+  "cpu-features": join(ROOT_DIR, "apps/electron/src/main/shims/cpu-features.cjs"),
 };
 
 // MCP server paths
@@ -287,13 +288,19 @@ function getOAuthDefines(): Record<string, string> {
 // Get environment variables for electron process
 function getElectronEnv(): Record<string, string> {
   const vitePort = process.env.CRAFT_VITE_PORT || "5173";
+  const electronEnv = { ...process.env } as Record<string, string>;
+
+  // Some Node-based launchers set this for their own Electron subprocesses.
+  // Passing it through makes electron.exe behave like node.exe and exit before
+  // the desktop app starts, leaving only the Vite process running.
+  delete electronEnv.ELECTRON_RUN_AS_NODE;
 
   // Codex binary path is resolved at runtime by the binary-resolver module.
   // It checks: CODEX_PATH env var > bundled binary > local dev fork > system PATH.
   // You can override with CODEX_PATH env var if needed for debugging.
 
   return {
-    ...process.env as Record<string, string>,
+    ...electronEnv,
     VITE_DEV_SERVER_URL: `http://localhost:${vitePort}`,
     CRAFT_CONFIG_DIR: process.env.CRAFT_CONFIG_DIR || "",
     CRAFT_APP_NAME: process.env.CRAFT_APP_NAME || "Craft Agents",

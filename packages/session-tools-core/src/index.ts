@@ -136,6 +136,8 @@ export type {
   ResolvedStatusResult,
   CreateTaskInput,
   CreateTaskResult,
+  SftpTransferArgs,
+  SftpTransferResult,
 } from './context.ts';
 
 export { createNodeFileSystem } from './context.ts';
@@ -208,6 +210,7 @@ export {
   ScriptSandboxSchema,
   RunShellSchema,
   LocalBashSchema,
+  SftpTransferSchema,
   RenderTemplateSchema,
   // Browser tool schema
   BrowserToolSchema,

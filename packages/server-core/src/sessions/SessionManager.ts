@@ -1,6 +1,6 @@
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
-import { CLIENT_BROWSER_INVOKE, CLIENT_RUN_SHELL, type ClientShellResult } from '@craft-agent/server-core/transport'
-import { executeShell, type ShellExecArgs } from '@craft-agent/session-tools-core'
+import { CLIENT_BROWSER_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
+import { executeShell, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
@@ -1444,6 +1444,17 @@ export class SessionManager implements ISessionManager {
     if (!session) return null
     const candidates = this.rpcServer.findClientsWithCapability(
       CLIENT_RUN_SHELL,
+      { workspaceId: session.workspace.id },
+    )
+    return candidates[0] ?? null
+  }
+
+  private getSftpTransferClient(sid: string): string | null {
+    if (!this.rpcServer) return null
+    const session = this.sessions.get(sid)
+    if (!session) return null
+    const candidates = this.rpcServer.findClientsWithCapability(
+      CLIENT_SFTP_TRANSFER,
       { workspaceId: session.workspace.id },
     )
     return candidates[0] ?? null
@@ -4329,6 +4340,18 @@ export class SessionManager implements ISessionManager {
             return result
           }
           return await executeShell(args)
+        },
+        transferSftpFileFn: async (args: SftpTransferArgs): Promise<ClientSftpTransferResult> => {
+          const clientId = this.getSftpTransferClient(managed.id)
+          if (!clientId || !this.rpcServer) {
+            throw new Error('No connected desktop client provides SFTP transfer capability')
+          }
+          return await this.rpcServer.invokeClientWithTimeout!(
+            clientId,
+            CLIENT_SFTP_TRANSFER,
+            10 * 60_000,
+            args,
+          ) as ClientSftpTransferResult
         },
         setSessionLabelsFn: async (sessionId: string | undefined, labels: string[]) => {
           await this.setSessionLabels(sessionId ?? managed.id, labels)

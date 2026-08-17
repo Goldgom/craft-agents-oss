@@ -18,6 +18,7 @@ type RemoteServersModule = typeof import('../remote-servers.ts');
 // the first (deleted) temp dir.
 let tempDir = '';
 let mod: RemoteServersModule;
+const originalConfigDir = process.env.CRAFT_CONFIG_DIR;
 
 beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'remote-servers-'));
@@ -27,7 +28,8 @@ beforeAll(async () => {
 
 afterAll(() => {
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
-  delete process.env.CRAFT_CONFIG_DIR;
+  if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR;
+  else process.env.CRAFT_CONFIG_DIR = originalConfigDir;
 });
 
 describe('normalizeServerUrl', () => {
@@ -88,6 +90,40 @@ describe('profile CRUD', () => {
     const raw = JSON.parse(readFileSync(join(tempDir, 'remote-servers.json'), 'utf-8'));
     expect(Array.isArray(raw)).toBe(true);
     expect(raw[0].name).toBe('P');
+  });
+
+  it('stores SFTP secrets locally but strips them from renderer DTOs', () => {
+    const created = mod.upsertRemoteServerProfile({
+      name: 'SFTP Server',
+      url: 'wss://sftp.example.com:50003',
+      sftp: {
+        enabled: true,
+        username: 'deploy',
+        password: 'sftp-secret',
+        remoteRoot: '/srv/craft',
+      },
+    });
+
+    expect(created.sftp?.host).toBe('sftp.example.com');
+    expect(created.sftp?.port).toBe(22);
+    expect(created.sftp?.password).toBe('sftp-secret');
+
+    const info = mod.toProfileInfo(created);
+    expect(info.sftp?.hasPassword).toBe(true);
+    expect('password' in (info.sftp ?? {})).toBe(false);
+
+    const updated = mod.upsertRemoteServerProfile({
+      id: created.id,
+      name: created.name,
+      url: created.url,
+      sftp: {
+        enabled: true,
+        username: 'deploy',
+        authMethod: 'password',
+      },
+    });
+    expect(updated.sftp?.password).toBe('sftp-secret');
+    mod.deleteRemoteServerProfile(created.id);
   });
 
   it('tolerates corrupt files', () => {

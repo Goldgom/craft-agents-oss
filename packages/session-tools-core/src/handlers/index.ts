@@ -63,6 +63,9 @@ export type { RenderTemplateArgs } from './render-template.ts';
 export { handleSendDeveloperFeedback } from './send-developer-feedback.ts';
 export type { SendDeveloperFeedbackArgs } from './send-developer-feedback.ts';
 
+// SFTP file transfer
+export { handleSftpTransfer } from './sftp-transfer.ts';
+
 // Session Self-Management
 export { handleSetSessionLabels } from './set-session-labels.ts';
 export type { SetSessionLabelsArgs } from './set-session-labels.ts';

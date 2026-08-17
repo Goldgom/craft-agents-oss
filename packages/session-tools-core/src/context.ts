@@ -32,6 +32,19 @@ export interface LoadedSource {
   workspaceId: string;
 }
 
+export interface SftpTransferArgs {
+  direction: 'upload' | 'download';
+  /** Absolute path on the user's client machine. */
+  localPath: string;
+  /** Path relative to the configured SFTP root, or an absolute path inside it. */
+  remotePath: string;
+}
+
+export interface SftpTransferResult extends SftpTransferArgs {
+  success: true;
+  bytes: number;
+}
+
 // ============================================================
 // Callback Interface
 // ============================================================
@@ -195,6 +208,9 @@ export interface SessionToolContext {
    * client with the `client:runShell` capability is connected.
    */
   runLocalShellFn?: (args: import('./shell.ts').ShellExecArgs) => Promise<import('./shell.ts').ShellExecResult>;
+
+  /** Transfer files through the connected desktop client's configured SFTP profile. */
+  transferSftpFileFn?: (args: SftpTransferArgs) => Promise<SftpTransferResult>;
 
   /** Path to sources folder within workspace */
   get sourcesPath(): string;

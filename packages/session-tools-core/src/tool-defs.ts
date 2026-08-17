@@ -33,6 +33,7 @@ import { handleUpdatePreferences } from './handlers/update-preferences.ts';
 import { handleTransformData } from './handlers/transform-data.ts';
 import { handleScriptSandbox } from './handlers/script-sandbox.ts';
 import { handleRunShell, handleLocalBash } from './handlers/shell-tools.ts';
+import { handleSftpTransfer } from './handlers/sftp-transfer.ts';
 import { handleRenderTemplate } from './handlers/render-template.ts';
 import { handleSendDeveloperFeedback } from './handlers/send-developer-feedback.ts';
 import { handleSetSessionLabels } from './handlers/set-session-labels.ts';
@@ -158,6 +159,12 @@ export const LocalBashSchema = z.object({
   command: z.string().describe('Shell command to execute on the CLIENT machine (the user\'s local computer), e.g. to read local files or run local tools. In remote mode this runs on the client; in local mode it is equivalent to runshell.'),
   cwd: z.string().optional().describe('Working directory on the client machine. Defaults to the session working directory or workspace root.'),
   timeoutMs: z.number().min(1000).max(600000).optional().describe('Timeout in milliseconds (default 120000).'),
+});
+
+export const SftpTransferSchema = z.object({
+  direction: z.enum(['upload', 'download']).describe('Upload sends a local client file to the remote server; download fetches a remote server file to the client.'),
+  localPath: z.string().describe('Absolute path on the CLIENT machine.'),
+  remotePath: z.string().describe('Path on the remote server, relative to the configured SFTP root or absolute within that root.'),
 });
 
 export const RenderTemplateSchema = z.object({
@@ -454,6 +461,12 @@ In remote mode the agent runs on a server, but this tool executes on the machine
 - stdout/stderr and the exit code are returned; output is capped at 200k chars
 - Default timeout 120s (max 600s)`,
 
+  sftp_transfer: `Transfer a file between the CLIENT machine and the remote server over the configured SFTP connection.
+
+Use this for binary or large files that should not be copied through shell output. Upload reads a local client path and writes it under the configured remote SFTP root. Download reads a remote path and writes it to an absolute local client path.
+
+The desktop client keeps all SSH credentials private. This tool receives only paths and transfer results.`,
+
   render_template: `Render a source's HTML template with data.
 
 Use this when a source provides HTML templates for rich rendering of its data (e.g., issue detail views, email threads, ticket summaries).
@@ -686,6 +699,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'script_sandbox', description: TOOL_DESCRIPTIONS.script_sandbox, inputSchema: ScriptSandboxSchema, executionMode: 'registry', safeMode: 'allow', handler: handleScriptSandbox },
   { name: 'runshell', description: TOOL_DESCRIPTIONS.runshell, inputSchema: RunShellSchema, executionMode: 'registry', safeMode: 'block', handler: handleRunShell },
   { name: 'localbash', description: TOOL_DESCRIPTIONS.localbash, inputSchema: LocalBashSchema, executionMode: 'registry', safeMode: 'block', handler: handleLocalBash },
+  { name: 'sftp_transfer', description: TOOL_DESCRIPTIONS.sftp_transfer, inputSchema: SftpTransferSchema, executionMode: 'registry', safeMode: 'block', handler: handleSftpTransfer },
   { name: 'render_template', description: TOOL_DESCRIPTIONS.render_template, inputSchema: RenderTemplateSchema, executionMode: 'registry', safeMode: 'allow', handler: handleRenderTemplate },
   { name: 'send_developer_feedback', description: TOOL_DESCRIPTIONS.send_developer_feedback, inputSchema: SendDeveloperFeedbackSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSendDeveloperFeedback },
   { name: 'call_llm', description: TOOL_DESCRIPTIONS.call_llm, inputSchema: CallLlmSchema, executionMode: 'backend', safeMode: 'allow', readOnly: true, handler: null },

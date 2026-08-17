@@ -46,8 +46,8 @@ export interface WorkspacePromptInput {
 }
 
 // Remote server management (远程服务器管理)
-import type { RemoteServerProfileInfo } from '@craft-agent/shared/config';
-export type { RemoteServerProfileInfo };
+import type { RemoteServerProfileInfo, RemoteServerSftpInput } from '@craft-agent/shared/config';
+export type { RemoteServerProfileInfo, RemoteServerSftpInput };
 
 /** Remote workspace DTO returned by server:getWorkspaces. */
 export interface RemoteWorkspaceInfo {
@@ -84,6 +84,20 @@ export interface ImportAllDataResponse {
   importedWorkspaces?: Array<{ id: string; name: string; slug?: string; rootPath: string }>;
   warnings?: string[];
   error?: string;
+}
+
+export interface SftpTransferRequest {
+  direction: 'upload' | 'download';
+  localPath: string;
+  remotePath: string;
+}
+
+export interface SftpTransferResult {
+  success: true;
+  direction: 'upload' | 'download';
+  localPath: string;
+  remotePath: string;
+  bytes: number;
 }
 
 export type {
@@ -539,12 +553,16 @@ export interface ElectronAPI {
 
   // Remote server management (远程服务器管理)
   getRemoteServers(): Promise<RemoteServerProfileInfo[]>
-  saveRemoteServer(input: { id?: string; name: string; url: string; token?: string }): Promise<RemoteServerProfileInfo>
+  saveRemoteServer(input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput }): Promise<RemoteServerProfileInfo>
   deleteRemoteServer(id: string): Promise<{ success: boolean }>
   testRemoteServer(input: { id?: string; url?: string; token?: string }): Promise<{ ok: boolean; error?: string; serverVersion?: string }>
   listRemoteServerWorkspaces(profileId: string): Promise<{ ok: boolean; error?: string; workspaces?: RemoteWorkspaceInfo[] }>
   createRemoteServerWorkspace(profileId: string, name: string): Promise<{ ok: boolean; error?: string; workspace?: { id: string; name: string; slug?: string } }>
   openRemoteServerWorkspace(profileId: string, remoteWorkspaceId: string): Promise<{ ok: boolean; error?: string; workspaceId?: string }>
+  testRemoteServerSftp(profileId: string): Promise<{ ok: boolean; error?: string; root?: string }>
+  transferRemoteServerFile(profileId: string, request: SftpTransferRequest): Promise<SftpTransferResult>
+  pickSftpUploadFile(): Promise<string | null>
+  pickSftpDownloadDestination(defaultName?: string): Promise<string | null>
 
   // Folder dialog
   openFolderDialog(): Promise<string | null>
