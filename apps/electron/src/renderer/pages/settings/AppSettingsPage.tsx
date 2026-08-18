@@ -141,6 +141,19 @@ export default function AppSettingsPage() {
   const isElectron = window.electronAPI.getRuntimeEnvironment() === 'electron'
   const updateChecker = useUpdateChecker()
   const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false)
+  const [clientVersion, setClientVersion] = useState<string | null>(null)
+  const [serverVersion, setServerVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void window.electronAPI.getClientVersion()
+      .then((version) => { if (!cancelled) setClientVersion(version) })
+      .catch(() => { if (!cancelled) setClientVersion(null) })
+    void window.electronAPI.getRuntimeServerStatus()
+      .then((status) => { if (!cancelled) setServerVersion(status.version) })
+      .catch(() => { if (!cancelled) setServerVersion(null) })
+    return () => { cancelled = true }
+  }, [])
 
   const handleCheckForUpdates = useCallback(async () => {
     setIsCheckingForUpdates(true)
@@ -512,10 +525,10 @@ export default function AppSettingsPage() {
               {/* About */}
               <SettingsSection title={t("settings.about.title")}>
                 <SettingsCard>
-                  <SettingsRow label={t("settings.about.version")}>
+                  <SettingsRow label="客户端版本">
                     <div className="flex items-center gap-2">
                       <span className="text-muted-foreground">
-                        {updateChecker.updateInfo?.currentVersion ?? t("common.loading")}
+                        {clientVersion ?? updateChecker.updateInfo?.currentVersion ?? t("common.loading")}
                       </span>
                       {isElectron && updateChecker.isDownloading && updateChecker.updateInfo?.latestVersion && (
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -524,6 +537,11 @@ export default function AppSettingsPage() {
                         </div>
                       )}
                     </div>
+                  </SettingsRow>
+                  <SettingsRow label="服务端版本">
+                    <span className="text-muted-foreground">
+                      {serverVersion ?? '未连接'}
+                    </span>
                   </SettingsRow>
                   {isElectron && (
                     <SettingsRow label={t("settings.about.checkForUpdates")}>

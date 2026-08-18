@@ -210,8 +210,8 @@ export function AutomationsListPanel({
   const categoryFiltered = React.useMemo(() => {
     const kind = automationFilter?.kind ?? 'all'
     if (kind === 'all') return automations
-    if (kind === 'scheduled') return automations.filter(a => a.event === 'SchedulerTick')
-    if (kind === 'app') return automations.filter(a => (APP_EVENTS as string[]).includes(a.event) && a.event !== 'SchedulerTick')
+    if (kind === 'scheduled') return automations.filter(a => a.event === 'SchedulerTick' || a.event === 'HostedScriptTick')
+    if (kind === 'app') return automations.filter(a => (APP_EVENTS as string[]).includes(a.event) && a.event !== 'SchedulerTick' && a.event !== 'HostedScriptTick')
     if (kind === 'agent') return automations.filter(a => (AGENT_EVENTS as string[]).includes(a.event))
     return automations
   }, [automations, automationFilter?.kind])

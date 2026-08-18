@@ -19,7 +19,9 @@ export type AppEvent =
   | 'PermissionModeChange'
   | 'FlagChange'
   | 'SessionStatusChange'
-  | 'SchedulerTick';
+  | 'SchedulerTick'
+  /** A hosted script returned true and opened a new automation cycle. */
+  | 'HostedScriptTick';
 
 /** Agent events - passed to Claude SDK */
 export type AgentEvent =
@@ -41,7 +43,7 @@ export type AutomationEvent = AppEvent | AgentEvent;
 
 export const APP_EVENTS: AppEvent[] = [
   'LabelAdd', 'LabelRemove', 'LabelConfigChange',
-  'PermissionModeChange', 'FlagChange', 'SessionStatusChange', 'SchedulerTick'
+  'PermissionModeChange', 'FlagChange', 'SessionStatusChange', 'SchedulerTick', 'HostedScriptTick'
 ];
 
 export const AGENT_EVENTS: AgentEvent[] = [
@@ -60,6 +62,8 @@ export interface PromptAction {
   prompt: string;
   /** LLM connection slug for the created session (falls back to default if not found) */
   llmConnection?: string;
+  /** Explicit provider alias. When set, it is resolved as the LLM connection slug. */
+  provider?: string;
   /** Model ID for the created session (falls back to provider default if invalid) */
   model?: string;
   /**
@@ -67,6 +71,8 @@ export interface PromptAction {
    * When omitted, falls back to the workspace default (then DEFAULT_THINKING_LEVEL).
    */
   thinkingLevel?: ThinkingLevel;
+  /** Friendly alias for permissionMode on the matcher. */
+  mode?: PermissionMode;
 }
 
 /** HTTP method for webhook actions */
@@ -161,6 +167,10 @@ export interface AutomationMatcher {
   timezone?: string;
   /** Permission mode for sessions created by prompt actions. */
   permissionMode?: PermissionMode;
+  /** Explicit provider alias for all prompt actions in this matcher. */
+  provider?: string;
+  /** Friendly alias for permissionMode. */
+  mode?: PermissionMode;
   /** Labels to apply to sessions created by prompt actions */
   labels?: string[];
   /** Whether this automation matcher is enabled. Defaults to true. Set to false to disable without removing. */
@@ -179,6 +189,11 @@ export interface AutomationMatcher {
    *   - The bot lacks "Manage Topics" permission in the supergroup
    */
   telegramTopic?: string;
+  /** Hosted-script trigger source (normally used under HostedScriptTick). */
+  script?: string;
+  intervalMs?: number;
+  scriptMetadata?: Record<string, unknown>;
+  scriptTimeoutMs?: number;
   actions: AutomationAction[];
 }
 
@@ -252,12 +267,23 @@ export interface PendingPrompt {
   permissionMode?: PermissionMode;
   /** LLM connection slug for the created session (falls back to default if not found) */
   llmConnection?: string;
+  provider?: string;
   /** Model ID for the created session (falls back to provider default if invalid) */
   model?: string;
   /** Thinking level for the created session (falls back to workspace default when omitted) */
   thinkingLevel?: ThinkingLevel;
   /** Forum-topic name to bind the new session to (Telegram supergroup, when paired). */
   telegramTopic?: string;
+  /** JSON-safe output/context returned by a hosted script. */
+  scriptInfo?: Record<string, unknown>;
+}
+
+/** A script evaluated by the hosted-script trigger. It must return truthy to fire actions. */
+export interface HostedScriptMatcher extends AutomationMatcher {
+  script: string;
+  intervalMs: number;
+  scriptMetadata?: Record<string, unknown>;
+  scriptTimeoutMs?: number;
 }
 
 export interface AutomationResult {

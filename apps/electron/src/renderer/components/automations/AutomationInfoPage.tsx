@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { PauseCircle, AlertCircle, Hash } from 'lucide-react'
+import { PauseCircle, Hash, Settings2 } from 'lucide-react'
 import {
   Info_Page,
   Info_Section,
@@ -17,7 +17,8 @@ import {
   Info_Markdown,
 } from '@/components/info'
 import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopover'
-import { useActiveWorkspace } from '@/context/AppShellContext'
+import { Button } from '@/components/ui/button'
+import { useActiveWorkspace, useAppShellContext } from '@/context/AppShellContext'
 import { AutomationAvatar } from './AutomationAvatar'
 import { AutomationMenu } from './AutomationMenu'
 import { AutomationActionRow } from './AutomationActionRow'
@@ -26,6 +27,7 @@ import { AutomationEventTimeline } from './AutomationEventTimeline'
 import { PhaseBadge } from './PhaseBadge'
 import { getEventDisplayName, getPermissionDisplayName, flattenConditions, type AutomationListItem, type ExecutionEntry, type TestResult } from './types'
 import { describeCron, computeNextRuns } from './utils'
+import { AutomationConfigDialog } from './AutomationConfigDialog'
 
 // ============================================================================
 // Component
@@ -56,7 +58,10 @@ export function AutomationInfoPage({
 }: AutomationInfoPageProps) {
   const { t } = useTranslation()
   const workspace = useActiveWorkspace()
+  const { llmConnections } = useAppShellContext()
+  const [configOpen, setConfigOpen] = React.useState(false)
   const nextRuns = automation.cron ? computeNextRuns(automation.cron) : []
+  const promptAction = automation.actions.find(action => action.type === 'prompt')
 
   // Lightweight per-mount fetch — mirrors the pattern used in MessagingSettingsPage.
   // Only fired when the matcher actually declares a topic to avoid unnecessary IPC.
@@ -78,11 +83,19 @@ export function AutomationInfoPage({
   }, [automation.telegramTopic])
 
   const editActions = workspace?.rootPath ? (
-    <EditPopover
-      trigger={<EditButton />}
-      {...getEditConfig('automation-config', workspace.rootPath)}
-      secondaryAction={{ label: t('automations.editFile'), filePath: `${workspace.rootPath}/automations.json` }}
-    />
+    <div className="flex items-center gap-2">
+      {(automation.event === 'SchedulerTick' || automation.event === 'HostedScriptTick') && (
+        <Button variant="outline" size="sm" onClick={() => setConfigOpen(true)}>
+          <Settings2 className="size-3.5" />
+          Configure
+        </Button>
+      )}
+      <EditPopover
+        trigger={<EditButton />}
+        {...getEditConfig('automation-config', workspace.rootPath)}
+        secondaryAction={{ label: t('automations.editFile'), filePath: `${workspace.rootPath}/automations.json` }}
+      />
+    </div>
   ) : undefined
 
   return (
@@ -169,6 +182,12 @@ export function AutomationInfoPage({
                 <Info_Table.Row label={t('automations.labelTimezone')} value={automation.timezone || t('automations.systemDefault')} />
               </>
             )}
+            {automation.event === 'HostedScriptTick' && (
+              <>
+                <Info_Table.Row label="Interval" value={formatInterval(automation.intervalMs)} />
+                <Info_Table.Row label="Script timeout" value={`${automation.scriptTimeoutMs ?? 2000} ms`} />
+              </>
+            )}
           </Info_Table>
         </Info_Section>
 
@@ -213,6 +232,9 @@ export function AutomationInfoPage({
         <Info_Section title={t('automations.sectionSettings')} actions={editActions}>
           <Info_Table>
             <Info_Table.Row label={t('automations.labelAccessLevel')} value={getPermissionDisplayName(automation.permissionMode)} />
+            {(promptAction?.llmConnection || automation.provider) && <Info_Table.Row label="Provider" value={promptAction?.llmConnection || automation.provider} />}
+            {promptAction?.model && <Info_Table.Row label="Model" value={promptAction.model} />}
+            {promptAction?.thinkingLevel && <Info_Table.Row label="Thinking" value={promptAction.thinkingLevel} />}
             <Info_Table.Row label={t('automations.labelStatus')}>
               <Info_Badge color={automation.enabled ? 'success' : 'muted'}>
                 {automation.enabled ? t('automations.statusActive') : t('automations.statusDisabled')}
@@ -264,6 +286,11 @@ export function AutomationInfoPage({
                 cron: automation.cron,
                 timezone: automation.timezone,
                 permissionMode: automation.permissionMode,
+                provider: automation.provider,
+                script: automation.script,
+                intervalMs: automation.intervalMs,
+                scriptTimeoutMs: automation.scriptTimeoutMs,
+                scriptMetadata: automation.scriptMetadata,
                 labels: automation.labels,
                 telegramTopic: automation.telegramTopic,
                 enabled: automation.enabled,
@@ -272,7 +299,23 @@ export function AutomationInfoPage({
             </Info_Markdown>
           </div>
         </Info_Section>
+        {workspace && (
+          <AutomationConfigDialog
+            open={configOpen}
+            onOpenChange={setConfigOpen}
+            automation={automation}
+            workspaceId={workspace.id}
+            connections={llmConnections}
+          />
+        )}
       </Info_Page.Content>
     </Info_Page>
   )
+}
+
+function formatInterval(intervalMs?: number): string {
+  if (!intervalMs) return 'Not configured'
+  if (intervalMs % 3_600_000 === 0) return `${intervalMs / 3_600_000} hr`
+  if (intervalMs % 60_000 === 0) return `${intervalMs / 60_000} min`
+  return `${intervalMs / 1000} sec`
 }

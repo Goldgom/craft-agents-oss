@@ -26,6 +26,7 @@ export type {
   WebhookAuth,
   AutomationAction,
   AutomationMatcher,
+  HostedScriptMatcher,
   AutomationsConfig,
   PromptReferences,
   PromptActionResult,
@@ -113,6 +114,7 @@ export {
   type FlagChangePayload,
   type SessionStatusChangePayload,
   type SchedulerTickPayload,
+  type HostedScriptTickPayload,
   type LabelConfigChangePayload,
   type GenericEventPayload,
   type EventHandler,
@@ -135,5 +137,6 @@ export {
   type PromptHandlerOptions,
   type EventLogHandlerOptions,
   type WebhookHandlerOptions,
+  HostedScriptHandler,
   type AutomationsConfigProvider,
 } from './handlers/index.ts';

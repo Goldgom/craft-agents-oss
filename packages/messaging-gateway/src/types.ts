@@ -9,7 +9,7 @@
 // Platform types
 // ---------------------------------------------------------------------------
 
-export type PlatformType = 'telegram' | 'whatsapp' | 'lark' | 'wecom'
+export type PlatformType = 'telegram' | 'whatsapp' | 'lark' | 'wecom' | 'qqbot'
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -552,6 +552,12 @@ export interface MessagingConfig {
     }
     wecom?: {
       enabled: boolean
+    }
+    qqbot?: {
+      enabled: boolean
+      appId?: string
+      /** App secret/token is stored in the credential manager, not this config. */
+      intents?: number
     }
   }
 }

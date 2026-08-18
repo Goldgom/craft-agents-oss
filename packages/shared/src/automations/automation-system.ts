@@ -21,7 +21,7 @@ import { resolveAutomationsConfigPath, generateShortId } from './resolve-config-
 import { compactAutomationHistorySync } from './history-store.ts';
 import { createLogger } from '../utils/debug.ts';
 import { WorkspaceEventBus, type EventPayloadMap } from './event-bus.ts';
-import { PromptHandler, EventLogHandler, WebhookHandler, type AutomationsConfigProvider } from './handlers/index.ts';
+import { PromptHandler, EventLogHandler, WebhookHandler, HostedScriptHandler, type AutomationsConfigProvider } from './handlers/index.ts';
 import { type AutomationsConfig, type AutomationEvent, type AutomationMatcher, type PendingPrompt, type WebhookActionResult, type AppEvent, type AgentEvent, type SdkAutomationCallbackMatcher, type SdkAutomationInput } from './types.ts';
 import { validateAutomationsConfig } from './validation.ts';
 import { matcherMatchesSdk } from './utils.ts';
@@ -70,6 +70,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
   private promptHandler: PromptHandler | null = null;
   private webhookHandler: WebhookHandler | null = null;
   private eventLogHandler: EventLogHandler | null = null;
+  private hostedScriptHandler: HostedScriptHandler | null = null;
   private scheduler: SchedulerService | null = null;
   private disposed = false;
 
@@ -275,6 +276,13 @@ export class AutomationSystem implements AutomationsConfigProvider {
       onEventLost: this.options.onEventLost,
     });
     this.eventLogHandler.subscribe(this.eventBus);
+
+    this.hostedScriptHandler = new HostedScriptHandler(
+      this.options.workspaceId,
+      this,
+      (event, error) => this.options.onError?.(event, error),
+    );
+    this.hostedScriptHandler.subscribe(this.eventBus);
 
     log.debug(`[AutomationSystem] Handlers created and subscribed`);
   }
@@ -549,6 +557,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
     // Dispose handlers
     this.promptHandler?.dispose();
     this.webhookHandler?.dispose();
+    this.hostedScriptHandler?.dispose();
     await this.eventLogHandler?.dispose();
 
     // Dispose event bus

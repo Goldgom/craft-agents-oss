@@ -61,6 +61,14 @@ function runMatcherSemanticValidations(
     for (let i = 0; i < matchers.length; i++) {
       const matcher = matchers[i];
       if (!matcher) continue;
+      if (event === 'HostedScriptTick') {
+        if (!matcher.script?.trim()) {
+          errors.push({ file, path: `automations.${event}[${i}].script`, message: 'Hosted script is required', severity: 'error' });
+        }
+        if (!Number.isFinite(matcher.intervalMs) || (matcher.intervalMs ?? 0) < 1000) {
+          errors.push({ file, path: `automations.${event}[${i}].intervalMs`, message: 'Hosted script intervalMs must be at least 1000', severity: 'error' });
+        }
+      }
       // Warn about allow-all permission mode
       if (matcher.permissionMode === 'allow-all') {
         warnings.push({

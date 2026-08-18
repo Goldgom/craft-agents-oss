@@ -14,6 +14,7 @@ import { AutomationAvatar } from '@/components/automations/AutomationAvatar'
 import { CronBuilder } from '@/components/automations/CronBuilder'
 import { AutomationTestPanel } from '@/components/automations/AutomationTestPanel'
 import { AutomationEventTimeline } from '@/components/automations/AutomationEventTimeline'
+import { AutomationConfigDialog } from '@/components/automations/AutomationConfigDialog'
 import { getEventDisplayName, type AutomationListItem, type ExecutionEntry, type TestResult, type AutomationTrigger } from '@/components/automations/types'
 
 // ============================================================================
@@ -168,6 +169,11 @@ function AutomationCardPlayground({
       onTest={() => console.log('[Playground] Test automation:', currentAutomation.id)}
     />
   )
+}
+
+function AutomationConfigDialogPlayground({ automation }: { automation: AutomationListItem }) {
+  const [open, setOpen] = useState(true)
+  return <div className="p-6"><button className="rounded border px-3 py-2 text-sm" onClick={() => setOpen(true)}>Open editor</button><AutomationConfigDialog open={open} onOpenChange={setOpen} automation={automation} workspaceId="playground" connections={[]} /></div>
 }
 
 // ============================================================================
@@ -525,6 +531,21 @@ export const automationComponents: ComponentEntry[] = [
     mockData: () => ({
       automation: mockAutomations[0],
     }),
+  },
+
+  {
+    id: 'automation-config-dialog',
+    name: 'AutomationConfigDialog',
+    category: 'Automations',
+    description: 'Structured schedule, hosted script, and runtime editor',
+    component: AutomationConfigDialogPlayground,
+    layout: 'full',
+    props: [],
+    variants: [
+      { name: 'Scheduled', props: { automation: mockAutomations[0] } },
+      { name: 'Hosted Script', props: { automation: { ...mockAutomations[0], id: 'hosted', event: 'HostedScriptTick', cron: undefined, summary: 'Checks every minute', script: 'const healthy = metadata.status === "ok"\nreturn healthy ? false : { healthy }', intervalMs: 60_000, scriptTimeoutMs: 2000, scriptMetadata: { status: 'ok' } } } },
+    ],
+    mockData: () => ({ automation: mockAutomations[0] }),
   },
 
   // ==========================================================================

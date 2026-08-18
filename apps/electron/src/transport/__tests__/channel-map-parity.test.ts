@@ -38,6 +38,7 @@ type ApiToChannelMapKeys = Exclude<
   | 'transferRemoteServerFile'
   | 'pickSftpUploadFile'
   | 'pickSftpDownloadDestination'
+  | 'getClientVersion' // direct IPC to main process; local Electron metadata
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

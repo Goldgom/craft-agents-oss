@@ -25,6 +25,8 @@ export const PromptActionSchema = z.object({
   type: z.literal('prompt'),
   prompt: z.string().min(1, 'Prompt cannot be empty'),
   llmConnection: z.string().min(1).optional(),
+  provider: z.string().min(1).optional(),
+  mode: z.enum(['safe', 'ask', 'allow-all']).optional(),
   model: z.string().min(1).optional(),
   thinkingLevel: ThinkingLevelInputSchema,
 });
@@ -144,12 +146,18 @@ export const AutomationMatcherSchema = z.object({
   cron: z.string().optional(),
   timezone: z.string().optional(),
   permissionMode: z.enum(['safe', 'ask', 'allow-all']).optional(),
+  provider: z.string().min(1).optional(),
+  mode: z.enum(['safe', 'ask', 'allow-all']).optional(),
   labels: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   conditions: z.array(AutomationConditionSchema).optional(),
   // Telegram forum-topic name (1–128 chars). Silently ignored at runtime when
   // no supergroup is paired or the Telegram adapter is not connected.
   telegramTopic: z.string().min(1).max(128).optional(),
+  script: z.string().min(1).optional(),
+  intervalMs: z.number().int().min(1000).max(86_400_000).optional(),
+  scriptMetadata: z.record(z.string(), z.unknown()).optional(),
+  scriptTimeoutMs: z.number().int().min(10).max(30_000).optional(),
   actions: z.array(ActionDefinitionSchema).min(1, 'At least one action required'),
 });
 

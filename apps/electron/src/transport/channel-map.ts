@@ -161,6 +161,7 @@ export const CHANNEL_MAP = {
 
   // Server info (REMOTE_ELIGIBLE)
   getServerHomeDir: invoke(RPC_CHANNELS.server.HOME_DIR),
+  getRuntimeServerStatus: invoke(RPC_CHANNELS.server.GET_STATUS),
 
   // Server mode configuration
   getServerConfig: invoke(RPC_CHANNELS.settings.GET_SERVER_CONFIG),
@@ -428,6 +429,7 @@ export const CHANNEL_MAP = {
 
   // Automations
   getAutomations: invoke(RPC_CHANNELS.automations.GET),
+  updateAutomation: invoke(RPC_CHANNELS.automations.UPDATE),
   testAutomation: invoke(RPC_CHANNELS.automations.TEST),
   setAutomationEnabled: invoke(RPC_CHANNELS.automations.SET_ENABLED),
   duplicateAutomation: invoke(RPC_CHANNELS.automations.DUPLICATE),
@@ -452,6 +454,8 @@ export const CHANNEL_MAP = {
   saveLarkCredentials: invoke(RPC_CHANNELS.messaging.SAVE_LARK),
   testWeComCredentials: invoke(RPC_CHANNELS.messaging.TEST_WECOM),
   saveWeComCredentials: invoke(RPC_CHANNELS.messaging.SAVE_WECOM),
+  testQQBotCredentials: invoke(RPC_CHANNELS.messaging.TEST_QQBOT),
+  saveQQBotCredentials: invoke(RPC_CHANNELS.messaging.SAVE_QQBOT),
   disconnectMessagingPlatform: invoke(RPC_CHANNELS.messaging.DISCONNECT),
   forgetMessagingPlatform: invoke(RPC_CHANNELS.messaging.FORGET),
   getMessagingBindings: invoke(RPC_CHANNELS.messaging.GET_BINDINGS),

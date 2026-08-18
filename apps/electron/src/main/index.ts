@@ -392,6 +392,40 @@ ipcMain.handle('__set-startup-location', async (_event, value: string) => {
   return { success: true }
 })
 
+// Client-only state must remain available when Electron is running as a thin
+// client. In that mode there is no embedded RPC server to service LOCAL_ONLY
+// channels, so expose these through the main process instead.
+ipcMain.handle('__client:get-version', () => app.getVersion())
+ipcMain.handle('__client:is-debug-mode', () => !app.isPackaged)
+ipcMain.handle('__client:get-system-theme', () => nativeTheme.shouldUseDarkColors)
+ipcMain.handle('__client:open-file-dialog', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+    || BrowserWindow.getFocusedWindow()
+    || BrowserWindow.getAllWindows()[0]
+  const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] })
+  return result.filePaths
+})
+ipcMain.handle('__client:get-update-info', async () => {
+  const { getUpdateInfo } = await import('./auto-update')
+  return getUpdateInfo()
+})
+ipcMain.handle('__client:check-for-updates', async () => {
+  const { checkForUpdates } = await import('./auto-update')
+  return checkForUpdates({ autoDownload: true })
+})
+ipcMain.handle('__client:install-update', async () => {
+  const { installUpdate } = await import('./auto-update')
+  return installUpdate()
+})
+ipcMain.handle('__client:dismiss-update', async (_event, version: string) => {
+  const { setDismissedUpdateVersion } = await import('@craft-agent/shared/config')
+  setDismissedUpdateVersion(version)
+})
+ipcMain.handle('__client:get-dismissed-update', async () => {
+  const { getDismissedUpdateVersion } = await import('@craft-agent/shared/config')
+  return getDismissedUpdateVersion()
+})
+
 // ── Data migration import from a LOCAL file (本地文件导入) ──────────────
 // The renderer picks a file on THIS machine; this handler reads it and runs
 // the import on the server that owns the active workspace:

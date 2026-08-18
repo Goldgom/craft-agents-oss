@@ -206,6 +206,9 @@ export interface IMessagingGatewayRegistry {
     secret: string
   }): Promise<void>
 
+  testQQBotCredentials(creds: { appId: string; token: string }): Promise<{ success: boolean; error?: string }>
+  saveQQBotCredentials(workspaceId: string, creds: { appId: string; token: string }): Promise<void>
+
   /** Disable a platform for a workspace, preserving WhatsApp auth state unless forgotten separately. */
   disconnectPlatform(workspaceId: string, platform: string): Promise<void>
 

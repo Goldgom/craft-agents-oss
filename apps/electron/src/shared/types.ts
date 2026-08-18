@@ -328,6 +328,8 @@ export interface ElectronAPI {
 
   // Server info (REMOTE_ELIGIBLE — returns data from whichever server owns the workspace)
   getServerHomeDir(): Promise<string>
+  /** Runtime status from the server that owns the active workspace. */
+  getRuntimeServerStatus(): Promise<import('@craft-agent/core/types').ServerStatus>
 
   // Server mode configuration
   getServerConfig(): Promise<import('@craft-agent/shared/config/server-config').ServerConfig>
@@ -425,6 +427,8 @@ export interface ElectronAPI {
   onSystemThemeChange(callback: (isDark: boolean) => void): () => void
 
   // System
+  /** Version of this Electron client, obtained locally rather than through RPC. */
+  getClientVersion(): Promise<string>
   getVersions(): { node: string; chrome: string; electron: string }
   /** Returns the renderer host environment without going through RPC. */
   getRuntimeEnvironment(): 'electron' | 'web'
@@ -796,6 +800,7 @@ export interface ElectronAPI {
 
   // Automations
   getAutomations(workspaceId: string): Promise<unknown>
+  updateAutomation(workspaceId: string, eventName: string, matcherIndex: number, matcher: Record<string, unknown>): Promise<{ success: boolean }>
 
   // Automation testing (manual trigger)
   testAutomation(payload: TestAutomationPayload): Promise<TestAutomationResult>
@@ -840,6 +845,8 @@ export interface ElectronAPI {
   saveLarkCredentials(creds: { appId: string; appSecret: string; domain: 'lark' | 'feishu' }): Promise<void>
   testWeComCredentials(creds: { botId: string; secret: string }): Promise<{ success: boolean; botName?: string; error?: string }>
   saveWeComCredentials(creds: { botId: string; secret: string }): Promise<void>
+  testQQBotCredentials(creds: { appId: string; token: string }): Promise<{ success: boolean; error?: string }>
+  saveQQBotCredentials(creds: { appId: string; token: string }): Promise<void>
   disconnectMessagingPlatform(platform: string): Promise<void>
   forgetMessagingPlatform(platform: string): Promise<void>
   getMessagingBindings(): Promise<Array<{ id: string; workspaceId: string; sessionId: string; platform: string; channelId: string; threadId?: number; channelName?: string; enabled: boolean; createdAt: number; accessMode?: MessagingBindingAccessMode; allowedSenderIds?: string[] }>>

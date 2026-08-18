@@ -57,16 +57,22 @@ export class PromptHandler implements AutomationHandler {
       matcherId: string | undefined;
       automationName: string;
       telegramTopic: string | undefined;
-      prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode }>;
+      prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode; provider?: string; scriptInfo?: Record<string, unknown> }>;
     }> = [];
 
     for (const matcher of matchers) {
       if (!matcherMatches(matcher, event, payload as unknown as Record<string, unknown>)) continue;
 
-      const prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode }> = [];
+      const prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode; provider?: string; scriptInfo?: Record<string, unknown> }> = [];
       for (const action of matcher.actions) {
         if (action.type === 'prompt') {
-          prompts.push({ prompt: action, labels: matcher.labels, permissionMode: matcher.permissionMode });
+          prompts.push({
+            prompt: action,
+            labels: matcher.labels,
+            permissionMode: matcher.permissionMode ?? matcher.mode ?? action.mode,
+            provider: matcher.provider,
+            scriptInfo: (payload as { scriptInfo?: Record<string, unknown> }).scriptInfo,
+          });
         }
       }
       if (prompts.length > 0) {
@@ -97,12 +103,15 @@ export class PromptHandler implements AutomationHandler {
       const expandedTopic = telegramTopic ? expandEnvVars(telegramTopic, env).trim() : undefined;
       const finalTopic = expandedTopic && expandedTopic.length > 0 ? expandedTopic : undefined;
 
-      for (const { prompt, labels, permissionMode } of prompts) {
+      for (const { prompt, labels, permissionMode, provider, scriptInfo } of prompts) {
         // Expand environment variables in the prompt
         const expandedPrompt = expandEnvVars(prompt.prompt, env);
+        const promptWithScriptInfo = scriptInfo
+          ? `${expandedPrompt}\n\n[Hosted script info]\n${JSON.stringify(scriptInfo)}`
+          : expandedPrompt;
 
         // Parse references
-        const references = parsePromptReferences(expandedPrompt);
+        const references = parsePromptReferences(promptWithScriptInfo);
 
         // Expand labels
         const expandedLabels = labels?.map(label => expandEnvVars(label, env));
@@ -111,14 +120,16 @@ export class PromptHandler implements AutomationHandler {
           sessionId: this.options.sessionId,
           matcherId,
           automationName,
-          prompt: expandedPrompt,
+          prompt: promptWithScriptInfo,
           mentions: references.mentions,
           labels: expandedLabels,
           permissionMode,
-          llmConnection: prompt.llmConnection,
+          llmConnection: prompt.llmConnection ?? prompt.provider ?? provider,
+          provider: prompt.provider ?? provider,
           model: prompt.model,
           thinkingLevel: prompt.thinkingLevel,
           telegramTopic: finalTopic,
+          scriptInfo,
         });
       }
 

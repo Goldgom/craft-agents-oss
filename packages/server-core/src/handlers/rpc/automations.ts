@@ -56,6 +56,7 @@ async function withAutomationMatcher(workspaceId: string, eventName: string, mat
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.automations.GET,
+  RPC_CHANNELS.automations.UPDATE,
   RPC_CHANNELS.automations.TEST,
   RPC_CHANNELS.automations.SET_ENABLED,
   RPC_CHANNELS.automations.DUPLICATE,
@@ -93,6 +94,25 @@ export function registerAutomationsHandlers(server: RpcServer, deps: HandlerDeps
       log.error(`AUTOMATIONS_GET: Error loading automations:`, error)
       throw error
     }
+  })
+
+  server.handle(RPC_CHANNELS.automations.UPDATE, async (
+    _ctx,
+    workspaceId: string,
+    eventName: string,
+    matcherIndex: number,
+    matcher: Record<string, unknown>,
+  ) => {
+    const { AutomationMatcherSchema } = await import('@craft-agent/shared/automations/schemas')
+    const parsed = AutomationMatcherSchema.safeParse(matcher)
+    if (!parsed.success) {
+      throw new Error(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('\n'))
+    }
+    await withAutomationMatcher(workspaceId, eventName, matcherIndex, (matchers, idx) => {
+      const existingId = matchers[idx]?.id
+      matchers[idx] = { ...parsed.data, id: parsed.data.id ?? existingId }
+    })
+    return { success: true }
   })
 
   server.handle(RPC_CHANNELS.automations.TEST, async (_ctx, payload: import('@craft-agent/shared/protocol').TestAutomationPayload) => {

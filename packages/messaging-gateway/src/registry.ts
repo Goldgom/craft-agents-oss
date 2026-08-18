@@ -32,6 +32,7 @@ import { TelegramAdapter } from './adapters/telegram/index'
 import { WhatsAppAdapter, type WhatsAppEvent } from './adapters/whatsapp/index'
 import { LarkAdapter, parseLarkCredentials, type LarkCredentials } from './adapters/lark/index'
 import { WeComAdapter, parseWeComCredentials, type WeComCredentials } from './adapters/wecom/index'
+import { QQBotAdapter, parseQQBotCredentials } from './adapters/qqbot/index'
 import { TopicRegistry } from './topic-registry'
 import type { SessionEvent } from './renderer'
 import type { EventSinkFn } from './event-fanout'
@@ -204,6 +205,13 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
       })
     }
 
+    if (isPlatformConfigured(config, 'qqbot')) {
+      this.setPlatformRuntime(workspaceId, state, 'qqbot', { configured: true, connected: false, state: 'connecting', lastError: undefined })
+      void this.tryConnectQQBot(workspaceId, state).catch((err) => {
+        this.setPlatformRuntime(workspaceId, state, 'qqbot', { configured: true, connected: false, state: 'error', lastError: err instanceof Error ? err.message : String(err) })
+      })
+    }
+
     if (isPlatformConfigured(config, 'whatsapp')) {
       if (this.hasWhatsAppAuthState(workspaceId)) {        this.setPlatformRuntime(workspaceId, state, 'whatsapp', {
           configured: true,
@@ -268,6 +276,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
         whatsapp: cloneRuntime(state.runtime.whatsapp),
         lark: cloneRuntime(state.runtime.lark),
         wecom: cloneRuntime(state.runtime.wecom),
+        qqbot: cloneRuntime(state.runtime.qqbot),
       },
     }
   }
@@ -288,6 +297,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
       await state.gateway.unregisterAdapter('whatsapp').catch(() => {})
       await state.gateway.unregisterAdapter('lark').catch(() => {})
       await state.gateway.unregisterAdapter('wecom').catch(() => {})
+      await state.gateway.unregisterAdapter('qqbot').catch(() => {})
       state.whatsappOffEvent?.()
       state.whatsappOffEvent = undefined
       state.whatsapp = null
@@ -319,13 +329,30 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
         identity: undefined,
         lastError: undefined,
       })
+      this.setPlatformRuntime(workspaceId, state, 'qqbot', {
+        configured: false,
+        connected: false,
+        state: 'disconnected',
+        identity: undefined,
+        lastError: undefined,
+      })
       return
     }
 
-    for (const platform of ['telegram', 'whatsapp', 'lark', 'wecom'] as const) {
+    for (const platform of ['telegram', 'whatsapp', 'lark', 'wecom', 'qqbot'] as const) {
       const configured = isPlatformConfigured(cfg, platform)
       if (!configured && state.gateway.getAdapter(platform)) {
         await state.gateway.unregisterAdapter(platform).catch(() => {})
+      }
+      if (configured && platform === 'qqbot' && !state.gateway.getAdapter('qqbot')) {
+        await this.tryConnectQQBot(workspaceId, state).catch((err) => {
+          this.setPlatformRuntime(workspaceId, state, 'qqbot', {
+            configured: true,
+            connected: false,
+            state: 'error',
+            lastError: err instanceof Error ? err.message : String(err),
+          })
+        })
       }
       if (!configured && platform === 'whatsapp') {
         state.whatsappOffEvent?.()
@@ -1164,6 +1191,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
         whatsapp: createRuntime('whatsapp', isPlatformConfigured(cfg, 'whatsapp')),
         lark: createRuntime('lark', isPlatformConfigured(cfg, 'lark')),
         wecom: createRuntime('wecom', isPlatformConfigured(cfg, 'wecom')),
+        qqbot: createRuntime('qqbot', isPlatformConfigured(cfg, 'qqbot')),
       },
     }
     this.workspaces.set(workspaceId, state)
@@ -1306,6 +1334,43 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
 
     await this.tryConnectWeCom(workspaceId, state)
     await state.gateway.start()
+  }
+
+  async testQQBotCredentials(creds: { appId: string; token: string }): Promise<{ success: boolean; error?: string }> {
+    try {
+      const adapter = new QQBotAdapter()
+      await adapter.initialize({ appId: creds.appId, token: creds.token })
+      await adapter.destroy()
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async saveQQBotCredentials(workspaceId: string, creds: { appId: string; token: string }): Promise<void> {
+    const test = await this.testQQBotCredentials(creds)
+    if (!test.success) throw new Error(test.error ?? 'Invalid QQ Bot credentials')
+    await this.opts.credentialManager.set(
+      { type: 'messaging_bearer', workspaceId, name: 'qqbot' },
+      { value: JSON.stringify(creds) },
+    )
+    const state = this.workspaces.get(workspaceId) ?? this.bootstrapWorkspace(workspaceId)
+    state.configStore.update({ enabled: true, platforms: { qqbot: { enabled: true, appId: creds.appId } } })
+    await this.tryConnectQQBot(workspaceId, state)
+    await state.gateway.start()
+  }
+
+  private async tryConnectQQBot(workspaceId: string, state: WorkspaceState): Promise<void> {
+    const cred = await this.opts.credentialManager.get({ type: 'messaging_bearer', workspaceId, name: 'qqbot' }).catch(() => null)
+    if (!cred?.value) return
+    const parsed = parseQQBotCredentials(cred.value)
+    if (!parsed) throw new Error('QQ Bot credentials are malformed')
+    await state.gateway.unregisterAdapter('qqbot').catch(() => {})
+    const adapter = new QQBotAdapter()
+    await adapter.initialize({ appId: parsed.appId, token: parsed.token, logger: this.log.child({ component: 'qqbot-adapter', workspaceId, platform: 'qqbot' }) })
+    state.gateway.registerAdapter(adapter)
+    state.botUsernames.qqbot = parsed.appId
+    this.setPlatformRuntime(workspaceId, state, 'qqbot', { configured: true, connected: true, state: 'connected', identity: parsed.appId, lastError: undefined })
   }
 
   private async tryConnectWeCom(workspaceId: string, state: WorkspaceState): Promise<void> {
@@ -1824,7 +1889,7 @@ function toBindingInfo(b: ChannelBinding): MessagingBindingInfo {
 }
 
 function isKnownPlatform(p: string): p is PlatformType {
-  return p === 'telegram' || p === 'whatsapp' || p === 'lark' || p === 'wecom'
+  return p === 'telegram' || p === 'whatsapp' || p === 'lark' || p === 'wecom' || p === 'qqbot'
 }
 
 function capitalize(value: string): string {

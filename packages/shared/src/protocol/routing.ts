@@ -438,6 +438,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
 
   // automations — workspace automations
   RPC_CHANNELS.automations.GET,
+  RPC_CHANNELS.automations.UPDATE,
   RPC_CHANNELS.automations.TEST,
   RPC_CHANNELS.automations.SET_ENABLED,
   RPC_CHANNELS.automations.DUPLICATE,
@@ -490,6 +491,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.messaging.SAVE_LARK,
   RPC_CHANNELS.messaging.TEST_WECOM,
   RPC_CHANNELS.messaging.SAVE_WECOM,
+  RPC_CHANNELS.messaging.TEST_QQBOT,
+  RPC_CHANNELS.messaging.SAVE_QQBOT,
   RPC_CHANNELS.messaging.DISCONNECT,
   RPC_CHANNELS.messaging.FORGET,
   RPC_CHANNELS.messaging.GET_BINDINGS,

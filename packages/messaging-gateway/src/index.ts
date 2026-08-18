@@ -6,6 +6,7 @@
 
 export { MessagingGateway, type GatewayOptions } from './gateway'
 export { TelegramAdapter } from './adapters/telegram/index'
+export { QQBotAdapter, parseQQBotCredentials, type QQBotConfig } from './adapters/qqbot/index'
 export {
   WhatsAppAdapter,
   type WhatsAppConfig,

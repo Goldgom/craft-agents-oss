@@ -210,4 +210,29 @@ describe('parseAutomationsConfig', () => {
     expect(items[0].permissionMode).toBe('ask')
     expect(items[0].labels).toEqual(['important'])
   })
+
+  it('parses hosted script and runtime configuration', () => {
+    const items = parseAutomationsConfig({
+      version: 2,
+      automations: {
+        HostedScriptTick: [{
+          id: 'hosted',
+          name: 'Health check',
+          script: 'return { healthy: true }',
+          intervalMs: 30_000,
+          scriptTimeoutMs: 1500,
+          scriptMetadata: { service: 'api' },
+          provider: 'openai-main',
+          permissionMode: 'safe',
+          actions: [{ type: 'prompt', prompt: 'Investigate', llmConnection: 'openai-main', model: 'gpt-5' }],
+        }],
+      },
+    })
+    expect(items[0].event).toBe('HostedScriptTick')
+    expect(items[0].intervalMs).toBe(30_000)
+    expect(items[0].scriptTimeoutMs).toBe(1500)
+    expect(items[0].scriptMetadata).toEqual({ service: 'api' })
+    expect(items[0].provider).toBe('openai-main')
+    expect(items[0].summary).toBe('Checks every 30 sec')
+  })
 })

@@ -81,23 +81,31 @@ export default function ServerSettingsPage() {
   const [startupLocation, setStartupLocationState] = useState<string>('local')
   const [startupProfiles, setStartupProfiles] = useState<RemoteServerProfileInfo[]>([])
   const [savingLocation, setSavingLocation] = useState(false)
+  const [isRemoteMode, setIsRemoteMode] = useState(false)
 
   const isDirty = JSON.stringify(form) !== JSON.stringify(savedForm)
 
   const loadSettings = useCallback(async () => {
     try {
-      const [config, serverStatus, location, profiles] = await Promise.all([
-        window.electronAPI.getServerConfig(),
-        window.electronAPI.getServerStatus(),
+      const [context, location, profiles] = await Promise.all([
+        window.electronAPI.getStartupContext(),
         window.electronAPI.getStartupLocation().catch(() => 'local'),
         window.electronAPI.getRemoteServers().catch(() => [] as RemoteServerProfileInfo[]),
+      ])
+      const remote = context.mode === 'remote'
+      setIsRemoteMode(remote)
+      setStartupLocationState(location)
+      setStartupProfiles(profiles)
+      if (remote) return
+
+      const [config, serverStatus] = await Promise.all([
+        window.electronAPI.getServerConfig(),
+        window.electronAPI.getServerStatus(),
       ])
       const formState = configToForm(config)
       setForm(formState)
       setSavedForm(formState)
       setStatus(serverStatus)
-      setStartupLocationState(location)
-      setStartupProfiles(profiles)
     } catch (err) {
       console.error('Failed to load server settings:', err)
     } finally {
@@ -255,6 +263,8 @@ export default function ServerSettingsPage() {
             </SettingsCard>
           </SettingsSection>
 
+          {/* The remote host has no Electron server-mode configuration API. */}
+          {!isRemoteMode && <>
           {/* Enable toggle + restart banner */}
           <SettingsSection title={t("settings.server.remoteAccess")}>
             <SettingsCard>
@@ -373,6 +383,7 @@ export default function ServerSettingsPage() {
               </Button>
             </SettingsCardFooter>
           )}
+          </>}
 
         </div>
       </ScrollArea>

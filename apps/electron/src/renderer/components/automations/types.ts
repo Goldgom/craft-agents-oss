@@ -28,6 +28,7 @@ export type AppEvent =
   | 'TodoStateChange'
   | 'SessionStatusChange'
   | 'SchedulerTick'
+  | 'HostedScriptTick'
 
 export type AgentEvent =
   | 'PreToolUse'
@@ -48,7 +49,7 @@ export type AutomationTrigger = AppEvent | AgentEvent
 
 export const APP_EVENTS: AppEvent[] = [
   'LabelAdd', 'LabelRemove', 'LabelConfigChange',
-  'PermissionModeChange', 'FlagChange', 'TodoStateChange', 'SessionStatusChange', 'SchedulerTick'
+  'PermissionModeChange', 'FlagChange', 'TodoStateChange', 'SessionStatusChange', 'SchedulerTick', 'HostedScriptTick'
 ]
 
 export const AGENT_EVENTS: AgentEvent[] = [
@@ -62,10 +63,12 @@ export interface PromptAction {
   prompt: string
   /** LLM connection slug override for the spawned session */
   llmConnection?: string
+  provider?: string
   /** Model ID override for the spawned session */
   model?: string
   /** Thinking level override for the spawned session */
   thinkingLevel?: ThinkingLevel
+  mode?: PermissionMode
 }
 
 export interface WebhookAction {
@@ -217,6 +220,13 @@ export interface AutomationListItem {
   timezone?: string
   /** Permission mode */
   permissionMode?: PermissionMode
+  /** Explicit connection/provider alias used by prompt actions */
+  provider?: string
+  /** Hosted script source and polling settings */
+  script?: string
+  intervalMs?: number
+  scriptTimeoutMs?: number
+  scriptMetadata?: Record<string, unknown>
   /** Labels for prompt sessions */
   labels?: string[]
   /** Conditions that must pass before actions run */
@@ -312,6 +322,7 @@ export const EVENT_DISPLAY_NAMES: Record<AutomationTrigger, string> = {
   TodoStateChange:      'Task Updated',
   SessionStatusChange:  'Status Changed',
   SchedulerTick:        'Scheduled',
+  HostedScriptTick:     'Hosted Script',
 
   // Agent events
   PreToolUse:           'Before Tool Runs',
@@ -372,7 +383,7 @@ interface AutomationsConfigFile {
 }
 
 type RawAction =
-  | { type: 'prompt'; prompt: string; llmConnection?: string; model?: string; thinkingLevel?: ThinkingLevel }
+  | { type: 'prompt'; prompt: string; llmConnection?: string; provider?: string; model?: string; thinkingLevel?: ThinkingLevel; mode?: PermissionMode }
   | { type: 'webhook'; url: string; method?: string; headers?: Record<string, string>; bodyFormat?: 'json' | 'form' | 'raw'; body?: unknown; captureResponse?: boolean; auth?: WebhookAction['auth'] }
 
 interface AutomationsConfigMatcher {
@@ -382,6 +393,12 @@ interface AutomationsConfigMatcher {
   cron?: string
   timezone?: string
   permissionMode?: PermissionMode
+  provider?: string
+  mode?: PermissionMode
+  script?: string
+  intervalMs?: number
+  scriptTimeoutMs?: number
+  scriptMetadata?: Record<string, unknown>
   labels?: string[]
   conditions?: AutomationConditionUI[]
   enabled?: boolean
@@ -410,6 +427,12 @@ function deriveAutomationName(event: string, matcher: AutomationsConfigMatcher):
 
 /** Derive a summary line from the matcher/cron/event */
 function deriveAutomationSummary(event: string, matcher: AutomationsConfigMatcher): string {
+  if (event === 'HostedScriptTick' && matcher.intervalMs) {
+    const seconds = matcher.intervalMs / 1000
+    return seconds >= 60 && seconds % 60 === 0
+      ? `Checks every ${seconds / 60} min`
+      : `Checks every ${seconds} sec`
+  }
   if (matcher.cron) {
     const runs = computeNextRuns(matcher.cron, 1)
     if (runs.length > 0) {
@@ -475,6 +498,11 @@ export function parseAutomationsConfig(json: unknown): AutomationListItem[] {
         cron: matcher.cron,
         timezone: matcher.timezone,
         permissionMode: matcher.permissionMode,
+        provider: matcher.provider,
+        script: matcher.script,
+        intervalMs: matcher.intervalMs,
+        scriptTimeoutMs: matcher.scriptTimeoutMs,
+        scriptMetadata: matcher.scriptMetadata,
         labels: matcher.labels,
         conditions: matcher.conditions,
         actions,
@@ -490,6 +518,7 @@ export function parseAutomationsConfig(json: unknown): AutomationListItem[] {
 export function getEventCategory(event: AutomationTrigger): EventCategory {
   switch (event) {
     case 'SchedulerTick':
+    case 'HostedScriptTick':
       return 'scheduled'
     case 'LabelAdd':
     case 'LabelRemove':

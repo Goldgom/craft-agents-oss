@@ -567,6 +567,19 @@ if (isClientOnly) {
   return result.canceled ? null : result.filePath ?? null
 }
 
+// These APIs describe or operate on the client application. Do not route them
+// over WebSocket: a thin client has no embedded RPC server, and the remote
+// server must never be asked to update or inspect this Electron installation.
+;(api as ElectronAPI).getClientVersion = () => ipcRenderer.invoke('__client:get-version')
+;(api as ElectronAPI).getSystemTheme = () => ipcRenderer.invoke('__client:get-system-theme')
+;(api as ElectronAPI).isDebugMode = () => ipcRenderer.invoke('__client:is-debug-mode')
+;(api as ElectronAPI).openFileDialog = () => ipcRenderer.invoke('__client:open-file-dialog')
+;(api as ElectronAPI).getUpdateInfo = () => ipcRenderer.invoke('__client:get-update-info')
+;(api as ElectronAPI).checkForUpdates = () => ipcRenderer.invoke('__client:check-for-updates')
+;(api as ElectronAPI).installUpdate = () => ipcRenderer.invoke('__client:install-update')
+;(api as ElectronAPI).dismissUpdate = (version: string) => ipcRenderer.invoke('__client:dismiss-update', version)
+;(api as ElectronAPI).getDismissedUpdateVersion = () => ipcRenderer.invoke('__client:get-dismissed-update')
+
 contextBridge.exposeInMainWorld('electronAPI', api)
 
 } // end if (!isPickerMode)

@@ -412,6 +412,7 @@ export const RPC_CHANNELS = {
   },
   automations: {
     GET: 'automations:get',
+    UPDATE: 'automations:update',
     TEST: 'automations:test',
     SET_ENABLED: 'automations:setEnabled',
     DUPLICATE: 'automations:duplicate',
@@ -466,6 +467,8 @@ export const RPC_CHANNELS = {
     SAVE_LARK: 'messaging:saveLark',
     TEST_WECOM: 'messaging:testWecom',
     SAVE_WECOM: 'messaging:saveWecom',
+    TEST_QQBOT: 'messaging:testQQBot',
+    SAVE_QQBOT: 'messaging:saveQQBot',
     DISCONNECT: 'messaging:disconnect',
     FORGET: 'messaging:forget',
     GET_BINDINGS: 'messaging:getBindings',

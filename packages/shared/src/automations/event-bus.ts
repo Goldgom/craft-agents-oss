@@ -58,6 +58,11 @@ export interface SchedulerTickPayload extends BaseEventPayload {
   utcTime: string;
 }
 
+export interface HostedScriptTickPayload extends BaseEventPayload {
+  automationId?: string;
+  scriptInfo?: Record<string, unknown>;
+}
+
 /** Label config change payload */
 export interface LabelConfigChangePayload extends BaseEventPayload {
   // No additional fields - just signals that config changed
@@ -84,6 +89,7 @@ export interface EventPayloadMap {
   FlagChange: FlagChangePayload;
   SessionStatusChange: SessionStatusChangePayload;
   SchedulerTick: SchedulerTickPayload;
+  HostedScriptTick: HostedScriptTickPayload;
 
   // Agent events (generic payload)
   PreToolUse: GenericEventPayload;

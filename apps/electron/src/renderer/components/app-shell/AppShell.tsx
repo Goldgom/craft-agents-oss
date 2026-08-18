@@ -1531,7 +1531,7 @@ function AppShellContent({
   const automationTypeCounts = useMemo(() => {
     const counts = { scheduled: 0, event: 0, agentic: 0 }
     for (const automation of automations) {
-      if (automation.event === 'SchedulerTick') counts.scheduled++
+      if (automation.event === 'SchedulerTick' || automation.event === 'HostedScriptTick') counts.scheduled++
       else if ((APP_EVENTS as string[]).includes(automation.event)) counts.event++
       else if ((AGENT_EVENTS as string[]).includes(automation.event)) counts.agentic++
     }
