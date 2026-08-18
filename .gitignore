@@ -9,6 +9,11 @@ dist
 apps/electron/release
 apps/electron/resources/session-mcp-server/
 apps/electron/resources/pi-agent-server/
+apps/android/.gradle/
+apps/android/app/build/
+apps/android/build/
+apps/android/local.properties
+.toolchains/
 
 # code coverage
 coverage

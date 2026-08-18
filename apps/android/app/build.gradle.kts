@@ -1,0 +1,41 @@
+plugins {
+    id("com.android.application")
+}
+
+val configuredServerUrl = providers.gradleProperty("serverUrl")
+    .orElse("https://agent.goldgom.top")
+    .get()
+
+android {
+    namespace = "com.craftagents.mobile"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.craftagents.mobile"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = "0.12.0"
+
+        buildConfigField("String", "SERVER_URL", "\"${configuredServerUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+}
