@@ -80,6 +80,10 @@ export interface MessagingGatewayRegistryOptions {
     /** Pairing flow: 'qr' or 'code'. Defaults to 'code' (phone-number based). */
     pairingMode?: 'qr' | 'code'
   }
+  qqbot?: {
+    workerEntry: string
+    nodeBin?: string
+  }
   /** Optional logger — shared with the gateway and adapters. */
   logger?: MessagingLogger
 }
@@ -1335,11 +1339,12 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
     await this.tryConnectWeCom(workspaceId, state)
     await state.gateway.start()
   }
-
   async testQQBotCredentials(creds: { appId: string; token: string }): Promise<{ success: boolean; error?: string }> {
     try {
       const adapter = new QQBotAdapter()
-      await adapter.initialize(normalizeQQBotCredentials(creds.appId, creds.token))
+      const worker = this.opts.qqbot
+      if (!worker) throw new Error('QQ Bot worker is not configured on this server')
+      await adapter.initialize({ ...normalizeQQBotCredentials(creds.appId, creds.token), workerEntry: worker.workerEntry, nodeBin: worker.nodeBin })
       await adapter.destroy()
       return { success: true }
     } catch (error) {
@@ -1368,7 +1373,9 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
     if (!parsed) throw new Error('QQ Bot credentials are malformed')
     await state.gateway.unregisterAdapter('qqbot').catch(() => {})
     const adapter = new QQBotAdapter()
-    await adapter.initialize({ appId: parsed.appId, token: parsed.token, logger: this.log.child({ component: 'qqbot-adapter', workspaceId, platform: 'qqbot' }) })
+    const worker = this.opts.qqbot
+    if (!worker) throw new Error('QQ Bot worker is not configured on this server')
+    await adapter.initialize({ appId: parsed.appId, token: parsed.token, workerEntry: worker.workerEntry, nodeBin: worker.nodeBin, logger: this.log.child({ component: 'qqbot-adapter', workspaceId, platform: 'qqbot' }) })
     state.gateway.registerAdapter(adapter)
     state.botUsernames.qqbot = parsed.appId
     this.setPlatformRuntime(workspaceId, state, 'qqbot', { configured: true, connected: true, state: 'connected', identity: parsed.appId, lastError: undefined })

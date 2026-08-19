@@ -45,6 +45,10 @@ export interface MessagingBootstrapOptions {
     nodeBin?: string
     pairingMode?: 'qr' | 'code'
   }
+  qqbot: {
+    workerEntry: string
+    nodeBin?: string
+  }
 }
 
 export interface MessagingBootstrapHandle {
@@ -77,6 +81,7 @@ export function createMessagingBootstrap(opts: MessagingBootstrapOptions): Messa
       nodeBin: opts.whatsapp.nodeBin,
       pairingMode: opts.whatsapp.pairingMode ?? 'qr',
     },
+    qqbot: { workerEntry: opts.qqbot.workerEntry, nodeBin: opts.qqbot.nodeBin },
     publishEvent: (channel, target, ...args) => {
       publisher?.(channel, target, ...args)
     },
@@ -85,7 +90,7 @@ export function createMessagingBootstrap(opts: MessagingBootstrapOptions): Messa
   const log = opts.logger?.child({ component: 'bootstrap' })
   log?.info('messaging bootstrap created', {
     event: 'messaging_bootstrap_created',
-    workerEntry: opts.whatsapp.workerEntry,
+      workerEntry: opts.whatsapp.workerEntry,
     nodeBin: opts.whatsapp.nodeBin ?? '(host default)',
     pairingMode: opts.whatsapp.pairingMode ?? 'qr',
   })

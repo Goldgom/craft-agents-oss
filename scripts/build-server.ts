@@ -487,7 +487,7 @@ function getDirSize(dir: string): number {
 function copyWorkspacePackages(config: ServerBuildConfig): void {
   const { rootDir, outputDir } = config;
 
-  // messaging-whatsapp-worker is included so dist/worker.cjs (built in step 4) ships.
+  // Messaging workers are included so their built bundles ship.
   // The worker is spawned as a Node subprocess against that file at runtime; see
   // CRAFT_MESSAGING_WA_WORKER env resolution in packages/server/src/index.ts.
   const packages = [
@@ -499,6 +499,7 @@ function copyWorkspacePackages(config: ServerBuildConfig): void {
     'session-mcp-server',
     'messaging-gateway',
     'messaging-whatsapp-worker',
+    'messaging-qqbot-worker',
   ];
 
   for (const pkg of packages) {
@@ -897,6 +898,8 @@ async function main(): Promise<void> {
   // The bundle embeds Baileys + transitive deps; see scripts/build-wa-worker.ts.
   console.log('  Building WhatsApp worker bundle...');
   await $`bun run ${join(rootDir, 'scripts', 'build-wa-worker.ts')}`.cwd(rootDir);
+  console.log('  Building QQ Bot worker bundle...');
+  await $`bun run ${join(rootDir, 'scripts', 'build-qqbot-worker.ts')}`.cwd(rootDir);
 
   // Step 5: Assemble resources
   console.log('\n[5/8] Assembling resources...');

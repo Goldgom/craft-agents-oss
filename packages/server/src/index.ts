@@ -159,6 +159,8 @@ if (webuiEnabled && serverToken) {
 const waWorkerEntry = process.env.CRAFT_MESSAGING_WA_WORKER
   ?? join(bundledAssetsRoot, 'packages', 'messaging-whatsapp-worker', 'dist', 'worker.cjs')
 const waNodeBin = process.env.CRAFT_MESSAGING_NODE_BIN ?? 'node'
+const qqbotWorkerEntry = process.env.CRAFT_MESSAGING_QQBOT_WORKER
+  ?? join(bundledAssetsRoot, 'packages', 'messaging-qqbot-worker', 'dist', 'worker.cjs')
 
 // Built inside createHandlerDeps (needs sessionManager), populated with the WS
 // publisher after bootstrapServer resolves.
@@ -249,6 +251,7 @@ const instance = await (async () => {
             nodeBin: waNodeBin,
             pairingMode: 'qr',
           },
+          qqbot: { workerEntry: qqbotWorkerEntry, nodeBin: waNodeBin },
         })
         return {
           sessionManager,
