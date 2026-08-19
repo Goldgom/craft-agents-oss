@@ -32,7 +32,7 @@ import { TelegramAdapter } from './adapters/telegram/index'
 import { WhatsAppAdapter, type WhatsAppEvent } from './adapters/whatsapp/index'
 import { LarkAdapter, parseLarkCredentials, type LarkCredentials } from './adapters/lark/index'
 import { WeComAdapter, parseWeComCredentials, type WeComCredentials } from './adapters/wecom/index'
-import { QQBotAdapter, parseQQBotCredentials } from './adapters/qqbot/index'
+import { QQBotAdapter, normalizeQQBotCredentials, parseQQBotCredentials } from './adapters/qqbot/index'
 import { TopicRegistry } from './topic-registry'
 import type { SessionEvent } from './renderer'
 import type { EventSinkFn } from './event-fanout'
@@ -1339,7 +1339,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
   async testQQBotCredentials(creds: { appId: string; token: string }): Promise<{ success: boolean; error?: string }> {
     try {
       const adapter = new QQBotAdapter()
-      await adapter.initialize({ appId: creds.appId, token: creds.token })
+      await adapter.initialize(normalizeQQBotCredentials(creds.appId, creds.token))
       await adapter.destroy()
       return { success: true }
     } catch (error) {
@@ -1348,14 +1348,15 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
   }
 
   async saveQQBotCredentials(workspaceId: string, creds: { appId: string; token: string }): Promise<void> {
-    const test = await this.testQQBotCredentials(creds)
+    const normalized = normalizeQQBotCredentials(creds.appId, creds.token)
+    const test = await this.testQQBotCredentials(normalized)
     if (!test.success) throw new Error(test.error ?? 'Invalid QQ Bot credentials')
     await this.opts.credentialManager.set(
       { type: 'messaging_bearer', workspaceId, name: 'qqbot' },
-      { value: JSON.stringify(creds) },
+      { value: JSON.stringify(normalized) },
     )
     const state = this.workspaces.get(workspaceId) ?? this.bootstrapWorkspace(workspaceId)
-    state.configStore.update({ enabled: true, platforms: { qqbot: { enabled: true, appId: creds.appId } } })
+    state.configStore.update({ enabled: true, platforms: { qqbot: { enabled: true, appId: normalized.appId } } })
     await this.tryConnectQQBot(workspaceId, state)
     await state.gateway.start()
   }

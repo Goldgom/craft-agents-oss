@@ -3,7 +3,7 @@ plugins {
 }
 
 val configuredServerUrl = providers.gradleProperty("serverUrl")
-    .orElse("https://agent.goldgom.top")
+    .orElse("wss://agent.goldgom.top:50003")
     .get()
 
 android {

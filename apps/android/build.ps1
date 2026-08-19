@@ -1,5 +1,5 @@
 param(
-    [string]$ServerUrl = "https://agent.goldgom.top",
+    [string]$ServerUrl = "wss://agent.goldgom.top:50003",
     [switch]$Release,
     [switch]$SkipToolchainInstall
 )
@@ -43,6 +43,20 @@ if (-not (Test-Path $sdkRoot)) {
 if (-not (Test-Path (Join-Path $sdkRoot "platforms\android-36"))) {
     throw "Android SDK platform android-36 is missing at $sdkRoot. Install it with sdkmanager."
 }
+
+# Build and bundle the browser frontend so the APK does not require the remote
+# server to host HTML, JavaScript, CSS, or font assets.
+Push-Location $projectRoot
+try {
+    & bun run webui:build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally {
+    Pop-Location
+}
+$assetRoot = Join-Path $androidRoot "app\src\main\assets\webui"
+if (Test-Path $assetRoot) { Remove-Item -Recurse -Force $assetRoot }
+New-Item -ItemType Directory -Force $assetRoot | Out-Null
+Copy-Item (Join-Path $projectRoot "apps\webui\dist\*") $assetRoot -Recurse -Force
 
 $env:JAVA_HOME = $jdkHome
 $env:ANDROID_HOME = $sdkRoot

@@ -31,7 +31,7 @@ function LoadingScreen() {
   )
 }
 
-function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+function ErrorScreen({ message, onRetry, embedded }: { message: string; onRetry: () => void; embedded: boolean }) {
   const { t } = useTranslation()
 
   return (
@@ -45,16 +45,18 @@ function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => voi
         >
           {t("common.retry")}
         </button>
-        <button
-          onClick={() => {
-            fetch('/api/auth/logout', { method: 'POST' }).then(() => {
-              window.location.href = '/login'
-            })
-          }}
-          className="px-4 py-1.5 rounded-md bg-background shadow-minimal text-[13px] text-foreground/70 cursor-pointer"
-        >
-          {t("webui.logOut")}
-        </button>
+        {!embedded && (
+          <button
+            onClick={() => {
+              fetch('/api/auth/logout', { method: 'POST' }).then(() => {
+                window.location.href = '/login'
+              })
+            }}
+            className="px-4 py-1.5 rounded-md bg-background shadow-minimal text-[13px] text-foreground/70 cursor-pointer"
+          >
+            {t("webui.logOut")}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -65,6 +67,7 @@ export default function App() {
   const [error, setError] = useState('')
   const clientRef = useRef<WsRpcClient | null>(null)
   const initRef = useRef(false)
+  const embedded = Boolean(new URLSearchParams(window.location.search).get('ws'))
 
   const initialize = async () => {
     setPhase('loading')
@@ -72,7 +75,12 @@ export default function App() {
 
     try {
       // 1. Fetch WS URL from the server (cookie auth)
-      const configRes = await fetch('/api/config', { credentials: 'same-origin' })
+      const params = new URLSearchParams(window.location.search)
+      const embeddedWsUrl = params.get('ws')
+      const embeddedToken = params.get('token') ?? undefined
+      let wsUrl = embeddedWsUrl ?? ''
+      if (!wsUrl) {
+        const configRes = await fetch('/api/config', { credentials: 'same-origin' })
       if (!configRes.ok) {
         if (configRes.status === 401) {
           // Session expired — redirect to login
@@ -82,16 +90,17 @@ export default function App() {
         throw new Error(`Failed to fetch config: ${configRes.status}`)
       }
 
-      const { wsUrl } = await configRes.json() as { wsUrl: string }
-      if (!wsUrl) throw new Error('Server did not return a WebSocket URL')
+        const config = await configRes.json() as { wsUrl?: string }
+        wsUrl = config.wsUrl ?? ''
+      }
+      if (!wsUrl) throw new Error('No WebSocket server URL configured')
 
       // 2. Determine workspace — check URL params first
-      const params = new URLSearchParams(window.location.search)
       let workspaceId = params.get('workspace') ?? undefined
 
       // If no workspace in URL, fetch the default from the server
       // so we can include it in the WebSocket handshake
-      if (!workspaceId) {
+      if (!workspaceId && !embeddedWsUrl) {
         try {
           const wsRes = await fetch('/api/config/workspaces', { credentials: 'same-origin' })
           if (wsRes.ok) {
@@ -109,7 +118,7 @@ export default function App() {
         clientRef.current.destroy()
       }
 
-      const { api, client } = createWebApi({ serverUrl: wsUrl, workspaceId })
+      const { api, client } = createWebApi({ serverUrl: wsUrl, workspaceId, token: embeddedToken })
       clientRef.current = client
 
       // 4. Set window.electronAPI — must happen before any Electron component mounts
@@ -139,7 +148,7 @@ export default function App() {
   }, [])
 
   if (phase === 'loading') return <LoadingScreen />
-  if (phase === 'error') return <ErrorScreen message={error} onRetry={initialize} />
+  if (phase === 'error') return <ErrorScreen message={error} onRetry={initialize} embedded={embedded} />
 
   return (
     <Suspense fallback={<LoadingScreen />}>

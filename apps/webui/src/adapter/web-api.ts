@@ -61,16 +61,19 @@ export interface WebApiOptions {
   serverUrl: string
   /** Workspace ID to connect as. */
   workspaceId?: string
+  /** Bearer token for embedded/mobile clients that do not have HTTP cookies. */
+  token?: string
 }
 
 export function createWebApi(options: WebApiOptions): {
   api: ElectronAPI
   client: WsRpcClient
 } {
-  const { serverUrl, workspaceId } = options
+  const { serverUrl, workspaceId, token } = options
 
   const client = new WsRpcClient(serverUrl, {
     workspaceId,
+    token,
     autoReconnect: true,
     mode: 'remote',
     // No token — auth is via session cookie sent on WebSocket upgrade

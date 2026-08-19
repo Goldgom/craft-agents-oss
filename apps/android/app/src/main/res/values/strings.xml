@@ -1,9 +1,10 @@
 <resources>
     <string name="app_name">Craft Agent</string>
-    <string name="server_url_hint">Server URL</string>
+    <string name="server_url_hint">Remote WebSocket URL</string>
+    <string name="server_token_hint">Server token (optional)</string>
     <string name="connect">Connect</string>
     <string name="change_server">Change server</string>
     <string name="reload">Reload</string>
-    <string name="server_url_invalid">Enter a valid http:// or https:// server URL.</string>
+    <string name="server_url_invalid">Enter a valid ws:// or wss:// WebSocket URL.</string>
     <string name="webview_error">Unable to load the server. Check the URL and connection.</string>
 </resources>

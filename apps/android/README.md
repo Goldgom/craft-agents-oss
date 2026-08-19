@@ -1,6 +1,6 @@
 # Craft Agent Android
 
-This is a small Android WebView client for the Craft Agent server. It reuses the existing `apps/webui` application at runtime, so the APK contains no duplicate agent or messaging implementation.
+This is a small Android client with a loopback HTTP service for the Craft Agent server. It bundles the existing `apps/webui` application as local static assets, so the APK does not depend on the server hosting the frontend. Agent RPC, sessions, automations, and messaging continue to run on the remote server over WebSocket.
 
 ## Build
 
@@ -20,15 +20,15 @@ From the repository root:
 
 ```powershell
 bun run android:build
-bun run android:build -- -ServerUrl "https://your-agent-server.example"
+bun run android:build -- -ServerUrl "wss://your-agent-server.example:50003"
 ```
 
 The signed debug APK is written to `dist/android/craft-agent-debug.apk`. Build an unsigned release variant with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File apps/android/build.ps1 -Release -ServerUrl "https://your-agent-server.example"
+powershell -ExecutionPolicy Bypass -File apps/android/build.ps1 -Release -ServerUrl "wss://your-agent-server.example:50003"
 ```
 
 Release output is `dist/android/craft-agent-release-unsigned.apk`. Configure a private Android signing key in your release pipeline before distributing it.
 
-The app also exposes a **Change server** action in its toolbar. The URL is persisted locally and can include a port, for example `http://192.168.1.20:9100` for a local server. Cleartext HTTP is enabled for local development; production deployments should use HTTPS.
+The app starts a localhost-only HTTP server inside the APK and loads the bundled frontend from it. The **Change server** action stores the remote WebSocket URL and optional bearer token locally. A local development server can use `ws://192.168.1.20:9100`; production deployments should use `wss://`.

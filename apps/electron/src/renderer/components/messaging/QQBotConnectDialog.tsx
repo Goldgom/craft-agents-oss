@@ -27,7 +27,7 @@ export function QQBotConnectDialog({ open, onOpenChange }: { open: boolean; onOp
     <DialogHeader><DialogTitle>{t('settings.messaging.qqbot.connectTitle', { defaultValue: 'Connect QQ Bot' })}</DialogTitle></DialogHeader>
     <div className="space-y-3 py-2">
       <Input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="App ID" autoComplete="off" />
-      <Input value={token} onChange={(e) => setToken(e.target.value)} placeholder="Bot token" type="password" autoComplete="off" />
+      <Input value={token} onChange={(e) => setToken(e.target.value)} placeholder="AppToken or AppID.AppToken" type="password" autoComplete="off" />
     </div>
     <DialogFooter><Button onClick={() => void submit()} disabled={busy || !appId.trim() || !token.trim()}>{busy ? 'Connecting...' : 'Connect'}</Button></DialogFooter>
   </DialogContent></Dialog>

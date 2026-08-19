@@ -16,6 +16,24 @@ const NOOP_LOGGER: MessagingLogger = { info: () => {}, warn: () => {}, error: ()
 
 export interface QQBotConfig extends PlatformConfig { appId: string; intents?: number }
 
+/**
+ * QQ's developer console commonly presents the credential as either a bare
+ * AppToken or the complete `AppID.AppToken` / `Bot AppID.AppToken` value.
+ * Keep one canonical representation internally so we never send a duplicated
+ * AppID in the Authorization header.
+ */
+export function normalizeQQBotCredentials(appId: string, token: string): { appId: string; token: string } {
+  const normalizedAppId = appId.trim()
+  let normalizedToken = token.trim().replace(/^Bot\s+/i, '')
+  if (normalizedToken.startsWith(`${normalizedAppId}.`)) {
+    normalizedToken = normalizedToken.slice(normalizedAppId.length + 1)
+  }
+  if (!normalizedAppId || !normalizedToken) {
+    throw new Error('QQ Bot requires an App ID and AppToken')
+  }
+  return { appId: normalizedAppId, token: normalizedToken }
+}
+
 export class QQBotAdapter implements PlatformAdapter {
   readonly platform = 'qqbot' as const
   readonly capabilities: AdapterCapabilities = {
@@ -35,9 +53,9 @@ export class QQBotAdapter implements PlatformAdapter {
   private readonly directChannels = new Set<string>()
 
   async initialize(config: QQBotConfig): Promise<void> {
-    if (!config.appId || !config.token) throw new Error('QQ Bot requires appId and token')
-    this.appId = config.appId
-    this.token = config.token.replace(/^Bot\s+/i, '')
+    const credentials = normalizeQQBotCredentials(config.appId ?? '', config.token ?? '')
+    this.appId = credentials.appId
+    this.token = credentials.token
     this.intents = config.intents ?? DEFAULT_INTENTS
     this.log = config.logger ?? NOOP_LOGGER
     const gateway = await this.requestGateway()

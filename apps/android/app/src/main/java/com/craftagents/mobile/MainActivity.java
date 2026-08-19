@@ -23,12 +23,16 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.IOException;
+
 public final class MainActivity extends Activity {
     private static final String PREFS = "craft_agent_mobile";
     private static final String SERVER_URL_KEY = "server_url";
+    private static final String SERVER_TOKEN_KEY = "server_token";
     private SharedPreferences preferences;
     private WebView webView;
     private TextView serverLabel;
+    private LocalWebServer localWebServer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -127,7 +131,23 @@ public final class MainActivity extends Activity {
             return;
         }
         serverLabel.setText(url);
-        webView.loadUrl(url);
+        try {
+            String token = Uri.encode(getSavedServerToken());
+            String pageUrl = "http://127.0.0.1:" + getLocalWebPort() + "/index.html?ws=" + Uri.encode(url) + "&token=" + token;
+            webView.loadUrl(pageUrl);
+        } catch (IOException error) {
+            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private int localWebPort = -1;
+
+    private int getLocalWebPort() throws IOException {
+        if (localWebServer == null) {
+            localWebServer = new LocalWebServer(getAssets());
+            localWebPort = localWebServer.start();
+        }
+        return localWebPort;
     }
 
     private void showServerDialog() {
@@ -138,10 +158,19 @@ public final class MainActivity extends Activity {
         input.setText(getSavedServerUrl());
         input.setSelectAllOnFocus(true);
 
+        final EditText tokenInput = new EditText(this);
+        tokenInput.setSingleLine(true);
+        tokenInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        tokenInput.setHint(R.string.server_token_hint);
+        tokenInput.setText(getSavedServerToken());
+
         int padding = dp(24);
         LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(padding, dp(8), padding, 0);
         container.addView(input, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        container.addView(tokenInput, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -157,6 +186,7 @@ public final class MainActivity extends Activity {
                 return;
             }
             preferences.edit().putString(SERVER_URL_KEY, url).apply();
+            preferences.edit().putString(SERVER_TOKEN_KEY, tokenInput.getText().toString().trim()).apply();
             dialog.dismiss();
             loadServerUrl(url);
         }));
@@ -167,14 +197,18 @@ public final class MainActivity extends Activity {
         if (rawUrl == null) return null;
         String value = rawUrl.trim();
         if (value.isEmpty()) return null;
-        if (!value.startsWith("http://") && !value.startsWith("https://")) {
-            value = "https://" + value;
+        if (!value.startsWith("ws://") && !value.startsWith("wss://")) {
+            value = "wss://" + value;
         }
         Uri uri = Uri.parse(value);
-        if (uri.getHost() == null || (!"http".equals(uri.getScheme()) && !"https".equals(uri.getScheme()))) {
+        if (uri.getHost() == null || (!"ws".equals(uri.getScheme()) && !"wss".equals(uri.getScheme()))) {
             return null;
         }
         return value;
+    }
+
+    private String getSavedServerToken() {
+        return preferences.getString(SERVER_TOKEN_KEY, "");
     }
 
     @Override
@@ -192,6 +226,7 @@ public final class MainActivity extends Activity {
             webView.stopLoading();
             webView.destroy();
         }
+        if (localWebServer != null) localWebServer.stop();
         super.onDestroy();
     }
 
