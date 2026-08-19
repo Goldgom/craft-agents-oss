@@ -20,6 +20,15 @@ const NOOP_LOGGER: MessagingLogger = { info: () => {}, warn: () => {}, error: ()
 export interface QQBotConfig extends PlatformConfig { appId: string; token: string; intents?: number }
 interface QQGatewayInfo { url: string; shards: number }
 
+function networkError(stage: string, error: unknown): Error {
+  const err = error instanceof Error ? error : new Error(String(error))
+  const cause = (err as Error & { cause?: unknown }).cause
+  const causeText = cause && typeof cause === 'object' && 'code' in cause
+    ? `, ${(cause as { code?: unknown }).code}`
+    : ''
+  return new Error(`QQ Bot ${stage} network request failed: ${err.message}${causeText}`)
+}
+
 /**
  * Normalize credentials from the UI. `token` is retained as the persisted
  * field name for compatibility, but its value is the current QQ AppSecret.
@@ -44,6 +53,7 @@ export class QQBotAdapter implements PlatformAdapter {
   private appSecret = ''
   private accessToken = ''
   private accessTokenExpiresAt = 0
+  private gatewayShards = 1
   private intents = DEFAULT_INTENTS
   private connected = false
   private sequence: number | null = null
@@ -61,9 +71,10 @@ export class QQBotAdapter implements PlatformAdapter {
     this.intents = config.intents ?? DEFAULT_INTENTS
     this.log = config.logger ?? NOOP_LOGGER
     this.log.info('QQ Bot auth mode: AppID + AppSecret -> short-lived access token')
-    const gateway = await this.requestGateway()
-    this.log.info(`QQ Bot gateway received (shards: ${gateway.shards}, intents: ${this.intents})`)
-    this.ws = new WebSocket(gateway.url)
+    const gatewayInfo = await this.requestGateway()
+    this.gatewayShards = gatewayInfo.shards
+    this.log.info(`QQ Bot gateway received (shards: ${gatewayInfo.shards}, intents: ${this.intents})`)
+    this.ws = new WebSocket(gatewayInfo.url)
     await new Promise<void>((resolve, reject) => {
       const ws = this.ws!
       let settled = false
@@ -137,11 +148,16 @@ export class QQBotAdapter implements PlatformAdapter {
 
   private async api(path: string, init?: Record<string, unknown>): Promise<unknown> {
     const accessToken = await this.getAccessToken()
-    const response = await fetch(API_BASE + path, {
-      method: init ? 'POST' : 'GET',
-      headers: { Authorization: `QQBot ${accessToken}`, 'Content-Type': 'application/json' },
-      body: init ? JSON.stringify(init) : undefined,
-    })
+    let response: Response
+    try {
+      response = await fetch(API_BASE + path, {
+        method: init ? 'POST' : 'GET',
+        headers: { Authorization: `QQBot ${accessToken}`, 'Content-Type': 'application/json' },
+        body: init ? JSON.stringify(init) : undefined,
+      })
+    } catch (error) {
+      throw networkError(`REST ${path}`, error)
+    }
     if (!response.ok) throw new Error(`QQ Bot REST request failed (${response.status}): ${await response.text()}`)
     return response.json()
   }
@@ -149,11 +165,16 @@ export class QQBotAdapter implements PlatformAdapter {
   /** Exchange AppID + AppSecret for the short-lived access token required by the current API. */
   private async getAccessToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.accessTokenExpiresAt - 60_000) return this.accessToken
-    const response = await fetch(`${API_BASE}/app/getAppAccessToken`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appId: this.appId, clientSecret: this.appSecret }),
-    })
+    let response: Response
+    try {
+      response = await fetch(`${API_BASE}/app/getAppAccessToken`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: this.appId, clientSecret: this.appSecret }),
+      })
+    } catch (error) {
+      throw networkError('access token', error)
+    }
     const body = await response.json().catch(() => ({})) as { access_token?: string; expires_in?: number; message?: string; code?: number; err_code?: number }
     if (!response.ok || !body.access_token) {
       const detail = body.message ? `: ${body.message}` : ''
@@ -174,7 +195,7 @@ export class QQBotAdapter implements PlatformAdapter {
       this.stopHeartbeat()
       this.heartbeat = setInterval(() => this.send({ op: 1, d: this.sequence }), interval)
       void this.getAccessToken().then((accessToken) => {
-        this.send({ op: 2, d: { token: `QQBot ${accessToken}`, intents: this.intents, shard: [0, gateway.shards], properties: { $os: process.platform, $browser: 'craft-agent', $device: 'craft-agent' } } })
+        this.send({ op: 2, d: { token: `QQBot ${accessToken}`, intents: this.intents, shard: [0, this.gatewayShards], properties: { $os: process.platform, $browser: 'craft-agent', $device: 'craft-agent' } } })
       }).catch((error) => {
         this.log.error(`QQ Bot authentication failed: ${error instanceof Error ? error.message : String(error)}`)
         this.readyWaiter?.reject(error instanceof Error ? error : new Error(String(error)))
