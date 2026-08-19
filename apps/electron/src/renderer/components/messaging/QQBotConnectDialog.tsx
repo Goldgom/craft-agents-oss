@@ -26,8 +26,11 @@ export function QQBotConnectDialog({ open, onOpenChange }: { open: boolean; onOp
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
     <DialogHeader><DialogTitle>{t('settings.messaging.qqbot.connectTitle', { defaultValue: 'Connect QQ Bot' })}</DialogTitle></DialogHeader>
     <div className="space-y-3 py-2">
-      <Input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="App ID" autoComplete="off" />
-      <Input value={token} onChange={(e) => setToken(e.target.value)} placeholder="AppToken or AppID.AppToken" type="password" autoComplete="off" />
+      <Input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="App ID (机器人 ID)" autoComplete="off" />
+      <Input value={token} onChange={(e) => setToken(e.target.value)} placeholder="AppSecret" type="password" autoComplete="off" />
+      <p className="text-xs text-muted-foreground">
+        使用 QQ 开放平台机器人页面显示的 AppSecret。服务端会自动换取短期 Access Token；不要填写已废弃的 AppToken。
+      </p>
     </div>
     <DialogFooter><Button onClick={() => void submit()} disabled={busy || !appId.trim() || !token.trim()}>{busy ? 'Connecting...' : 'Connect'}</Button></DialogFooter>
   </DialogContent></Dialog>
