@@ -11,10 +11,14 @@ import type {
 } from '../../types'
 
 const API_BASE = 'https://api.bot.qq.com'
-const DEFAULT_INTENTS = (1 << 30) | (1 << 12) | 1
+// GUILDS + PUBLIC_GUILD_MESSAGES are the baseline intents available to every
+// QQ Bot. Direct-message and other privileged intents require separately
+// granted capabilities and must not make a basic connection fail.
+const DEFAULT_INTENTS = (1 << 30) | 1
 const NOOP_LOGGER: MessagingLogger = { info: () => {}, warn: () => {}, error: () => {}, child: () => NOOP_LOGGER }
 
 export interface QQBotConfig extends PlatformConfig { appId: string; token: string; intents?: number }
+interface QQGatewayInfo { url: string; shards: number }
 
 /**
  * Normalize credentials from the UI. `token` is retained as the persisted
@@ -44,6 +48,7 @@ export class QQBotAdapter implements PlatformAdapter {
   private connected = false
   private sequence: number | null = null
   private heartbeat: ReturnType<typeof setInterval> | null = null
+  private readyWaiter: { resolve: () => void; reject: (error: Error) => void } | null = null
   private messageHandler: ((msg: IncomingMessage) => Promise<void>) | null = null
   private buttonHandler: ((press: ButtonPress) => Promise<void>) | null = null
   private log: MessagingLogger = NOOP_LOGGER
@@ -55,22 +60,51 @@ export class QQBotAdapter implements PlatformAdapter {
     this.appSecret = credentials.token
     this.intents = config.intents ?? DEFAULT_INTENTS
     this.log = config.logger ?? NOOP_LOGGER
+    this.log.info('QQ Bot auth mode: AppID + AppSecret -> short-lived access token')
     const gateway = await this.requestGateway()
-    this.ws = new WebSocket(gateway)
+    this.log.info(`QQ Bot gateway received (shards: ${gateway.shards}, intents: ${this.intents})`)
+    this.ws = new WebSocket(gateway.url)
     await new Promise<void>((resolve, reject) => {
       const ws = this.ws!
-      const onError = (err: Error) => { ws.off('open', onOpen); reject(err) }
-      const onOpen = () => { ws.off('error', onError); this.connected = true; resolve() }
+      let settled = false
+      let timer: ReturnType<typeof setTimeout>
+      const fail = (error: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.readyWaiter = null
+        reject(error)
+      }
+      const onError = (err: Error) => fail(new Error(`QQ Bot WebSocket connection failed: ${err.message}`))
+      const onOpen = () => { /* Keep the error listener installed for post-open failures. */ }
+      timer = setTimeout(() => fail(new Error('QQ Bot WebSocket authentication timed out')), 15_000)
+      this.readyWaiter = {
+        resolve: () => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          this.readyWaiter = null
+          this.connected = true
+          resolve()
+        },
+        reject: fail,
+      }
       ws.once('error', onError)
       ws.once('open', onOpen)
       ws.on('message', (raw) => void this.handleGatewayMessage(String(raw)))
-      ws.on('close', () => { this.connected = false; this.stopHeartbeat() })
+      ws.on('close', (code, reason) => {
+        this.connected = false
+        this.stopHeartbeat()
+        const detail = reason?.toString() ? `: ${reason.toString()}` : ''
+        this.readyWaiter?.reject(new Error(`QQ Bot WebSocket identify failed (close ${code})${detail}`))
+      })
     })
   }
 
   async destroy(): Promise<void> {
     this.stopHeartbeat(); this.connected = false
     this.ws?.close(); this.ws = null
+    this.readyWaiter = null
     this.accessToken = ''
     this.accessTokenExpiresAt = 0
   }
@@ -93,10 +127,12 @@ export class QQBotAdapter implements PlatformAdapter {
     throw new Error('QQ Bot file upload is not implemented')
   }
 
-  private async requestGateway(): Promise<string> {
-    const body = await this.api('/gateway') as { url?: string }
-    if (!body.url) throw new Error('QQ Bot gateway URL missing')
-    return body.url
+  private async requestGateway(): Promise<QQGatewayInfo> {
+    const body = await this.api('/gateway') as { url?: string; shards?: number }
+    if (!body.url) throw new Error('QQ Bot gateway request failed: URL missing')
+    const shards = Number(body.shards ?? 1)
+    if (!Number.isInteger(shards) || shards < 1) throw new Error('QQ Bot gateway request failed: invalid shard count')
+    return { url: body.url, shards }
   }
 
   private async api(path: string, init?: Record<string, unknown>): Promise<unknown> {
@@ -106,7 +142,7 @@ export class QQBotAdapter implements PlatformAdapter {
       headers: { Authorization: `QQBot ${accessToken}`, 'Content-Type': 'application/json' },
       body: init ? JSON.stringify(init) : undefined,
     })
-    if (!response.ok) throw new Error(`QQ Bot API ${response.status}: ${await response.text()}`)
+    if (!response.ok) throw new Error(`QQ Bot REST request failed (${response.status}): ${await response.text()}`)
     return response.json()
   }
 
@@ -121,7 +157,8 @@ export class QQBotAdapter implements PlatformAdapter {
     const body = await response.json().catch(() => ({})) as { access_token?: string; expires_in?: number; message?: string; code?: number; err_code?: number }
     if (!response.ok || !body.access_token) {
       const detail = body.message ? `: ${body.message}` : ''
-      throw new Error(`QQ Bot access token request failed (${response.status})${detail}`)
+      const code = body.err_code ?? body.code
+      throw new Error(`QQ Bot access token exchange failed (${response.status}${code ? `, code ${code}` : ''})${detail}`)
     }
     this.accessToken = body.access_token
     this.accessTokenExpiresAt = Date.now() + Math.max(60, Number(body.expires_in ?? 7200)) * 1000
@@ -137,15 +174,24 @@ export class QQBotAdapter implements PlatformAdapter {
       this.stopHeartbeat()
       this.heartbeat = setInterval(() => this.send({ op: 1, d: this.sequence }), interval)
       void this.getAccessToken().then((accessToken) => {
-        this.send({ op: 2, d: { token: `QQBot ${accessToken}`, intents: this.intents, shard: [0, 0], properties: { $os: process.platform, $browser: 'craft-agent', $device: 'craft-agent' } } })
+        this.send({ op: 2, d: { token: `QQBot ${accessToken}`, intents: this.intents, shard: [0, gateway.shards], properties: { $os: process.platform, $browser: 'craft-agent', $device: 'craft-agent' } } })
       }).catch((error) => {
         this.log.error(`QQ Bot authentication failed: ${error instanceof Error ? error.message : String(error)}`)
+        this.readyWaiter?.reject(error instanceof Error ? error : new Error(String(error)))
         this.ws?.close()
       })
       return
     }
+    if (packet.op === 9) {
+      const detail = packet.d === undefined || packet.d === null || packet.d === ''
+        ? ''
+        : ` (${typeof packet.d === 'string' ? packet.d : JSON.stringify(packet.d)})`
+      this.readyWaiter?.reject(new Error(`QQ Bot WebSocket identify failed: invalid identify parameters${detail}`))
+      this.ws?.close()
+      return
+    }
     if (packet.op !== 0 || !packet.t) return
-    if (packet.t === 'READY') { this.connected = true; return }
+    if (packet.t === 'READY') { this.readyWaiter?.resolve(); return }
     if (packet.t !== 'AT_MESSAGE_CREATE' && packet.t !== 'DIRECT_MESSAGE_CREATE') return
     const d = packet.d ?? {}
     const isDirect = packet.t === 'DIRECT_MESSAGE_CREATE'
@@ -163,7 +209,14 @@ export class QQBotAdapter implements PlatformAdapter {
 }
 
 export function parseQQBotCredentials(value: unknown): { appId: string; token: string } | null {
-  if (!value || typeof value !== 'object') return null
-  const v = value as Record<string, unknown>
+  // Credentials are persisted through CredentialManager as a JSON string, but
+  // accepting an object keeps this helper compatible with already-decoded
+  // callers and older in-memory configurations.
+  let decoded: unknown = value
+  if (typeof decoded === 'string') {
+    try { decoded = JSON.parse(decoded) } catch { return null }
+  }
+  if (!decoded || typeof decoded !== 'object') return null
+  const v = decoded as Record<string, unknown>
   return typeof v.appId === 'string' && typeof v.token === 'string' ? { appId: v.appId, token: v.token } : null
 }
