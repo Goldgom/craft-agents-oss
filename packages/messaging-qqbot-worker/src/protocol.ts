@@ -1,6 +1,17 @@
 export type WorkerCommand =
   | { type: 'start'; appId: string; appSecret: string }
   | { type: 'send_text'; id: string; channelId: string; scope: 'c2c' | 'group'; text: string; replyMessageId?: string }
+  | {
+      type: 'send_media'
+      id: string
+      channelId: string
+      scope: 'c2c' | 'group'
+      kind: 'voice' | 'image' | 'video' | 'file'
+      dataBase64: string
+      filename: string
+      caption?: string
+      replyMessageId?: string
+    }
   | { type: 'shutdown' }
 
 export type WorkerEvent =

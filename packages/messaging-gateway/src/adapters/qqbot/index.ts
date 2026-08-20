@@ -63,9 +63,20 @@ export class QQBotAdapter implements PlatformAdapter {
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void { this.handler = handler }
   onButtonPress(handler: (press: ButtonPress) => Promise<void>): void { this.buttonHandler = handler }
   async sendText(channelId: string, text: string, _opts?: SendOptions): Promise<SentMessage> { const id = String(++this.seq); const scope = this.scopes.get(channelId) ?? 'c2c'; const replyMessageId = this.replyMessageIds.get(channelId); const result = await new Promise<{ ok: boolean; messageId?: string; error?: string }>((resolve) => { const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: 'QQ Bot send timed out' }) }, this.sendTimeoutMs); this.pending.set(id, { resolve, timer }); this.send({ id, type: 'send_text', channelId, scope, replyMessageId, text: text.slice(0, 4000) }) }); if (!result.ok) throw new Error(result.error ?? 'QQ Bot send failed'); return { platform: 'qqbot', channelId, messageId: result.messageId ?? '' } }
+  private async sendBinary(channelId: string, kind: 'voice' | 'image' | 'video' | 'file', file: Buffer, filename: string, caption?: string): Promise<SentMessage> {
+    const id = String(++this.seq); const scope = this.scopes.get(channelId) ?? 'c2c'; const replyMessageId = this.replyMessageIds.get(channelId)
+    const result = await new Promise<{ ok: boolean; messageId?: string; error?: string }>((resolve) => {
+      const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: 'QQ Bot media send timed out' }) }, this.sendTimeoutMs)
+      this.pending.set(id, { resolve, timer })
+      this.send({ id, type: 'send_media', channelId, scope, replyMessageId, kind, dataBase64: file.toString('base64'), filename, caption })
+    })
+    if (!result.ok) throw new Error(result.error ?? 'QQ Bot media send failed')
+    return { platform: 'qqbot', channelId, messageId: result.messageId ?? '' }
+  }
   async editMessage(): Promise<void> { throw new Error('QQ Bot message editing is not supported') }
   async sendButtons(channelId: string, text: string, buttons: InlineButton[]): Promise<SentMessage> { return this.sendText(channelId, text + (buttons.length ? `\n${buttons.map((b) => `[${b.label}]`).join(' ')}` : '')) }
   async sendTyping(): Promise<void> {}
-  async sendFile(): Promise<SentMessage> { throw new Error('QQ Bot file upload is not implemented') }
+  async sendFile(channelId: string, file: Buffer, filename: string, caption?: string, _opts?: SendOptions): Promise<SentMessage> { return this.sendBinary(channelId, 'file', file, filename, caption) }
+  async sendMedia(channelId: string, kind: 'voice' | 'image' | 'video', file: Buffer, filename: string, caption?: string, _opts?: SendOptions): Promise<SentMessage> { return this.sendBinary(channelId, kind, file, filename, caption) }
 }
 export function parseQQBotCredentials(value: unknown): { appId: string; token: string } | null { let parsed: unknown = value; if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed) } catch { return null } }; if (!parsed || typeof parsed !== 'object') return null; const v = parsed as Record<string, unknown>; return typeof v.appId === 'string' && typeof v.token === 'string' ? { appId: v.appId, token: v.token } : null }

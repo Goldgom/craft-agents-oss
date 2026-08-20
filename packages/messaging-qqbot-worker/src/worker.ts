@@ -24,6 +24,25 @@ async function handle(command: WorkerCommand): Promise<void> {
     }
     return
   }
+  if (command.type === 'send_media') {
+    if (!bot) { emit({ type: 'send_result', id: command.id, ok: false, error: 'QQ Bot worker is not connected' }); return }
+    try {
+      if (command.scope === 'group' && !command.replyMessageId) {
+        throw new Error('QQ group media messages must reply to an incoming message and require its message ID')
+      }
+      const target = { scope: command.scope, targetId: command.channelId, msgId: command.replyMessageId }
+      const source = { buffer: Buffer.from(command.dataBase64, 'base64') }
+      let result: Awaited<ReturnType<QQBot['sendFile']>>
+      if (command.kind === 'voice') result = await bot.sendVoice(target, source)
+      else if (command.kind === 'image') result = await bot.sendImage(target, source, { content: command.caption })
+      else if (command.kind === 'video') result = await bot.sendVideo(target, source, { content: command.caption })
+      else result = await bot.sendFile(target, source, { fileName: command.filename, content: command.caption })
+      emit({ type: 'send_result', id: command.id, ok: true, messageId: String(result.message?.id ?? '') })
+    } catch (error) {
+      emit({ type: 'send_result', id: command.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
   if (command.type !== 'start') return
   try {
     const logger = { info: (...args: unknown[]) => console.error('[qqbot-sdk]', ...args), warn: (...args: unknown[]) => console.error('[qqbot-sdk]', ...args), error: (...args: unknown[]) => console.error('[qqbot-sdk]', ...args), debug: (...args: unknown[]) => console.error('[qqbot-sdk]', ...args) }
