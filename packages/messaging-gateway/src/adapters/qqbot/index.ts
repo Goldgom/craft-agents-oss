@@ -18,7 +18,7 @@ export class QQBotAdapter implements PlatformAdapter {
   private proc: ChildProcess | null = null; private buffer = ''; private connected = false; private log = NOOP_LOGGER
   private handler: ((msg: IncomingMessage) => Promise<void>) | null = null; private buttonHandler: ((press: ButtonPress) => Promise<void>) | null = null
   private pending = new Map<string, Pending>(); private seq = 0; private sendTimeoutMs = 30000
-  private scopes = new Map<string, 'c2c' | 'group'>(); private readyCheck: ((event: WorkerEvent) => void) | null = null
+  private scopes = new Map<string, 'c2c' | 'group'>(); private replyMessageIds = new Map<string, string>(); private readyCheck: ((event: WorkerEvent) => void) | null = null
   async initialize(config: QQBotConfig): Promise<void> {
     const creds = normalizeQQBotCredentials(config.appId ?? '', config.token ?? '')
     if (!config.workerEntry) throw new Error('QQ Bot workerEntry path is required')
@@ -54,7 +54,7 @@ export class QQBotAdapter implements PlatformAdapter {
     if (event.type === 'error') { this.log.error(event.message); return }
     if (event.type === 'unavailable') { this.drain(event.message); return }
     if (event.type === 'send_result') { const pending = this.pending.get(event.id); if (pending) { clearTimeout(pending.timer); this.pending.delete(event.id); pending.resolve(event) }; return }
-    if (event.type === 'incoming') { this.scopes.set(event.channelId, event.scope); const msg: IncomingMessage = { platform: 'qqbot', channelId: event.channelId, messageId: event.messageId, senderId: event.senderId, text: event.text, timestamp: event.timestamp, raw: event.raw }; if (this.handler) void this.handler(msg) }
+    if (event.type === 'incoming') { this.scopes.set(event.channelId, event.scope); if (event.messageId) this.replyMessageIds.set(event.channelId, event.messageId); const msg: IncomingMessage = { platform: 'qqbot', channelId: event.channelId, messageId: event.messageId, senderId: event.senderId, text: event.text, timestamp: event.timestamp, raw: event.raw }; if (this.handler) void this.handler(msg) }
   }
   private send(command: WorkerCommand): void { this.proc?.stdin?.write(encodeMessage(command)) }
   private drain(error: string): void { for (const [id, p] of this.pending) { clearTimeout(p.timer); p.resolve({ ok: false, error }); this.pending.delete(id) } }
@@ -62,7 +62,7 @@ export class QQBotAdapter implements PlatformAdapter {
   isConnected(): boolean { return this.connected }
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void { this.handler = handler }
   onButtonPress(handler: (press: ButtonPress) => Promise<void>): void { this.buttonHandler = handler }
-  async sendText(channelId: string, text: string, _opts?: SendOptions): Promise<SentMessage> { const id = String(++this.seq); const scope = this.scopes.get(channelId) ?? 'c2c'; const result = await new Promise<{ ok: boolean; messageId?: string; error?: string }>((resolve) => { const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: 'QQ Bot send timed out' }) }, this.sendTimeoutMs); this.pending.set(id, { resolve, timer }); this.send({ id, type: 'send_text', channelId, scope, text: text.slice(0, 4000) }) }); if (!result.ok) throw new Error(result.error ?? 'QQ Bot send failed'); return { platform: 'qqbot', channelId, messageId: result.messageId ?? '' } }
+  async sendText(channelId: string, text: string, _opts?: SendOptions): Promise<SentMessage> { const id = String(++this.seq); const scope = this.scopes.get(channelId) ?? 'c2c'; const replyMessageId = this.replyMessageIds.get(channelId); const result = await new Promise<{ ok: boolean; messageId?: string; error?: string }>((resolve) => { const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: 'QQ Bot send timed out' }) }, this.sendTimeoutMs); this.pending.set(id, { resolve, timer }); this.send({ id, type: 'send_text', channelId, scope, replyMessageId, text: text.slice(0, 4000) }) }); if (!result.ok) throw new Error(result.error ?? 'QQ Bot send failed'); return { platform: 'qqbot', channelId, messageId: result.messageId ?? '' } }
   async editMessage(): Promise<void> { throw new Error('QQ Bot message editing is not supported') }
   async sendButtons(channelId: string, text: string, buttons: InlineButton[]): Promise<SentMessage> { return this.sendText(channelId, text + (buttons.length ? `\n${buttons.map((b) => `[${b.label}]`).join(' ')}` : '')) }
   async sendTyping(): Promise<void> {}

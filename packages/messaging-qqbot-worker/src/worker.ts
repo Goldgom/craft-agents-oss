@@ -14,7 +14,10 @@ async function handle(command: WorkerCommand): Promise<void> {
   if (command.type === 'send_text') {
     if (!bot) { emit({ type: 'send_result', id: command.id, ok: false, error: 'QQ Bot worker is not connected' }); return }
     try {
-      const result = await bot.sendText({ scope: command.scope, targetId: command.channelId }, command.text)
+      if (command.scope === 'group' && !command.replyMessageId) {
+        throw new Error('QQ group messages must reply to an incoming message and require its message ID')
+      }
+      const result = await bot.sendText({ scope: command.scope, targetId: command.channelId, msgId: command.replyMessageId }, command.text)
       emit({ type: 'send_result', id: command.id, ok: true, messageId: String((result as { id?: string }).id ?? '') })
     } catch (error) {
       emit({ type: 'send_result', id: command.id, ok: false, error: error instanceof Error ? error.message : String(error) })
