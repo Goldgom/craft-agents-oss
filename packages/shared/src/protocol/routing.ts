@@ -240,6 +240,10 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
 // ---------------------------------------------------------------------------
 
 export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
+  // workspace catalogs — tools and feature/source guide documents
+  RPC_CHANNELS.catalog.LIST_TOOLS,
+  RPC_CHANNELS.catalog.LIST_GUIDES,
+
   // server — server-level operations (no workspace context needed)
   RPC_CHANNELS.server.GET_WORKSPACES,
   RPC_CHANNELS.server.CREATE_WORKSPACE,

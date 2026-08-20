@@ -8,6 +8,7 @@
 
 import {
   Building2,
+  BookOpen,
   Cloud,
   Keyboard,
   MessageSquare,
@@ -19,6 +20,7 @@ import {
   Tag,
   ToggleRight,
   UserCircle,
+  Wrench,
 } from 'lucide-react'
 import type { SettingsSubpage } from '../../../shared/types'
 
@@ -31,6 +33,8 @@ export const InputIcon = ({ className }: IconProps) => <Keyboard className={clas
 export const WorkspaceIcon = ({ className }: IconProps) => <Building2 className={className} />
 export const PromptsIcon = ({ className }: IconProps) => <ScrollText className={className} />
 export const PermissionsIcon = ({ className }: IconProps) => <ShieldCheck className={className} />
+export const ToolsIcon = ({ className }: IconProps) => <Wrench className={className} />
+export const GuidesIcon = ({ className }: IconProps) => <BookOpen className={className} />
 export const LabelsIcon = ({ className }: IconProps) => <Tag className={className} />
 export const MessagingSettingsIcon = ({ className }: IconProps) => <MessageSquare className={className} />
 export const RemoteServersIcon = ({ className }: IconProps) => <Cloud className={className} />
@@ -50,6 +54,8 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   workspace: WorkspaceIcon,
   prompts: PromptsIcon,
   permissions: PermissionsIcon,
+  tools: ToolsIcon,
+  guides: GuidesIcon,
   labels: LabelsIcon,
   messaging: MessagingSettingsIcon,
   remoteServers: RemoteServersIcon,

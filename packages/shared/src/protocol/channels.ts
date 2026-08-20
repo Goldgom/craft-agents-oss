@@ -258,6 +258,10 @@ export const RPC_CHANNELS = {
     IMPORT_ALL_DATA_FROM_PATH: 'settings:importAllDataFromPath',
     IMPORT_ALL_DATA_FROM_PAYLOAD: 'settings:importAllDataFromPayload',
   },
+  catalog: {
+    LIST_TOOLS: 'catalog:listTools',
+    LIST_GUIDES: 'catalog:listGuides',
+  },
   pi: {
     GET_API_KEY_PROVIDERS: 'pi:getApiKeyProviders',
     GET_PROVIDER_BASE_URL: 'pi:getProviderBaseUrl',

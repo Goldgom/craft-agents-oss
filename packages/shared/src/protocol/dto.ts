@@ -663,6 +663,45 @@ export interface McpToolsResult {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace tools and feature guide catalogs
+// ---------------------------------------------------------------------------
+
+export type WorkspaceToolOrigin = 'builtin' | 'added'
+export type WorkspaceToolCategory = 'core' | 'session' | 'mcp' | 'api'
+export type WorkspaceToolStatus = 'available' | 'disabled' | 'unavailable'
+
+export interface WorkspaceToolCatalogItem {
+  id: string
+  name: string
+  description: string
+  origin: WorkspaceToolOrigin
+  category: WorkspaceToolCategory
+  status: WorkspaceToolStatus
+  sourceSlug?: string
+  sourceName?: string
+}
+
+export interface WorkspaceToolCatalogResult {
+  tools: WorkspaceToolCatalogItem[]
+  warnings: Array<{ sourceSlug: string; sourceName: string; message: string }>
+}
+
+export type FeatureGuideScope = 'system' | 'source'
+
+export interface FeatureGuideCatalogItem {
+  id: string
+  title: string
+  filename: string
+  path: string
+  summary: string
+  tags: string[]
+  scope: FeatureGuideScope
+  content: string
+  sourceSlug?: string
+  sourceName?: string
+}
+
+// ---------------------------------------------------------------------------
 // Search types
 // ---------------------------------------------------------------------------
 

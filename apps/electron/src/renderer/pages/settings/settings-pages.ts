@@ -21,6 +21,8 @@ import InputSettingsPage from './InputSettingsPage'
 import WorkspaceSettingsPage from './WorkspaceSettingsPage'
 import WorkspacePromptsPage from './WorkspacePromptsPage'
 import PermissionsSettingsPage from './PermissionsSettingsPage'
+import ToolsSettingsPage from './ToolsSettingsPage'
+import GuidesSettingsPage from './GuidesSettingsPage'
 import LabelsSettingsPage from './LabelsSettingsPage'
 import MessagingSettingsPage from './MessagingSettingsPage'
 import RemoteServersPage from './RemoteServersPage'
@@ -40,6 +42,8 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   workspace: WorkspaceSettingsPage,
   prompts: WorkspacePromptsPage,
   permissions: PermissionsSettingsPage,
+  tools: ToolsSettingsPage,
+  guides: GuidesSettingsPage,
   labels: LabelsSettingsPage,
   messaging: MessagingSettingsPage,
   remoteServers: RemoteServersPage,

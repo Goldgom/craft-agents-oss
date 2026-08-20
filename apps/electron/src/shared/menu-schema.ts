@@ -386,6 +386,8 @@ const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
   workspace: 'Building2',
   prompts: 'ScrollText',
   permissions: 'ShieldCheck',
+  tools: 'Wrench',
+  guides: 'BookOpen',
   labels: 'Tag',
   messaging: 'MessageSquare',
   remoteServers: 'Cloud',

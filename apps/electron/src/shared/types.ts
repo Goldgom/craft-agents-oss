@@ -548,6 +548,10 @@ export interface ElectronAPI {
   deleteWorkspacePrompt(workspaceId: string, promptId: string): Promise<{ success: boolean }>
   generateWorkspacePrompt(workspaceId: string, description: string): Promise<{ title: string; content: string }>
 
+  // Workspace tool and feature guide catalogs
+  listWorkspaceTools(workspaceId: string): Promise<import('@craft-agent/shared/protocol').WorkspaceToolCatalogResult>
+  listFeatureGuides(workspaceId: string): Promise<import('@craft-agent/shared/protocol').FeatureGuideCatalogItem[]>
+
   // Data migration (跨系统迁移数据)
   exportAllData(): Promise<ExportAllDataResponse>
   importAllData(): Promise<ImportAllDataResponse>

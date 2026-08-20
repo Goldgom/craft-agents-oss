@@ -5,5 +5,7 @@
  * The Codex app-server handles tool execution internally.
  */
 
-// Placeholder for future tool implementations
-export {};
+export {
+  getBuiltinToolCatalog,
+  type BuiltinToolCatalogEntry,
+} from './catalog.ts';

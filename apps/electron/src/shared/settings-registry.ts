@@ -42,6 +42,8 @@ export const SETTINGS_PAGES = [
   { id: 'workspace' as const, labelKey: 'settings.workspace.title', descriptionKey: 'settings.workspace.description' },
   { id: 'prompts' as const, labelKey: 'settings.prompts.title', descriptionKey: 'settings.prompts.description' },
   { id: 'permissions' as const, labelKey: 'settings.permissions.title', descriptionKey: 'settings.permissions.description' },
+  { id: 'tools' as const, labelKey: 'settings.tools.title', descriptionKey: 'settings.tools.description' },
+  { id: 'guides' as const, labelKey: 'settings.guides.title', descriptionKey: 'settings.guides.description' },
   { id: 'labels' as const, labelKey: 'settings.labels.title', descriptionKey: 'settings.labels.description' },
   { id: 'messaging' as const, labelKey: 'settings.messaging.title', descriptionKey: 'settings.messaging.description' },
   { id: 'remoteServers' as const, labelKey: 'settings.remoteServers.title', descriptionKey: 'settings.remoteServers.description' },

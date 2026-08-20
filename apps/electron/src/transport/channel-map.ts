@@ -196,6 +196,10 @@ export const CHANNEL_MAP = {
   deleteWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_DELETE),
   generateWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_GENERATE),
 
+  // Workspace tool and feature guide catalogs
+  listWorkspaceTools: invoke(RPC_CHANNELS.catalog.LIST_TOOLS),
+  listFeatureGuides: invoke(RPC_CHANNELS.catalog.LIST_GUIDES),
+
   // Data migration (跨系统迁移数据)
   exportAllData: invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA),
   importAllData: invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA),
