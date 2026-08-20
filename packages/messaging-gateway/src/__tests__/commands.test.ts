@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import type { Session } from '@craft-agent/shared/protocol'
 import type { ISessionManager } from '@craft-agent/server-core/handlers'
 import { BindingStore } from '../binding-store'
-import { Commands } from '../commands'
-import type { IncomingMessage, PlatformAdapter, SentMessage } from '../types'
+import { Commands, resolveCommand } from '../commands'
+import type { IncomingMessage, MessagingConfig, PlatformAdapter, SentMessage } from '../types'
 
 function makeSession(id: string, name: string, lastMessageAt: number): Session {
   return {
@@ -93,6 +93,60 @@ function makeStore(): BindingStore {
 }
 
 describe('Commands', () => {
+  it('resolves configured aliases and preserves arguments', () => {
+    expect(resolveCommand('/start Project Alpha', {
+      commands: { new: { aliases: ['start', '/create'] } },
+    })).toEqual({ name: 'new', args: 'Project Alpha', invokedAs: '/start' })
+    expect(resolveCommand('/create@MyBot Project Beta', {
+      commands: { new: { aliases: ['start', '/create'] } },
+    })).toEqual({ name: 'new', args: 'Project Beta', invokedAs: '/create' })
+  })
+
+  it('does not resolve disabled commands or invalid aliases', () => {
+    expect(resolveCommand('/new', { commands: { new: { enabled: false, aliases: ['start'] } } })).toBeNull()
+    expect(resolveCommand('/start', { commands: { new: { enabled: false, aliases: ['start'] } } })).toBeNull()
+    expect(resolveCommand('/bad-alias', { commands: { new: { aliases: ['bad-alias'] } } })).toBeNull()
+  })
+
+  it('uses custom help text and expands the enabled command list', async () => {
+    const config: MessagingConfig = {
+      enabled: true,
+      platforms: {},
+      commands: {
+        helpMessage: 'Custom help\n{commands}',
+        commands: { stop: { enabled: false }, new: { aliases: ['start'] } },
+      },
+    }
+    const commands = new Commands(makeSessionManager([]), makeStore(), 'ws1', undefined, undefined, {
+      getWorkspaceConfig: () => config,
+      seedOwnerOnFirstPair: async () => [],
+    })
+    const adapter = makeAdapter('whatsapp', false)
+
+    await commands.handleCommand(adapter, makeMessage('/help'))
+
+    expect(adapter.sent[0]).toContain('Custom help')
+    expect(adapter.sent[0]).toContain('/new [name] (aliases: /start)')
+    expect(adapter.sent[0]).not.toContain('/stop')
+  })
+
+  it('can silently ignore unknown commands in an unbound chat', async () => {
+    const config: MessagingConfig = {
+      enabled: true,
+      platforms: {},
+      commands: { unknownCommandBehavior: 'ignore' },
+    }
+    const commands = new Commands(makeSessionManager([]), makeStore(), 'ws1', undefined, undefined, {
+      getWorkspaceConfig: () => config,
+      seedOwnerOnFirstPair: async () => [],
+    })
+    const adapter = makeAdapter('whatsapp', false)
+
+    await commands.handle(adapter, makeMessage('/does_not_exist'))
+
+    expect(adapter.sent).toHaveLength(0)
+  })
+
   it('binds by numbered recent-session index on non-inline platforms', async () => {
     const sessions = [
       makeSession('sess-1', 'Old', 100),

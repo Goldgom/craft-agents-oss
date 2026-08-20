@@ -22,6 +22,8 @@ import type { BindingStore } from './binding-store'
 import type { PendingSendersStore } from './pending-senders'
 import type {
   IncomingMessage,
+  MessagingCommandName,
+  MessagingCommandsConfig,
   MessagingConfig,
   MessagingLogger,
   PlatformAdapter,
@@ -99,7 +101,8 @@ export interface AccessControlDeps {
  * is the bootstrap exception (first sender to redeem becomes owner) and
  * `/help` is informational.
  */
-const ALWAYS_ALLOWED_COMMANDS = new Set(['/pair', '/help'])
+const ALWAYS_ALLOWED_COMMANDS = new Set<MessagingCommandName>(['pair', 'help'])
+const COMMAND_NAMES: MessagingCommandName[] = ['new', 'bind', 'pair', 'unbind', 'help', 'status', 'stop']
 
 /**
  * Telegram (and other Bot-API platforms) lets users address commands to
@@ -115,6 +118,29 @@ export function parseCommand(text: string): { cmd: string; args: string } {
   const m = trimmed.match(/^\/([a-z0-9_]+)(?:@[a-z0-9_]+)?(?:\s+([\s\S]*))?$/i)
   if (!m) return { cmd: '', args: '' }
   return { cmd: '/' + m[1]!.toLowerCase(), args: (m[2] ?? '').trim() }
+}
+
+export function resolveCommand(
+  text: string,
+  config?: MessagingCommandsConfig,
+): { name: MessagingCommandName; args: string; invokedAs: string } | null {
+  const parsed = parseCommand(text)
+  if (!parsed.cmd) return null
+  const token = parsed.cmd.slice(1)
+  for (const name of COMMAND_NAMES) {
+    const definition = config?.commands?.[name]
+    if (definition?.enabled === false) continue
+    if (token === name || normalizeAliases(definition?.aliases).includes(token)) {
+      return { name, args: parsed.args, invokedAs: parsed.cmd }
+    }
+  }
+  return null
+}
+
+function normalizeAliases(aliases?: string[]): string[] {
+  if (!aliases) return []
+  return [...new Set(aliases.map((alias) => alias.trim().replace(/^\/+/, '').toLowerCase()))]
+    .filter((alias) => /^[a-z0-9_]+$/.test(alias) && !COMMAND_NAMES.includes(alias as MessagingCommandName))
 }
 
 export class Commands {
@@ -140,14 +166,15 @@ export class Commands {
   async handle(adapter: PlatformAdapter, msg: IncomingMessage): Promise<void> {
     const text = msg.text.trim()
     const replyOpts = msg.threadId !== undefined ? { threadId: msg.threadId } : {}
+    const commandConfig = this.access.getWorkspaceConfig().commands
 
     // Pre-binding gate: every inbound stimulus runs through the access
     // evaluator, including non-command free-form text. Without this,
     // a stranger DMing "hi" would receive the help message (revealing
     // commands) and bypass the pending-senders flow. Only `/pair`
     // (bootstrap) and `/help` (informational) skip the gate.
-    const cmd = parseCommand(text).cmd
-    const skipsGate = cmd && ALWAYS_ALLOWED_COMMANDS.has(cmd)
+    const resolved = resolveCommand(text, commandConfig)
+    const skipsGate = resolved && ALWAYS_ALLOWED_COMMANDS.has(resolved.name)
     if (!skipsGate) {
       const verdict = evaluatePreBindingAccess({
         msg,
@@ -162,28 +189,21 @@ export class Commands {
     // Exact-cmd dispatch (parsed; supports `/cmd@BotName`). Avoids the old
     // `text.startsWith('/new')` bug where `/newuser` would also dispatch
     // to handleNew.
-    if (cmd === '/new') {
+    if (resolved?.name === 'new') {
       await this.handleNew(adapter, msg)
-    } else if (cmd === '/bind') {
+    } else if (resolved?.name === 'bind') {
       await this.handleBind(adapter, msg)
-    } else if (cmd === '/pair') {
+    } else if (resolved?.name === 'pair') {
       await this.handlePair(adapter, msg)
-    } else if (cmd === '/unbind') {
+    } else if (resolved?.name === 'unbind') {
       await this.handleUnbind(adapter, msg)
-    } else if (cmd === '/help') {
+    } else if (resolved?.name === 'help') {
       await this.handleHelp(adapter, msg)
     } else {
       // Sender passed the access gate (owner or open workspace) and typed
       // free-form text into a chat with no binding. Show the help prompt.
-      await adapter.sendText(
-        msg.channelId,
-        'No session bound to this chat.\n\n' +
-        '/new [name] — start a new session\n' +
-        '/bind — connect to an existing session\n' +
-        '/pair <code> — redeem a pairing code from the app\n' +
-        '/help — show all commands',
-        replyOpts,
-      )
+      if (text.startsWith('/') && commandConfig?.unknownCommandBehavior === 'ignore') return
+      await adapter.sendText(msg.channelId, this.buildUnboundMessage(adapter, commandConfig), replyOpts)
     }
   }
 
@@ -194,8 +214,9 @@ export class Commands {
     // Strip the optional `@BotName` suffix Telegram uses to disambiguate
     // commands in shared chats. Without this, `/pair@MyBot 123456` would
     // never match the switch case below.
-    const { cmd } = parseCommand(text)
-    if (!cmd) return false
+    const commandConfig = this.access.getWorkspaceConfig().commands
+    const resolved = resolveCommand(text, commandConfig)
+    if (!resolved) return false
 
     this.log.info('handling chat command', {
       event: 'command_received',
@@ -203,13 +224,14 @@ export class Commands {
       platform: adapter.platform,
       channelId: msg.channelId,
       senderId: msg.senderId,
-      command: cmd,
+      command: resolved.name,
+      invokedAs: resolved.invokedAs,
     })
 
     // Pre-binding gate for commands that arrive directly (i.e. typed inside
     // an already-bound chat — `gateway.wireAdapter` always tries
     // `handleCommand` before `router.route`). `/pair` and `/help` always pass.
-    if (!ALWAYS_ALLOWED_COMMANDS.has(cmd)) {
+    if (!ALWAYS_ALLOWED_COMMANDS.has(resolved.name)) {
       const verdict = evaluatePreBindingAccess({
         msg,
         workspaceConfig: this.access.getWorkspaceConfig(),
@@ -220,26 +242,26 @@ export class Commands {
       }
     }
 
-    switch (cmd) {
-      case '/new':
+    switch (resolved.name) {
+      case 'new':
         await this.handleNew(adapter, msg)
         return true
-      case '/bind':
+      case 'bind':
         await this.handleBind(adapter, msg)
         return true
-      case '/pair':
+      case 'pair':
         await this.handlePair(adapter, msg)
         return true
-      case '/unbind':
+      case 'unbind':
         await this.handleUnbind(adapter, msg)
         return true
-      case '/help':
+      case 'help':
         await this.handleHelp(adapter, msg)
         return true
-      case '/status':
+      case 'status':
         await this.handleStatus(adapter, msg)
         return true
-      case '/stop':
+      case 'stop':
         await this.handleStop(adapter, msg)
         return true
       default:
@@ -640,24 +662,50 @@ export class Commands {
   }
 
   private async handleHelp(adapter: PlatformAdapter, msg: IncomingMessage): Promise<void> {
-    const bindLine = adapter.platform === 'whatsapp'
-      ? '/bind — list recent sessions (then use /bind <number>)\n'
-      : '/bind — pick from recent sessions\n'
     const replyOpts = msg.threadId !== undefined ? { threadId: msg.threadId } : {}
+    await adapter.sendText(msg.channelId, this.buildHelpMessage(adapter), replyOpts)
+  }
 
-    await adapter.sendText(
-      msg.channelId,
-      'Commands:\n' +
-      '/new [name] — create + bind new session\n' +
-      bindLine +
-      '/bind <id> — bind to specific session\n' +
-      '/pair <code> — redeem an app-generated pairing code\n' +
-      '/unbind — disconnect this chat\n' +
-      '/status — show current binding\n' +
-      '/stop — abort current agent run\n' +
-      '/help — show this message',
-      replyOpts,
-    )
+  private buildHelpMessage(adapter: PlatformAdapter): string {
+    const config = this.access.getWorkspaceConfig().commands
+    const commandList = this.buildCommandList(adapter, config)
+    const custom = config?.helpMessage?.trim()
+    return custom ? custom.replaceAll('{commands}', commandList) : `Commands:\n${commandList}`
+  }
+
+  private buildUnboundMessage(adapter: PlatformAdapter, config?: MessagingCommandsConfig): string {
+    const custom = config?.unboundMessage?.trim()
+    const commandList = this.buildCommandList(adapter, config)
+    if (custom) return custom.replaceAll('{commands}', commandList)
+    const shortList = (['new', 'bind', 'pair', 'help'] as MessagingCommandName[])
+      .filter((name) => config?.commands?.[name]?.enabled !== false)
+      .map((name) => this.commandLabel(name, config))
+      .join(', ')
+    return `No session bound to this chat.\n\nAvailable commands: ${shortList || '(none)'}`
+  }
+
+  private buildCommandList(adapter: PlatformAdapter, config?: MessagingCommandsConfig): string {
+    const descriptions: Record<MessagingCommandName, string> = {
+      new: 'create + bind new session (optionally add a name)',
+      bind: adapter.platform === 'whatsapp'
+        ? 'list recent sessions; add a number or session ID to bind'
+        : 'pick from recent sessions, or add a session ID',
+      pair: 'redeem an app-generated pairing code',
+      unbind: 'disconnect this chat',
+      help: 'show this message',
+      status: 'show current binding',
+      stop: 'abort current agent run',
+    }
+    return COMMAND_NAMES
+      .filter((name) => config?.commands?.[name]?.enabled !== false)
+      .map((name) => `${this.commandLabel(name, config)} — ${descriptions[name]}`)
+      .join('\n')
+  }
+
+  private commandLabel(name: MessagingCommandName, config?: MessagingCommandsConfig): string {
+    const args = name === 'new' ? ' [name]' : name === 'pair' ? ' <code>' : name === 'bind' ? ' [number|id]' : ''
+    const aliases = normalizeAliases(config?.commands?.[name]?.aliases).map((alias) => `/${alias}`)
+    return `/${name}${args}${aliases.length ? ` (aliases: ${aliases.join(', ')})` : ''}`
   }
 
   private getRecentSessions(): ReturnType<ISessionManager['getSessions']> {

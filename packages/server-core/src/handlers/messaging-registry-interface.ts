@@ -88,8 +88,18 @@ export type MessagingPlatformAccessMode = 'open' | 'owner-only'
 
 export type MessagingBindingAccessMode = 'inherit' | 'allow-list' | 'open'
 
+export type MessagingCommandName = 'new' | 'bind' | 'pair' | 'unbind' | 'help' | 'status' | 'stop'
+
+export interface MessagingCommandsConfigInfo {
+  commands?: Partial<Record<MessagingCommandName, { enabled?: boolean; aliases?: string[] }>>
+  helpMessage?: string
+  unboundMessage?: string
+  unknownCommandBehavior?: 'help' | 'ignore'
+}
+
 export interface MessagingConfigInfo {
   enabled: boolean
+  commands?: MessagingCommandsConfigInfo
   /**
    * Per-platform config. Telegram may carry optional `supergroup`,
    * `accessMode`, and `owners` fields; other platforms only use `enabled`.

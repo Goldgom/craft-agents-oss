@@ -274,6 +274,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
     const cfg = state.configStore.get()
     return {
       enabled: cfg.enabled,
+      commands: cfg.commands,
       platforms: cfg.platforms as MessagingConfigInfo['platforms'],
       runtime: {
         telegram: cloneRuntime(state.runtime.telegram),
@@ -292,6 +293,7 @@ export class MessagingGatewayRegistry implements IMessagingGatewayRegistry {
     const state = this.workspaces.get(workspaceId) ?? this.bootstrapWorkspace(workspaceId)
     state.configStore.update({
       enabled: partial.enabled,
+      commands: partial.commands,
       platforms: partial.platforms,
     } as never)
 

@@ -47,7 +47,14 @@ import {
   StyledDropdownMenuItem,
   StyledDropdownMenuSeparator,
 } from '@/components/ui/styled-dropdown'
-import { SettingsSection, SettingsCard } from '@/components/settings'
+import {
+  SettingsSection,
+  SettingsCard,
+  SettingsInputRow,
+  SettingsSelectRow,
+  SettingsTextarea,
+  SettingsToggle,
+} from '@/components/settings'
 import { MessagingPlatformIcon } from '@/components/messaging/MessagingPlatformIcon'
 import { TelegramConnectDialog } from '@/components/messaging/TelegramConnectDialog'
 import { LarkConnectDialog } from '@/components/messaging/LarkConnectDialog'
@@ -133,9 +140,149 @@ export default function MessagingSettingsPage() {
               <PlatformRow platform="qqbot" workspaceId={activeWorkspace.id} />
             </SettingsCard>
           </SettingsSection>
+          <CommandSettings workspaceId={activeWorkspace.id} />
         </div>
       </ScrollArea>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Command behaviour
+// ---------------------------------------------------------------------------
+
+const COMMAND_NAMES = ['new', 'bind', 'pair', 'unbind', 'help', 'status', 'stop'] as const
+type CommandName = (typeof COMMAND_NAMES)[number]
+type CommandDraft = Record<CommandName, { enabled: boolean; aliases: string }>
+
+function emptyCommandDraft(): CommandDraft {
+  return Object.fromEntries(COMMAND_NAMES.map((name) => [name, { enabled: true, aliases: '' }])) as CommandDraft
+}
+
+function CommandSettings({ workspaceId }: { workspaceId: string }) {
+  const { t } = useTranslation()
+  const [commands, setCommands] = React.useState<CommandDraft>(emptyCommandDraft)
+  const [helpMessage, setHelpMessage] = React.useState('')
+  const [unboundMessage, setUnboundMessage] = React.useState('')
+  const [unknownBehavior, setUnknownBehavior] = React.useState<'help' | 'ignore'>('help')
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+
+  React.useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    void window.electronAPI.getMessagingConfig().then((cfg) => {
+      if (cancelled) return
+      const next = emptyCommandDraft()
+      for (const name of COMMAND_NAMES) {
+        const definition = cfg?.commands?.commands?.[name]
+        next[name] = {
+          enabled: definition?.enabled !== false,
+          aliases: definition?.aliases?.map((alias) => `/${alias.replace(/^\/+/, '')}`).join(', ') ?? '',
+        }
+      }
+      setCommands(next)
+      setHelpMessage(cfg?.commands?.helpMessage ?? '')
+      setUnboundMessage(cfg?.commands?.unboundMessage ?? '')
+      setUnknownBehavior(cfg?.commands?.unknownCommandBehavior ?? 'help')
+    }).catch((error) => {
+      toast.error(error instanceof Error ? error.message : t('common.error'))
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [workspaceId, t])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const definitions = Object.fromEntries(COMMAND_NAMES.map((name) => [
+        name,
+        {
+          enabled: commands[name].enabled,
+          aliases: [...new Set(commands[name].aliases
+            .split(/[\s,，]+/)
+            .map((alias) => alias.trim().replace(/^\/+/, '').toLowerCase())
+            .filter((alias) => /^[a-z0-9_]+$/.test(alias) && !COMMAND_NAMES.includes(alias as CommandName)))],
+        },
+      ]))
+      await window.electronAPI.updateMessagingConfig({
+        commands: {
+          commands: definitions,
+          helpMessage: helpMessage.trim() || undefined,
+          unboundMessage: unboundMessage.trim() || undefined,
+          unknownCommandBehavior: unknownBehavior,
+        },
+      })
+      toast.success(t('settings.messaging.commands.saved'))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('common.error'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <SettingsSection
+      title={t('settings.messaging.commands.title')}
+      description={t('settings.messaging.commands.description')}
+      action={<Button size="sm" onClick={save} disabled={loading || saving}>{saving ? t('common.saving') : t('common.save')}</Button>}
+    >
+      <SettingsCard>
+        {COMMAND_NAMES.flatMap((name) => [
+          <SettingsToggle
+            key={`${name}-enabled`}
+            label={`/${name}`}
+            description={t(`settings.messaging.commands.${name}Description`)}
+            checked={commands[name].enabled}
+            disabled={loading}
+            onCheckedChange={(enabled) => setCommands((current) => ({ ...current, [name]: { ...current[name], enabled } }))}
+          />,
+          <SettingsInputRow
+            key={`${name}-aliases`}
+            label={t('settings.messaging.commands.aliases')}
+            description={t('settings.messaging.commands.aliasesDescription')}
+            value={commands[name].aliases}
+            disabled={loading || !commands[name].enabled}
+            placeholder="/start, /create"
+            onChange={(aliases) => setCommands((current) => ({ ...current, [name]: { ...current[name], aliases } }))}
+          />,
+        ])}
+      </SettingsCard>
+      <SettingsCard>
+        <SettingsTextarea
+          inCard
+          label={t('settings.messaging.commands.helpMessage')}
+          description={t('settings.messaging.commands.helpMessageDescription')}
+          value={helpMessage}
+          disabled={loading}
+          rows={6}
+          placeholder={t('settings.messaging.commands.defaultMessagePlaceholder')}
+          onChange={setHelpMessage}
+        />
+        <SettingsTextarea
+          inCard
+          label={t('settings.messaging.commands.unboundMessage')}
+          description={t('settings.messaging.commands.unboundMessageDescription')}
+          value={unboundMessage}
+          disabled={loading}
+          rows={4}
+          placeholder={t('settings.messaging.commands.defaultMessagePlaceholder')}
+          onChange={setUnboundMessage}
+        />
+        <SettingsSelectRow
+          label={t('settings.messaging.commands.unknownBehavior')}
+          description={t('settings.messaging.commands.unknownBehaviorDescription')}
+          value={unknownBehavior}
+          disabled={loading}
+          options={[
+            { value: 'help', label: t('settings.messaging.commands.unknownShowHelp') },
+            { value: 'ignore', label: t('settings.messaging.commands.unknownIgnore') },
+          ]}
+          onValueChange={(value) => setUnknownBehavior(value as 'help' | 'ignore')}
+        />
+      </SettingsCard>
+    </SettingsSection>
   )
 }
 

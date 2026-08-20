@@ -28,7 +28,7 @@ export { ConfigStore } from './config-store'
 export { PairingCodeManager, PAIRING_TTL_MS, PAIRING_RATE_LIMIT_PER_MINUTE } from './pairing'
 export type { PairingEntry, GeneratedPairing } from './pairing'
 export { Router } from './router'
-export { Commands, type PairingCodeConsumer } from './commands'
+export { Commands, parseCommand, resolveCommand, type PairingCodeConsumer } from './commands'
 export { Renderer } from './renderer'
 
 export type {
@@ -43,6 +43,9 @@ export type {
   ChannelBinding,
   BindingConfig,
   MessagingConfig,
+  MessagingCommandName,
+  MessagingCommandDefinitionConfig,
+  MessagingCommandsConfig,
   MessagingLogger,
   MessagingLogContext,
   MessagingLogMeta,

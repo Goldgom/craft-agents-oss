@@ -835,6 +835,12 @@ export interface ElectronAPI {
   // Messaging gateway — workspaceId is taken from the client handshake (ctx.workspaceId)
   getMessagingConfig(): Promise<{
     enabled: boolean
+    commands?: {
+      commands?: Partial<Record<'new' | 'bind' | 'pair' | 'unbind' | 'help' | 'status' | 'stop', { enabled?: boolean; aliases?: string[] }>>
+      helpMessage?: string
+      unboundMessage?: string
+      unknownCommandBehavior?: 'help' | 'ignore'
+    }
     platforms: Record<string, { enabled: boolean; accessMode?: MessagingPlatformAccessMode; owners?: MessagingPlatformOwnerInfo[] } | undefined>
     runtime: Record<string, MessagingPlatformRuntimeInfo | undefined>
   } | null>

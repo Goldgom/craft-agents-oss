@@ -503,6 +503,7 @@ export interface PendingSender {
 
 export interface MessagingConfig {
   enabled: boolean
+  commands?: MessagingCommandsConfig
   platforms: {
     telegram?: {
       enabled: boolean
@@ -560,6 +561,25 @@ export interface MessagingConfig {
       intents?: number
     }
   }
+}
+
+export type MessagingCommandName = 'new' | 'bind' | 'pair' | 'unbind' | 'help' | 'status' | 'stop'
+
+export interface MessagingCommandDefinitionConfig {
+  /** Disables both the canonical command and all of its aliases when false. */
+  enabled?: boolean
+  /** Additional command names. A leading slash is optional. */
+  aliases?: string[]
+}
+
+export interface MessagingCommandsConfig {
+  commands?: Partial<Record<MessagingCommandName, MessagingCommandDefinitionConfig>>
+  /** Custom /help body. `{commands}` expands to the enabled command list. */
+  helpMessage?: string
+  /** Message shown for free-form text in an unbound chat. Blank uses the default. */
+  unboundMessage?: string
+  /** Whether an unknown slash command in an unbound chat shows help or is ignored. */
+  unknownCommandBehavior?: 'help' | 'ignore'
 }
 
 export const DEFAULT_MESSAGING_CONFIG: MessagingConfig = {

@@ -43,6 +43,7 @@ export class ConfigStore {
   update(partial: Partial<MessagingConfig>): MessagingConfig {
     const next: MessagingConfig = {
       enabled: partial.enabled ?? this.config.enabled,
+      commands: partial.commands ?? this.config.commands,
       platforms: {
         ...this.config.platforms,
         ...(partial.platforms ?? {}),
@@ -83,6 +84,7 @@ export class ConfigStore {
         const parsed = JSON.parse(raw) as Partial<MessagingConfig>
         return {
           enabled: parsed.enabled ?? DEFAULT_MESSAGING_CONFIG.enabled,
+          commands: parsed.commands,
           platforms: parsed.platforms ?? { ...DEFAULT_MESSAGING_CONFIG.platforms },
         }
       }
