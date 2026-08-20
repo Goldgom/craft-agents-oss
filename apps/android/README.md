@@ -1,6 +1,6 @@
-# Craft Agent Android
+# Craft Agents Community Edition — Android
 
-This is a small Android client with a loopback HTTP service for the Craft Agent server. It bundles the existing `apps/webui` application as local static assets, so the APK does not depend on the server hosting the frontend. Agent RPC, sessions, automations, and messaging continue to run on the remote server over WebSocket.
+This is the Android client for Craft Agents Community Edition. It starts a loopback-only HTTP service inside the APK and bundles the `apps/webui` frontend as local assets, so the APK does not depend on the remote server hosting HTML, JavaScript, CSS, or fonts. Agent RPC, sessions, automations, models, and messaging continue to run on the configured server over WebSocket/RPC.
 
 ## Build
 

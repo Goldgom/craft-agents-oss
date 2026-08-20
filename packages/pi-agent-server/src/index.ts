@@ -136,7 +136,7 @@ interface RuntimeConfigUpdateMessage {
 type InboundMessage =
   | InitMessage
   | { type: 'prompt'; id: string; message: string; systemPrompt: string; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
-  | { type: 'register_tools'; tools: ProxyToolDef[] }
+  | { type: 'register_tools'; id: string; tools: ProxyToolDef[] }
   | { type: 'tool_execute_response'; requestId: string; result: { content: string; isError: boolean } }
   | { type: 'pre_tool_use_response'; requestId: string; action: 'allow' | 'block' | 'modify'; input?: Record<string, unknown>; reason?: string }
   | { type: 'abort' }
@@ -183,6 +183,12 @@ interface OutboundPreToolUseReq {
   input: Record<string, unknown>;
 }
 interface OutboundToolExecReq { type: 'tool_execute_request'; requestId: string; toolName: string; args: Record<string, unknown> }
+interface OutboundToolsRegistered {
+  type: 'tools_registered';
+  id: string;
+  count: number;
+  total: number;
+}
 interface OutboundSessionToolCompleted { type: 'session_tool_completed'; toolName: string; args: Record<string, unknown>; isError: boolean }
 interface OutboundMiniResult { type: 'mini_completion_result'; id: string; text: string | null }
 interface OutboundLlmQueryResult {
@@ -226,6 +232,7 @@ type OutboundMessage =
   | OutboundEvent
   | OutboundPreToolUseReq
   | OutboundToolExecReq
+  | OutboundToolsRegistered
   | OutboundSessionToolCompleted
   | OutboundMiniResult
   | OutboundLlmQueryResult
@@ -1385,6 +1392,15 @@ function handleRegisterTools(msg: Extract<InboundMessage, { type: 'register_tool
     toolsChanged = true;
     debugLog('Proxy tools changed — session will be recreated on next prompt');
   }
+
+  // A write to stdin only proves the message was queued by the OS. Confirm the
+  // registry mutation so the main process can safely release the first prompt.
+  send({
+    type: 'tools_registered',
+    id: msg.id,
+    count: msg.tools.length,
+    total: proxyToolDefs.length,
+  });
 }
 
 function handleToolExecuteResponse(msg: Extract<InboundMessage, { type: 'tool_execute_response' }>): void {

@@ -1,6 +1,6 @@
-# Craft Agents Electron App
+# Craft Agents Community Edition — Electron App
 
-The primary desktop interface for Craft Agents, built with Electron + React. Provides a multi-session inbox with chat interface for interacting with Claude via Craft workspaces.
+The desktop client for Craft Agents Community Edition, built with Electron + React. It provides the multi-session inbox, workspace settings, automations, Messaging configuration, and chat interface for connecting to configured Agent backends and models.
 
 ## Quick Start
 

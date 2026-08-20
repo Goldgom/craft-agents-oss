@@ -81,7 +81,7 @@ import { getPermissionModeDiagnostics } from './mode-manager.ts';
 // call_llm pre-execution pipeline
 
 // McpClientPool for source tool proxying (centralized pool from main process)
-import type { McpClientPool } from '../mcp/mcp-pool.ts';
+import type { McpClientPool, ProxyToolDef } from '../mcp/mcp-pool.ts';
 
 // Path utilities
 import { join } from 'path';
@@ -172,6 +172,10 @@ export class PiAgent extends BaseAgent {
   private readline: ReadlineInterface | null = null;
   private subprocessReady: Promise<void> | null = null;
   private subprocessReadyResolve: (() => void) | null = null;
+  private subprocessReadyReject: ((error: Error) => void) | null = null;
+  // Covers the complete startup sequence (ready + runtime setup + tool ACKs).
+  // subprocessReady alone only represents the child's early `ready` message.
+  private subprocessStarting: Promise<void> | null = null;
 
   // Pi session ID (managed by subprocess, reported back)
   private piSessionId: string | null = null;
@@ -312,6 +316,13 @@ export class PiAgent extends BaseAgent {
     reject: (error: Error) => void;
   }> = new Map();
 
+  // Pending register_tools requests. The ACK is the ordering barrier that
+  // prevents a first prompt from racing ahead of session/MCP tool registration.
+  private pendingToolRegistrations: Map<string, {
+    resolve: (result: { count: number; total: number }) => void;
+    reject: (error: Error) => void;
+  }> = new Map();
+
   // Metadata captured before PreToolUse stripping, keyed by toolCallId.
   // This provides a deterministic bridge when side-channel metadata store misses.
   private preToolMetadataByCallId: Map<string, {
@@ -415,12 +426,32 @@ export class PiAgent extends BaseAgent {
    * Lazy initialization -- spawns on first use.
    */
   private async ensureSubprocess(): Promise<void> {
+    if (this.subprocessStarting) {
+      await this.subprocessStarting;
+      return;
+    }
+
     if (this.subprocess && this.subprocessReady) {
       await this.subprocessReady;
       return;
     }
 
-    await this.spawnSubprocess();
+    const starting = this.spawnSubprocess();
+    this.subprocessStarting = starting;
+    try {
+      await starting;
+    } catch (error) {
+      // Never retain a child that reached `ready` but failed a later bootstrap
+      // barrier; a later ensureSubprocess() must perform a clean registration.
+      if (this.subprocess) {
+        this.killSubprocess();
+      }
+      throw error;
+    } finally {
+      if (this.subprocessStarting === starting) {
+        this.subprocessStarting = null;
+      }
+    }
   }
 
   /**
@@ -445,8 +476,9 @@ export class PiAgent extends BaseAgent {
     this.resetSubprocessErrorDedup();
 
     // Set up ready promise before spawning
-    this.subprocessReady = new Promise<void>((resolve) => {
+    this.subprocessReady = new Promise<void>((resolve, reject) => {
       this.subprocessReadyResolve = resolve;
+      this.subprocessReadyReject = reject;
     });
 
     // Build session ID and session dir path upfront (used for spawn env + init command)
@@ -538,6 +570,7 @@ export class PiAgent extends BaseAgent {
 
     child.on('error', (error) => {
       this.debug(`Subprocess error: ${error.message}`);
+      this.subprocessReadyReject?.(error);
       this.resetSubprocessErrorDedup();
       this.eventQueue.enqueue({ type: 'error', message: `Pi subprocess error: ${error.message}` });
       this.eventQueue.complete();
@@ -586,7 +619,9 @@ export class PiAgent extends BaseAgent {
     // Ensure auto-compaction is explicitly enabled for embedded sessions.
     // PI defaults this to enabled, but we set it proactively for clarity and resilience.
     try {
-      const enabled = await this.requestSetAutoCompaction(true);
+      // spawnSubprocess itself is the active startup promise, so this internal
+      // bootstrap RPC must not recursively wait for ensureSubprocess().
+      const enabled = await this.requestSetAutoCompaction(true, false);
       this.debug(`PI auto-compaction enabled: ${enabled}`);
     } catch (error) {
       this.debug(`Failed to configure PI auto-compaction (continuing): ${error instanceof Error ? error.message : String(error)}`);
@@ -614,29 +649,60 @@ export class PiAgent extends BaseAgent {
       }
     }
 
-    this.send({
-      type: 'register_tools',
-      tools: sessionToolDefs,
-    });
-    this.debug(`Registered ${sessionToolDefs.length} session tools with subprocess`);
+    const sessionRegistration = await this.requestRegisterTools(sessionToolDefs);
+    this.debug(
+      `Registered ${sessionRegistration.count} session tools with subprocess ` +
+      `(total: ${sessionRegistration.total})`,
+    );
 
     // If pool has source tools, register them with the subprocess.
-    this.registerPoolToolsWithSubprocess();
+    await this.registerPoolToolsWithSubprocess();
   }
 
   /**
    * Send pool's proxy tool defs to subprocess for model visibility.
    */
-  private registerPoolToolsWithSubprocess(): void {
-    if (!this.mcpPool) return;
+  private async registerPoolToolsWithSubprocess(): Promise<void> {
+    // Source configuration commonly runs before the lazy subprocess startup.
+    // In that case spawnSubprocess() will register the already-populated pool.
+    if (!this.subprocess || !this.mcpPool) return;
     const proxyDefs = this.mcpPool.getProxyToolDefs();
     if (proxyDefs.length > 0) {
-      this.send({
-        type: 'register_tools',
-        tools: proxyDefs,
-      });
-      this.debug(`Registered ${proxyDefs.length} MCP source tools from pool with subprocess`);
+      const registration = await this.requestRegisterTools(proxyDefs);
+      this.debug(
+        `Registered ${registration.count} MCP source tools from pool with subprocess ` +
+        `(total: ${registration.total})`,
+      );
     }
+  }
+
+  /**
+   * Register proxy tools and wait until the subprocess confirms that the
+   * definitions have been merged into its registry.
+   */
+  private requestRegisterTools(tools: ProxyToolDef[]): Promise<{ count: number; total: number }> {
+    const id = `register-tools-${++this.rpcIdCounter}`;
+    const timeoutMs = 15_000;
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingToolRegistrations.delete(id);
+        reject(new Error(`register_tools timed out after ${Math.floor(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+
+      this.pendingToolRegistrations.set(id, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+
+      this.send({ type: 'register_tools', id, tools });
+    });
   }
 
   /**
@@ -997,6 +1063,12 @@ export class PiAgent extends BaseAgent {
         this.handleSetAutoCompactionResult(msg);
         break;
 
+      case 'tools_registered':
+        // Registration barrier: only release startup/source updates after the
+        // subprocess has actually merged the advertised tool definitions.
+        this.handleToolsRegistered(msg);
+        break;
+
       case 'update_runtime_config_result':
         // Response to a runtime config refresh request
         this.handleRuntimeConfigUpdateResult(msg);
@@ -1073,6 +1145,10 @@ export class PiAgent extends BaseAgent {
         for (const [id, pending] of this.pendingRuntimeConfigUpdates) {
           pending.reject(new Error(rawMessage));
           this.pendingRuntimeConfigUpdates.delete(id);
+        }
+        for (const [id, pending] of this.pendingToolRegistrations) {
+          pending.reject(new Error(rawMessage));
+          this.pendingToolRegistrations.delete(id);
         }
 
         // Suppress repeated identical errors to prevent a broken subprocess
@@ -1716,6 +1792,19 @@ export class PiAgent extends BaseAgent {
     pending.resolve(Boolean(msg.enabled));
   }
 
+  /** Handle register_tools acknowledgement from the subprocess. */
+  private handleToolsRegistered(msg: Record<string, unknown>): void {
+    const id = msg.id as string;
+    const pending = this.pendingToolRegistrations.get(id);
+    if (!pending) return;
+
+    this.pendingToolRegistrations.delete(id);
+    pending.resolve({
+      count: Number(msg.count || 0),
+      total: Number(msg.total || 0),
+    });
+  }
+
   /**
    * Handle update_runtime_config_result from subprocess.
    */
@@ -1740,15 +1829,18 @@ export class PiAgent extends BaseAgent {
   private handleSubprocessExit(code: number | null, signal: string | null): void {
     this.debug(`Pi subprocess exited: code=${code}, signal=${signal}`);
 
+    const exitReason = signal ? `signal ${signal}` : `code ${code}`;
+    this.subprocessReadyReject?.(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+
     this.subprocess = null;
     this.readline = null;
     this.resetSubprocessErrorDedup();
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
+    this.subprocessReadyReject = null;
 
     // If we were processing, emit error + complete
     if (this._isProcessing) {
-      const exitReason = signal ? `signal ${signal}` : `code ${code}`;
       this.eventQueue.enqueue({
         type: 'error',
         message: `Pi subprocess exited unexpectedly (${exitReason})`,
@@ -1758,7 +1850,6 @@ export class PiAgent extends BaseAgent {
 
     // Reject pending mini completions with error (not null) so callers
     // get a meaningful error instead of silently returning "no response"
-    const exitReason = signal ? `signal ${signal}` : `code ${code}`;
     for (const [, pending] of this.pendingMiniCompletions) {
       pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
     }
@@ -1791,6 +1882,11 @@ export class PiAgent extends BaseAgent {
       pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
     }
     this.pendingRuntimeConfigUpdates.clear();
+
+    for (const [, pending] of this.pendingToolRegistrations) {
+      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+    }
+    this.pendingToolRegistrations.clear();
 
     // Reject all pending tool executions
     for (const [, pending] of this.pendingToolExecutions) {
@@ -1869,8 +1965,10 @@ export class PiAgent extends BaseAgent {
   /**
    * Ask subprocess to enable/disable auto-compaction.
    */
-  private async requestSetAutoCompaction(enabled: boolean): Promise<boolean> {
-    await this.ensureSubprocess();
+  private async requestSetAutoCompaction(enabled: boolean, ensureReady = true): Promise<boolean> {
+    if (ensureReady) {
+      await this.ensureSubprocess();
+    }
 
     const id = `set-auto-compaction-${++this.rpcIdCounter}`;
     const timeoutMs = 15_000;
@@ -2280,7 +2378,7 @@ export class PiAgent extends BaseAgent {
     await super.setSourceServers(mcpServers, apiServers, intendedSlugs);
 
     // Register pool's proxy tool defs with subprocess so the model can call them.
-    this.registerPoolToolsWithSubprocess();
+    await this.registerPoolToolsWithSubprocess();
   }
 
   // ============================================================
@@ -2431,6 +2529,13 @@ export class PiAgent extends BaseAgent {
       return;
     }
 
+    const stoppingError = new Error('Pi subprocess stopped during tool registration');
+    this.subprocessReadyReject?.(stoppingError);
+    for (const [, pending] of this.pendingToolRegistrations) {
+      pending.reject(stoppingError);
+    }
+    this.pendingToolRegistrations.clear();
+
     const pid = child.pid;
     const waitForExit = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
       if (child.exitCode !== null || child.signalCode) {
@@ -2494,6 +2599,7 @@ export class PiAgent extends BaseAgent {
     }
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
+    this.subprocessReadyReject = null;
     this.callbackPort = 0;
     this.preToolMetadataByCallId.clear();
     this.adapter.resetOverflowState();
@@ -2509,6 +2615,13 @@ export class PiAgent extends BaseAgent {
    * Kill the subprocess and clean up resources.
    */
   private killSubprocess(): void {
+    const stoppingError = new Error('Pi subprocess stopped during tool registration');
+    this.subprocessReadyReject?.(stoppingError);
+    for (const [, pending] of this.pendingToolRegistrations) {
+      pending.reject(stoppingError);
+    }
+    this.pendingToolRegistrations.clear();
+
     if (this.readline) {
       this.readline.close();
       this.readline = null;
@@ -2536,6 +2649,7 @@ export class PiAgent extends BaseAgent {
 
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
+    this.subprocessReadyReject = null;
     this.callbackPort = 0;
     this.preToolMetadataByCallId.clear();
 
