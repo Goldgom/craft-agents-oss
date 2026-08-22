@@ -113,7 +113,7 @@ function parseGeneratedWorkspacePrompt(
 
 export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const performanceManager = deps.sessionManager as typeof deps.sessionManager & {
-    getPerformanceSnapshot(): import('@craft-agent/shared/protocol').PerformanceSnapshot
+    getPerformanceSnapshot(): Promise<import('@craft-agent/shared/protocol').PerformanceSnapshot>
     getMaxWarmRuntimes(): number
     setMaxWarmRuntimes(value: number): Promise<void>
   }

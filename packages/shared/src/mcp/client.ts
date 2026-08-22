@@ -8,6 +8,47 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+/** Read a child process RSS without exposing command lines or credentials. */
+export async function getProcessRssBytes(pid: number | undefined): Promise<number | undefined> {
+  if (!pid || !Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  try {
+    if (process.platform === 'linux') {
+      const status = await readFile(`/proc/${pid}/status`, 'utf8');
+      const match = status.match(/^VmRSS:\s+(\d+)\s+kB$/m);
+      return match ? Number(match[1]) * 1024 : undefined;
+    }
+    if (process.platform === 'win32') {
+      try {
+        const { stdout } = await execFileAsync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true });
+        const row = stdout.trim();
+        if (row && !row.startsWith('INFO:')) {
+          const fields = row.split('","').map(field => field.replace(/^"|"$/g, ''));
+          const memory = fields[4]?.replace(/[,.\s]*/g, '');
+          if (memory && /^\d+$/.test(memory)) return Number(memory) * 1024;
+        }
+      } catch {
+        // Fall through to the PowerShell implementation below.
+      }
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `$p = Get-Process -Id ${pid} -ErrorAction Stop; [Console]::WriteLine($p.WorkingSet64)`,
+      ], { windowsHide: true });
+      const bytes = Number(stdout.trim());
+      return Number.isFinite(bytes) && bytes > 0 ? bytes : undefined;
+    }
+    const { stdout } = await execFileAsync('ps', ['-o', 'rss=', '-p', String(pid)]);
+    const kb = Number(stdout.trim());
+    return Number.isFinite(kb) && kb > 0 ? kb * 1024 : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * HTTP transport config for remote MCP servers
@@ -112,6 +153,10 @@ export class CraftMcpClient {
   }
 
   isConnected(): boolean { return this.connected }
+
+  getPid(): number | undefined {
+    return this.transport instanceof StdioClientTransport ? (this.transport.pid ?? undefined) : undefined;
+  }
 
   async connect(): Promise<void> {
     if (this.connected) return;

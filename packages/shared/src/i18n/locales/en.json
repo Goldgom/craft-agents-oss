@@ -1905,4 +1905,7 @@
   "settings.performance.nameLabel": "Name",
   "settings.performance.statusLabel": "Status",
   "settings.performance.memoryLabel": "RSS"
+  ,"settings.performance.processes": "Processes",
+  "settings.performance.agents": "Agents",
+  "settings.performance.mcpServices": "MCP services"
 }

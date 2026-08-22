@@ -84,7 +84,7 @@ import { toolMetadataStore, getLastApiError } from '@craft-agent/shared/intercep
 import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
-import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
+import { CraftMcpClient, McpClientPool, McpPoolServer, getProcessRssBytes } from '@craft-agent/shared/mcp'
 import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type PerformanceSnapshot, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
@@ -1287,6 +1287,8 @@ export class SessionManager implements ISessionManager {
    * subprocess can race the resulting `chat` against the still-pending update.
    */
   private agentRefreshLocks: Map<string, Promise<void>> = new Map()
+  /** Serializes lazy runtime creation so maintenance/eviction cannot tear down a half-registered Pi process. */
+  private agentCreationLocks: Map<string, Promise<AgentInstance>> = new Map()
   /** Monotonic clock to ensure strictly increasing message timestamps */
   private lastTimestamp = 0
 
@@ -1302,15 +1304,15 @@ export class SessionManager implements ISessionManager {
     this.maxWarmRuntimes = Math.max(0, Math.floor(value))
     await this.enforceWarmRuntimeLimit()
   }
-  getPerformanceSnapshot(): PerformanceSnapshot {
+  async getPerformanceSnapshot(): Promise<PerformanceSnapshot> {
     const memory = process.memoryUsage()
     const processes: import('@craft-agent/shared/protocol').PerformanceProcessInfo[] = [{ id: 'server', kind: 'server', name: 'Craft server', pid: process.pid, rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, status: 'running' }]
     let mcpCount = 0; let agentCount = 0; let warmRuntimeCount = 0
     for (const managed of this.sessions.values()) {
       if (managed.agent || managed.mcpPool || managed.poolServer) warmRuntimeCount++
-      if (managed.agent) { agentCount++; processes.push({ id: `agent:${managed.id}`, kind: 'agent', name: 'Agent runtime', sessionId: managed.id, workspaceId: managed.workspace.id, status: managed.isProcessing ? 'processing' : 'idle', details: 'Included in server total' }) }
+      if (managed.agent) { agentCount++; const pid = managed.agent.getProcessId?.(); processes.push({ id: `agent:${managed.id}`, kind: 'agent', name: 'Agent runtime', sessionId: managed.id, workspaceId: managed.workspace.id, pid, rssBytes: await getProcessRssBytes(pid), status: managed.isProcessing ? 'processing' : 'idle', details: pid ? 'Pi subprocess' : 'Included in server total' }) }
       if (managed.poolServer) processes.push({ id: `pool:${managed.id}`, kind: 'component', name: 'MCP pool server', sessionId: managed.id, workspaceId: managed.workspace.id, status: 'running', details: 'Included in server total' })
-      for (const diag of managed.mcpPool?.getDiagnostics() ?? []) { mcpCount++; processes.push({ id: `mcp:${managed.id}:${diag.sourceSlug}`, kind: 'mcp', name: diag.sourceSlug, sessionId: managed.id, workspaceId: managed.workspace.id, sourceSlug: diag.sourceSlug, status: diag.connected ? 'connected' : 'disconnected', details: `${diag.transport} · ${diag.toolCount} tools` }) }
+      for (const diag of await (managed.mcpPool?.getDiagnosticsWithMemory() ?? Promise.resolve([]))) { mcpCount++; processes.push({ id: `mcp:${managed.id}:${diag.sourceSlug}`, kind: 'mcp', name: diag.sourceSlug, sessionId: managed.id, workspaceId: managed.workspace.id, sourceSlug: diag.sourceSlug, pid: diag.pid, rssBytes: diag.rssBytes, status: diag.connected ? 'connected' : 'disconnected', details: `${diag.transport} · ${diag.toolCount} tools` }) }
     }
     return { capturedAt: Date.now(), total: { rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal, externalBytes: memory.external, arrayBuffersBytes: memory.arrayBuffers, processCount: processes.length, mcpCount, agentCount }, processes, warmRuntimeLimit: this.maxWarmRuntimes, warmRuntimeCount }
   }
@@ -3344,6 +3346,7 @@ export class SessionManager implements ISessionManager {
     if (managed.isProcessing || managed.agent?.isProcessing?.() || (managed.messageQueue?.length ?? 0) > 0) return false
     if (managed.pendingAuthRequest || this.hasPendingPermissionRequest(managed.id)) return false
     if (managed.runtimeTeardown) return false
+    if (this.agentCreationLocks.has(managed.id)) return false
     return !Array.from(managed.backgroundTaskRegistry?.values() ?? []).some(task => task.status === 'running')
   }
 
@@ -3396,6 +3399,16 @@ export class SessionManager implements ISessionManager {
    *     can't apply the update.
    */
   private async tryRefreshAgentRuntime(managed: ManagedSession, reason: string): Promise<void> {
+    // A connection/config watcher may fire while lazy Pi startup is still
+    // registering tools. Wait for that startup to finish before deciding that
+    // the runtime needs to be replaced; disposing it here produces the
+    // misleading "stopped during tool registration" error.
+    if (reason !== 'send-path refresh') {
+      const creating = this.agentCreationLocks.get(managed.id)
+      if (creating) {
+        await creating.catch(() => undefined)
+      }
+    }
     // Serialize against any in-flight refresh on this session. The waiter
     // doesn't propagate the prior call's errors — those are logged at the
     // origin call site.
@@ -3546,6 +3559,18 @@ export class SessionManager implements ISessionManager {
    * 4. fallback: no connection configured
    */
   private async getOrCreateAgent(managed: ManagedSession): Promise<AgentInstance> {
+    const existing = this.agentCreationLocks.get(managed.id)
+    if (existing) return existing
+    const creation = this.createAgentRuntime(managed)
+    this.agentCreationLocks.set(managed.id, creation)
+    try {
+      return await creation
+    } finally {
+      if (this.agentCreationLocks.get(managed.id) === creation) this.agentCreationLocks.delete(managed.id)
+    }
+  }
+
+  private async createAgentRuntime(managed: ManagedSession): Promise<AgentInstance> {
     // If LRU eviction selected this runtime just before a new message arrived,
     // wait for the full teardown and recreate from persisted session state.
     if (managed.runtimeTeardown) {

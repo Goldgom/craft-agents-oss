@@ -17,7 +17,7 @@
  * workspace-level discovered-tools cache below is the only cross-session cache.
  */
 
-import { CraftMcpClient, type McpClientConfig, type PoolClient } from './client.ts';
+import { CraftMcpClient, getProcessRssBytes, type McpClientConfig, type PoolClient } from './client.ts';
 import { ApiSourcePoolClient } from './api-source-pool-client.ts';
 import { proxyToolName } from './proxy-tool-name.ts';
 import type { SdkMcpServerConfig } from '../agent/backend/types.ts';
@@ -164,6 +164,15 @@ export class McpClientPool {
       connected: client instanceof CraftMcpClient ? client.isConnected() : true,
       toolCount: this.toolCache.get(sourceSlug)?.length ?? 0,
     }))
+  }
+
+  async getDiagnosticsWithMemory(): Promise<Array<{ sourceSlug: string; transport: 'stdio' | 'http' | 'api'; connected: boolean; toolCount: number; pid?: number; rssBytes?: number }>> {
+    const diagnostics = this.getDiagnostics();
+    return Promise.all(diagnostics.map(async diagnostic => {
+      const client = this.clients.get(diagnostic.sourceSlug);
+      const pid = client instanceof CraftMcpClient ? client.getPid() : undefined;
+      return { ...diagnostic, pid, rssBytes: await getProcessRssBytes(pid) };
+    }));
   }
 
   /**

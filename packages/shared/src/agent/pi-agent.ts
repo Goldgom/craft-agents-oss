@@ -421,6 +421,10 @@ export class PiAgent extends BaseAgent {
   // Subprocess Management
   // ============================================================
 
+  getProcessId(): number | undefined {
+    return this.subprocess?.pid ?? undefined;
+  }
+
   /**
    * Ensure the subprocess is spawned and ready.
    * Lazy initialization -- spawns on first use.

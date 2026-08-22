@@ -1905,4 +1905,7 @@
   "settings.performance.nameLabel": "名称",
   "settings.performance.statusLabel": "状态",
   "settings.performance.memoryLabel": "RSS"
+  ,"settings.performance.processes": "进程",
+  "settings.performance.agents": "Agent",
+  "settings.performance.mcpServices": "MCP 服务"
 }

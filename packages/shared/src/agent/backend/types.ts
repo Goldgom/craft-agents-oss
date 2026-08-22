@@ -451,6 +451,9 @@ export interface AgentBackend {
    */
   isProcessing(): boolean;
 
+  /** Optional child process id for runtime diagnostics (Pi exposes this; other backends may not). */
+  getProcessId?(): number | undefined;
+
   // ============================================================
   // Model & Thinking Configuration
   // ============================================================
