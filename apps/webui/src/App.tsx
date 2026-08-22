@@ -67,7 +67,9 @@ export default function App() {
   const [error, setError] = useState('')
   const clientRef = useRef<WsRpcClient | null>(null)
   const initRef = useRef(false)
-  const embedded = Boolean(new URLSearchParams(window.location.search).get('ws'))
+  const initialParams = new URLSearchParams(window.location.search)
+  const embeddedPlatform = initialParams.get('embedded')
+  const embedded = Boolean(initialParams.get('ws')) || embeddedPlatform === 'android'
 
   const initialize = async () => {
     setPhase('loading')
@@ -76,8 +78,20 @@ export default function App() {
     try {
       // 1. Fetch WS URL from the server (cookie auth)
       const params = new URLSearchParams(window.location.search)
-      const embeddedWsUrl = params.get('ws')
-      const embeddedToken = params.get('token') ?? undefined
+      let embeddedWsUrl = params.get('ws')
+      let embeddedToken = params.get('token') ?? undefined
+      if (params.get('embedded') === 'android') {
+        const mobileConfigResponse = await fetch('/api/mobile-config', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        })
+        if (!mobileConfigResponse.ok) {
+          throw new Error(`Failed to load Android server config: ${mobileConfigResponse.status}`)
+        }
+        const mobileConfig = await mobileConfigResponse.json() as { wsUrl?: string; token?: string }
+        embeddedWsUrl = mobileConfig.wsUrl ?? null
+        embeddedToken = mobileConfig.token || undefined
+      }
       let wsUrl = embeddedWsUrl ?? ''
       if (!wsUrl) {
         const configRes = await fetch('/api/config', { credentials: 'same-origin' })

@@ -85,7 +85,7 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type PerformanceSnapshot, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -806,6 +806,10 @@ interface ManagedSession {
   /** Set when user requests stop - allows event loop to drain before clearing isProcessing */
   stopRequested?: boolean
   lastMessageAt: number
+  /** Last time this session's live Agent/MCP runtime was used (runtime-only). */
+  runtimeLastUsedAt?: number
+  /** In-flight full runtime teardown; new sends await it before recreating. */
+  runtimeTeardown?: Promise<void>
   streamingText: string
   // Incremented each time a new message starts processing.
   // Used to detect if a follow-up message has superseded the current one (stale-request guard).
@@ -1084,6 +1088,7 @@ export function createManagedSession(
     messages: [],
     isProcessing: false,
     lastMessageAt: (s.lastMessageAt ?? s.lastUsedAt ?? Date.now()) as number,
+    runtimeLastUsedAt: undefined,
     streamingText: '',
     processingGeneration: 0,
     isFlagged: (s.isFlagged ?? false) as boolean,
@@ -1203,7 +1208,26 @@ export function resolveMidStreamDeliveryOutcome(
   }
 }
 
+export interface SessionManagerOptions {
+  /**
+   * Maximum number of idle Agent + MCP runtimes retained process-wide.
+   * `0` disposes a runtime as soon as its turn and message queue complete.
+   * Defaults to `CRAFT_MAX_WARM_RUNTIMES`, or 2 when unset/invalid.
+   */
+  maxWarmRuntimes?: number
+}
+
+export function resolveMaxWarmRuntimes(value = process.env.CRAFT_MAX_WARM_RUNTIMES): number {
+  if (value === undefined || value.trim() === '') return 2
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 2
+}
+
 export class SessionManager implements ISessionManager {
+  /** Maximum number of idle Agent + MCP runtimes retained process-wide. */
+  private maxWarmRuntimes: number
+  /** Serializes LRU eviction so concurrent turn completions cannot over-evict. */
+  private warmRuntimeEviction: Promise<void> = Promise.resolve()
   private sessions: Map<string, ManagedSession> = new Map()
   // Delta batching for performance - reduces IPC events from 50+/sec to ~20/sec
   private pendingDeltas: Map<string, PendingDelta> = new Map()
@@ -1265,6 +1289,31 @@ export class SessionManager implements ISessionManager {
   private agentRefreshLocks: Map<string, Promise<void>> = new Map()
   /** Monotonic clock to ensure strictly increasing message timestamps */
   private lastTimestamp = 0
+
+  constructor(options: SessionManagerOptions = {}) {
+    const preferenceLimit = loadPreferences().performance?.maxWarmRuntimes
+    this.maxWarmRuntimes = options.maxWarmRuntimes === undefined
+      ? (Number.isSafeInteger(preferenceLimit) && preferenceLimit! >= 0 ? preferenceLimit! : resolveMaxWarmRuntimes())
+      : resolveMaxWarmRuntimes(String(options.maxWarmRuntimes))
+  }
+
+  getMaxWarmRuntimes(): number { return this.maxWarmRuntimes }
+  async setMaxWarmRuntimes(value: number): Promise<void> {
+    this.maxWarmRuntimes = Math.max(0, Math.floor(value))
+    await this.enforceWarmRuntimeLimit()
+  }
+  getPerformanceSnapshot(): PerformanceSnapshot {
+    const memory = process.memoryUsage()
+    const processes: import('@craft-agent/shared/protocol').PerformanceProcessInfo[] = [{ id: 'server', kind: 'server', name: 'Craft server', pid: process.pid, rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, status: 'running' }]
+    let mcpCount = 0; let agentCount = 0; let warmRuntimeCount = 0
+    for (const managed of this.sessions.values()) {
+      if (managed.agent || managed.mcpPool || managed.poolServer) warmRuntimeCount++
+      if (managed.agent) { agentCount++; processes.push({ id: `agent:${managed.id}`, kind: 'agent', name: 'Agent runtime', sessionId: managed.id, workspaceId: managed.workspace.id, status: managed.isProcessing ? 'processing' : 'idle', details: 'Included in server total' }) }
+      if (managed.poolServer) processes.push({ id: `pool:${managed.id}`, kind: 'component', name: 'MCP pool server', sessionId: managed.id, workspaceId: managed.workspace.id, status: 'running', details: 'Included in server total' })
+      for (const diag of managed.mcpPool?.getDiagnostics() ?? []) { mcpCount++; processes.push({ id: `mcp:${managed.id}:${diag.sourceSlug}`, kind: 'mcp', name: diag.sourceSlug, sessionId: managed.id, workspaceId: managed.workspace.id, sourceSlug: diag.sourceSlug, status: diag.connected ? 'connected' : 'disconnected', details: `${diag.transport} · ${diag.toolCount} tools` }) }
+    }
+    return { capturedAt: Date.now(), total: { rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal, externalBytes: memory.external, arrayBuffersBytes: memory.arrayBuffers, processCount: processes.length, mcpCount, agentCount }, processes, warmRuntimeLimit: this.maxWarmRuntimes, warmRuntimeCount }
+  }
 
   /**
    * Optional binder installed by the messaging-gateway bootstrap. When set,
@@ -3224,6 +3273,23 @@ export class SessionManager implements ISessionManager {
   }
 
   private async disposeManagedAgentRuntime(managed: ManagedSession, reason: string): Promise<void> {
+    if (managed.runtimeTeardown) {
+      await managed.runtimeTeardown
+      return
+    }
+
+    const teardown = this.performManagedAgentRuntimeDisposal(managed, reason)
+    managed.runtimeTeardown = teardown
+    try {
+      await teardown
+    } finally {
+      if (managed.runtimeTeardown === teardown) {
+        managed.runtimeTeardown = undefined
+      }
+    }
+  }
+
+  private async performManagedAgentRuntimeDisposal(managed: ManagedSession, reason: string): Promise<void> {
     const sessionId = managed.id
 
     if (managed.agent) {
@@ -3262,7 +3328,48 @@ export class SessionManager implements ISessionManager {
     managed.agentReadyResolve = undefined
     managed.backendRuntimeSignature = undefined
     managed.backendRestartSignature = undefined
+    managed.runtimeLastUsedAt = undefined
     unregisterSessionScopedToolCallbacks(sessionId)
+  }
+
+  private hasPendingPermissionRequest(sessionId: string): boolean {
+    for (const request of this.pendingPermissionRequests.values()) {
+      if (request.sessionId === sessionId) return true
+    }
+    return false
+  }
+
+  private isWarmRuntimeEvictable(managed: ManagedSession): boolean {
+    if (!managed.agent && !managed.mcpPool && !managed.poolServer) return false
+    if (managed.isProcessing || managed.agent?.isProcessing?.() || (managed.messageQueue?.length ?? 0) > 0) return false
+    if (managed.pendingAuthRequest || this.hasPendingPermissionRequest(managed.id)) return false
+    if (managed.runtimeTeardown) return false
+    return !Array.from(managed.backgroundTaskRegistry?.values() ?? []).some(task => task.status === 'running')
+  }
+
+  private async evictWarmRuntimesOverLimit(limit = this.maxWarmRuntimes): Promise<void> {
+    const candidates = Array.from(this.sessions.values())
+      .filter(managed => this.isWarmRuntimeEvictable(managed))
+      .sort((a, b) => (a.runtimeLastUsedAt ?? a.lastMessageAt) - (b.runtimeLastUsedAt ?? b.lastMessageAt))
+
+    const excess = candidates.length - limit
+    if (excess <= 0) return
+
+    for (const managed of candidates.slice(0, excess)) {
+      // Re-check after earlier asynchronous teardowns: a new send or auth
+      // request may have made this session active while eviction was queued.
+      if (!this.isWarmRuntimeEvictable(managed)) continue
+      sessionLog.info(`Evicting idle runtime for session ${managed.id} (warm runtime limit ${limit})`)
+      await this.disposeManagedAgentRuntime(managed, 'warm runtime LRU limit')
+    }
+  }
+
+  private async enforceWarmRuntimeLimit(limit = this.maxWarmRuntimes): Promise<void> {
+    const eviction = this.warmRuntimeEviction.then(() => this.evictWarmRuntimesOverLimit(limit))
+    this.warmRuntimeEviction = eviction.catch(error => {
+      sessionLog.warn(`Warm runtime eviction failed: ${error instanceof Error ? error.message : error}`)
+    })
+    await eviction
   }
 
   /**
@@ -3439,6 +3546,12 @@ export class SessionManager implements ISessionManager {
    * 4. fallback: no connection configured
    */
   private async getOrCreateAgent(managed: ManagedSession): Promise<AgentInstance> {
+    // If LRU eviction selected this runtime just before a new message arrived,
+    // wait for the full teardown and recreate from persisted session state.
+    if (managed.runtimeTeardown) {
+      await managed.runtimeTeardown
+    }
+
     // Refresh runtime config in-place when the connection has drifted since
     // the agent was created. May null out `managed.agent` if the in-place
     // refresh fails, in which case the create branch below rebuilds it.
@@ -3461,6 +3574,13 @@ export class SessionManager implements ISessionManager {
     const restartSignature = buildRestartRequiredSignature(sigInput)
 
     if (!managed.agent) {
+      // Free the least-recently-used idle runtimes before starting another
+      // session's MCP processes. The current session is already processing,
+      // so it can never be selected as an eviction candidate.
+      // Reserve one slot for the runtime about to be created, keeping the
+      // process-wide live-runtime count within the configured cap.
+      await this.enforceWarmRuntimeLimit(Math.max(0, this.maxWarmRuntimes - 1))
+
       const end = perf.start('agent.create', { sessionId: managed.id })
 
       // Lock the connection after first resolution
@@ -4817,6 +4937,7 @@ export class SessionManager implements ISessionManager {
       managed.backendRestartSignature = restartSignature
       end()
     }
+    managed.runtimeLastUsedAt = Date.now()
     return managed.agent
   }
 
@@ -5922,17 +6043,8 @@ export class SessionManager implements ISessionManager {
     this.remoteBpms.delete(sessionId)
     this.browserHostByCanvas.delete(sessionId)
 
-    // Dispose agent to clean up ConfigWatchers, event listeners, MCP connections
-    if (managed.agent) {
-      managed.agent.dispose()
-    }
-
-    // Stop pool server (HTTP MCP server for external SDK subprocesses)
-    if (managed.poolServer) {
-      managed.poolServer.stop().catch(err => {
-        sessionLog.warn(`Failed to stop pool server for ${sessionId}: ${err instanceof Error ? err.message : err}`)
-      })
-    }
+    // Fully await the single runtime teardown path before deleting files.
+    await this.disposeManagedAgentRuntime(managed, 'session deleted')
 
     // Cancel any pending source-activation auto-retry timer (craft-agents-oss#804).
     if (managed.autoRetryTimer) {
@@ -6918,6 +7030,12 @@ export class SessionManager implements ISessionManager {
           : undefined,
         tokenUsage: managed.tokenUsage,
       })
+
+      // A completed, queue-empty session becomes a warm runtime candidate.
+      // Keep only the configured LRU budget so MCP processes cannot accumulate
+      // without bound under high multi-session load.
+      managed.runtimeLastUsedAt = Date.now()
+      await this.enforceWarmRuntimeLimit()
     }
 
     // 6. Always persist
@@ -9190,7 +9308,7 @@ export class SessionManager implements ISessionManager {
    * Clean up all resources held by the SessionManager.
    * Should be called on app shutdown to prevent resource leaks.
    */
-  cleanup(): void {
+  async cleanup(): Promise<void> {
     sessionLog.info('Cleaning up resources...')
 
     // Stop all ConfigWatchers (file system watchers)
@@ -9223,6 +9341,13 @@ export class SessionManager implements ISessionManager {
     this.pendingPermissionRequests.clear()
     this.adminRememberApprovals.clear()
     this.pendingMcpReloadSessionIds.clear()
+
+    // Shutdown must close every retained warm runtime as well as file
+    // watchers. Awaiting all teardowns prevents MCP child processes from
+    // surviving the server process's normal shutdown path.
+    await Promise.all(Array.from(this.sessions.values()).map(managed =>
+      this.disposeManagedAgentRuntime(managed, 'server shutdown')
+    ))
 
     // Clean up session-scoped tool callbacks for all sessions
     for (const sessionId of this.sessions.keys()) {

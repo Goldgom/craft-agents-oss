@@ -31,4 +31,6 @@ powershell -ExecutionPolicy Bypass -File apps/android/build.ps1 -Release -Server
 
 Release output is `dist/android/craft-agent-release-unsigned.apk`. Configure a private Android signing key in your release pipeline before distributing it.
 
-The app starts a localhost-only HTTP server inside the APK and loads the bundled frontend from it. The **Change server** action stores the remote WebSocket URL and optional bearer token locally. A local development server can use `ws://192.168.1.20:9100`; production deployments should use `wss://`.
+The app starts a localhost-only HTTP server inside the APK and loads the bundled frontend from it. On first launch, the server home lets the user choose and independently configure a **Local server** or **Remote server** profile. The selected profile and optional bearer token are stored locally and can be changed later with **Configure**.
+
+“Local server” means a Craft Agent backend already running on the Android device or local network; the loopback HTTP server bundled in the APK serves frontend assets only. A LAN development server can use `ws://192.168.1.20:9100`; production deployments should use `wss://`. Android skips the model onboarding screen, so model connections are managed on the selected server from Settings after connecting.

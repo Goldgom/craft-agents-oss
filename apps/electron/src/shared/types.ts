@@ -720,6 +720,9 @@ export interface ElectronAPI {
   // Network proxy settings
   getNetworkProxySettings(): Promise<NetworkProxySettings | undefined>
   setNetworkProxySettings(settings: NetworkProxySettings): Promise<void>
+  getPerformanceSettings(): Promise<{ maxWarmRuntimes: number }>
+  setPerformanceSettings(settings: { maxWarmRuntimes: number }): Promise<{ success: boolean }>
+  getPerformanceSnapshot(): Promise<import('@craft-agent/shared/protocol').PerformanceSnapshot>
 
   refreshBadge(): Promise<void>
   setDockIconWithBadge(dataUrl: string): Promise<void>

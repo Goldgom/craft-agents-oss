@@ -1,13 +1,13 @@
 package com.craftagents.mobile;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -19,35 +19,97 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.IOException;
+import java.util.EnumMap;
+import java.util.Map;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "craft_agent_mobile";
-    private static final String SERVER_URL_KEY = "server_url";
-    private static final String SERVER_TOKEN_KEY = "server_token";
+    private static final String MODE_KEY = "server_mode";
+    private static final String LEGACY_SERVER_URL_KEY = "server_url";
+    private static final String LEGACY_SERVER_TOKEN_KEY = "server_token";
+    private static final String LOCAL_SERVER_URL_KEY = "local_server_url";
+    private static final String LOCAL_SERVER_TOKEN_KEY = "local_server_token";
+    private static final String REMOTE_SERVER_URL_KEY = "remote_server_url";
+    private static final String REMOTE_SERVER_TOKEN_KEY = "remote_server_token";
+    private static final String DEFAULT_LOCAL_SERVER_URL = "ws://127.0.0.1:9100";
+
+    private enum ServerMode {
+        LOCAL("local"),
+        REMOTE("remote");
+
+        private final String value;
+
+        ServerMode(String value) {
+            this.value = value;
+        }
+
+        static ServerMode fromPreference(String value) {
+            if (LOCAL.value.equals(value)) return LOCAL;
+            if (REMOTE.value.equals(value)) return REMOTE;
+            return null;
+        }
+    }
+
+    private static final class ServerProfile {
+        final String url;
+        final String token;
+
+        ServerProfile(String url, String token) {
+            this.url = url;
+            this.token = token;
+        }
+    }
+
     private SharedPreferences preferences;
+    private LinearLayout root;
+    private LinearLayout toolbar;
+    private FrameLayout content;
     private WebView webView;
     private TextView serverLabel;
     private LocalWebServer localWebServer;
+    private ServerMode activeMode;
+    private boolean showingServerConfiguration;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        migrateLegacyServerProfile();
         buildUi();
-        loadServerUrl(getSavedServerUrl());
+
+        ServerMode savedMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
+        if (savedMode == null) {
+            showServerConfiguration(false);
+        } else {
+            connect(savedMode);
+        }
+    }
+
+    private void migrateLegacyServerProfile() {
+        if (preferences.contains(MODE_KEY) || !preferences.contains(LEGACY_SERVER_URL_KEY)) return;
+
+        preferences.edit()
+                .putString(MODE_KEY, ServerMode.REMOTE.value)
+                .putString(REMOTE_SERVER_URL_KEY, preferences.getString(LEGACY_SERVER_URL_KEY, BuildConfig.SERVER_URL))
+                .putString(REMOTE_SERVER_TOKEN_KEY, preferences.getString(LEGACY_SERVER_TOKEN_KEY, ""))
+                .apply();
     }
 
     private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
+        root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(16, 17, 20));
 
-        LinearLayout toolbar = new LinearLayout(this);
+        toolbar = new LinearLayout(this);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.setPadding(dp(12), dp(4), dp(6), dp(4));
         toolbar.setBackgroundColor(Color.rgb(16, 17, 20));
@@ -56,25 +118,26 @@ public final class MainActivity extends Activity {
         serverLabel.setTextColor(Color.WHITE);
         serverLabel.setTextSize(14);
         serverLabel.setSingleLine(true);
-        serverLabel.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        serverLabel.setEllipsize(TextUtils.TruncateAt.END);
         toolbar.addView(serverLabel, new LinearLayout.LayoutParams(0, dp(44), 1f));
 
         Button reload = toolbarButton(getString(R.string.reload));
         reload.setOnClickListener(view -> webView.reload());
         toolbar.addView(reload);
 
-        Button server = toolbarButton(getString(R.string.change_server));
-        server.setOnClickListener(view -> showServerDialog());
-        toolbar.addView(server);
+        Button configure = toolbarButton(getString(R.string.configure_server));
+        configure.setOnClickListener(view -> showServerConfiguration(true));
+        toolbar.addView(configure);
 
         root.addView(toolbar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
 
-        webView = new WebView(this);
-        configureWebView(webView);
-        root.addView(webView, new LinearLayout.LayoutParams(
+        content = new FrameLayout(this);
+        root.addView(content, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        webView = new WebView(this);
+        configureWebView(webView);
         setContentView(root);
     }
 
@@ -120,100 +183,239 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private String getSavedServerUrl() {
-        return preferences.getString(SERVER_URL_KEY, BuildConfig.SERVER_URL);
+    private void showServerConfiguration(boolean allowCancel) {
+        showingServerConfiguration = true;
+        toolbar.setVisibility(View.GONE);
+
+        ServerMode initialMode = activeMode;
+        if (initialMode == null) {
+            initialMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
+        }
+        if (initialMode == null) initialMode = ServerMode.REMOTE;
+
+        Map<ServerMode, ServerProfile> drafts = new EnumMap<>(ServerMode.class);
+        drafts.put(ServerMode.LOCAL, getSavedProfile(ServerMode.LOCAL));
+        drafts.put(ServerMode.REMOTE, getSavedProfile(ServerMode.REMOTE));
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER_HORIZONTAL);
+        page.setPadding(dp(24), dp(40), dp(24), dp(32));
+        scrollView.addView(page, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView title = textView(R.string.server_home_title, 24, Color.WHITE);
+        title.setGravity(Gravity.CENTER);
+        page.addView(title, matchWrap());
+
+        TextView subtitle = textView(R.string.server_home_description, 14, Color.rgb(166, 170, 178));
+        subtitle.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.setMargins(0, dp(10), 0, dp(28));
+        page.addView(subtitle, subtitleParams);
+
+        RadioGroup modeGroup = new RadioGroup(this);
+        modeGroup.setOrientation(RadioGroup.HORIZONTAL);
+        modeGroup.setGravity(Gravity.CENTER);
+        RadioButton local = serverModeButton(R.string.local_server);
+        local.setId(View.generateViewId());
+        RadioButton remote = serverModeButton(R.string.remote_server);
+        remote.setId(View.generateViewId());
+        modeGroup.addView(local, new RadioGroup.LayoutParams(0, dp(52), 1f));
+        modeGroup.addView(remote, new RadioGroup.LayoutParams(0, dp(52), 1f));
+        page.addView(modeGroup, matchWrap());
+
+        TextView modeDescription = textView(0, 13, Color.rgb(148, 152, 160));
+        LinearLayout.LayoutParams descriptionParams = matchWrap();
+        descriptionParams.setMargins(0, dp(14), 0, dp(16));
+        page.addView(modeDescription, descriptionParams);
+
+        EditText urlInput = new EditText(this);
+        urlInput.setSingleLine(true);
+        urlInput.setTextColor(Color.WHITE);
+        urlInput.setHintTextColor(Color.rgb(115, 118, 126));
+        urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        urlInput.setHint(R.string.server_url_hint);
+        page.addView(urlInput, matchWrap());
+
+        EditText tokenInput = new EditText(this);
+        tokenInput.setSingleLine(true);
+        tokenInput.setTextColor(Color.WHITE);
+        tokenInput.setHintTextColor(Color.rgb(115, 118, 126));
+        tokenInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        tokenInput.setHint(R.string.server_token_hint);
+        LinearLayout.LayoutParams tokenParams = matchWrap();
+        tokenParams.setMargins(0, dp(10), 0, dp(24));
+        page.addView(tokenInput, tokenParams);
+
+        final ServerMode[] editingMode = { initialMode };
+        final boolean[] changingMode = { false };
+        Runnable renderProfile = () -> {
+            changingMode[0] = true;
+            ServerProfile profile = drafts.get(editingMode[0]);
+            urlInput.setText(profile == null ? "" : profile.url);
+            tokenInput.setText(profile == null ? "" : profile.token);
+            modeDescription.setText(editingMode[0] == ServerMode.LOCAL
+                    ? R.string.local_server_description
+                    : R.string.remote_server_description);
+            modeGroup.check(editingMode[0] == ServerMode.LOCAL ? local.getId() : remote.getId());
+            changingMode[0] = false;
+        };
+
+        modeGroup.setOnCheckedChangeListener((group, checkedId) -> {
+            if (changingMode[0]) return;
+            drafts.put(editingMode[0], new ServerProfile(
+                    urlInput.getText().toString(), tokenInput.getText().toString()));
+            editingMode[0] = checkedId == local.getId() ? ServerMode.LOCAL : ServerMode.REMOTE;
+            renderProfile.run();
+        });
+        renderProfile.run();
+
+        Button connectButton = new Button(this);
+        connectButton.setText(R.string.save_and_connect);
+        connectButton.setAllCaps(false);
+        connectButton.setTextSize(15);
+        connectButton.setOnClickListener(view -> {
+            ServerMode mode = editingMode[0];
+            String normalizedUrl = normalizeUrl(urlInput.getText().toString(), mode);
+            if (normalizedUrl == null) {
+                urlInput.setError(getString(R.string.server_url_invalid));
+                return;
+            }
+
+            drafts.put(mode, new ServerProfile(normalizedUrl, tokenInput.getText().toString().trim()));
+            saveProfiles(drafts, mode);
+            connect(mode);
+        });
+        page.addView(connectButton, matchWrap());
+
+        if (allowCancel && activeMode != null) {
+            Button cancelButton = new Button(this);
+            cancelButton.setText(android.R.string.cancel);
+            cancelButton.setAllCaps(false);
+            cancelButton.setOnClickListener(view -> showWebView());
+            LinearLayout.LayoutParams cancelParams = matchWrap();
+            cancelParams.setMargins(0, dp(8), 0, 0);
+            page.addView(cancelButton, cancelParams);
+        }
+
+        replaceContent(scrollView);
     }
 
-    private void loadServerUrl(String rawUrl) {
-        String url = normalizeUrl(rawUrl);
+    private RadioButton serverModeButton(int labelRes) {
+        RadioButton button = new RadioButton(this);
+        button.setText(labelRes);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(15);
+        button.setGravity(Gravity.CENTER);
+        button.setBackgroundColor(Color.rgb(36, 38, 44));
+        return button;
+    }
+
+    private TextView textView(int textRes, int sizeSp, int color) {
+        TextView view = new TextView(this);
+        if (textRes != 0) view.setText(textRes);
+        view.setTextSize(sizeSp);
+        view.setTextColor(color);
+        return view;
+    }
+
+    private LinearLayout.LayoutParams matchWrap() {
+        return new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    private void saveProfiles(Map<ServerMode, ServerProfile> profiles, ServerMode selectedMode) {
+        ServerProfile local = profiles.get(ServerMode.LOCAL);
+        ServerProfile remote = profiles.get(ServerMode.REMOTE);
+        SharedPreferences.Editor editor = preferences.edit().putString(MODE_KEY, selectedMode.value);
+        if (local != null) {
+            editor.putString(LOCAL_SERVER_URL_KEY, local.url.trim());
+            editor.putString(LOCAL_SERVER_TOKEN_KEY, local.token.trim());
+        }
+        if (remote != null) {
+            editor.putString(REMOTE_SERVER_URL_KEY, remote.url.trim());
+            editor.putString(REMOTE_SERVER_TOKEN_KEY, remote.token.trim());
+        }
+        editor.apply();
+    }
+
+    private ServerProfile getSavedProfile(ServerMode mode) {
+        if (mode == ServerMode.LOCAL) {
+            return new ServerProfile(
+                    preferences.getString(LOCAL_SERVER_URL_KEY, DEFAULT_LOCAL_SERVER_URL),
+                    preferences.getString(LOCAL_SERVER_TOKEN_KEY, ""));
+        }
+        return new ServerProfile(
+                preferences.getString(REMOTE_SERVER_URL_KEY, BuildConfig.SERVER_URL),
+                preferences.getString(REMOTE_SERVER_TOKEN_KEY, ""));
+    }
+
+    private void connect(ServerMode mode) {
+        ServerProfile profile = getSavedProfile(mode);
+        String url = normalizeUrl(profile.url, mode);
         if (url == null) {
-            showServerDialog();
+            showServerConfiguration(activeMode != null);
             return;
         }
-        serverLabel.setText(url);
+
+        activeMode = mode;
+        showingServerConfiguration = false;
+        serverLabel.setText(mode == ServerMode.LOCAL ? R.string.local_server : R.string.remote_server);
+
         try {
-            String token = Uri.encode(getSavedServerToken());
-            String pageUrl = "http://127.0.0.1:" + getLocalWebPort() + "/index.html?ws=" + Uri.encode(url) + "&token=" + token;
-            webView.loadUrl(pageUrl);
+            int port = getLocalWebPort();
+            localWebServer.setConnectionConfig(url, profile.token, mode.value);
+            showWebView();
+            webView.loadUrl("http://127.0.0.1:" + port + "/index.html?embedded=android");
         } catch (IOException error) {
             Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
-    private int localWebPort = -1;
+    private void showWebView() {
+        showingServerConfiguration = false;
+        toolbar.setVisibility(View.VISIBLE);
+        replaceContent(webView);
+    }
+
+    private void replaceContent(View view) {
+        ViewGroup parent = (ViewGroup) view.getParent();
+        if (parent != null) parent.removeView(view);
+        content.removeAllViews();
+        content.addView(view, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
 
     private int getLocalWebPort() throws IOException {
         if (localWebServer == null) {
             localWebServer = new LocalWebServer(getAssets());
-            localWebPort = localWebServer.start();
+            return localWebServer.start();
         }
-        return localWebPort;
+        return localWebServer.getPort();
     }
 
-    private void showServerDialog() {
-        final EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        input.setHint(R.string.server_url_hint);
-        input.setText(getSavedServerUrl());
-        input.setSelectAllOnFocus(true);
-
-        final EditText tokenInput = new EditText(this);
-        tokenInput.setSingleLine(true);
-        tokenInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        tokenInput.setHint(R.string.server_token_hint);
-        tokenInput.setText(getSavedServerToken());
-
-        int padding = dp(24);
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        container.setPadding(padding, dp(8), padding, 0);
-        container.addView(input, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        container.addView(tokenInput, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(R.string.change_server)
-                .setView(container)
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(R.string.connect, null)
-                .create();
-        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-            String url = normalizeUrl(input.getText().toString());
-            if (url == null) {
-                input.setError(getString(R.string.server_url_invalid));
-                return;
-            }
-            preferences.edit().putString(SERVER_URL_KEY, url).apply();
-            preferences.edit().putString(SERVER_TOKEN_KEY, tokenInput.getText().toString().trim()).apply();
-            dialog.dismiss();
-            loadServerUrl(url);
-        }));
-        dialog.show();
-    }
-
-    private String normalizeUrl(String rawUrl) {
+    private String normalizeUrl(String rawUrl, ServerMode mode) {
         if (rawUrl == null) return null;
         String value = rawUrl.trim();
         if (value.isEmpty()) return null;
         if (!value.startsWith("ws://") && !value.startsWith("wss://")) {
-            value = "wss://" + value;
+            value = (mode == ServerMode.LOCAL ? "ws://" : "wss://") + value;
         }
         Uri uri = Uri.parse(value);
-        if (uri.getHost() == null || (!"ws".equals(uri.getScheme()) && !"wss".equals(uri.getScheme()))) {
+        if (uri.getHost() == null || (!("ws".equals(uri.getScheme())) && !("wss".equals(uri.getScheme())))) {
             return null;
         }
         return value;
     }
 
-    private String getSavedServerToken() {
-        return preferences.getString(SERVER_TOKEN_KEY, "");
-    }
-
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
+        if (showingServerConfiguration && activeMode != null) {
+            showWebView();
+        } else if (!showingServerConfiguration && webView.canGoBack()) {
             webView.goBack();
         } else {
             super.onBackPressed();

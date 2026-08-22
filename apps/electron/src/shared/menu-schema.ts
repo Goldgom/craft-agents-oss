@@ -387,6 +387,7 @@ const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
   prompts: 'ScrollText',
   permissions: 'ShieldCheck',
   tools: 'Wrench',
+  performance: 'Activity',
   guides: 'BookOpen',
   labels: 'Tag',
   messaging: 'MessageSquare',

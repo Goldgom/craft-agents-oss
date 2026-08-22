@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Craft Agent</string>
+    <string name="server_home_title">选择服务器</string>
+    <string name="server_home_description">连接 Craft Agent 服务器。模型配置将在连接后通过设置管理。</string>
+    <string name="local_server">本地服务器</string>
+    <string name="local_server_description">连接手机本机或局域网中已运行的 Craft Agent 服务。</string>
+    <string name="remote_server">远程服务器</string>
+    <string name="remote_server_description">连接互联网中的 Craft Agent 服务，生产环境建议使用 wss://。</string>
+    <string name="server_url_hint">WebSocket 地址</string>
+    <string name="server_token_hint">服务器令牌（可选）</string>
+    <string name="save_and_connect">保存并连接</string>
+    <string name="configure_server">配置</string>
+    <string name="reload">刷新</string>
+    <string name="server_url_invalid">请输入有效的 ws:// 或 wss:// WebSocket 地址。</string>
+    <string name="webview_error">无法加载服务，请检查地址和网络连接。</string>
+</resources>

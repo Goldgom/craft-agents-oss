@@ -7,10 +7,9 @@ import type {
   WorkspaceToolCatalogResult,
 } from '@craft-agent/shared/protocol'
 import { getWorkspaceByNameOrId } from '@craft-agent/shared/config'
-import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getDocPath, listDocs } from '@craft-agent/shared/docs'
-import { proxyToolName } from '@craft-agent/shared/mcp'
-import { loadWorkspaceSources, type LoadedSource } from '@craft-agent/shared/sources'
+import { getCachedMcpSourceTools, proxyToolName } from '@craft-agent/shared/mcp'
+import { loadWorkspaceSources } from '@craft-agent/shared/sources'
 import { getBuiltinToolCatalog } from '@craft-agent/shared/tools'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
@@ -60,46 +59,6 @@ export function summaryFromMarkdown(content: string): string {
     .slice(0, 240)
 }
 
-async function listMcpTools(source: LoadedSource): Promise<Array<{ name: string; description?: string }>> {
-  const mcp = source.config.mcp
-  if (!mcp) throw new Error('MCP configuration is missing')
-  if (source.config.connectionStatus === 'needs_auth') throw new Error('Authentication required')
-  if (source.config.connectionStatus === 'failed') {
-    throw new Error(source.config.connectionError || 'Connection failed')
-  }
-
-  const { CraftMcpClient } = await import('@craft-agent/shared/mcp')
-  let client: InstanceType<typeof CraftMcpClient> | null = null
-  try {
-    if (mcp.transport === 'stdio') {
-      if (!mcp.command) throw new Error('Stdio command is missing')
-      client = new CraftMcpClient({
-        transport: 'stdio',
-        command: mcp.command,
-        args: mcp.args,
-        env: mcp.env,
-      })
-    } else {
-      if (!mcp.url) throw new Error('MCP URL is missing')
-      let accessToken: string | undefined
-      if (mcp.authType === 'oauth' || mcp.authType === 'bearer') {
-        const credentialId = mcp.authType === 'oauth'
-          ? { type: 'source_oauth' as const, workspaceId: source.workspaceId, sourceId: source.config.slug }
-          : { type: 'source_bearer' as const, workspaceId: source.workspaceId, sourceId: source.config.slug }
-        accessToken = (await getCredentialManager().get(credentialId))?.value
-      }
-      client = new CraftMcpClient({
-        transport: 'http',
-        url: mcp.url,
-        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
-      })
-    }
-    return await client.listTools()
-  } finally {
-    await client?.close().catch(() => undefined)
-  }
-}
-
 export function registerCatalogHandlers(server: RpcServer, deps: HandlerDeps): void {
   server.handle(RPC_CHANNELS.catalog.LIST_TOOLS, async (_ctx, workspaceId: string): Promise<WorkspaceToolCatalogResult> => {
     const workspace = getWorkspaceByNameOrId(workspaceId)
@@ -116,7 +75,7 @@ export function registerCatalogHandlers(server: RpcServer, deps: HandlerDeps): v
     const warnings: WorkspaceToolCatalogResult['warnings'] = []
     const sources = loadWorkspaceSources(workspace.rootPath)
 
-    await Promise.all(sources.map(async source => {
+    for (const source of sources) {
       const { config } = source
       if (config.type === 'api') {
         // SourceServerBuilder.buildApiConfig uses the source slug as ApiConfig.name.
@@ -131,42 +90,44 @@ export function registerCatalogHandlers(server: RpcServer, deps: HandlerDeps): v
           sourceSlug: config.slug,
           sourceName: config.name,
         })
-        return
+        continue
       }
-      if (config.type !== 'mcp') return
+      if (config.type !== 'mcp') continue
 
-      try {
-        const sourceTools = await listMcpTools(source)
-        const seenProxyNames = new Map<string, string>()
-        for (const tool of sourceTools) {
-          const name = proxyToolName(config.slug, tool.name)
-          const existingName = seenProxyNames.get(name)
-          if (existingName) {
-            warnings.push({
-              sourceSlug: config.slug,
-              sourceName: config.name,
-              message: `Tool name collision: ${existingName} and ${tool.name} both map to ${name}; only the first is available.`,
-            })
-            continue
-          }
-          seenProxyNames.set(name, tool.name)
-          tools.push({
-            id: `mcp:${config.slug}:${tool.name}`,
-            name,
-            description: tool.description || '',
-            origin: 'added',
-            category: 'mcp',
-            status: config.enabled === false ? 'disabled' : 'available',
+      const sourceTools = getCachedMcpSourceTools(workspace.rootPath, config.slug)
+      if (!sourceTools) {
+        warnings.push({
+          sourceSlug: config.slug,
+          sourceName: config.name,
+          message: 'Tool list is not cached yet. It will appear after this source is connected by a session.',
+        })
+        continue
+      }
+      const seenProxyNames = new Map<string, string>()
+      for (const tool of sourceTools) {
+        const name = proxyToolName(config.slug, tool.name)
+        const existingName = seenProxyNames.get(name)
+        if (existingName) {
+          warnings.push({
             sourceSlug: config.slug,
             sourceName: config.name,
+            message: `Tool name collision: ${existingName} and ${tool.name} both map to ${name}; only the first is available.`,
           })
+          continue
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to load tools'
-        deps.platform.logger.warn(`Catalog could not load MCP tools for ${config.slug}: ${message}`)
-        warnings.push({ sourceSlug: config.slug, sourceName: config.name, message })
+        seenProxyNames.set(name, tool.name)
+        tools.push({
+          id: `mcp:${config.slug}:${tool.name}`,
+          name,
+          description: tool.description || '',
+          origin: 'added',
+          category: 'mcp',
+          status: config.enabled === false ? 'disabled' : 'available',
+          sourceSlug: config.slug,
+          sourceName: config.name,
+        })
       }
-    }))
+    }
 
     tools.sort((a, b) => a.origin.localeCompare(b.origin) || a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
     warnings.sort((a, b) => a.sourceName.localeCompare(b.sourceName))

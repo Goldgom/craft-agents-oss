@@ -23,6 +23,19 @@ final class LocalWebServer {
     private final AssetManager assets;
     private final ExecutorService clients = Executors.newCachedThreadPool();
     private volatile ServerSocket serverSocket;
+    private volatile ConnectionConfig connectionConfig;
+
+    private static final class ConnectionConfig {
+        final String url;
+        final String token;
+        final String mode;
+
+        ConnectionConfig(String url, String token, String mode) {
+            this.url = url;
+            this.token = token;
+            this.mode = mode;
+        }
+    }
 
     LocalWebServer(AssetManager assets) {
         this.assets = assets;
@@ -35,6 +48,16 @@ final class LocalWebServer {
         acceptThread.setDaemon(true);
         acceptThread.start();
         return socket.getLocalPort();
+    }
+
+    int getPort() throws IOException {
+        ServerSocket socket = serverSocket;
+        if (socket == null || socket.isClosed()) throw new IOException("Local web server is not running");
+        return socket.getLocalPort();
+    }
+
+    void setConnectionConfig(String url, String token, String mode) {
+        connectionConfig = new ConnectionConfig(url, token, mode);
     }
 
     void stop() {
@@ -89,6 +112,21 @@ final class LocalWebServer {
                 return;
             }
 
+            if ("api/mobile-config".equals(path)) {
+                ConnectionConfig config = connectionConfig;
+                if (config == null) {
+                    writeResponse(output, 503, "application/json; charset=utf-8",
+                            "{\"error\":\"Server is not configured\"}".getBytes(StandardCharsets.UTF_8), false);
+                    return;
+                }
+                String json = "{\"wsUrl\":\"" + escapeJson(config.url)
+                        + "\",\"token\":\"" + escapeJson(config.token)
+                        + "\",\"mode\":\"" + escapeJson(config.mode) + "\"}";
+                writeResponse(output, 200, "application/json; charset=utf-8",
+                        json.getBytes(StandardCharsets.UTF_8), "HEAD".equals(parts[0]));
+                return;
+            }
+
             byte[] content;
             String contentType;
             try (InputStream asset = assets.open("webui/" + path)) {
@@ -105,15 +143,40 @@ final class LocalWebServer {
     }
 
     private static void writeResponse(OutputStream output, int status, String type, byte[] body, boolean headOnly) throws IOException {
-        String statusText = status == 200 ? "OK" : status == 404 ? "Not Found" : status == 405 ? "Method Not Allowed" : "Bad Request";
+        String statusText = status == 200 ? "OK" : status == 404 ? "Not Found" : status == 405 ? "Method Not Allowed" : status == 503 ? "Service Unavailable" : "Bad Request";
+        String cacheControl = type.startsWith("application/json") ? "no-store" : "no-cache";
         String headers = "HTTP/1.1 " + status + " " + statusText + "\r\n"
                 + "Content-Type: " + type + "\r\n"
                 + "Content-Length: " + body.length + "\r\n"
-                + "Cache-Control: no-cache\r\n"
+                + "Cache-Control: " + cacheControl + "\r\n"
                 + "Connection: close\r\n\r\n";
         output.write(headers.getBytes(StandardCharsets.UTF_8));
         if (!headOnly) output.write(body);
         output.flush();
+    }
+
+    private static String escapeJson(String value) {
+        if (value == null) return "";
+        StringBuilder escaped = new StringBuilder(value.length() + 16);
+        for (int i = 0; i < value.length(); i++) {
+            char character = value.charAt(i);
+            switch (character) {
+                case '"': escaped.append("\\\""); break;
+                case '\\': escaped.append("\\\\"); break;
+                case '\b': escaped.append("\\b"); break;
+                case '\f': escaped.append("\\f"); break;
+                case '\n': escaped.append("\\n"); break;
+                case '\r': escaped.append("\\r"); break;
+                case '\t': escaped.append("\\t"); break;
+                default:
+                    if (character < 0x20) {
+                        escaped.append(String.format(Locale.ROOT, "\\u%04x", (int) character));
+                    } else {
+                        escaped.append(character);
+                    }
+            }
+        }
+        return escaped.toString();
     }
 
     private static String readLine(InputStream input) throws IOException {

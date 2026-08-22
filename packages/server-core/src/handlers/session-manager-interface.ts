@@ -34,7 +34,7 @@ export interface ISessionManager {
 
   waitForInit(): Promise<void>
   initialize(): Promise<void>
-  cleanup(): void
+  cleanup(): Promise<void> | void
   setEventSink(sink: EventSink): void
   flushAllSessions(): Promise<void>
 

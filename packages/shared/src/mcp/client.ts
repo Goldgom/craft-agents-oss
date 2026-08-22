@@ -73,6 +73,7 @@ export class CraftMcpClient {
   private client: Client;
   private transport: Transport;
   private connected = false;
+  readonly transportType: 'stdio' | 'http';
 
   constructor(config: McpClientConfig) {
     this.client = new Client({
@@ -82,6 +83,7 @@ export class CraftMcpClient {
 
     // Create transport based on config type
     if (config.transport === 'stdio') {
+      this.transportType = 'stdio';
       // Stdio transport for local MCP servers - merge with process env,
       // but filter out sensitive credentials to prevent leaking secrets to subprocesses
       const processEnv: Record<string, string> = {};
@@ -96,6 +98,7 @@ export class CraftMcpClient {
         env: { ...processEnv, ...config.env },
       });
     } else {
+      this.transportType = 'http';
       // HTTP transport for remote MCP servers
       this.transport = new StreamableHTTPClientTransport(
         new URL(config.url),
@@ -107,6 +110,8 @@ export class CraftMcpClient {
       );
     }
   }
+
+  isConnected(): boolean { return this.connected }
 
   async connect(): Promise<void> {
     if (this.connected) return;

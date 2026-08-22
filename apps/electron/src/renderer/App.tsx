@@ -279,6 +279,10 @@ function SessionLoadErrorScreen({
 
 export default function App() {
   const { t } = useTranslation()
+  const isAndroidEmbedded = useMemo(
+    () => new URLSearchParams(window.location.search).get('embedded') === 'android',
+    [],
+  )
 
   // Initialize renderer perf tracking early (debug mode = running from source)
   // Uses useEffect with empty deps to run once on mount before any session switches
@@ -713,13 +717,13 @@ export default function App() {
   const handleReauthLogin = useCallback(async () => {
     // Re-check setup needs
     const needs = await window.electronAPI.getSetupNeeds()
-    if (needs.isFullyConfigured) {
+    if (needs.isFullyConfigured || isAndroidEmbedded) {
       setAppState('ready')
     } else {
       setSetupNeeds(needs)
       setAppState('onboarding')
     }
-  }, [])
+  }, [isAndroidEmbedded])
 
   // Reauth reset handler - open reset confirmation dialog
   const handleReauthReset = useCallback(() => {
@@ -746,7 +750,7 @@ export default function App() {
         const needs = await window.electronAPI.getSetupNeeds()
         setSetupNeeds(needs)
 
-        if (needs.isFullyConfigured) {
+        if (needs.isFullyConfigured || isAndroidEmbedded) {
           // If no workspace is selected (thin client without CRAFT_WORKSPACE_ID),
           // show workspace picker before entering the main app
           if (!wsId) {
@@ -761,12 +765,12 @@ export default function App() {
       } catch (error) {
         console.error('Failed to check auth state:', error)
         // If check fails, show onboarding to be safe
-        setAppState('onboarding')
+        setAppState(isAndroidEmbedded ? 'workspace-picker' : 'onboarding')
       }
     }
 
     initialize()
-  }, [])
+  }, [isAndroidEmbedded])
 
   // Session selection state
   const [sessionSelection, setSession] = useSession()
@@ -1784,7 +1788,8 @@ export default function App() {
       initializeSessions([])
       setWorkspaces([])
       setWindowWorkspaceId(null)
-      // Reset setupNeeds to force fresh onboarding start
+      // Reset setupNeeds to force fresh onboarding start on desktop. Android
+      // keeps provider setup in Settings and returns to workspace selection.
       setSetupNeeds({
         needsBillingConfig: true,
         needsCredentials: true,
@@ -1792,13 +1797,13 @@ export default function App() {
       })
       // Reset onboarding hook state
       onboarding.reset()
-      setAppState('onboarding')
+      setAppState(isAndroidEmbedded ? 'workspace-picker' : 'onboarding')
     } catch (error) {
       console.error('Reset failed:', error)
     } finally {
       setShowResetDialog(false)
     }
-  }, [onboarding, initializeSessions])
+  }, [onboarding, initializeSessions, isAndroidEmbedded])
 
   // Handle workspace selection
   // - Default: switch workspace in same window (in-window switching)

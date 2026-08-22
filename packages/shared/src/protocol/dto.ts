@@ -23,6 +23,28 @@ import type {
   CredentialAuthRequest as SharedCredentialAuthRequest,
 } from '../agent/index'
 
+export interface PerformanceProcessInfo {
+  id: string
+  kind: 'server' | 'agent' | 'mcp' | 'component'
+  name: string
+  sessionId?: string
+  workspaceId?: string
+  sourceSlug?: string
+  pid?: number
+  rssBytes?: number
+  heapUsedBytes?: number
+  status?: string
+  details?: string
+}
+
+export interface PerformanceSnapshot {
+  capturedAt: number
+  total: { rssBytes: number; heapUsedBytes: number; heapTotalBytes: number; externalBytes: number; arrayBuffersBytes: number; processCount: number; mcpCount: number; agentCount: number }
+  processes: PerformanceProcessInfo[]
+  warmRuntimeLimit: number
+  warmRuntimeCount: number
+}
+
 // Re-export generateMessageId for handler convenience
 export { generateMessageId } from '@craft-agent/core/types'
 

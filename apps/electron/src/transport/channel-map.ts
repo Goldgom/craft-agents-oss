@@ -176,6 +176,9 @@ export const CHANNEL_MAP = {
   setDefaultThinkingLevel: invoke(RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL),
   getNetworkProxySettings: invoke(RPC_CHANNELS.settings.GET_NETWORK_PROXY),
   setNetworkProxySettings: invoke(RPC_CHANNELS.settings.SET_NETWORK_PROXY),
+  getPerformanceSettings: invoke(RPC_CHANNELS.settings.GET_PERFORMANCE_SETTINGS),
+  setPerformanceSettings: invoke(RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS),
+  getPerformanceSnapshot: invoke(RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT),
 
   // Pi provider discovery
   getPiApiKeyProviders: invoke(RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS),

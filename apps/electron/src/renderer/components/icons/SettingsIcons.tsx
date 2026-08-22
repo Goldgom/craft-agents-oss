@@ -21,6 +21,7 @@ import {
   ToggleRight,
   UserCircle,
   Wrench,
+  Activity,
 } from 'lucide-react'
 import type { SettingsSubpage } from '../../../shared/types'
 
@@ -34,6 +35,7 @@ export const WorkspaceIcon = ({ className }: IconProps) => <Building2 className=
 export const PromptsIcon = ({ className }: IconProps) => <ScrollText className={className} />
 export const PermissionsIcon = ({ className }: IconProps) => <ShieldCheck className={className} />
 export const ToolsIcon = ({ className }: IconProps) => <Wrench className={className} />
+export const PerformanceIcon = ({ className }: IconProps) => <Activity className={className} />
 export const GuidesIcon = ({ className }: IconProps) => <BookOpen className={className} />
 export const LabelsIcon = ({ className }: IconProps) => <Tag className={className} />
 export const MessagingSettingsIcon = ({ className }: IconProps) => <MessageSquare className={className} />
@@ -55,6 +57,7 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   prompts: PromptsIcon,
   permissions: PermissionsIcon,
   tools: ToolsIcon,
+  performance: PerformanceIcon,
   guides: GuidesIcon,
   labels: LabelsIcon,
   messaging: MessagingSettingsIcon,

@@ -1887,4 +1887,22 @@
   "workspace.selectWorkspacePlaceholder": "选择 Workspace...",
   "workspace.serverAuthToken": "服务器认证令牌",
   "workspace.underDefaultFolder": ".craft-agent 文件夹下"
+  ,"settings.performance.title": "性能",
+  "settings.performance.description": "配置运行时回收并查看资源占用。",
+  "settings.performance.settingsTitle": "性能设置",
+  "settings.performance.maxWarmRuntimesDesc": "保留的空闲 Agent/MCP 运行时上限。降低此值可减少内存占用。",
+  "settings.performance.save": "保存",
+  "settings.performance.saved": "性能设置已保存",
+  "settings.performance.invalid": "请输入非负整数",
+  "settings.performance.warmCount": "{{count}} 个热运行时",
+  "settings.performance.analysisTitle": "性能分析",
+  "settings.performance.rss": "RSS",
+  "settings.performance.heapUsed": "已用堆",
+  "settings.performance.heapTotal": "堆总量",
+  "settings.performance.external": "外部内存",
+  "settings.performance.arrayBuffers": "ArrayBuffer",
+  "settings.performance.kindLabel": "类型",
+  "settings.performance.nameLabel": "名称",
+  "settings.performance.statusLabel": "状态",
+  "settings.performance.memoryLabel": "RSS"
 }

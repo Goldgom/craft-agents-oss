@@ -1,9 +1,15 @@
 <resources>
     <string name="app_name">Craft Agent</string>
-    <string name="server_url_hint">Remote WebSocket URL</string>
+    <string name="server_home_title">Choose a server</string>
+    <string name="server_home_description">Connect to a Craft Agent server. Model settings are managed after connecting.</string>
+    <string name="local_server">Local server</string>
+    <string name="local_server_description">A Craft Agent server running on this device or your local network.</string>
+    <string name="remote_server">Remote server</string>
+    <string name="remote_server_description">A Craft Agent server reached over the internet. Use wss:// in production.</string>
+    <string name="server_url_hint">WebSocket URL</string>
     <string name="server_token_hint">Server token (optional)</string>
-    <string name="connect">Connect</string>
-    <string name="change_server">Change server</string>
+    <string name="save_and_connect">Save and connect</string>
+    <string name="configure_server">Configure</string>
     <string name="reload">Reload</string>
     <string name="server_url_invalid">Enter a valid ws:// or wss:// WebSocket URL.</string>
     <string name="webview_error">Unable to load the server. Check the URL and connection.</string>

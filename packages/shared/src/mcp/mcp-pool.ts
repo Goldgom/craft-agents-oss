@@ -8,9 +8,13 @@
  *
  * Benefits:
  * - One MCP code path for all backends
- * - Shared clients across sessions (e.g., same Linear connection)
+ * - One client set per live session runtime, shared by that session's backends
  * - No credential cache files — main process has direct access
  * - Runtime source switching without session restart
+ *
+ * A pool carries session-specific state (large-response output path and
+ * summarization callback), so it must not be shared between sessions. The
+ * workspace-level discovered-tools cache below is the only cross-session cache.
  */
 
 import { CraftMcpClient, type McpClientConfig, type PoolClient } from './client.ts';
@@ -26,6 +30,26 @@ import {
   detectExtensionFromMagic,
   sanitizeFilename,
 } from '../utils/binary-detection.ts';
+
+export interface CachedMcpSourceTool {
+  name: string;
+  description?: string;
+}
+
+/**
+ * Tools already discovered by live session pools, keyed by workspace and source.
+ * Catalog/settings callers may inspect this cache without creating new MCP
+ * clients (which is especially important for stdio sources).
+ */
+const discoveredToolsByWorkspace = new Map<string, Map<string, CachedMcpSourceTool[]>>();
+
+export function getCachedMcpSourceTools(
+  workspaceRootPath: string,
+  sourceSlug: string,
+): CachedMcpSourceTool[] | undefined {
+  const tools = discoveredToolsByWorkspace.get(workspaceRootPath)?.get(sourceSlug);
+  return tools?.map(tool => ({ ...tool }));
+}
 
 /**
  * Configuration for an in-process API source server.
@@ -133,6 +157,15 @@ export class McpClientPool {
     this.sessionPath = options?.sessionPath;
   }
 
+  getDiagnostics(): Array<{ sourceSlug: string; transport: 'stdio' | 'http' | 'api'; connected: boolean; toolCount: number }> {
+    return Array.from(this.clients.entries()).map(([sourceSlug, client]) => ({
+      sourceSlug,
+      transport: client instanceof CraftMcpClient ? client.transportType : 'api',
+      connected: client instanceof CraftMcpClient ? client.isConnected() : true,
+      toolCount: this.toolCache.get(sourceSlug)?.length ?? 0,
+    }))
+  }
+
   /**
    * Set the summarize callback for large response handling.
    * Typically called after agent creation: pool.setSummarizeCallback(agent.getSummarizeCallback())
@@ -158,6 +191,17 @@ export class McpClientPool {
     const tools = await client.listTools();
     this.clients.set(slug, client);
     this.toolCache.set(slug, tools);
+    if (this.workspaceRootPath) {
+      let workspaceCache = discoveredToolsByWorkspace.get(this.workspaceRootPath);
+      if (!workspaceCache) {
+        workspaceCache = new Map();
+        discoveredToolsByWorkspace.set(this.workspaceRootPath, workspaceCache);
+      }
+      workspaceCache.set(slug, tools.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+      })));
+    }
 
     for (const tool of tools) {
       const proxyName = proxyToolName(slug, tool.name);

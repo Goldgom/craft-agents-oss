@@ -22,6 +22,7 @@ import WorkspaceSettingsPage from './WorkspaceSettingsPage'
 import WorkspacePromptsPage from './WorkspacePromptsPage'
 import PermissionsSettingsPage from './PermissionsSettingsPage'
 import ToolsSettingsPage from './ToolsSettingsPage'
+import PerformanceSettingsPage from './PerformanceSettingsPage'
 import GuidesSettingsPage from './GuidesSettingsPage'
 import LabelsSettingsPage from './LabelsSettingsPage'
 import MessagingSettingsPage from './MessagingSettingsPage'
@@ -43,6 +44,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   prompts: WorkspacePromptsPage,
   permissions: PermissionsSettingsPage,
   tools: ToolsSettingsPage,
+  performance: PerformanceSettingsPage,
   guides: GuidesSettingsPage,
   labels: LabelsSettingsPage,
   messaging: MessagingSettingsPage,

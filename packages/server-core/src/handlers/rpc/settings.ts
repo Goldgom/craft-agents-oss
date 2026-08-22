@@ -49,6 +49,9 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.sessions.SET_MODEL,
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
+  RPC_CHANNELS.settings.GET_PERFORMANCE_SETTINGS,
+  RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS,
+  RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT,
   RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
@@ -109,6 +112,11 @@ function parseGeneratedWorkspacePrompt(
 }
 
 export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): void {
+  const performanceManager = deps.sessionManager as typeof deps.sessionManager & {
+    getPerformanceSnapshot(): import('@craft-agent/shared/protocol').PerformanceSnapshot
+    getMaxWarmRuntimes(): number
+    setMaxWarmRuntimes(value: number): Promise<void>
+  }
   // ============================================================
   // Settings - Default Thinking Level (App-Level)
   // ============================================================
@@ -127,6 +135,19 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     }
     return { success: true }
   })
+
+  server.handle(RPC_CHANNELS.settings.GET_PERFORMANCE_SETTINGS, async () => {
+    const prefs = (await import('@craft-agent/shared/config')).loadPreferences()
+    return { maxWarmRuntimes: prefs.performance?.maxWarmRuntimes ?? performanceManager.getMaxWarmRuntimes() }
+  })
+  server.handle(RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS, async (_ctx, settings: { maxWarmRuntimes: number }) => {
+    if (!Number.isSafeInteger(settings?.maxWarmRuntimes) || settings.maxWarmRuntimes < 0) throw new Error('maxWarmRuntimes must be a non-negative integer')
+    const { updatePreferences } = await import('@craft-agent/shared/config')
+    updatePreferences({ performance: { maxWarmRuntimes: settings.maxWarmRuntimes } })
+    await performanceManager.setMaxWarmRuntimes(settings.maxWarmRuntimes)
+    return { success: true }
+  })
+  server.handle(RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT, async () => performanceManager.getPerformanceSnapshot())
 
   // ============================================================
   // Settings - Model (Session-Specific)

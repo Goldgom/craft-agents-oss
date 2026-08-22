@@ -130,6 +130,8 @@ export function TopBar({
   // and has no traffic lights regardless of host OS — collapse to a normal
   // 12px inset so the logo sits at the edge.
   const menuLeftPadding = isMac && !isWebUI ? 86 : 12
+  const isAndroidEmbedded = isWebUI
+    && new URLSearchParams(window.location.search).get('embedded') === 'android'
 
   return (
     <div
@@ -170,7 +172,7 @@ export function TopBar({
         </div>
 
         {/* Server switcher — 当前运行服务端 (本机服务器 / 远程服务) */}
-        <ServerSwitcher />
+        {!isAndroidEmbedded && <ServerSwitcher />}
 
         {/* Back / Forward / Workspace selector (moved from center).
             In compact mode the back/forward buttons are dropped — the iOS-style

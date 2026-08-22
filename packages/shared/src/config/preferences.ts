@@ -24,6 +24,7 @@ export interface DiffViewerPreferences {
 }
 
 export interface UserPreferences {
+  performance?: { maxWarmRuntimes?: number }
   name?: string;
   timezone?: string;
   location?: UserLocation;
@@ -88,6 +89,9 @@ export function updatePreferences(updates: Partial<UserPreferences>): UserPrefer
     diffViewer: updates.diffViewer
       ? { ...current.diffViewer, ...updates.diffViewer }
       : current.diffViewer,
+    performance: updates.performance
+      ? { ...current.performance, ...updates.performance }
+      : current.performance,
   };
   savePreferences(updated);
   return updated;
