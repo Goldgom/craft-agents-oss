@@ -6,12 +6,16 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.text.InputType;
-import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -71,10 +75,8 @@ public final class MainActivity extends Activity {
 
     private SharedPreferences preferences;
     private LinearLayout root;
-    private LinearLayout toolbar;
     private FrameLayout content;
     private WebView webView;
-    private TextView serverLabel;
     private LocalWebServer localWebServer;
     private ServerMode activeMode;
     private boolean showingServerConfiguration;
@@ -82,6 +84,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        enableImmersiveMode();
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         migrateLegacyServerProfile();
         buildUi();
@@ -109,29 +112,6 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(16, 17, 20));
 
-        toolbar = new LinearLayout(this);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(12), dp(4), dp(6), dp(4));
-        toolbar.setBackgroundColor(Color.rgb(16, 17, 20));
-
-        serverLabel = new TextView(this);
-        serverLabel.setTextColor(Color.WHITE);
-        serverLabel.setTextSize(14);
-        serverLabel.setSingleLine(true);
-        serverLabel.setEllipsize(TextUtils.TruncateAt.END);
-        toolbar.addView(serverLabel, new LinearLayout.LayoutParams(0, dp(44), 1f));
-
-        Button reload = toolbarButton(getString(R.string.reload));
-        reload.setOnClickListener(view -> webView.reload());
-        toolbar.addView(reload);
-
-        Button configure = toolbarButton(getString(R.string.configure_server));
-        configure.setOnClickListener(view -> showServerConfiguration(true));
-        toolbar.addView(configure);
-
-        root.addView(toolbar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)));
-
         content = new FrameLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -139,18 +119,6 @@ public final class MainActivity extends Activity {
         webView = new WebView(this);
         configureWebView(webView);
         setContentView(root);
-    }
-
-    private Button toolbarButton(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextSize(12);
-        button.setTextColor(Color.WHITE);
-        button.setAllCaps(false);
-        button.setMinHeight(0);
-        button.setMinWidth(0);
-        button.setPadding(dp(8), 0, dp(8), 0);
-        return button;
     }
 
     private void configureWebView(WebView view) {
@@ -167,6 +135,7 @@ public final class MainActivity extends Activity {
         settings.setUserAgentString(settings.getUserAgentString() + " CraftAgentAndroid/" + BuildConfig.VERSION_NAME);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
+        view.addJavascriptInterface(new AndroidBridge(), "CraftAgentAndroid");
         view.setWebChromeClient(new WebChromeClient());
         view.setWebViewClient(new WebViewClient() {
             @Override
@@ -185,7 +154,6 @@ public final class MainActivity extends Activity {
 
     private void showServerConfiguration(boolean allowCancel) {
         showingServerConfiguration = true;
-        toolbar.setVisibility(View.GONE);
 
         ServerMode initialMode = activeMode;
         if (initialMode == null) {
@@ -363,7 +331,6 @@ public final class MainActivity extends Activity {
 
         activeMode = mode;
         showingServerConfiguration = false;
-        serverLabel.setText(mode == ServerMode.LOCAL ? R.string.local_server : R.string.remote_server);
 
         try {
             int port = getLocalWebPort();
@@ -377,8 +344,8 @@ public final class MainActivity extends Activity {
 
     private void showWebView() {
         showingServerConfiguration = false;
-        toolbar.setVisibility(View.VISIBLE);
         replaceContent(webView);
+        enableImmersiveMode();
     }
 
     private void replaceContent(View view) {
@@ -430,6 +397,55 @@ public final class MainActivity extends Activity {
         }
         if (localWebServer != null) localWebServer.stop();
         super.onDestroy();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        enableImmersiveMode();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && !showingServerConfiguration) enableImmersiveMode();
+    }
+
+    /**
+     * Keep the chat surface edge-to-edge by default. Android still lets users
+     * reveal the system bars temporarily with an edge swipe.
+     */
+    private void enableImmersiveMode() {
+        Window window = getWindow();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                controller.setSystemBarsBehavior(
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            window.getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        }
+    }
+
+    /** Methods intentionally limited to local app navigation, exposed to the bundled UI. */
+    private final class AndroidBridge {
+        @JavascriptInterface
+        public void reload() {
+            runOnUiThread(() -> webView.reload());
+        }
+
+        @JavascriptInterface
+        public void configureServer() {
+            runOnUiThread(() -> showServerConfiguration(true));
+        }
     }
 
     private int dp(int value) {

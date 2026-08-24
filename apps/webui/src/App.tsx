@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createWebApi } from './adapter/web-api'
+import { MobileAppMenu, useMobileAppViewport } from './mobile-app'
 import type { WsRpcClient } from '../../electron/src/transport/client'
 
 // Lazy-load the Electron App after window.electronAPI is set up.
@@ -63,6 +64,7 @@ function ErrorScreen({ message, onRetry, embedded }: { message: string; onRetry:
 }
 
 export default function App() {
+  useMobileAppViewport()
   const [phase, setPhase] = useState<Phase>('loading')
   const [error, setError] = useState('')
   const clientRef = useRef<WsRpcClient | null>(null)
@@ -167,6 +169,7 @@ export default function App() {
   return (
     <Suspense fallback={<LoadingScreen />}>
       <ElectronApp />
+      <MobileAppMenu />
     </Suspense>
   )
 }

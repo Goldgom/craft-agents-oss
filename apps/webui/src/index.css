@@ -40,13 +40,87 @@ html, body, #root {
   max-width: 100%;
 }
 
-body {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+/*
+ * Android WebView reports a changing visual viewport when the IME opens.
+ * Use that value for the application root so the composer stays visible and
+ * never rely on CSS zoom, which changes the renderer's effective breakpoint.
+ */
+html[data-mobile-app="android"],
+html[data-mobile-app="android"] body,
+html[data-mobile-app="android"] #root {
+  width: 100%;
+  height: var(--app-viewport-height, 100dvh);
+  min-height: var(--app-viewport-height, 100dvh);
+  overscroll-behavior: none;
 }
 
-/* 120% zoom on mobile viewports for better readability */
-@media (max-width: 768px) {
-  html {
-    zoom: 1.2;
-  }
+html[data-mobile-app="android"] {
+  /* The shared renderer uses this variable for both its fixed top bar and
+     the content offset below it, keeping controls clear of display cutouts. */
+  --topbar-height: calc(56px + env(safe-area-inset-top, 0px));
+}
+
+html[data-mobile-app="android"] body {
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-mobile-app="android"] .h-screen {
+  height: var(--app-viewport-height, 100dvh) !important;
+}
+
+.mobile-app-menu {
+  position: fixed;
+  z-index: var(--z-modal, 200);
+  top: calc(env(safe-area-inset-top, 0px) + 64px);
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.mobile-app-menu > * {
+  pointer-events: auto;
+}
+
+.mobile-app-menu__trigger {
+  width: 44px;
+  height: 44px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--background) 90%, transparent);
+  box-shadow: var(--shadow-modal-small, 0 6px 18px rgb(0 0 0 / 18%));
+  color: var(--foreground);
+  font-size: 27px;
+  line-height: 1;
+  backdrop-filter: blur(12px);
+}
+
+.mobile-app-menu__trigger:active {
+  transform: scale(.94);
+}
+
+.mobile-app-menu__panel {
+  display: grid;
+  min-width: 148px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover, var(--background));
+  box-shadow: var(--shadow-modal-small, 0 6px 18px rgb(0 0 0 / 18%));
+}
+
+.mobile-app-menu__panel button {
+  min-height: 44px;
+  padding: 0 16px;
+  color: var(--foreground);
+  font-size: 15px;
+  text-align: left;
+}
+
+.mobile-app-menu__panel button + button {
+  border-top: 1px solid var(--border);
 }
