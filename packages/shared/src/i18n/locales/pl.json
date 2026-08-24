@@ -1947,5 +1947,6 @@
   "settings.promptOverview.save": "Zapisz instrukcje",
   "settings.promptOverview.saved": "Ustawienia promptu zapisane",
   "settings.promptOverview.saveError": "Nie udało się zapisać ustawień promptu"
-  ,"settings.prompts.totalPrompt": "Pełny prompt"
+  ,"settings.prompts.totalPrompt": "Pełny prompt",
+  "settings.promptOverview.remoteUpgrade": "Ten zdalny serwer nie obsługuje jeszcze pełnego przeglądu promptu. Zaktualizuj serwer, aby włączyć konfigurację i edycję."
 }

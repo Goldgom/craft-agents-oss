@@ -1947,5 +1947,6 @@
   "settings.promptOverview.save": "指示を保存",
   "settings.promptOverview.saved": "プロンプト設定を保存しました",
   "settings.promptOverview.saveError": "プロンプト設定の保存に失敗しました"
-  ,"settings.prompts.totalPrompt": "総合プロンプト"
+  ,"settings.prompts.totalPrompt": "総合プロンプト",
+  "settings.promptOverview.remoteUpgrade": "このリモートサーバーは完全なプロンプト概要にまだ対応していません。リモートサーバーを更新すると設定と編集を有効にできます。"
 }

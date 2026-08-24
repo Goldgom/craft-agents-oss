@@ -1947,5 +1947,6 @@
   "settings.promptOverview.save": "Save instructions",
   "settings.promptOverview.saved": "Prompt settings saved",
   "settings.promptOverview.saveError": "Failed to save prompt settings"
-  ,"settings.prompts.totalPrompt": "Total prompt"
+  ,"settings.prompts.totalPrompt": "Total prompt",
+  "settings.promptOverview.remoteUpgrade": "This remote server does not support the full prompt overview yet. Upgrade the remote server to enable prompt capabilities and editing."
 }

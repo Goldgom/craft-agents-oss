@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +22,12 @@ const SOURCE_KEYS: Record<SystemPromptSource['source'], string> = {
   debug: 'debug',
 }
 
+function isMissingRemoteHandler(error: unknown): boolean {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
+  const message = error instanceof Error ? error.message : String(error)
+  return code === 'CHANNEL_NOT_FOUND' || message.includes('No handler for:')
+}
+
 export default function PromptOverviewPage() {
   const { t } = useTranslation()
   const { activeWorkspaceId } = useAppShellContext()
@@ -30,29 +36,63 @@ export default function PromptOverviewPage() {
   const [capabilities, setCapabilities] = useState<Record<string, boolean>>({})
   const [editableInstructions, setEditableInstructions] = useState('')
   const [saving, setSaving] = useState(false)
+  const [legacyRemote, setLegacyRemote] = useState(false)
 
   const load = useCallback(async () => {
-    if (!activeWorkspaceId) { setSources([]); setLoading(false); return }
+    if (!activeWorkspaceId) { setSources([]); setLegacyRemote(false); setLoading(false); return }
     setLoading(true)
+    let usingLegacyRemote = false
     try {
-      const [nextSources, settings] = await Promise.all([
-        window.electronAPI.getSystemPromptSources(activeWorkspaceId),
-        window.electronAPI.getSystemPromptSettings(),
-      ])
+      const nextSources = await window.electronAPI.getSystemPromptSources(activeWorkspaceId)
       setSources(nextSources)
+    } catch (error) {
+      if (isMissingRemoteHandler(error)) {
+        // Older remote servers do not know the aggregate system-prompt RPC.
+        // Workspace prompts are still useful and are supported by those servers.
+        try {
+          const prompts = await window.electronAPI.getWorkspacePrompts(activeWorkspaceId)
+          setSources(prompts.map(prompt => ({
+            id: `workspace-preference:${prompt.id}`,
+            source: 'workspace' as const,
+            title: prompt.title,
+            content: prompt.content,
+            enabled: prompt.enabled,
+          })))
+        } catch (fallbackError) {
+          setSources([])
+          if (!isMissingRemoteHandler(fallbackError)) {
+            toast.error(fallbackError instanceof Error ? fallbackError.message : t('settings.promptOverview.loadError'))
+          }
+        }
+        usingLegacyRemote = true
+      } else {
+        setSources([])
+        toast.error(error instanceof Error ? error.message : t('settings.promptOverview.loadError'))
+      }
+    }
+
+    try {
+      const settings = await window.electronAPI.getSystemPromptSettings()
       setCapabilities(settings.capabilities)
       setEditableInstructions(settings.editableInstructions ?? '')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('settings.promptOverview.loadError'))
-    } finally {
-      setLoading(false)
+      if (isMissingRemoteHandler(error)) {
+        setCapabilities({ browserTools: true, webSearch: true, structuredData: true, documentTools: true, themeDesign: true })
+        setEditableInstructions('')
+        usingLegacyRemote = true
+      } else {
+        toast.error(error instanceof Error ? error.message : t('settings.promptOverview.loadError'))
+      }
     }
+    setLegacyRemote(usingLegacyRemote)
+    setLoading(false)
   }, [activeWorkspaceId, t])
 
   useEffect(() => { void load() }, [load])
 
   const activeCount = useMemo(() => sources.filter(source => source.enabled).length, [sources])
   const saveSettings = async (nextCapabilities = capabilities, nextInstructions = editableInstructions) => {
+    if (legacyRemote) return
     setSaving(true)
     try {
       await window.electronAPI.setSystemPromptSettings({ capabilities: nextCapabilities, editableInstructions: nextInstructions })
@@ -77,6 +117,12 @@ export default function PromptOverviewPage() {
       <div className="min-h-0 flex-1 mask-fade-y">
         <ScrollArea className="h-full">
           <div className="mx-auto max-w-4xl space-y-7 px-5 py-7">
+            {legacyRemote && (
+              <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>{t('settings.promptOverview.remoteUpgrade')}</span>
+              </div>
+            )}
             <SettingsSection title={t('settings.promptOverview.capabilitiesTitle')} description={t('settings.promptOverview.capabilitiesDescription')}>
               <SettingsCard divided>
                 {(['browserTools', 'webSearch', 'structuredData', 'documentTools', 'themeDesign'] as const).map(capability => (
@@ -85,7 +131,7 @@ export default function PromptOverviewPage() {
                     label={t(`settings.promptOverview.capability.${capability}`)}
                     description={t(`settings.promptOverview.capability.${capability}Desc`)}
                     checked={capabilities[capability] !== false}
-                    disabled={loading || saving}
+                    disabled={loading || saving || legacyRemote}
                     onCheckedChange={checked => {
                       const next = { ...capabilities, [capability]: checked }
                       setCapabilities(next)
@@ -97,8 +143,8 @@ export default function PromptOverviewPage() {
             </SettingsSection>
             <SettingsSection title={t('settings.promptOverview.editableTitle')} description={t('settings.promptOverview.editableDescription')}>
               <SettingsCard>
-                <SettingsTextarea value={editableInstructions} onChange={setEditableInstructions} maxLength={20000} rows={7} placeholder={t('settings.promptOverview.editablePlaceholder')} inCard />
-                <div className="flex justify-end border-t border-border/50 px-4 py-3"><Button disabled={loading || saving} onClick={() => void saveSettings()}>{t('settings.promptOverview.save')}</Button></div>
+                <SettingsTextarea value={editableInstructions} onChange={setEditableInstructions} maxLength={20000} rows={7} placeholder={t('settings.promptOverview.editablePlaceholder')} inCard disabled={legacyRemote} />
+                <div className="flex justify-end border-t border-border/50 px-4 py-3"><Button disabled={loading || saving || legacyRemote} onClick={() => void saveSettings()}>{t('settings.promptOverview.save')}</Button></div>
               </SettingsCard>
             </SettingsSection>
             <SettingsSection

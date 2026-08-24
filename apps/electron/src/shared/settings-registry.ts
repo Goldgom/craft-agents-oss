@@ -36,6 +36,7 @@ export interface SettingsPageDefinition {
  */
 export const SETTINGS_PAGES = [
   { id: 'app' as const, labelKey: 'settings.app.title', descriptionKey: 'settings.app.description' },
+  { id: 'preferences' as const, labelKey: 'settings.preferences.title', descriptionKey: 'settings.preferences.description' },
   { id: 'ai' as const, labelKey: 'settings.ai.title', descriptionKey: 'settings.ai.description' },
   { id: 'appearance' as const, labelKey: 'settings.appearance.title', descriptionKey: 'settings.appearance.description' },
   { id: 'input' as const, labelKey: 'settings.input.title', descriptionKey: 'settings.input.description' },
@@ -51,7 +52,6 @@ export const SETTINGS_PAGES = [
   { id: 'remoteServers' as const, labelKey: 'settings.remoteServers.title', descriptionKey: 'settings.remoteServers.description' },
   { id: 'server' as const, labelKey: 'settings.server.title', descriptionKey: 'settings.server.description' },
   { id: 'shortcuts' as const, labelKey: 'settings.shortcuts.title', descriptionKey: 'settings.shortcuts.description' },
-  { id: 'preferences' as const, labelKey: 'settings.preferences.title', descriptionKey: 'settings.preferences.description' },
 ] satisfies readonly SettingsPageDefinition[]
 
 /**

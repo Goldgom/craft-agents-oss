@@ -1947,5 +1947,6 @@
   "settings.promptOverview.save": "Anweisungen speichern",
   "settings.promptOverview.saved": "Prompt-Einstellungen gespeichert",
   "settings.promptOverview.saveError": "Prompt-Einstellungen konnten nicht gespeichert werden"
-  ,"settings.prompts.totalPrompt": "Gesamtprompt"
+  ,"settings.prompts.totalPrompt": "Gesamtprompt",
+  "settings.promptOverview.remoteUpgrade": "Dieser Remote-Server unterstützt die vollständige Prompt-Übersicht noch nicht. Aktualisieren Sie den Remote-Server, um Konfiguration und Bearbeitung zu aktivieren."
 }

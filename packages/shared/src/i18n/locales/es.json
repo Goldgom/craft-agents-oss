@@ -1947,5 +1947,6 @@
   "settings.promptOverview.save": "Guardar instrucciones",
   "settings.promptOverview.saved": "Ajustes guardados",
   "settings.promptOverview.saveError": "No se pudieron guardar los ajustes"
-  ,"settings.prompts.totalPrompt": "Prompt total"
+  ,"settings.prompts.totalPrompt": "Prompt total",
+  "settings.promptOverview.remoteUpgrade": "Este servidor remoto aún no admite la vista completa del prompt. Actualiza el servidor remoto para habilitar la configuración y edición."
 }

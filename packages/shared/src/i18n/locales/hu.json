@@ -1947,5 +1947,6 @@
   "settings.promptOverview.save": "Utasítások mentése",
   "settings.promptOverview.saved": "Promptbeállítások mentve",
   "settings.promptOverview.saveError": "A promptbeállítások mentése sikertelen"
-  ,"settings.prompts.totalPrompt": "Teljes prompt"
+  ,"settings.prompts.totalPrompt": "Teljes prompt",
+  "settings.promptOverview.remoteUpgrade": "Ez a távoli szerver még nem támogatja a teljes promptáttekintést. Frissítse a távoli szervert a konfiguráció és szerkesztés engedélyezéséhez."
 }

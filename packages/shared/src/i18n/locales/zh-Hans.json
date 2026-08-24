@@ -1947,5 +1947,6 @@
   "settings.promptOverview.save": "保存指令",
   "settings.promptOverview.saved": "提示词设置已保存",
   "settings.promptOverview.saveError": "保存提示词设置失败"
-  ,"settings.prompts.totalPrompt": "总提示词"
+  ,"settings.prompts.totalPrompt": "总提示词",
+  "settings.promptOverview.remoteUpgrade": "当前远程服务不支持完整的总提示词页面。升级远程服务后可启用能力配置和编辑功能。"
 }
