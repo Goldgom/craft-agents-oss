@@ -59,6 +59,7 @@ export function PanelSlot({
   const setFocusedPanel = useSetAtom(focusedPanelIdAtom)
   const parentContext = useAppShellContext()
   const navState = parseRouteToNavigationState(entry.route)
+  const isChatPanel = navState?.navigator === 'sessions' && !!navState.details
 
   const handleClose = useCallback(() => {
     closePanel(entry.id)
@@ -109,6 +110,7 @@ export function PanelSlot({
       <div
         onPointerDown={handlePointerDown}
         data-panel-role="content"
+        data-theme-area={isChatPanel ? 'chat' : undefined}
         data-compact={isCompact || undefined}
         className={cn(
           'h-full overflow-hidden relative @container/panel',
@@ -116,6 +118,12 @@ export function PanelSlot({
           'bg-foreground-2',
         )}
         style={{
+          // The chat panel itself is the opaque layer that previously hid the
+          // scenic background. Apply the user-controlled alpha at this level,
+          // while leaving headers/settings and other panels untouched.
+          ...(isChatPanel
+            ? { backgroundColor: 'color-mix(in srgb, var(--background) var(--craft-chat-panel-opacity, 100%), transparent)' }
+            : {}),
           // In multi-panel, unfocused panels override --background so all
           // bg-background children render at the elevated (dimmed) background.
           ...(!isFocusedPanel && !isOnly

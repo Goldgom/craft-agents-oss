@@ -355,7 +355,8 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
   // ============================================================
   // Theme packs (background + chat/sidebar textures + style JSON).
   // Also compatible with DSH skin folders (skin.json + assets/*.webp).
-  // Only declarative files are read — plugin JS is never executed.
+  // CSS and declared assets are read; compatibility JS is only evaluated in
+  // the renderer after the user explicitly enables theme scripts.
   // ============================================================
 
   server.handle(RPC_CHANNELS.theme.GET_PACKS, async () => {
@@ -453,12 +454,19 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
     const { loadToolIconConfig } = await import('@craft-agent/shared/utils/cli-icon-resolver')
     const { encodeIconToDataUrl } = await import('@craft-agent/shared/utils/icon-encoder')
     const { join } = await import('path')
+    const { getBundledAssetsDir } = await import('@craft-agent/shared/utils/paths')
 
     const toolIconsDir = getToolIconsDir()
     const config = loadToolIconConfig(toolIconsDir)
-    if (!config) return []
 
-    return config.tools
+    // Classify entries by stable id against the shipped mapping. The user config
+    // is intentionally editable, so comparing object identity or array position
+    // would incorrectly mark reordered/edited built-ins as custom.
+    const bundledDir = getBundledAssetsDir('tool-icons')
+    const bundledConfig = bundledDir ? loadToolIconConfig(bundledDir) : null
+    const builtinIds = new Set((bundledConfig?.tools ?? []).map(tool => tool.id))
+
+    const mapped = (config?.tools ?? [])
       .map(tool => {
         const iconPath = join(toolIconsDir, tool.icon)
         const iconDataUrl = encodeIconToDataUrl(iconPath)
@@ -468,9 +476,35 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
           displayName: tool.displayName,
           iconDataUrl,
           commands: tool.commands,
+          origin: builtinIds.has(tool.id) ? 'builtin' : 'custom',
         }
       })
       .filter(Boolean)
+
+    // These document helpers are bundled CLI entry points but do not need an
+    // icon mapping because they are exposed through the Bash environment.
+    const bundledCli = [
+      ['pdf-tool', 'PDF operations (extract, merge, split, info)', ['pdf-tool']],
+      ['xlsx-tool', 'Excel operations (read, write, export, info)', ['xlsx-tool']],
+      ['docx-tool', 'Word document creation and editing', ['docx-tool']],
+      ['pptx-tool', 'PowerPoint operations', ['pptx-tool']],
+      ['ical-tool', 'iCalendar file operations', ['ical-tool']],
+      ['img-tool', 'Image metadata and conversion operations', ['img-tool']],
+      ['doc-diff', 'Compare document revisions', ['doc-diff']],
+      ['markitdown', 'Convert documents and rich files to Markdown', ['markitdown']],
+    ] as const
+    const mappedIds = new Set(mapped.filter(Boolean).map(tool => tool!.id))
+    const documentTools = bundledCli
+      .filter(([id]) => !mappedIds.has(id))
+      .map(([id, description, commands]) => ({
+        id,
+        displayName: id,
+        iconDataUrl: '',
+        commands: [...commands],
+        description,
+        origin: 'builtin' as const,
+      }))
+    return [...mapped.filter(Boolean), ...documentTools]
   })
 
   // Logo URL resolution (uses Node.js filesystem cache for provider domains)

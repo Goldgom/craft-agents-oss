@@ -217,7 +217,7 @@ export function setBundledAssetsRoot(dir: string): void {
  *
  * Returns the first candidate that exists on disk, or undefined if none found.
  *
- * @param subfolder - Name of the assets subdirectory (e.g. 'docs', 'tool-icons', 'themes', 'permissions')
+ * @param subfolder - Name of the assets subdirectory (e.g. 'docs', 'tool-icons', 'themes', 'theme-packs', 'permissions')
  */
 export function getBundledAssetsDir(subfolder: string): string | undefined {
   const candidates = [

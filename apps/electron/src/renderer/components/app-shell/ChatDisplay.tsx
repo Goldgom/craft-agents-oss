@@ -2250,7 +2250,7 @@ function MessageBubble({
   if (message.role === 'assistant') {
     return (
       <div className="flex justify-start group">
-        <div className="relative max-w-[90%] bg-background shadow-minimal rounded-[8px] pl-6 pr-4 py-3 break-words min-w-0 select-text">
+        <div data-theme-bubble="assistant" className="theme-message-assistant-bubble relative max-w-[90%] bg-background shadow-minimal rounded-[8px] pl-6 pr-4 py-3 break-words min-w-0 select-text">
           {/* Pop-out button - visible on hover */}
           {onPopOut && !message.isStreaming && (
             <button

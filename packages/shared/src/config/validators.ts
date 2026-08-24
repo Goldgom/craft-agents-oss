@@ -1656,6 +1656,10 @@ export const ThemePackManifestSchema = z.object({
   style: ThemePackStyleSchema.optional(),
   colors: z.object({}).passthrough().optional(),
   source: z.enum(['dsh']).optional(),
+  customCss: z.string().optional(),
+  stylesheets: z.array(z.string()).optional(),
+  bodyAttr: z.string().optional(),
+  scripts: z.array(z.string()).optional(),
 }).passthrough();
 
 /**

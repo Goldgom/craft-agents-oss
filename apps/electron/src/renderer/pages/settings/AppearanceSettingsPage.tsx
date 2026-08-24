@@ -118,6 +118,8 @@ export default function AppearanceSettingsPage() {
     setColorTheme,
     font,
     setFont,
+    chatOpacity,
+    setChatOpacity,
     activeWorkspaceId,
     setWorkspaceColorTheme,
     themeLoadError,
@@ -128,6 +130,8 @@ export default function AppearanceSettingsPage() {
     setThemePack,
     importThemePack,
     deleteThemePack,
+    themePackScriptsEnabled,
+    setThemePackScriptsEnabled,
   } = useTheme()
   const { workspaces, sessionStatuses } = useAppShellContext()
 
@@ -388,6 +392,26 @@ export default function AppearanceSettingsPage() {
                       ]}
                     />
                   </SettingsRow>
+                  <SettingsRow
+                    label={t("settings.appearance.chatOpacity")}
+                    description={t("settings.appearance.chatOpacityDesc")}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        aria-label={t("settings.appearance.chatOpacity")}
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={Math.round(chatOpacity * 100)}
+                        onChange={(event) => setChatOpacity(Number(event.target.value) / 100)}
+                        className="w-32 accent-accent"
+                      />
+                      <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">
+                        {Math.round(chatOpacity * 100)}%
+                      </span>
+                    </div>
+                  </SettingsRow>
                   <SettingsRow label={t("settings.appearance.language")}>
                     <SettingsMenuSelect
                       value={(i18n.resolvedLanguage ?? i18n.language) as LanguageCode}
@@ -521,6 +545,9 @@ export default function AppearanceSettingsPage() {
                               {pack.source === 'dsh' && (
                                 <Info_Badge color="muted" className="ml-2">dsh</Info_Badge>
                               )}
+                              {pack.location === 'builtin' && (
+                                <Info_Badge color="muted" className="ml-2">built-in</Info_Badge>
+                              )}
                             </div>
                             {(pack.manifest.tagline || pack.manifest.author) && (
                               <div className="truncate text-xs text-muted-foreground">
@@ -539,14 +566,16 @@ export default function AppearanceSettingsPage() {
                               {t("settings.appearance.themePackApply")}
                             </Button>
                           )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label={t("settings.appearance.themePackDelete")}
-                            onClick={() => void deleteThemePack(pack.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {pack.location !== 'builtin' && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={t("settings.appearance.themePackDelete")}
+                              onClick={() => void deleteThemePack(pack.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -566,6 +595,14 @@ export default function AppearanceSettingsPage() {
                       <FolderOpen className="mr-1.5 h-4 w-4" />
                       {t("settings.appearance.themePackOpenFolder")}
                     </Button>
+                  </div>
+                  <div className="mt-3 border-t border-foreground/10 pt-3">
+                    <SettingsToggle
+                      label={t("settings.appearance.themePackScripts")}
+                      description={t("settings.appearance.themePackScriptsDesc")}
+                      checked={themePackScriptsEnabled}
+                      onCheckedChange={setThemePackScriptsEnabled}
+                    />
                   </div>
                 </SettingsCard>
               </SettingsSection>

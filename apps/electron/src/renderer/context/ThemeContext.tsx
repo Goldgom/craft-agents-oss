@@ -32,6 +32,9 @@ interface ThemeContextType {
   /** Set app-level default color theme */
   setColorTheme: (theme: string) => void
   setFont: (font: FontFamily) => void
+  /** Opacity of the chat panel background (0 = transparent, 1 = opaque). */
+  chatOpacity: number
+  setChatOpacity: (opacity: number) => void
 
   // Workspace-level theme override
   /** Active workspace ID (null if no workspace context) */
@@ -88,6 +91,9 @@ interface ThemeContextType {
   importThemePack: () => Promise<ThemePack | null>
   /** Delete an installed pack */
   deleteThemePack: (packId: string) => Promise<boolean>
+  /** Explicit opt-in for compatibility scripts from imported theme packs. */
+  themePackScriptsEnabled: boolean
+  setThemePackScriptsEnabled: (enabled: boolean) => void
 }
 
 interface StoredTheme {
@@ -112,6 +118,92 @@ const BUNDLED_THEMES = new Map<string, ThemeFile>(
     return [id, theme]
   })
 )
+
+function decodeAssetDataUrl(dataUrl: string): string | null {
+  const comma = dataUrl.indexOf(',')
+  if (comma < 0) return null
+
+  const meta = dataUrl.slice(0, comma)
+  const payload = dataUrl.slice(comma + 1)
+  try {
+    if (meta.includes(';base64')) {
+      const binary = atob(payload)
+      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
+      return new TextDecoder().decode(bytes)
+    }
+    return decodeURIComponent(payload)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Execute a Harness client bundle against a deliberately tiny DOM facade.
+ * Scripts can add/remove style and link elements, set body data attributes and
+ * update the title, but receive no Electron bridge, network, storage, or real
+ * window/document object. This is opt-in because third-party JS is still code.
+ */
+function runThemeCompatibilityScript(source: string): () => void {
+  const cleanups: Array<() => void> = []
+  const unwrap = (value: any) => value?.__craftThemeElement ?? value
+  const wrapElement = (real: HTMLElement) => {
+    const dataset = real.dataset
+    return {
+      __craftThemeElement: real,
+      dataset,
+      get textContent() { return real.textContent ?? '' },
+      set textContent(value: string) { real.textContent = value },
+      get rel() { return real.getAttribute('rel') ?? '' },
+      set rel(value: string) { real.setAttribute('rel', value) },
+      get href() { return real.getAttribute('href') ?? '' },
+      set href(value: string) { real.setAttribute('href', value) },
+      setAttribute: (name: string, value: string) => real.setAttribute(name, value),
+      remove: () => real.remove(),
+    }
+  }
+  const append = (parent: HTMLElement) => (...children: any[]) => children.forEach(child => parent.appendChild(unwrap(child)))
+  const body = wrapElement(document.body)
+  const head = { append: append(document.head), appendChild: (child: any) => document.head.appendChild(unwrap(child)) }
+  const fakeDocument: any = {
+    body,
+    head,
+    get title() { return document.title },
+    set title(value: string) { document.title = String(value) },
+    createElement: (tag: string) => wrapElement(document.createElement(tag)),
+    querySelector: (selector: string) => {
+      const result = document.querySelector(selector)
+      return result instanceof HTMLElement ? wrapElement(result) : null
+    },
+  }
+  const fakeWindow: any = { __ModuleLoader__: null, document: fakeDocument }
+  fakeWindow.__ModuleLoader__ = {
+    load: (definition: any) => {
+      if (!definition || typeof definition.factory !== 'function') return
+      const exports = definition.factory(() => { throw new Error('Theme script imports are disabled') }) ?? {}
+      if (typeof exports.apply !== 'function') return
+      const ctx = {
+        effect: (effect: unknown) => {
+          if (typeof effect !== 'function') return
+          try {
+            // Harness/Cordis uses effect(() => cleanup, description), while a
+            // few packs provide the cleanup directly. Support both forms.
+            const result = (effect as () => unknown)()
+            if (typeof result === 'function') cleanups.push(result as () => void)
+          } catch { /* ignore an unsupported effect */ }
+        },
+      }
+      try { exports.apply(ctx) } catch { /* a decorative script must never break the app */ }
+    },
+  }
+  const blocked = undefined
+  try {
+    const execute = new Function('window', 'document', 'fetch', 'XMLHttpRequest', 'WebSocket', 'localStorage', 'indexedDB', 'require', 'process', 'globalThis', `'use strict';\n${source}`)
+    execute(fakeWindow, fakeDocument, blocked, blocked, blocked, blocked, blocked, blocked, blocked, blocked)
+  } catch {
+    // Keep CSS/asset compatibility even when a package uses unsupported JS.
+  }
+  return () => { for (const cleanup of cleanups.reverse()) { try { cleanup() } catch { /* ignore cleanup */ } } }
+}
 
 interface ThemeProviderProps {
   children: ReactNode
@@ -157,6 +249,10 @@ export function ThemeProvider({
     return defaultColorTheme // Will be updated by config.json effect
   })
   const [font, setFontState] = useState<FontFamily>(stored?.font ?? defaultFont)
+  const [chatOpacity, setChatOpacityState] = useState(() => {
+    const value = storage.get<number>(storage.KEYS.chatOpacity, 1)
+    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1
+  })
   const [systemPreference, setSystemPreference] = useState<'light' | 'dark'>(getSystemPreference)
   const [previewColorTheme, setPreviewColorTheme] = useState<string | null>(null)
 
@@ -190,6 +286,9 @@ export function ThemeProvider({
   const [themePacks, setThemePacks] = useState<ThemePack[]>([])
   const [themePackId, setThemePackId] = useState<string | null>(null)
   const [activeThemePack, setActiveThemePack] = useState<ThemePack | null>(null)
+  const [themePackScriptsEnabled, setThemePackScriptsEnabledState] = useState(() =>
+    storage.get(storage.KEYS.themePackScripts, false)
+  )
   const [packAssets, setPackAssets] = useState<{
     background: ThemePackAsset | null
     chat: ThemePackAsset | null
@@ -350,7 +449,67 @@ export function ThemeProvider({
 
     // Always set theme override for semi-transparent background (vibrancy effect)
     root.dataset.themeOverride = 'true'
-  }, [effectiveColorTheme, font])
+    root.style.setProperty('--craft-chat-panel-opacity', `${chatOpacity * 100}%`)
+    root.style.setProperty('--craft-chat-bubble-opacity', `${chatOpacity * 100}%`)
+    root.style.setProperty('--craft-chat-opacity-number', String(chatOpacity))
+  }, [effectiveColorTheme, font, chatOpacity])
+
+  // Apply declarative CSS shipped by Harness-compatible packs. The bundle is
+  // parsed on the server as text; executable compatibility scripts are handled
+  // separately below and remain opt-in.
+  useEffect(() => {
+    const pack = activeThemePack
+    const body = document.body
+    const candidateAttr = pack?.manifest.bodyAttr?.trim()
+    const attr = candidateAttr && /^[A-Za-z_:][A-Za-z0-9_.:-]*$/.test(candidateAttr) ? candidateAttr : undefined
+    const styleId = 'craft-theme-pack-css'
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null
+    if (pack?.manifest.customCss) {
+      if (!styleEl) {
+        styleEl = document.createElement('style')
+        styleEl.id = styleId
+        document.head.appendChild(styleEl)
+      }
+      styleEl.textContent = pack.manifest.customCss
+    } else if (styleEl) {
+      styleEl.remove()
+      styleEl = null
+    }
+
+    const hadPackAttr = attr ? body.hasAttribute(attr) : false
+    if (attr) body.setAttribute(attr, '')
+    const isDsh = pack?.source === 'dsh'
+    const hadDarkAttr = body.hasAttribute('data-ds-dark-theme')
+    if (isDsh) body.toggleAttribute('data-ds-dark-theme', isDark)
+
+    return () => {
+      if (attr && !hadPackAttr) body.removeAttribute(attr)
+      if (isDsh && !hadDarkAttr) body.removeAttribute('data-ds-dark-theme')
+      if (styleEl) styleEl.remove()
+    }
+  }, [activeThemePack, isDark])
+
+  // Optional compatibility execution for Harness client bundles. The CSS and
+  // extra assets are always loaded; this effect only runs when explicitly on.
+  useEffect(() => {
+    const pack = activeThemePack
+    if (!pack || !themePackScriptsEnabled || !pack.manifest.scripts?.length) return
+    let cancelled = false
+    const disposers: Array<() => void> = []
+    void (async () => {
+      for (const scriptPath of pack.manifest.scripts ?? []) {
+        const asset = await window.electronAPI?.getThemePackAsset?.(pack.id, scriptPath)
+        if (cancelled || !asset?.dataUrl) continue
+        const source = decodeAssetDataUrl(asset.dataUrl)
+        if (!source) continue
+        disposers.push(runThemeCompatibilityScript(source))
+      }
+    })()
+    return () => {
+      cancelled = true
+      for (const dispose of disposers.reverse()) dispose()
+    }
+  }, [activeThemePack, themePackScriptsEnabled])
 
   // Apply dark/light class and theme-specific DOM attributes
   // This runs when preset loads or mode changes
@@ -680,6 +839,17 @@ export function ThemeProvider({
     return ok
   }, [refreshThemePacks, themePackId])
 
+  const setThemePackScriptsEnabled = useCallback((enabled: boolean) => {
+    setThemePackScriptsEnabledState(enabled)
+    storage.set(storage.KEYS.themePackScripts, enabled)
+  }, [])
+
+  const setChatOpacity = useCallback((opacity: number) => {
+    const next = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1
+    setChatOpacityState(next)
+    storage.set(storage.KEYS.chatOpacity, next)
+  }, [])
+
   const themePackName = activeThemePack?.manifest.name ?? null
 
   // Character standees (立绘) — rendered through the fixed stage element
@@ -710,6 +880,8 @@ export function ThemeProvider({
         setMode,
         setColorTheme,
         setFont,
+        chatOpacity,
+        setChatOpacity,
 
         // Workspace-level theme override
         activeWorkspaceId,
@@ -743,6 +915,8 @@ export function ThemeProvider({
         setThemePack,
         importThemePack,
         deleteThemePack,
+        themePackScriptsEnabled,
+        setThemePackScriptsEnabled,
       }}
     >
       {children}

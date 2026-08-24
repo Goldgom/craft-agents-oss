@@ -167,6 +167,9 @@ export interface ToolIconMapping {
   /** Data URL of the icon (e.g., data:image/png;base64,...) */
   iconDataUrl: string
   commands: string[]
+  description?: string
+  /** Whether this mapping ships with Craft Agent or was added by the user. */
+  origin?: 'builtin' | 'custom'
 }
 
 /**
@@ -547,6 +550,9 @@ export interface ElectronAPI {
   saveWorkspacePrompt(workspaceId: string, prompt: WorkspacePromptInput): Promise<WorkspacePrompt>
   deleteWorkspacePrompt(workspaceId: string, promptId: string): Promise<{ success: boolean }>
   generateWorkspacePrompt(workspaceId: string, description: string): Promise<{ title: string; content: string }>
+  getSystemPromptSources(workspaceId: string): Promise<import('@craft-agent/shared/protocol').SystemPromptSource[]>
+  getSystemPromptSettings(): Promise<import('@craft-agent/shared/config').SystemPromptSettings & { capabilities: Record<import('@craft-agent/shared/config').SystemPromptCapabilityId, boolean> }>
+  setSystemPromptSettings(settings: import('@craft-agent/shared/config').SystemPromptSettings): Promise<{ success: boolean }>
 
   // Workspace tool and feature guide catalogs
   listWorkspaceTools(workspaceId: string): Promise<import('@craft-agent/shared/protocol').WorkspaceToolCatalogResult>
@@ -1016,6 +1022,14 @@ export interface SourcesNavigationState {
   rightSidebar?: RightSidebarPanel
 }
 
+/** CLI tools catalog navigation state. */
+export interface ToolsNavigationState {
+  navigator: 'tools'
+  filter?: 'builtin' | 'custom'
+  details: null
+  rightSidebar?: RightSidebarPanel
+}
+
 /**
  * Settings navigation state
  *
@@ -1063,6 +1077,7 @@ export interface ProjectsNavigationState {
 export type NavigationState =
   | SessionsNavigationState
   | SourcesNavigationState
+  | ToolsNavigationState
   | SettingsNavigationState
   | SkillsNavigationState
   | AutomationsNavigationState
@@ -1075,6 +1090,10 @@ export const isSessionsNavigation = (
 export const isSourcesNavigation = (
   state: NavigationState
 ): state is SourcesNavigationState => state.navigator === 'sources'
+
+export const isToolsNavigation = (
+  state: NavigationState
+): state is ToolsNavigationState => state.navigator === 'tools'
 
 export const isSettingsNavigation = (
   state: NavigationState
@@ -1104,6 +1123,9 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `sources/source/${state.details.sourceSlug}`
     }
     return 'sources'
+  }
+  if (state.navigator === 'tools') {
+    return state.filter ? `tools/${state.filter}` : 'tools'
   }
   if (state.navigator === 'skills') {
     if (state.details?.type === 'skill') {
@@ -1149,6 +1171,11 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       return { navigator: 'sources', details: { type: 'source', sourceSlug } }
     }
     return { navigator: 'sources', details: null }
+  }
+
+  if (key === 'tools') return { navigator: 'tools', details: null }
+  if (key === 'tools/builtin' || key === 'tools/custom') {
+    return { navigator: 'tools', filter: key.slice(6) as 'builtin' | 'custom', details: null }
   }
 
   // Handle skills

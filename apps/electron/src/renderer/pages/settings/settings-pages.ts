@@ -20,6 +20,7 @@ import AppearanceSettingsPage from './AppearanceSettingsPage'
 import InputSettingsPage from './InputSettingsPage'
 import WorkspaceSettingsPage from './WorkspaceSettingsPage'
 import WorkspacePromptsPage from './WorkspacePromptsPage'
+import PromptOverviewPage from './PromptOverviewPage'
 import PermissionsSettingsPage from './PermissionsSettingsPage'
 import ToolsSettingsPage from './ToolsSettingsPage'
 import PerformanceSettingsPage from './PerformanceSettingsPage'
@@ -42,6 +43,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   input: InputSettingsPage,
   workspace: WorkspaceSettingsPage,
   prompts: WorkspacePromptsPage,
+  promptOverview: PromptOverviewPage,
   permissions: PermissionsSettingsPage,
   tools: ToolsSettingsPage,
   performance: PerformanceSettingsPage,

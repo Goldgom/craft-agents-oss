@@ -191,6 +191,51 @@ restyle the whole window. Manage them in Settings → Appearance → Theme Packs
 └── preview/light.webp  # optional previews shown in settings
 ```
 
+The writable location can be overridden by the host application with
+`CRAFT_THEME_PACKS_DIR`. Built-in packs are read from the application's
+`resources/theme-packs/` directory and cannot be deleted from the UI. During
+development, the repository-level `themes/<pack-id>/` directory is used as the
+same built-in source. The Electron asset copy step packages that directory
+verbatim.
+
+### Harness / DSH package compatibility
+
+Folders from Harness (DeepSeek Web GUI) can be installed directly. A package
+with `skin.json` is recognized in addition to the native `theme-pack.json`
+format:
+
+```
+themes/my-skin/
+├── skin.json
+├── preview/light.png
+├── preview/dark.png
+├── lib/client.js          # declarative CSS is extracted as text
+├── src/                    # preserved, not executed
+└── tests/                  # preserved, not parsed
+```
+
+The loader reads skin metadata, previews, recursively discovers image assets,
+and extracts generated `const css = "..."` stylesheets. Relative CSS URLs are
+inlined, so additional images and font files continue to work after the CSS is
+injected into Craft. Audio/video files and other supported resources remain
+available through the same pack asset loader.
+
+Harness client JavaScript is retained and can be enabled with **Allow theme
+scripts** in the Theme Packs settings. It runs only after explicit opt-in in a
+small DOM compatibility facade (for style/link tags, body data attributes,
+favicons and title changes); network, storage, Electron APIs and module
+imports are unavailable to the script. Keep this disabled for untrusted packs.
+Harness references such as `skins/my-skin/preview/light.png` are normalized to
+the actual package path.
+
+Native packs may set `customCss` to inline CSS or a relative `.css` file, and
+may list additional files with `stylesheets` and `scripts` arrays. All local
+stylesheet URLs are resolved relative to the pack and safely inlined.
+`bodyAttr` is applied while the pack is active and `data-ds-dark-theme` follows
+the current light/dark mode, allowing the packaged Harness CSS to work in the
+Craft renderer. Executable files remain inert unless the user opts into theme
+scripts in Settings.
+
 ### Manifest (theme-pack.json)
 
 ```json
@@ -208,6 +253,9 @@ restyle the whole window. Manage them in Settings → Appearance → Theme Packs
   "sidebarTexture": "sidebar.png",
   "characters": { "left": "char-left.png", "right": "char-right.png" },
   "preview": { "light": "preview/light.webp", "dark": "preview/dark.webp" },
+  "customCss": "styles/theme.css",
+  "stylesheets": ["styles/extra.css"],
+  "scripts": ["scripts/theme.js"],
   "style": {
     "backgroundSize": "cover",
     "backgroundPosition": "center",

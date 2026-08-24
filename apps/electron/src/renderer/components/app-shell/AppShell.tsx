@@ -33,6 +33,8 @@ import {
   Info,
   MailOpen,
   FolderKanban,
+  Terminal,
+  Wrench,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -113,6 +115,7 @@ import {
   useNavigationState,
   isSessionsNavigation,
   isSourcesNavigation,
+  isToolsNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
   isAutomationsNavigation,
@@ -122,6 +125,7 @@ import {
 import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
+import CliToolsNavigator from "./CliToolsNavigator"
 import { AutomationsListPanel } from "../automations/AutomationsListPanel"
 import { ProjectsListPanel } from "./ProjectsListPanel"
 import { APP_EVENTS, AGENT_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO_FILTER_KIND } from "../automations/types"
@@ -1813,6 +1817,16 @@ function AppShellContent({
     navigate(routes.view.sourcesLocal())
   }, [])
 
+  const handleToolsClick = useCallback(() => {
+    navigate(routes.view.tools())
+  }, [])
+  const handleBuiltinToolsClick = useCallback(() => {
+    navigate(routes.view.tools('builtin'))
+  }, [])
+  const handleCustomToolsClick = useCallback(() => {
+    navigate(routes.view.tools('custom'))
+  }, [])
+
   // Handler for skills view
   const handleSkillsClick = useCallback(() => {
     navigate(routes.view.skills())
@@ -2115,15 +2129,16 @@ function AppShellContent({
     }
     flattenTree(labelTree)
 
-    // 3. Sources, Skills, Settings
+    // 3. Sources, Tools, Skills, Settings
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
+    result.push({ id: 'nav:tools', type: 'nav', action: handleToolsClick })
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
     result.push({ id: 'nav:automations', type: 'nav', action: handleAutomationsClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick() })
     result.push({ id: 'nav:whats-new', type: 'nav', action: handleWhatsNewClick })
 
     return result
-  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
+  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleToolsClick, handleSkillsClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -2235,6 +2250,10 @@ function AppShellContent({
     // Sources navigator
     if (isSourcesNavigation(navState)) {
       return t("sidebar.sources")
+    }
+
+    if (isToolsNavigation(navState)) {
+      return t("sidebar.tools")
     }
 
     // Skills navigator
@@ -2573,6 +2592,32 @@ function AppShellContent({
                             onAddSource: () => openAddSource('local'),
                             sourceType: 'local',
                           },
+                        },
+                      ],
+                    },
+                    {
+                      id: "nav:tools",
+                      title: t("sidebar.tools"),
+                      icon: Wrench,
+                      variant: isToolsNavigation(navState) && !navState.filter ? "default" : "ghost",
+                      onClick: handleToolsClick,
+                      expandable: true,
+                      expanded: isExpanded('nav:tools'),
+                      onToggle: () => toggleExpanded('nav:tools'),
+                      items: [
+                        {
+                          id: "nav:tools:builtin",
+                          title: t("sidebar.builtinCli"),
+                          icon: Terminal,
+                          variant: isToolsNavigation(navState) && navState.filter === 'builtin' ? "default" : "ghost",
+                          onClick: handleBuiltinToolsClick,
+                        },
+                        {
+                          id: "nav:tools:custom",
+                          title: t("sidebar.customCli"),
+                          icon: Wrench,
+                          variant: isToolsNavigation(navState) && navState.filter === 'custom' ? "default" : "ghost",
+                          onClick: handleCustomToolsClick,
                         },
                       ],
                     },
@@ -3473,6 +3518,9 @@ function AppShellContent({
                 selectedSourceSlug={isSourcesNavigation(navState) && navState.details ? navState.details.sourceSlug : null}
                 localMcpEnabled={localMcpEnabled}
               />
+            )}
+            {isToolsNavigation(navState) && (
+              <CliToolsNavigator filter={navState.filter} />
             )}
             {isSkillsNavigation(navState) && activeWorkspaceId && (
               /* Skills List */

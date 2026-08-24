@@ -45,6 +45,15 @@ export interface PerformanceSnapshot {
   warmRuntimeCount: number
 }
 
+/** A labelled section of the system prompt shown in Prompt Overview. */
+export interface SystemPromptSource {
+  id: string
+  source: 'builtin' | 'user' | 'workspace' | 'project' | 'context' | 'debug'
+  title: string
+  content: string
+  enabled: boolean
+}
+
 // Re-export generateMessageId for handler convenience
 export { generateMessageId } from '@craft-agent/core/types'
 

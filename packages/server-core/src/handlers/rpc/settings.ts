@@ -22,6 +22,9 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.settings.PROMPTS_SAVE,
   RPC_CHANNELS.settings.PROMPTS_DELETE,
   RPC_CHANNELS.settings.PROMPTS_GENERATE,
+  RPC_CHANNELS.settings.PROMPTS_SYSTEM_GET,
+  RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_GET,
+  RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_SET,
   RPC_CHANNELS.settings.EXPORT_ALL_DATA,
   RPC_CHANNELS.settings.IMPORT_ALL_DATA,
   RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PATH,
@@ -460,6 +463,30 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const workspace = getWorkspaceOrThrow(workspaceId)
     const { loadWorkspacePrompts } = await import('@craft-agent/shared/workspaces')
     return loadWorkspacePrompts(workspace.rootPath)
+  })
+
+  // Return the current system-prompt sections with their originating source.
+  // This is read-only and intentionally excludes credentials and MCP headers.
+  server.handle(RPC_CHANNELS.settings.PROMPTS_SYSTEM_GET, async (_ctx, workspaceId: string) => {
+    const workspace = getWorkspaceOrThrow(workspaceId)
+    const { getSystemPromptSources } = await import('@craft-agent/shared/prompts/system')
+    return getSystemPromptSources(undefined, undefined, workspace.rootPath, workspace.rootPath)
+  })
+  server.handle(RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_GET, async () => {
+    const { getSystemPromptSettings } = await import('@craft-agent/shared/config/preferences')
+    return getSystemPromptSettings()
+  })
+  server.handle(RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_SET, async (_ctx, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('Invalid system prompt settings')
+    const raw = input as Record<string, unknown>
+    const capabilities = raw.capabilities && typeof raw.capabilities === 'object' ? raw.capabilities as Record<string, unknown> : {}
+    const allowed = ['browserTools', 'webSearch', 'structuredData', 'documentTools', 'themeDesign'] as const
+    const normalized: Record<string, boolean> = {}
+    for (const key of allowed) if (capabilities[key] !== undefined) normalized[key] = Boolean(capabilities[key])
+    const editableInstructions = typeof raw.editableInstructions === 'string' ? raw.editableInstructions.slice(0, 20_000) : ''
+    const { updatePreferences } = await import('@craft-agent/shared/config/preferences')
+    updatePreferences({ systemPrompt: { capabilities: normalized, editableInstructions } })
+    return { success: true }
   })
 
   // Upsert a preference prompt (manual or AI-generated)

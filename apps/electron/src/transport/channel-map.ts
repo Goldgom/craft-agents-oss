@@ -198,6 +198,9 @@ export const CHANNEL_MAP = {
   saveWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_SAVE),
   deleteWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_DELETE),
   generateWorkspacePrompt: invoke(RPC_CHANNELS.settings.PROMPTS_GENERATE),
+  getSystemPromptSources: invoke(RPC_CHANNELS.settings.PROMPTS_SYSTEM_GET),
+  getSystemPromptSettings: invoke(RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_GET),
+  setSystemPromptSettings: invoke(RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_SET),
 
   // Workspace tool and feature guide catalogs
   listWorkspaceTools: invoke(RPC_CHANNELS.catalog.LIST_TOOLS),

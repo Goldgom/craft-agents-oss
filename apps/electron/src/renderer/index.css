@@ -410,9 +410,25 @@ html[data-theme-pack] [data-theme-area="sidebar"]::before {
   background-repeat: var(--theme-pack-texture-repeat, no-repeat);
 }
 
+/* Chat panel transparency and Harness/DSH bubble color bridge. Theme packs
+   commonly expose --message-user-bg/--message-tips-bg rather than Craft's
+   Tailwind variables; the data attributes keep those colors overridable by
+   the pack stylesheet without affecting the rest of the application. */
+[data-theme-area="chat"] {
+  background-color: color-mix(in srgb, var(--background) var(--craft-chat-panel-opacity, 100%), transparent);
+}
+
+[data-theme-area="chat"] .theme-message-assistant-bubble {
+  background-color: color-mix(in srgb, var(--message-tips-bg, var(--background)) var(--craft-chat-bubble-opacity, 100%), transparent);
+}
+
+[data-theme-area="chat"] .theme-message-user-bubble {
+  background-color: color-mix(in srgb, var(--message-user-bg, var(--user-message-bubble)) var(--craft-chat-bubble-opacity, 100%), transparent);
+}
+
 html[data-theme-pack] [data-theme-area="chat"]::before {
   background-image: var(--theme-pack-chat-texture, none);
-  opacity: var(--theme-pack-chat-opacity, 0.9);
+  opacity: calc(var(--theme-pack-chat-opacity, 0.9) * var(--craft-chat-opacity-number, 1));
   background-blend-mode: var(--theme-pack-chat-blend, normal);
   background-size: var(--theme-pack-chat-size, var(--theme-pack-texture-size, auto));
   background-position: var(--theme-pack-chat-position, var(--theme-pack-texture-position, center));

@@ -28,6 +28,7 @@ export function isDetailNavState(navState: NavigationState | null): boolean {
     case 'settings':
       return navState.subpage !== null
     case 'sources':
+    case 'tools':
     case 'skills':
     case 'automations':
     case 'projects':

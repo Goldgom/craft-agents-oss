@@ -35,7 +35,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'projects' | 'settings'
+export type NavigatorType = 'sessions' | 'sources' | 'tools' | 'skills' | 'automations' | 'projects' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -44,6 +44,8 @@ export interface ParsedCompoundRoute {
   sessionFilter?: SessionFilter
   /** Source filter (only for sources navigator) */
   sourceFilter?: SourceFilter
+  /** CLI tool catalog filter (only for tools navigator) */
+  toolsFilter?: 'builtin' | 'custom'
   /** Automation filter (only for automations navigator) */
   automationFilter?: AutomationFilter
   /** Sessions presentation mode (only for sessions navigator). 'board' = Kanban view. */
@@ -63,7 +65,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'board', 'sources', 'skills', 'automations', 'projects', 'settings'
+  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'board', 'sources', 'tools', 'skills', 'automations', 'projects', 'settings'
 ]
 
 /**
@@ -158,6 +160,15 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
       }
     }
 
+    return null
+  }
+
+  // CLI tools navigator - supports built-in/custom filters.
+  if (first === 'tools') {
+    if (segments.length === 1) return { navigator: 'tools', details: null }
+    if (segments[1] === 'builtin' || segments[1] === 'custom') {
+      return { navigator: 'tools', toolsFilter: segments[1], details: null }
+    }
     return null
   }
 
@@ -305,6 +316,10 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
     return `${base}/source/${parsed.details.id}`
   }
 
+  if (parsed.navigator === 'tools') {
+    return parsed.toolsFilter ? `tools/${parsed.toolsFilter}` : 'tools'
+  }
+
   if (parsed.navigator === 'skills') {
     if (!parsed.details) return 'skills'
     return `skills/skill/${parsed.details.id}`
@@ -433,6 +448,11 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
       return { type: 'view', name: 'sources', params: {} }
     }
     return { type: 'view', name: 'source-info', id: compound.details.id, params: {} }
+  }
+
+  // Tools
+  if (compound.navigator === 'tools') {
+    return { type: 'view', name: 'tools', params: compound.toolsFilter ? { filter: compound.toolsFilter } : {} }
   }
 
   // Skills
@@ -567,6 +587,11 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
     }
   }
 
+  // Tools - include the optional built-in/custom filter.
+  if (compound.navigator === 'tools') {
+    return { navigator: 'tools', filter: compound.toolsFilter, details: null }
+  }
+
   // Skills
   if (compound.navigator === 'skills') {
     if (!compound.details) {
@@ -646,6 +671,12 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
       return { navigator: 'settings', subpage: 'preferences' }
     case 'sources':
       return { navigator: 'sources', details: null }
+    case 'tools':
+      return {
+        navigator: 'tools',
+        filter: parsed.params.filter === 'builtin' || parsed.params.filter === 'custom' ? parsed.params.filter : undefined,
+        details: null,
+      }
     case 'source-info':
       if (parsed.id) {
         return {
@@ -783,6 +814,14 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
       navigator: 'sources',
       sourceFilter: state.filter ?? undefined,
       details: state.details ? { type: 'source', id: state.details.sourceSlug } : null,
+    }
+  }
+
+  if (state.navigator === 'tools') {
+    return {
+      navigator: 'tools',
+      toolsFilter: state.filter,
+      details: null,
     }
   }
 

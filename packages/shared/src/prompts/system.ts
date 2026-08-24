@@ -1,4 +1,4 @@
-import { formatPreferencesForPrompt, getCoAuthorPreference } from '../config/preferences.ts';
+import { formatPreferencesForPrompt, getCoAuthorPreference, getSystemPromptSettings, type SystemPromptCapabilityId } from '../config/preferences.ts';
 import { getBrowserToolEnabled } from '../config/storage.ts';
 import { debug } from '../utils/debug.ts';
 import { existsSync, readFileSync, readdirSync } from 'fs';
@@ -12,7 +12,9 @@ import { formatBytes } from '../utils/binary-detection.ts';
 import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
+import type { SystemPromptSource } from '../protocol/dto.ts';
 import {
+  loadWorkspacePrompts,
   loadEnabledWorkspacePrompts,
   formatWorkspacePromptsForPrompt,
 } from '../workspaces/prompts.ts';
@@ -568,7 +570,7 @@ function getCraftAgentEnvironmentMarker(): string {
  * @param backendName - Backend name for "powered by X" text (default: 'Claude Code')
  * @param includeCoAuthoredBy - Whether to include the Co-Authored-By git trailer instruction (default: true)
  */
-function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string = 'Claude Code', includeCoAuthoredBy: boolean = true): string {
+export function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string = 'Claude Code', includeCoAuthoredBy: boolean = true): string {
   // Default to ${APP_ROOT}/workspaces/{id} if no path provided
   const workspacePath = workspaceRootPath || `${APP_ROOT}/workspaces/{id}`;
 
@@ -580,6 +582,7 @@ function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string
 
   // Environment marker for SDK JSONL detection
   const environmentMarker = getCraftAgentEnvironmentMarker();
+  const promptSettings = getSystemPromptSettings();
 
   const browserToolsSection = getBrowserToolEnabled() ? `
 ## Browser Tools
@@ -635,7 +638,7 @@ Use the browser as an **alternative/fallback** path when source setup is fragile
 - \`hide\` — temporarily done, may need browser again later in conversation
 ` : '';
 
-  return `${environmentMarker}
+  let assembled = `${environmentMarker}
 
 You are Craft Agent - an AI assistant that helps users connect and work across their data sources through a desktop interface.
 
@@ -664,6 +667,18 @@ Sources are external data connections. Each source has:
 - Sources: \`${workspacePath}/sources/{slug}/\`
 - Skills: \`${workspacePath}/skills/{slug}/\`
 - Theme: \`${workspacePath}/theme.json\`
+
+## Theme Package Design
+
+When the user asks you to design or customize a theme package, create a
+complete, portable package rather than only suggesting colors. Read the Themes
+documentation first, then define a valid \`theme-pack.json\` or Harness-compatible
+\`skin.json\`, include all referenced images/fonts/CSS/JS assets, and keep every
+manifest path relative to the package root. Prefer declarative CSS and explain
+any optional script behavior. Validate that the package can be imported without
+network access and that light/dark colors remain readable. Do not overwrite an
+installed package unless the user explicitly asks; write a new package folder
+or provide a previewable archive.
 
 ## Skills
 
@@ -1266,4 +1281,79 @@ You have a \`send_developer_feedback\` tool — a direct line to the Craft Agent
 **Write detailed markdown.** Use headings, bullet lists, code blocks. Include what happened, what you expected, and what would help. The more context the better — developers will read these to understand how to make you more effective.
 
 **Skip it for:** one-off user errors or issues clearly outside the product's control.` : ''}`;
+
+  // Keep the core safety/tool protocol fixed, while allowing optional
+  // capability documentation to be disabled to reduce prompt size.
+  if (!promptSettings.capabilities.webSearch) assembled = removePromptSection(assembled, '## Web Search')
+  if (!promptSettings.capabilities.structuredData) assembled = removePromptSection(assembled, '## Structured Data (Tables & Spreadsheets)')
+  if (!promptSettings.capabilities.documentTools) assembled = removePromptSection(assembled, '## Document Tools')
+  if (!promptSettings.capabilities.themeDesign) assembled = removePromptSection(assembled, '## Theme Package Design')
+  if (promptSettings.editableInstructions?.trim()) assembled += `\n\n## User supplemental instructions\n${promptSettings.editableInstructions.trim()}`
+  return assembled;
+}
+
+function removePromptSection(prompt: string, startHeading: string): string {
+  const start = prompt.indexOf(startHeading)
+  if (start < 0) return prompt
+  const end = prompt.indexOf('\n## ', start + startHeading.length)
+  return end < 0 ? prompt.slice(0, start).trimEnd() : `${prompt.slice(0, start)}${prompt.slice(end)}`
+}
+
+/** Return the current system prompt as labelled, source-aware sections. */
+export function getSystemPromptSources(
+  pinnedPreferencesPrompt?: string,
+  debugMode?: DebugModeConfig,
+  workspaceRootPath?: string,
+  workingDirectory?: string,
+  preset?: SystemPromptPreset | string,
+  backendName?: string,
+  includeCoAuthoredBy?: boolean,
+  projectContext?: ProjectPromptContext,
+): SystemPromptSource[] {
+  if (preset === 'mini') return [{ id: 'mini-system', source: 'builtin', title: 'Mini system prompt', content: getMiniAgentSystemPrompt(workspaceRootPath), enabled: true }]
+  const preferences = pinnedPreferencesPrompt ?? formatPreferencesForPrompt()
+  const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference()
+  const fullBuiltin = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy)
+  let coreBuiltin = fullBuiltin
+  const sources: SystemPromptSource[] = []
+  const capabilitySections: Array<[SystemPromptCapabilityId, string, string]> = [
+    ['webSearch', '## Web Search', 'Web search capability'],
+    ['structuredData', '## Structured Data (Tables & Spreadsheets)', 'Structured data rendering'],
+    ['documentTools', '## Document Tools', 'Document tools'],
+    ['browserTools', '## Browser Tools', 'Browser tools'],
+    ['themeDesign', '## Theme Package Design', 'Theme package design'],
+  ]
+  for (const [capability, heading, title] of capabilitySections) {
+    const section = extractPromptSection(fullBuiltin, heading)
+    if (section) {
+      sources.push({ id: `capability:${capability}`, source: 'builtin', title, content: section, enabled: getSystemPromptSettings().capabilities[capability] !== false })
+      coreBuiltin = removePromptSection(coreBuiltin, heading)
+    }
+  }
+  coreBuiltin = removePromptSection(coreBuiltin, '## User supplemental instructions')
+  sources.unshift({ id: 'craft-agent-system', source: 'builtin', title: 'Craft Agent core system prompt', content: coreBuiltin, enabled: true })
+  if (preferences.trim()) sources.push({ id: 'user-preferences', source: 'user', title: 'User preferences', content: preferences, enabled: true })
+  const editable = getSystemPromptSettings().editableInstructions?.trim()
+  if (editable) sources.push({ id: 'user-editable-instructions', source: 'user', title: 'User supplemental instructions', content: editable, enabled: true })
+  if (workspaceRootPath) {
+    for (const prompt of loadWorkspacePrompts(workspaceRootPath)) {
+      sources.push({ id: `workspace-preference:${prompt.id}`, source: 'workspace', title: prompt.title, content: prompt.content, enabled: prompt.enabled && prompt.content.trim().length > 0 })
+    }
+  }
+  if (projectContext) {
+    const content = formatProjectContextForPrompt(projectContext)
+    if (content.trim()) sources.push({ id: 'project-context', source: 'project', title: `Project: ${projectContext.name}`, content, enabled: true })
+  }
+  const projectContextFiles = getProjectContextFilesPrompt(workingDirectory)
+  if (projectContextFiles.trim()) sources.push({ id: 'context-files', source: 'context', title: 'Project context files', content: projectContextFiles, enabled: true })
+  const debugContext = debugMode?.enabled ? formatDebugModeContext(debugMode.logFilePath) : ''
+  if (debugContext.trim()) sources.push({ id: 'debug-mode', source: 'debug', title: 'Debug mode', content: debugContext, enabled: true })
+  return sources
+}
+
+function extractPromptSection(prompt: string, heading: string): string | undefined {
+  const start = prompt.indexOf(heading)
+  if (start < 0) return undefined
+  const end = prompt.indexOf('\n## ', start + heading.length)
+  return (end < 0 ? prompt.slice(start) : prompt.slice(start, end)).trim()
 }

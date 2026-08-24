@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Palette,
   ScrollText,
+  ListTree,
   Server,
   ShieldCheck,
   Sparkles,
@@ -33,6 +34,7 @@ export const AppearanceIcon = ({ className }: IconProps) => <Palette className={
 export const InputIcon = ({ className }: IconProps) => <Keyboard className={className} />
 export const WorkspaceIcon = ({ className }: IconProps) => <Building2 className={className} />
 export const PromptsIcon = ({ className }: IconProps) => <ScrollText className={className} />
+export const PromptOverviewIcon = ({ className }: IconProps) => <ListTree className={className} />
 export const PermissionsIcon = ({ className }: IconProps) => <ShieldCheck className={className} />
 export const ToolsIcon = ({ className }: IconProps) => <Wrench className={className} />
 export const PerformanceIcon = ({ className }: IconProps) => <Activity className={className} />
@@ -55,6 +57,7 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   input: InputIcon,
   workspace: WorkspaceIcon,
   prompts: PromptsIcon,
+  promptOverview: PromptOverviewIcon,
   permissions: PermissionsIcon,
   tools: ToolsIcon,
   performance: PerformanceIcon,

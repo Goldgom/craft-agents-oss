@@ -11,11 +11,19 @@
  * Run: bun scripts/copy-assets.ts
  */
 
-import { cpSync, copyFileSync, mkdirSync } from 'fs';
+import { cpSync, copyFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
 // Copy all resources (icons, themes, docs, permissions, tool-icons, etc.)
 cpSync('resources', 'dist/resources', { recursive: true });
+
+// Harness-compatible theme packages live at the repository root (`themes/<id>`).
+// Preserve their complete package layout in the distributable; the runtime only
+// reads declarative metadata and image assets and never executes plugin code.
+const bundledThemePacks = join('..', '..', 'themes');
+if (existsSync(bundledThemePacks)) {
+  cpSync(bundledThemePacks, join('dist', 'resources', 'theme-packs'), { recursive: true });
+}
 
 console.log('✓ Copied resources/ → dist/resources/');
 

@@ -485,8 +485,9 @@ export function UserMessageBubble({
           while the chip and pulsing icon make the waiting state obvious
           (#616 follow-up). */}
       <div
+        data-theme-bubble="user"
         className={cn(
-          "max-w-[80%] bg-user-message-bubble rounded-[16px] break-words min-w-0 select-text [&_p]:m-0",
+          "theme-message-user-bubble max-w-[80%] bg-user-message-bubble rounded-[16px] break-words min-w-0 select-text [&_p]:m-0",
           compactMode ? "px-4 py-2" : "px-5 py-3.5"
         )}
       >

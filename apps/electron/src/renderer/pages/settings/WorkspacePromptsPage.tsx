@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { ListTree, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -27,7 +27,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useAppShellContext } from '@/context/AppShellContext'
-import { routes } from '@/lib/navigate'
+import { navigate, routes } from '@/lib/navigate'
 import { cn } from '@/lib/utils'
 import {
   SettingsSection,
@@ -195,6 +195,10 @@ export default function WorkspacePromptsPage() {
         title={t('settings.prompts.title')}
         actions={
           <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => navigate(routes.view.settings('promptOverview'))}>
+              <ListTree className="h-3.5 w-3.5 mr-1.5" />
+              {t('settings.prompts.totalPrompt')}
+            </Button>
             <Button variant="outline" size="sm" onClick={openGenerator}>
               <Sparkles className="h-3.5 w-3.5 mr-1.5" />
               {t('settings.prompts.aiGenerate')}

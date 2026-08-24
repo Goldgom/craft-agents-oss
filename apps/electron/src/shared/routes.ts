@@ -152,6 +152,10 @@ export const routes = {
         ? `sources/local/source/${sourceSlug}` as const
         : 'sources/local' as const,
 
+    /** CLI tools view. Optional filter narrows the catalog to built-in/custom mappings. */
+    tools: (filter?: 'builtin' | 'custom') =>
+      filter ? `tools/${filter}` as const : 'tools' as const,
+
     /** Skills view (skills navigator). Pass a slug string for a local skill detail view. */
     skills: (skillSlug?: string) => {
       if (!skillSlug) return 'skills' as const

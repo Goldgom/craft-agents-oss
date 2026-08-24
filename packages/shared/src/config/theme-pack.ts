@@ -19,9 +19,9 @@
  * Skins distributed for DeepSeek Harness Web GUI (e.g.
  * github.com/Small-tailqwq/dsh-deep-whale) ship a `skin.json` and WebP
  * artwork under `assets/` / `preview/`. Such folders are detected as theme
- * packs automatically: only the DECLARATIVE parts are read (skin.json +
- * images) — the plugin's executable JS (`lib/`, `src/`) is never loaded or
- * executed. The mapping:
+ * packs automatically: the declarative parts are read (skin.json + images),
+ * while executable JS is retained only for an explicit renderer opt-in and
+ * is never evaluated by this server-side loader. The mapping:
  *   skin.json.id / name / nameEn / author / tagline / description / tags / accent
  *   assets/*palace-day* or *day*  → background (light)
  *   assets/*palace-night* or *night* → background (dark)
@@ -31,8 +31,9 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, cpSync, rmSync } from 'fs';
-import { join, basename, extname } from 'path';
+import { join, basename, extname, relative, sep } from 'path';
 import { CONFIG_DIR } from './paths.ts';
+import { getBundledAssetsDir } from '../utils/paths.ts';
 import { debug } from '../utils/debug.ts';
 import type { ThemeOverrides } from './theme.ts';
 
@@ -78,6 +79,14 @@ export interface ThemePackManifest {
   };
   /** Set for packs synthesized from a DSH skin.json. */
   source?: 'dsh';
+  /** Optional declarative stylesheet extracted from a Harness bundle. */
+  customCss?: string;
+  /** Optional stylesheet files relative to the pack directory. */
+  stylesheets?: string[];
+  /** Body data attribute used by Harness CSS selectors (e.g. data-dsh-foo). */
+  bodyAttr?: string;
+  /** Optional client scripts retained for explicit compatibility loading. */
+  scripts?: string[];
 }
 
 /** A parsed, on-disk theme pack. */
@@ -87,6 +96,8 @@ export interface ThemePack {
   manifest: ThemePackManifest;
   /** How the manifest was produced. */
   source: 'native' | 'dsh';
+  /** Built-in packs are read-only and shipped with the application. */
+  location: 'builtin' | 'user';
 }
 
 /**
@@ -107,6 +118,83 @@ export interface DshSkinManifest {
   order?: number;
 }
 
+export interface ThemePackResource {
+  path: string;
+  mimeType: string;
+  size: number;
+  kind: 'image' | 'font' | 'stylesheet' | 'script' | 'data' | 'other';
+}
+
+/**
+ * Extract CSS literals from a generated Harness client bundle without loading
+ * or evaluating the JavaScript module. This keeps the visual part of a skin
+ * usable while preserving the security boundary around executable plugins.
+ */
+function extractDshCss(packDir: string): string | undefined {
+  const candidates = ['lib/client.js', 'lib/client.mjs', 'lib/client.cjs', 'dist/client.js', 'dist/client.mjs'];
+  for (const relativePath of candidates) {
+    const path = join(packDir, relativePath);
+    if (!existsSync(path)) continue;
+    try {
+      const content = readFileSync(path, 'utf-8');
+      if (content.length > 4 * 1024 * 1024) continue;
+      const cssParts: string[] = [];
+      const pattern = /(?:const|let|var)\s+css\s*=\s*("(?:\\.|[^"\\])*")/g;
+      for (const match of content.matchAll(pattern)) {
+        try {
+          const value = JSON.parse(match[1]!);
+          if (typeof value === 'string' && value.trim()) cssParts.push(value);
+        } catch { /* ignore a non-JSON JS string literal */ }
+      }
+      if (cssParts.length) return cssParts.join('\n');
+    } catch { /* optional stylesheet */ }
+  }
+  return undefined;
+}
+
+function detectDshScripts(packDir: string): string[] {
+  return ['lib/client.js', 'lib/client.mjs', 'lib/client.cjs', 'dist/client.js', 'dist/client.mjs']
+    .filter((path) => existsSync(join(packDir, path)));
+}
+
+function resolvePackRelativePath(packDir: string, reference: string): string | null {
+  const normalized = reference.replace(/\\/g, '/').replace(/^\.\//, '')
+  if (!normalized || /^(?:data:|https?:|blob:)/i.test(normalized)) return null
+  const absolute = join(packDir, normalized)
+  const rel = relative(packDir, absolute)
+  if (rel.startsWith('..') || rel.includes(`..${sep}`) || rel.includes(':')) return null
+  return absolute
+}
+
+/**
+ * Resolve optional native-pack stylesheet files into one inline stylesheet.
+ * This keeps relative image/font URLs working when the renderer injects the
+ * resulting CSS as a <style> element.
+ */
+function loadPackStylesheets(packDir: string, manifest: ThemePackManifest): ThemePackManifest {
+  const cssParts: string[] = []
+  if (manifest.customCss) {
+    const cssReference = manifest.customCss.trim()
+    const referencedPath = resolvePackRelativePath(packDir, cssReference)
+    if (referencedPath && extname(referencedPath).toLowerCase() === '.css' && existsSync(referencedPath)) {
+      try {
+        cssParts.push(inlineCssAssetUrlsFromDir(packDir, readFileSync(referencedPath, 'utf-8'), relative(packDir, referencedPath).split(sep).join('/')))
+      } catch { /* retain no stylesheet on read failure */ }
+    } else {
+      cssParts.push(inlineCssAssetUrlsFromDir(packDir, manifest.customCss, ''))
+    }
+  }
+  for (const reference of manifest.stylesheets ?? []) {
+    const path = resolvePackRelativePath(packDir, reference)
+    if (!path || extname(path).toLowerCase() !== '.css') continue
+    try {
+      cssParts.push(inlineCssAssetUrlsFromDir(packDir, readFileSync(path, 'utf-8'), relative(packDir, path).split(sep).join('/')))
+    } catch { /* ignore an optional stylesheet */ }
+  }
+  const { stylesheets: _stylesheets, ...withoutStylesheets } = manifest
+  return cssParts.length ? { ...withoutStylesheets, customCss: cssParts.join('\n') } : withoutStylesheets
+}
+
 /** A theme pack asset read as a data URL (ready for CSS). */
 export interface ThemePackAsset {
   path: string;
@@ -123,7 +211,22 @@ const MANIFEST_FILENAMES = ['theme-pack.json', 'skin.json'] as const;
 /** Root directory where theme packs are installed. */
 export function getThemePacksDir(): string {
   // Read env dynamically so tests can isolate via CRAFT_CONFIG_DIR.
-  return join(process.env.CRAFT_CONFIG_DIR || CONFIG_DIR, 'theme-packs');
+  // CRAFT_THEME_PACKS_DIR lets a desktop/web shell explicitly choose the
+  // writable pack location without changing the rest of the config root.
+  return process.env.CRAFT_THEME_PACKS_DIR || join(process.env.CRAFT_CONFIG_DIR || CONFIG_DIR, 'theme-packs');
+}
+
+/** Read-only theme packs bundled by the Electron build. */
+export function getBundledThemePacksDir(): string | undefined {
+  const packaged = getBundledAssetsDir('theme-packs');
+  if (packaged) return packaged;
+  // Development source tree: the Harness packages are kept at repository
+  // root/themes rather than under Electron's resources directory.
+  const sourceCandidates = [
+    join(process.cwd(), 'themes'),
+    join(process.cwd(), '..', '..', 'themes'),
+  ];
+  return sourceCandidates.find((candidate) => existsSync(candidate));
 }
 
 /** Ensure the theme packs directory exists and return it. */
@@ -143,20 +246,30 @@ export function sanitizePackId(id: string): string {
   return cleaned || 'theme-pack';
 }
 
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif']);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif', '.apng', '.bmp', '.ico', '.tif', '.tiff', '.heic', '.jxl']);
 
 function isImageFile(name: string): boolean {
   return IMAGE_EXTENSIONS.has(extname(name).toLowerCase());
 }
 
-/** List image files in a directory (non-recursive). */
+/** List image files in a directory recursively, returning pack-relative paths. */
 function listImages(dir: string): string[] {
   if (!existsSync(dir)) return [];
   try {
-    return readdirSync(dir).filter((f) => {
-      const p = join(dir, f);
-      return statSync(p).isFile() && isImageFile(f);
-    });
+    const result: string[] = [];
+    const walk = (current: string) => {
+      for (const entry of readdirSync(current)) {
+        // Theme packages can contain source maps, tests and dependencies. They
+        // are preserved on disk but never parsed or executed by this loader.
+        if (entry === 'node_modules' || entry === '.git') continue;
+        const path = join(current, entry);
+        const stat = statSync(path);
+        if (stat.isDirectory()) walk(path);
+        else if (stat.isFile() && isImageFile(entry)) result.push(relative(dir, path).split(sep).join('/'));
+      }
+    };
+    walk(dir);
+    return result;
   } catch {
     return [];
   }
@@ -169,10 +282,29 @@ function listImages(dir: string): string[] {
 function findImageByNeedle(dir: string, needles: string[]): string | null {
   const files = listImages(dir);
   for (const needle of needles) {
-    const hit = files.find((f) => f.toLowerCase().includes(needle));
+    const hit = files.find((f) => f.toLowerCase().includes(needle.toLowerCase()));
     if (hit) return hit;
   }
   return null;
+}
+
+/** Normalize Harness/DSH references such as `skins/foo/preview/light.png`. */
+function normalizeDshAssetReference(packDir: string, reference: string | undefined, fallbackNeedles: string[]): string | undefined {
+  if (reference) {
+    const normalized = reference.replace(/\\/g, '/').replace(/^\.\//, '');
+    const candidates = [
+      normalized,
+      normalized.replace(/^skins\/[^/]+\//, ''),
+      normalized.replace(/^assets\/[^/]+\//, 'assets/'),
+      basename(normalized),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(join(packDir, candidate))) return candidate;
+    }
+    const byName = listImages(packDir).find((file) => file.endsWith(`/${basename(normalized)}`) || file === basename(normalized));
+    if (byName) return byName;
+  }
+  return findImageByNeedle(packDir, fallbackNeedles) ?? undefined;
 }
 
 // ============================================================
@@ -181,14 +313,14 @@ function findImageByNeedle(dir: string, needles: string[]): string | null {
 
 /**
  * Synthesize a native ThemePackManifest from a DSH skin.json and the
- * artwork conventions of dsh skin packages. Never touches executable code.
+ * artwork conventions of dsh skin packages. Executable code is only recorded
+ * as an opt-in script reference; it is not evaluated here.
  */
 export function convertDshSkinToManifest(
   skin: DshSkinManifest,
   packDir: string,
 ): ThemePackManifest {
   const assetsDir = join(packDir, 'assets');
-  const previewDir = join(packDir, 'preview');
 
   const day = findImageByNeedle(assetsDir, ['palace-day', '-day', 'day-', 'light']);
   const night = findImageByNeedle(assetsDir, ['palace-night', '-night', 'night-', 'dark']);
@@ -196,10 +328,8 @@ export function convertDshSkinToManifest(
   const chat = findImageByNeedle(assetsDir, ['composer', 'frame', 'chat']);
   const charLeft = findImageByNeedle(assetsDir, ['maid-left', 'character-left', 'chibi-left']);
   const charRight = findImageByNeedle(assetsDir, ['maid-right', 'character-right', 'chibi-right']);
-  const previewLight = skin.preview?.light
-    ?? findImageByNeedle(previewDir, ['light'])
-  const previewDark = skin.preview?.dark
-    ?? findImageByNeedle(previewDir, ['dark'])
+  const previewLight = normalizeDshAssetReference(packDir, skin.preview?.light, ['preview/light', 'light'])
+  const previewDark = normalizeDshAssetReference(packDir, skin.preview?.dark, ['preview/dark', 'dark'])
 
   const manifest: ThemePackManifest = {
     name: skin.name || skin.nameEn || skin.id || 'DSH Skin',
@@ -209,7 +339,13 @@ export function convertDshSkinToManifest(
     ...(skin.description ? { description: skin.description } : {}),
     ...(skin.tags?.length ? { tags: skin.tags } : {}),
     source: 'dsh',
+    ...(skin.bodyAttr ? { bodyAttr: skin.bodyAttr } : {}),
   };
+
+  const customCss = extractDshCss(packDir);
+  if (customCss) manifest.customCss = inlineCssAssetUrlsFromDir(packDir, customCss, 'lib');
+  const scripts = detectDshScripts(packDir);
+  if (scripts.length) manifest.scripts = scripts;
 
   if (day || night) {
     manifest.background = {
@@ -230,8 +366,8 @@ export function convertDshSkinToManifest(
     };
   }
 
-  const lightPreview = previewLight ? (skin.preview?.light ?? `preview/${previewLight}`) : undefined;
-  const darkPreview = previewDark ? (skin.preview?.dark ?? `preview/${previewDark}`) : undefined;
+  const lightPreview = previewLight;
+  const darkPreview = previewDark;
   if (lightPreview || darkPreview) {
     manifest.preview = {
       ...(lightPreview ? { light: lightPreview } : {}),
@@ -276,8 +412,15 @@ export function convertDshSkinToManifest(
  */
 export function loadThemePack(id: string): ThemePack | null {
   const safeId = sanitizePackId(id);
-  const dir = join(getThemePacksDir(), safeId);
-  if (!existsSync(dir)) return null;
+  const userDir = join(getThemePacksDir(), safeId);
+  const bundledRoot = getBundledThemePacksDir();
+  const candidates = [
+    { dir: userDir, location: 'user' as const },
+    ...(bundledRoot ? [{ dir: join(bundledRoot, safeId), location: 'builtin' as const }] : []),
+  ];
+  const candidate = candidates.find((entry) => existsSync(entry.dir) && statSync(entry.dir).isDirectory());
+  if (!candidate) return null;
+  const dir = candidate.dir;
 
   for (const filename of MANIFEST_FILENAMES) {
     const manifestPath = join(dir, filename);
@@ -286,9 +429,10 @@ export function loadThemePack(id: string): ThemePack | null {
       const raw = JSON.parse(readFileSync(manifestPath, 'utf-8'));
       if (filename === 'skin.json') {
         const manifest = convertDshSkinToManifest(raw as DshSkinManifest, dir);
-        return { id: safeId, dir, manifest, source: 'dsh' };
+        return { id: safeId, dir, manifest, source: 'dsh', location: candidate.location };
       }
-      return { id: safeId, dir, manifest: raw as ThemePackManifest, source: 'native' };
+      const nativeManifest = loadPackStylesheets(dir, raw as ThemePackManifest);
+      return { id: safeId, dir, manifest: nativeManifest, source: 'native', location: candidate.location };
     } catch (error) {
       debug(`[theme-pack] Failed to parse ${manifestPath}:`, error);
       return null;
@@ -299,16 +443,17 @@ export function loadThemePack(id: string): ThemePack | null {
 
 /** List all installed theme packs. */
 export function listThemePacks(): ThemePack[] {
-  const root = getThemePacksDir();
-  if (!existsSync(root)) return [];
-  try {
-    return readdirSync(root)
-      .filter((entry) => statSync(join(root, entry)).isDirectory())
-      .map((entry) => loadThemePack(entry))
-      .filter((pack): pack is ThemePack => pack !== null);
-  } catch {
-    return [];
+  const ids = new Set<string>();
+  for (const root of [getThemePacksDir(), getBundledThemePacksDir()]) {
+    if (!root || !existsSync(root)) continue;
+    try {
+      for (const entry of readdirSync(root)) {
+        if (statSync(join(root, entry)).isDirectory()) ids.add(sanitizePackId(entry));
+      }
+    } catch { /* ignore an unavailable optional theme root */ }
   }
+  return [...ids].map((id) => loadThemePack(id)).filter((pack): pack is ThemePack => pack !== null)
+    .sort((a, b) => a.manifest.name.localeCompare(b.manifest.name));
 }
 
 // ============================================================
@@ -323,6 +468,36 @@ const MIME_BY_EXT: Record<string, string> = {
   '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
   '.avif': 'image/avif',
+  '.apng': 'image/apng',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.heic': 'image/heic',
+  '.jxl': 'image/jxl',
+  '.css': 'text/css',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.cjs': 'text/javascript',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+  '.mkv': 'video/x-matroska',
 };
 
 /** Maximum asset size served as a data URL (8 MB). */
@@ -334,23 +509,27 @@ const MAX_ASSET_BYTES = 8 * 1024 * 1024;
  */
 export function resolveThemePackAssetPath(packId: string, asset: string): string | null {
   const safeId = sanitizePackId(packId);
-  const packDir = join(getThemePacksDir(), safeId);
+  const userDir = join(getThemePacksDir(), safeId);
+  const bundledRoot = getBundledThemePacksDir();
+  const packDir = existsSync(userDir)
+    ? userDir
+    : bundledRoot ? join(bundledRoot, safeId) : userDir;
   if (!packDir || !asset) return null;
 
   const normalizedAsset = asset.replace(/\\/g, '/').replace(/^\.?\//, '');
   if (!normalizedAsset) return null;
 
   const absolute = join(packDir, normalizedAsset);
-  const dirPrefix = packDir.endsWith('/') || packDir.endsWith('\\') ? packDir : packDir + '/';
-  const backPrefix = packDir.endsWith('\\') ? packDir : packDir + '\\';
-  if (!(absolute.startsWith(dirPrefix) || absolute.startsWith(backPrefix))) return null;
+  const relativeAsset = relative(packDir, absolute);
+  if (!relativeAsset || relativeAsset.startsWith('..') || relativeAsset.includes(`..${sep}`) || relativeAsset.includes(':')) return null;
 
   return existsSync(absolute) ? absolute : null;
 }
 
 /**
- * Read a theme pack asset as a data URL for CSS injection.
- * Returns null for missing files, non-image files, or oversized assets.
+ * Read a theme pack asset as a data URL for CSS injection. Images, fonts,
+ * stylesheets, scripts and media are supported; executable code is never run
+ * by this function.
  */
 export function readThemePackAsset(packId: string, asset: string): ThemePackAsset | null {
   const path = resolveThemePackAssetPath(packId, asset);
@@ -370,6 +549,81 @@ export function readThemePackAsset(packId: string, asset: string): ThemePackAsse
     debug(`[theme-pack] Failed to read asset ${path}:`, error);
     return null;
   }
+}
+
+function resourceKind(mimeType: string): ThemePackResource['kind'] {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('font/')) return 'font';
+  if (mimeType === 'text/css') return 'stylesheet';
+  if (mimeType.includes('javascript')) return 'script';
+  if (mimeType === 'application/json') return 'data';
+  return 'other';
+}
+
+function inlineCssAssetUrlsFromDir(packDir: string, css: string, basePath: string): string {
+  return css.replace(/url\((['"]?)([^'"\)]+)\1\)/gi, (full, quote: string, rawUrl: string) => {
+    const url = rawUrl.trim();
+    if (!url || /^(?:data:|https?:|blob:|#|var\()/i.test(url)) return full;
+    const hashIndex = url.indexOf('#');
+    const fragment = hashIndex >= 0 ? url.slice(hashIndex) : '';
+    const localUrl = (hashIndex >= 0 ? url.slice(0, hashIndex) : url).split('?', 1)[0] ?? url;
+    const candidates = [
+      localUrl.replace(/^\.\//, ''),
+      join(basePath, '..', localUrl).replace(/\\/g, '/'),
+      join(basePath, localUrl).replace(/\\/g, '/'),
+    ];
+    for (const candidate of candidates) {
+      const path = resolvePackRelativePath(packDir, candidate);
+      if (!path) continue;
+      const mimeType = MIME_BY_EXT[extname(path).toLowerCase()];
+      if (!mimeType || !existsSync(path)) continue;
+      try {
+        const stats = statSync(path);
+        if (stats.size > MAX_ASSET_BYTES) return full;
+        const dataUrl = `data:${mimeType};base64,${readFileSync(path).toString('base64')}`;
+        return `url(${dataUrl}${fragment})`;
+      } catch { return full; }
+    }
+    return full;
+  });
+}
+
+/** Inline local texture/font references used by generated Harness CSS. */
+export function inlineThemePackCss(packId: string, css: string, basePath = 'lib/client.js'): string {
+  const safeId = sanitizePackId(packId);
+  const userDir = join(getThemePacksDir(), safeId);
+  const bundledRoot = getBundledThemePacksDir();
+  const packDir = existsSync(userDir) ? userDir : bundledRoot ? join(bundledRoot, safeId) : userDir;
+  return existsSync(packDir) ? inlineCssAssetUrlsFromDir(packDir, css, basePath) : css;
+}
+
+/** Enumerate resources that a pack can reference from CSS or its manifest. */
+export function listThemePackResources(packId: string): ThemePackResource[] {
+  const safeId = sanitizePackId(packId);
+  const userDir = join(getThemePacksDir(), safeId);
+  const bundledRoot = getBundledThemePacksDir();
+  const packDir = existsSync(userDir) ? userDir : bundledRoot ? join(bundledRoot, safeId) : userDir;
+  if (!existsSync(packDir)) return [];
+  const resources: ThemePackResource[] = [];
+  const walk = (current: string) => {
+    for (const entry of readdirSync(current)) {
+      if (entry === 'node_modules' || entry === '.git') continue;
+      const path = join(current, entry);
+      const stat = statSync(path);
+      if (stat.isDirectory()) { walk(path); continue; }
+      if (!stat.isFile()) continue;
+      const mimeType = MIME_BY_EXT[extname(path).toLowerCase()];
+      if (!mimeType) continue;
+      resources.push({
+        path: relative(packDir, path).split(sep).join('/'),
+        mimeType,
+        size: stat.size,
+        kind: resourceKind(mimeType),
+      });
+    }
+  };
+  try { walk(packDir); } catch { return []; }
+  return resources.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 // ============================================================

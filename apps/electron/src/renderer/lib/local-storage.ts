@@ -31,6 +31,8 @@ export const KEYS = {
 
   // Theme
   theme: 'theme',
+  themePackScripts: 'theme-pack-scripts',
+  chatOpacity: 'chat-opacity',
 
   // Panel layouts (dynamic key suffix)
   panelLayout: 'panel-layout', // Used as: panelLayout:${key}

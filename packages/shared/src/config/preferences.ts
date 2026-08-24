@@ -23,7 +23,36 @@ export interface DiffViewerPreferences {
   disableBackground?: boolean;
 }
 
+/** Functional sections of the system prompt that users may enable/disable. */
+export type SystemPromptCapabilityId = 'browserTools' | 'webSearch' | 'structuredData' | 'documentTools' | 'themeDesign'
+
+export interface SystemPromptSettings {
+  capabilities?: Partial<Record<SystemPromptCapabilityId, boolean>>
+  /** Low-priority, user-authored additions; core safety/tool rules remain fixed. */
+  editableInstructions?: string
+}
+
+export const DEFAULT_SYSTEM_PROMPT_CAPABILITIES: Record<SystemPromptCapabilityId, boolean> = {
+  browserTools: true,
+  webSearch: true,
+  structuredData: true,
+  documentTools: true,
+  themeDesign: true,
+}
+
+export function getSystemPromptSettings(): Required<Pick<SystemPromptSettings, 'capabilities'>> & SystemPromptSettings {
+  const settings = loadPreferences().systemPrompt ?? {}
+  return {
+    ...settings,
+    capabilities: {
+      ...DEFAULT_SYSTEM_PROMPT_CAPABILITIES,
+      ...settings.capabilities,
+    },
+  }
+}
+
 export interface UserPreferences {
+  systemPrompt?: SystemPromptSettings;
   performance?: { maxWarmRuntimes?: number }
   name?: string;
   timezone?: string;
@@ -92,6 +121,9 @@ export function updatePreferences(updates: Partial<UserPreferences>): UserPrefer
     performance: updates.performance
       ? { ...current.performance, ...updates.performance }
       : current.performance,
+    systemPrompt: updates.systemPrompt
+      ? { ...current.systemPrompt, ...updates.systemPrompt, capabilities: { ...current.systemPrompt?.capabilities, ...updates.systemPrompt.capabilities } }
+      : current.systemPrompt,
   };
   savePreferences(updated);
   return updated;

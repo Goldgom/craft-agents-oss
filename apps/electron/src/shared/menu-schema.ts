@@ -385,6 +385,7 @@ const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
   input: 'Keyboard',
   workspace: 'Building2',
   prompts: 'ScrollText',
+  promptOverview: 'ListTree',
   permissions: 'ShieldCheck',
   tools: 'Wrench',
   performance: 'Activity',
