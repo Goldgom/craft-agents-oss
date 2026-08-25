@@ -87,6 +87,8 @@ export type EditContextKey =
   | 'edit-views'
   | 'edit-tool-icons'
   | 'automation-config'
+  | 'script-monitor-config'
+  | 'agent-config'
 
 /**
  * Full edit configuration including context for agent and example for UI.
@@ -544,7 +546,7 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
       context:
         'The user is editing automations.json which configures automations. ' +
         'Structure: { version: 2, automations: { EventName: [{ name?, matcher?, cron?, timezone?, permissionMode?, labels?, actions: [...] }] } }. ' +
-        'Scheduled entries use SchedulerTick with cron/timezone. Hosted checks use HostedScriptTick with script, intervalMs (1000-86400000), scriptTimeoutMs, and scriptMetadata; the script must return false to skip or a truthy JSON-safe value to trigger. ' +
+        'Scheduled entries use SchedulerTick with cron/timezone. Hosted checks use HostedScriptTick with script, intervalMs (1000-86400000), scriptTimeoutMs, scriptMetadata, and optional scriptPermissions (env/filesystem/network allowlists); the script must return false to skip or a truthy JSON-safe value to trigger. ' +
         'Prompt actions support llmConnection (provider connection slug), model, thinkingLevel, and mode. Each matcher has an actions array ({ type: "prompt", prompt }). ' +
         'Read ~/.craft-agent/docs/automations.md for full format reference. ' +
         'After editing, confirm clearly what changed.',
@@ -552,6 +554,42 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
     example: 'Change the cron schedule to every 30 minutes',
     displayLabelKey: 'editPopover.label.automationConfiguration',
     exampleKey: 'editPopover.example.automationConfig',
+    model: 'default',
+    systemPromptPreset: 'mini',
+    inlineExecution: true,
+  }),
+
+  'agent-config': (location) => ({
+    context: {
+      label: 'Agent Configuration',
+      filePath: `${location}/agents.json`,
+      context:
+        'The user is configuring reusable subagents in agents.json. Structure: { version: 1, agents: [{ id, name, description, prompt, tools?, model? }] }. ' +
+        'Each agent has an isolated prompt and tool allowlist and is invoked by the main conversation for bounded side work. ' +
+        'id must be lowercase letters, numbers, and hyphens; never use the reserved id "compact". ' +
+        'The built-in compact agent is already available and uses native context compaction, so do not add it to the file. ' +
+        'Create a focused, safe definition with only the tools needed. Confirm clearly what changed.',
+    },
+    example: 'Create a code-review agent that can read, search, and run tests',
+    model: 'default',
+    systemPromptPreset: 'mini',
+    inlineExecution: true,
+  }),
+
+  'script-monitor-config': (location) => ({
+    context: {
+      label: 'Background Script Monitor',
+      filePath: `${location}/automations.json`,
+      context:
+        'The user wants a background script monitor. Add or update an entry under the HostedScriptTick event in automations.json. ' +
+        'A HostedScriptTick matcher must include a script, intervalMs between 1000 and 86400000, optional scriptTimeoutMs (10-30000), optional scriptMetadata, and at least one action. ' +
+        'The program starts these checks in the background for every configured workspace, runs the script immediately and then at the configured frequency, prevents overlapping runs, and reloads changes without restart. ' +
+        'The script runs in a sandbox with no direct filesystem, process, require, or network access. Optional scriptPermissions can explicitly allow env names, relative workspace filesystem paths (read-only), and exact HTTP(S) origins; scripts use these through api.env(), api.readFile(), and api.fetch(). Default permissions are empty. ' +
+        'When the signal is emitted, prompt actions run and receive the result as [Hosted script info]. Use a focused prompt action to tell the model what to do. ' +
+        'Example: { "HostedScriptTick": [{ "name": "Monitor", "script": "return metadata.ready === true ? { ready: true } : false", "intervalMs": 60000, "scriptMetadata": { "ready": true }, "actions": [{ "type": "prompt", "prompt": "A monitor signal fired. Inspect the hosted script info and investigate the issue, then report findings." }] }] }. ' +
+        'Never use permissionMode allow-all unless explicitly requested. Confirm the interval, signal condition, and model action after editing.',
+    },
+    example: 'Monitor a service every minute and ask the model to investigate when it becomes unhealthy',
     model: 'default',
     systemPromptPreset: 'mini',
     inlineExecution: true,

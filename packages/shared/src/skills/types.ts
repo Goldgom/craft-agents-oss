@@ -29,7 +29,8 @@ export interface SkillMetadata {
 }
 
 /** Source of a loaded skill */
-export type SkillSource = 'global' | 'workspace' | 'project';
+/** Built-in skills ship with the app and are the lowest-priority tier. */
+export type SkillSource = 'builtin' | 'global' | 'workspace' | 'project';
 
 /**
  * Plugin name for project-level and global skills.

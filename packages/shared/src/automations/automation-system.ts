@@ -151,6 +151,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
 
     if (!existsSync(configPath)) {
       this.config = { automations: {} };
+      this.hostedScriptHandler?.refresh();
       return { success: true, automationCount: 0, errors: [] };
     }
 
@@ -163,6 +164,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
 
       this.config = validation.config;
       this.backfillIds(configPath, raw);
+      this.hostedScriptHandler?.refresh();
       const actionCount = this.getActionCount();
       log.debug(`[AutomationSystem] Reloaded ${actionCount} actions`);
       return { success: true, automationCount: actionCount, errors: [] };
@@ -281,6 +283,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
       this.options.workspaceId,
       this,
       (event, error) => this.options.onError?.(event, error),
+      this.options.workspaceRootPath,
     );
     this.hostedScriptHandler.subscribe(this.eventBus);
 

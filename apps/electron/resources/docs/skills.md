@@ -10,6 +10,8 @@ This guide explains how to create and configure skills in Craft Agent.
 
 Skills are specialized instructions that extend Claude's capabilities for specific tasks. They use **the exact same SKILL.md format as the Claude Code SDK** - making skills fully compatible between systems.
 
+Craft Agents also ships built-in authoring skills for common AI-generated configuration: `automation-authoring`, `agent-authoring`, `skill-authoring`, `source-authoring`, and `workspace-configuration`. They appear in the Skills page with a **Built-in** badge and can be invoked with `@` mentions. Built-in skills are read-only; a global, workspace, or project skill with the same slug overrides the built-in definition.
+
 **Key points:**
 - Skills are invoked via slash commands (e.g., `/commit`, `/review-pr`)
 - Skills can be automatically triggered by file patterns (globs)

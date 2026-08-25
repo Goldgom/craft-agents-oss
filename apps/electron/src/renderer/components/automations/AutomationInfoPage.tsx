@@ -186,6 +186,7 @@ export function AutomationInfoPage({
               <>
                 <Info_Table.Row label="Interval" value={formatInterval(automation.intervalMs)} />
                 <Info_Table.Row label="Script timeout" value={`${automation.scriptTimeoutMs ?? 2000} ms`} />
+                <Info_Table.Row label="Sandbox permissions" value={formatScriptPermissions(automation.scriptPermissions)} />
               </>
             )}
           </Info_Table>
@@ -291,6 +292,7 @@ export function AutomationInfoPage({
                 intervalMs: automation.intervalMs,
                 scriptTimeoutMs: automation.scriptTimeoutMs,
                 scriptMetadata: automation.scriptMetadata,
+                scriptPermissions: automation.scriptPermissions,
                 labels: automation.labels,
                 telegramTopic: automation.telegramTopic,
                 enabled: automation.enabled,
@@ -311,6 +313,15 @@ export function AutomationInfoPage({
       </Info_Page.Content>
     </Info_Page>
   )
+}
+
+function formatScriptPermissions(permissions?: { env?: string[]; filesystem?: string[]; network?: string[] }): string {
+  if (!permissions || (!permissions.env?.length && !permissions.filesystem?.length && !permissions.network?.length)) return 'None'
+  const parts: string[] = []
+  if (permissions.env?.length) parts.push(`${permissions.env.length} env`)
+  if (permissions.filesystem?.length) parts.push(`${permissions.filesystem.length} file path${permissions.filesystem.length === 1 ? '' : 's'}`)
+  if (permissions.network?.length) parts.push(`${permissions.network.length} network origin${permissions.network.length === 1 ? '' : 's'}`)
+  return parts.join(', ')
 }
 
 function formatInterval(intervalMs?: number): string {

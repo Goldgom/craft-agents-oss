@@ -28,6 +28,8 @@ import { cn } from '@/lib/utils'
 import { automationSelection } from '@/hooks/useEntitySelection'
 import { APP_EVENTS, AGENT_EVENTS, getEventDisplayName, type AutomationListItem, type AutomationListFilter } from './types'
 import { formatShortRelativeTime } from './utils'
+import { AgentManagerDialog } from './AgentManagerDialog'
+import { BuiltinDocHelpButton } from '@/components/ui/BuiltinDocHelpButton'
 
 const {
   useSelection: useAutomationSelection,
@@ -170,6 +172,7 @@ export interface AutomationsListPanelProps {
   onDuplicateAutomation?: (automationId: string) => void
   selectedAutomationId?: string | null
   workspaceRootPath?: string
+  workspaceId?: string
   className?: string
 }
 
@@ -183,6 +186,7 @@ export function AutomationsListPanel({
   onDuplicateAutomation,
   selectedAutomationId,
   workspaceRootPath,
+  workspaceId,
   className,
 }: AutomationsListPanelProps) {
   const { t } = useTranslation()
@@ -261,17 +265,11 @@ export function AutomationsListPanel({
           description={t('automations.emptyDescription')}
           docKey="automations"
         >
-          {workspaceRootPath && (
-            <EditPopover
-              align="center"
-              trigger={
-                <button className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors">
-                  {t('automations.addAutomation')}
-                </button>
-              }
-              {...getEditConfig('automation-config', workspaceRootPath)}
-            />
-          )}
+          <div className="flex flex-wrap justify-center gap-2">
+            {workspaceRootPath && <EditPopover align="center" trigger={<button className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors">{t('automations.addAutomation')}</button>} {...getEditConfig('automation-config', workspaceRootPath)} />}
+            {workspaceRootPath && <EditPopover align="center" trigger={<button className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] border border-foreground/10 hover:bg-foreground/[0.03] transition-colors">Script monitor</button>} {...getEditConfig('script-monitor-config', workspaceRootPath)} />}
+            {workspaceId && workspaceRootPath && <AgentManagerDialog workspaceId={workspaceId} workspaceRootPath={workspaceRootPath} />}
+          </div>
         </EntityListEmptyScreen>
       </div>
     )
@@ -279,6 +277,11 @@ export function AutomationsListPanel({
 
   return (
     <div className={cn('flex flex-col flex-1 min-h-0', className)}>
+      {workspaceId && workspaceRootPath && <div className="flex justify-end gap-2 px-3 pt-2">
+        <BuiltinDocHelpButton feature="automations" />
+        <EditPopover trigger={<button type="button" className="inline-flex items-center gap-1.5 rounded-[8px] border border-foreground/10 px-2.5 py-1.5 text-xs font-medium hover:bg-foreground/[0.04]">Script monitor</button>} {...getEditConfig('script-monitor-config', workspaceRootPath)} />
+        <AgentManagerDialog workspaceId={workspaceId} workspaceRootPath={workspaceRootPath} />
+      </div>}
       {/* Search header */}
       {searchActive && (
         <SessionSearchHeader

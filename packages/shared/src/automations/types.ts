@@ -150,6 +150,16 @@ export interface LogicalCondition {
 /** Union of all condition types */
 export type AutomationCondition = TimeCondition | StateCondition | LogicalCondition;
 
+/** Explicit capabilities injected into a HostedScriptTick sandbox. Empty by default. */
+export interface HostedScriptPermissions {
+  /** Environment variable names the script may read through api.env(). */
+  env?: string[];
+  /** Relative workspace files/directories the script may read through api.readFile(). */
+  filesystem?: string[];
+  /** URL origins (for example https://status.example.com) allowed through api.fetch(). */
+  network?: string[];
+}
+
 // ============================================================================
 // Matcher Definition
 // ============================================================================
@@ -194,6 +204,7 @@ export interface AutomationMatcher {
   intervalMs?: number;
   scriptMetadata?: Record<string, unknown>;
   scriptTimeoutMs?: number;
+  scriptPermissions?: HostedScriptPermissions;
   actions: AutomationAction[];
 }
 
@@ -284,6 +295,7 @@ export interface HostedScriptMatcher extends AutomationMatcher {
   intervalMs: number;
   scriptMetadata?: Record<string, unknown>;
   scriptTimeoutMs?: number;
+  scriptPermissions?: HostedScriptPermissions;
 }
 
 export interface AutomationResult {

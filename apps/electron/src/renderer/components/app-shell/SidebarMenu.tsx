@@ -210,13 +210,22 @@ export function SidebarMenu({
     )
   }
 
-  // Skills: show "Add Skill"
-  if (type === 'skills' && onAddSkill) {
+  // Skills: show "Add Skill" and "Learn More"
+  if (type === 'skills') {
     return (
-      <MenuItem onClick={onAddSkill}>
-        <Plus className="h-3.5 w-3.5" />
-        <span className="flex-1">{t("sidebarMenu.addSkill")}</span>
-      </MenuItem>
+      <>
+        {onAddSkill && (
+          <MenuItem onClick={onAddSkill}>
+            <Plus className="h-3.5 w-3.5" />
+            <span className="flex-1">{t("sidebarMenu.addSkill")}</span>
+          </MenuItem>
+        )}
+        {onAddSkill && <Separator />}
+        <MenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('skills'))}>
+          <ExternalLink className="h-3.5 w-3.5" />
+          <span className="flex-1">{t("common.learnMore")}</span>
+        </MenuItem>
+      </>
     )
   }
 

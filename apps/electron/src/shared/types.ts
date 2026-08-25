@@ -829,6 +829,12 @@ export interface ElectronAPI {
   // Automations change listener
   onAutomationsChanged(callback: (workspaceId: string) => void): () => void
 
+  // Reusable workspace agents (includes the built-in compact agent)
+  listAgents(workspaceId: string): Promise<import('@craft-agent/shared/agents').CustomAgentDefinition[]>
+  saveAgent(workspaceId: string, agent: import('@craft-agent/shared/agents').CustomAgentDefinition): Promise<unknown>
+  deleteAgent(workspaceId: string, agentId: string): Promise<unknown>
+  generateAgent(workspaceId: string, request: { name?: string; goal: string }): Promise<import('@craft-agent/shared/agents').CustomAgentDefinition>
+
   // Language
   changeLanguage(lang: string): Promise<void>
 

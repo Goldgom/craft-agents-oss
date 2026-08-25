@@ -139,6 +139,12 @@ export const AutomationConditionSchema: z.ZodType = z.lazy(() =>
 // Matcher Schema
 // ============================================================================
 
+const HostedScriptPermissionsSchema = z.object({
+  env: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).max(50).optional(),
+  filesystem: z.array(z.string().min(1).max(500).refine((path) => !path.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(path), 'Filesystem paths must be relative to the workspace')).max(50).optional(),
+  network: z.array(z.string().url().refine((url) => /^https?:\/\//i.test(url), 'Only http(s) origins are allowed')).max(50).optional(),
+}).strict();
+
 export const AutomationMatcherSchema = z.object({
   id: z.string().optional(),
   name: z.string().optional(),
@@ -158,6 +164,7 @@ export const AutomationMatcherSchema = z.object({
   intervalMs: z.number().int().min(1000).max(86_400_000).optional(),
   scriptMetadata: z.record(z.string(), z.unknown()).optional(),
   scriptTimeoutMs: z.number().int().min(10).max(30_000).optional(),
+  scriptPermissions: HostedScriptPermissionsSchema.optional(),
   actions: z.array(ActionDefinitionSchema).min(1, 'At least one action required'),
 });
 

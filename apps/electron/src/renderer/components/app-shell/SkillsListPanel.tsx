@@ -11,6 +11,7 @@ import { SendResourceToWorkspaceDialog } from './SendResourceToWorkspaceDialog'
 import { EditPopover, getEditConfig } from '@/components/ui/EditPopover'
 import { useActiveWorkspace, useAppShellContext } from '@/context/AppShellContext'
 import { getFileManagerName } from '@/lib/platform'
+import { BuiltinDocHelpButton } from '@/components/ui/BuiltinDocHelpButton'
 import type { LoadedSkill } from '../../../shared/types'
 
 export interface SkillsListPanelProps {
@@ -53,6 +54,11 @@ export function SkillsListPanel({
       onItemClick={onSkillClick}
       className={className}
       containerProps={{ 'data-list-role': 'skills' }}
+      header={
+        <div className="flex justify-end px-3 pt-2">
+          <BuiltinDocHelpButton feature="skills" />
+        </div>
+      }
       emptyState={
         <EntityListEmptyScreen
           icon={<Zap />}
@@ -83,6 +89,11 @@ export function SkillsListPanel({
                 {t('skillsList.projectBadge')}
               </span>
             )}
+            {skill.source === 'builtin' && (
+              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-info/10 text-info">
+                Built-in
+              </span>
+            )}
             <span className="truncate">{skill.metadata.description}</span>
           </span>
         ),
@@ -105,7 +116,11 @@ export function SkillsListPanel({
             canShowInFinder={canRevealLocally}
             onDelete={skill.source === 'workspace' ? () => onDeleteSkill(skill.slug) : undefined}
             canDelete={skill.source === 'workspace'}
-            deleteLabel={skill.source === 'workspace' ? t('skillsList.deleteSkill') : t('skillsList.managedByProject')}
+            deleteLabel={skill.source === 'workspace'
+              ? t('skillsList.deleteSkill')
+              : skill.source === 'builtin'
+                ? 'Built-in skill'
+                : t('skillsList.managedByProject')}
             onSendToWorkspace={hasOtherWorkspaces && skill.source === 'workspace' ? () => {
               setSendResourceSlug(skill.slug)
               setSendResourceLabel(skill.metadata.name)

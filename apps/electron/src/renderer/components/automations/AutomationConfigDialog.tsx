@@ -42,6 +42,7 @@ export function AutomationConfigDialog({ open, onOpenChange, automation, workspa
   const [intervalUnit, setIntervalUnit] = React.useState<IntervalUnit>(initialSeconds >= 3600 && initialSeconds % 3600 === 0 ? 'hours' : initialSeconds >= 60 && initialSeconds % 60 === 0 ? 'minutes' : 'seconds')
   const [timeout, setTimeoutValue] = React.useState(String(automation.scriptTimeoutMs ?? 2000))
   const [metadata, setMetadata] = React.useState(JSON.stringify(automation.scriptMetadata ?? {}, null, 2))
+  const [permissions, setPermissions] = React.useState(JSON.stringify(automation.scriptPermissions ?? {}, null, 2))
   const [saving, setSaving] = React.useState(false)
   const isHosted = automation.event === 'HostedScriptTick'
   const selectedConnection = connections.find(connection => connection.slug === provider)
@@ -66,16 +67,31 @@ export function AutomationConfigDialog({ open, onOpenChange, automation, workspa
     setIntervalValue(String(nextUnit === 'hours' ? nextSeconds / 3600 : nextUnit === 'minutes' ? nextSeconds / 60 : nextSeconds))
     setTimeoutValue(String(automation.scriptTimeoutMs ?? 2000))
     setMetadata(JSON.stringify(automation.scriptMetadata ?? {}, null, 2))
+    setPermissions(JSON.stringify(automation.scriptPermissions ?? {}, null, 2))
   }, [open, automation])
 
   const save = async () => {
     let parsedMetadata: Record<string, unknown> | undefined
+    let parsedPermissions: { env?: string[]; filesystem?: string[]; network?: string[] } | undefined
     try {
       const parsed = metadata.trim() ? JSON.parse(metadata) : {}
       if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Metadata must be a JSON object')
       parsedMetadata = parsed
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Invalid metadata JSON')
+      return
+    }
+    try {
+      const parsed = permissions.trim() ? JSON.parse(permissions) : {}
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Sandbox permissions must be a JSON object')
+      for (const key of ['env', 'filesystem', 'network']) {
+        if (parsed[key] !== undefined && (!Array.isArray(parsed[key]) || parsed[key].some((item: unknown) => typeof item !== 'string'))) {
+          throw new Error(`Sandbox permission "${key}" must be an array of strings`)
+        }
+      }
+      parsedPermissions = parsed
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Invalid sandbox permissions JSON')
       return
     }
     const unitMs = intervalUnit === 'hours' ? 3_600_000 : intervalUnit === 'minutes' ? 60_000 : 1000
@@ -119,6 +135,7 @@ export function AutomationConfigDialog({ open, onOpenChange, automation, workspa
         intervalMs: isHosted ? intervalMs : undefined,
         scriptTimeoutMs: isHosted ? Math.max(10, Math.min(30_000, Number(timeout) || 2000)) : undefined,
         scriptMetadata: isHosted ? parsedMetadata : undefined,
+        scriptPermissions: isHosted ? parsedPermissions : undefined,
         actions,
       })
       toast.success('Automation saved')
@@ -181,6 +198,11 @@ export function AutomationConfigDialog({ open, onOpenChange, automation, workspa
               <div className={fieldClass}>
                 <Label htmlFor="script-metadata">Attached metadata</Label>
                 <Textarea id="script-metadata" value={metadata} onChange={event => setMetadata(event.target.value)} className="min-h-24 resize-y font-mono text-xs leading-5" spellCheck={false} />
+              </div>
+              <div className={fieldClass}>
+                <Label htmlFor="script-permissions">Sandbox permissions</Label>
+                <p className="text-xs text-muted-foreground">Default is no external access. Use <code>env</code>, <code>filesystem</code> (relative workspace paths), and <code>network</code> (allowed URL origins).</p>
+                <Textarea id="script-permissions" value={permissions} onChange={event => setPermissions(event.target.value)} className="min-h-28 resize-y font-mono text-xs leading-5" spellCheck={false} placeholder={'{\n  "env": ["SERVICE_STATUS"],\n  "filesystem": ["data/status.json"],\n  "network": ["https://status.example.com"]\n}'} />
               </div>
             </section>
           ) : (

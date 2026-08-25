@@ -12,6 +12,7 @@ Automations allow you to trigger actions automatically when specific events occu
 - Send prompts to create agent sessions based on events
 - Send webhook HTTP requests to external services (Slack, Discord, custom APIs, etc.)
 - Execute actions on a schedule using cron expressions
+- Run sandboxed background scripts at a fixed frequency and trigger an agent when a script returns a signal
 - Automate workflows based on permission mode changes, flags, or session status changes
 
 ## automations.json Location
@@ -71,8 +72,109 @@ craft-agent automation validate
 | `FlagChange` | Session flagged/unflagged | `true` or `false` |
 | `SessionStatusChange` | Session status changed | New status (e.g., `done`, `in_progress`) |
 | `SchedulerTick` | Runs every minute | Uses cron matching |
+| `HostedScriptTick` | Runs a configured sandboxed script immediately and at its configured interval | Script result (truthy emits an event) |
 
 > **Note:** `TodoStateChange` is a deprecated alias for `SessionStatusChange`. Existing configs using the old name will continue to work but will show a deprecation warning during validation.
+
+### Background Script Monitors
+
+Use `HostedScriptTick` for health checks, polling, and lightweight workspace monitors. The server starts configured monitors for every workspace in the background, runs each script once at startup, then repeats it at `intervalMs`. Changes to `automations.json` are picked up without restarting the application. A slow check never overlaps its own next interval.
+
+Scripts execute in a sandbox with no `require`, direct `process`, direct filesystem, or direct network access. They receive `metadata`, `input.workspaceId`, and `input.timestamp`. Optional capabilities are explicitly granted per monitor through `scriptPermissions` and exposed only via `api`:
+
+```json
+{
+  "scriptPermissions": {
+    "env": ["SERVICE_STATUS"],
+    "filesystem": ["data/status.json"],
+    "network": ["https://status.example.com"]
+  }
+}
+```
+
+- `env`: allowlisted names read with `api.env("SERVICE_STATUS")`.
+- `filesystem`: relative workspace files/directories read with `await api.readFile("data/status.json")` (read-only, 1 MB limit).
+- `network`: exact HTTP(S) origins allowed with `await api.fetch("https://status.example.com/health")` (GET/HEAD only, 10 second timeout).
+
+All three lists default to empty. Shell/command execution, writes, arbitrary paths, and unlisted network origins are never exposed to a monitor script.
+
+```json
+{
+  "version": 2,
+  "automations": {
+    "HostedScriptTick": [
+      {
+        "id": "service-health-monitor",
+        "name": "Service health monitor",
+        "script": "return metadata.healthy === false ? { healthy: false, service: metadata.service } : false",
+        "intervalMs": 60000,
+        "scriptTimeoutMs": 2000,
+        "scriptMetadata": { "healthy": false, "service": "api" },
+        "actions": [
+          {
+            "type": "prompt",
+            "prompt": "A background monitor reported a failure. Inspect the hosted script info, investigate the service, and report the likely cause and next steps."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Return `false`, `null`, or `undefined` to skip a cycle. Return any JSON-safe truthy value to emit the signal. The returned object is attached to the prompt as `[Hosted script info]`, so the model can act on the exact monitor result. `intervalMs` must be between 1 second and 24 hours; `scriptTimeoutMs` must be between 10 ms and 30 seconds.
+
+### Event-triggered work
+
+Put a matcher under the event that supplies the signal you care about. A matcher can have a regular-expression `matcher`, optional `conditions`, labels, and one or more actions. Events that have a specific match value (for example `LabelAdd`, `SessionStatusChange`, and `PreToolUse`) apply `matcher` to that value; omitting it means every occurrence of that event matches.
+
+```json
+{
+  "automations": {
+    "SessionStatusChange": [
+      {
+        "name": "Review completed work",
+        "matcher": "needs-review",
+        "labels": ["review"],
+        "actions": [
+          {
+            "type": "prompt",
+            "prompt": "Review the session that entered needs-review. Check the work against its stated goal and report blockers or approval notes."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Use event triggers for changes that originate in Craft Agent. Do not use a broad event or a catch-all matcher for expensive model work unless every occurrence truly needs a new model session. Prefer a condition, label, or clear regex to keep the trigger focused.
+
+### Scheduled tasks
+
+Use `SchedulerTick` for calendar-based recurring work. Craft evaluates its matchers once per minute; the matcher must include a five-field cron expression, and may include an IANA timezone.
+
+```json
+{
+  "automations": {
+    "SchedulerTick": [
+      {
+        "name": "Weekday morning brief",
+        "cron": "0 9 * * 1-5",
+        "timezone": "Asia/Shanghai",
+        "actions": [
+          {
+            "type": "prompt",
+            "prompt": "Create the weekday morning brief. Summarize open work, urgent sessions, and the next concrete actions."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Choose cron for a known calendar time. Choose `HostedScriptTick` when the task depends on a computed condition or external state. Scheduled and script-monitor prompts always run as new sessions, so name the automation and prompt clearly enough for their output to stand on its own.
 
 ### Agent Events (passed to Claude SDK)
 

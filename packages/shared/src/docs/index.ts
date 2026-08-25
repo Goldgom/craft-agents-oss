@@ -110,6 +110,7 @@ export const DOC_REFS = {
   labels: `${APP_ROOT}/docs/labels.md`,
   toolIcons: `${APP_ROOT}/docs/tool-icons.md`,
   automations: `${APP_ROOT}/docs/automations.md`,
+  agents: `${APP_ROOT}/docs/agents.md`,
   hooks: `${APP_ROOT}/docs/automations.md`,
   tasks: `${APP_ROOT}/docs/automations.md`,
   mermaid: `${APP_ROOT}/docs/mermaid.md`,

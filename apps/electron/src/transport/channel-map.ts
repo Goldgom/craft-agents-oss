@@ -449,6 +449,12 @@ export const CHANNEL_MAP = {
   replayAutomation: invoke(RPC_CHANNELS.automations.REPLAY),
   onAutomationsChanged: listener(RPC_CHANNELS.automations.CHANGED),
 
+  // Workspace agents
+  listAgents: invoke(RPC_CHANNELS.agents.LIST),
+  saveAgent: invoke(RPC_CHANNELS.agents.SAVE),
+  deleteAgent: invoke(RPC_CHANNELS.agents.DELETE),
+  generateAgent: invoke(RPC_CHANNELS.agents.GENERATE),
+
   // Resources (cross-workspace export/import)
   exportResources: invoke(RPC_CHANNELS.resources.EXPORT),
   importResources: invoke(RPC_CHANNELS.resources.IMPORT),

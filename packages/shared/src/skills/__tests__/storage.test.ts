@@ -1,21 +1,22 @@
 /**
  * Tests for Skills Storage
  *
- * Verifies the three-tier skill loading system:
- * 1. Global skills: ~/.agents/skills/ (lowest priority)
- * 2. Workspace skills: {workspaceRoot}/skills/ (medium priority)
- * 3. Project skills: {projectRoot}/.agents/skills/ (highest priority)
+ * Verifies the four-tier skill loading system:
+ * 1. Built-in skills: application resources/skills/ (lowest priority)
+ * 2. Global skills: ~/.agents/skills/
+ * 3. Workspace skills: {workspaceRoot}/skills/
+ * 4. Project skills: {projectRoot}/.agents/skills/ (highest priority)
  *
  * Uses real temp directories to test actual filesystem operations.
  *
  * Note: The global skills directory (~/.agents/skills/) is a module-level constant
  * that cannot be mocked reliably when tests run in parallel with other test files.
- * The loadAllSkills tests account for any pre-existing global skills by capturing a
- * baseline count and validating relative to it.
+ * The loadAllSkills tests account for built-in and pre-existing global skills by
+ * capturing a baseline and validating relative to it.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
-import { homedir, tmpdir } from 'os';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   loadAllSkills,
@@ -25,6 +26,7 @@ import {
   listSkillSlugs,
   deleteSkill,
 } from '../storage.ts';
+import type { SkillSource } from '../types.ts';
 
 // ============================================================
 // Temp Directory Setup
@@ -33,9 +35,6 @@ import {
 let tempDir: string;
 let workspaceRoot: string;
 let projectRoot: string;
-
-// The real global skills directory — we cannot mock this reliably.
-const REAL_GLOBAL_SKILLS_DIR = join(homedir(), '.agents', 'skills');
 
 // ============================================================
 // Helpers
@@ -85,14 +84,13 @@ function createEmptySkillDir(skillsDir: string, slug: string): string {
   return skillDir;
 }
 
-/** Get the set of slugs currently in the real global skills directory */
-function getExistingGlobalSlugs(): Set<string> {
+/** Get the skills available outside the temporary workspace and project. */
+function getBaselineSkills(): Map<string, SkillSource> {
   const emptyWs = mkdtempSync(join(tmpdir(), 'skills-baseline-'));
   mkdirSync(join(emptyWs, 'skills'), { recursive: true });
   try {
     const skills = loadAllSkills(emptyWs);
-    // These are all global skills since the workspace is empty
-    return new Set(skills.map(s => s.slug));
+    return new Map(skills.map(skill => [skill.slug, skill.source]));
   } finally {
     rmSync(emptyWs, { recursive: true, force: true });
   }
@@ -312,21 +310,21 @@ describe('loadWorkspaceSkills', () => {
 });
 
 // ============================================================
-// Tests: loadAllSkills (three-tier loading)
+// Tests: loadAllSkills (four-tier loading)
 //
-// These tests account for pre-existing global skills at ~/.agents/skills/.
-// We capture a baseline and verify our test skills appear with correct sources.
+// These tests account for built-in and pre-existing global skills. We capture a
+// baseline and verify our test skills appear with correct sources.
 // ============================================================
 
 describe('loadAllSkills', () => {
   const getWorkspaceSkillsDir = () => join(workspaceRoot, 'skills');
   const getProjectSkillsDir = () => join(projectRoot, '.agents', 'skills');
 
-  // Use unique slugs that won't collide with real global skills
+  // Use unique slugs that won't collide with baseline skills.
   const TEST_PREFIX = '_test_storage_';
 
-  it('should load workspace and project skills alongside any existing global skills', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+  it('should load workspace and project skills alongside baseline skills', () => {
+    const baselineSkills = getBaselineSkills();
     const wsDir = getWorkspaceSkillsDir();
     const projDir = getProjectSkillsDir();
     mkdirSync(projDir, { recursive: true });
@@ -336,8 +334,8 @@ describe('loadAllSkills', () => {
 
     const skills = loadAllSkills(workspaceRoot, projectRoot);
 
-    // Should have baseline global skills + our 2 test skills
-    expect(skills.length).toBe(baselineGlobal.size + 2);
+    // Should have baseline skills + our 2 test skills
+    expect(skills.length).toBe(baselineSkills.size + 2);
 
     const wsSkill = skills.find(s => s.slug === `${TEST_PREFIX}ws`);
     const projSkill = skills.find(s => s.slug === `${TEST_PREFIX}proj`);
@@ -348,20 +346,20 @@ describe('loadAllSkills', () => {
     expect(projSkill).toBeDefined();
     expect(projSkill!.source).toBe('project');
 
-    // All baseline global skills should still be present with source 'global'
-    for (const globalSlug of baselineGlobal) {
-      const skill = skills.find(s => s.slug === globalSlug);
+    // All baseline skills should still be present with their original source.
+    for (const [slug, source] of baselineSkills) {
+      const skill = skills.find(s => s.slug === slug);
       expect(skill).toBeDefined();
-      expect(skill!.source).toBe('global');
+      expect(skill!.source).toBe(source);
     }
   });
 
-  it('should override global skills with workspace skills when slug matches', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+  it('should override lower-priority skills with workspace skills when slug matches', () => {
+    const baselineSkills = getBaselineSkills();
 
-    // Only test override if there are actually global skills to override
-    if (baselineGlobal.size === 0) {
-      // No global skills — just verify workspace skills load
+    // Only test override if there are baseline skills to override.
+    if (baselineSkills.size === 0) {
+      // No baseline skills: just verify workspace skills load.
       const wsDir = getWorkspaceSkillsDir();
       createSkill(wsDir, `${TEST_PREFIX}ws_only`, { name: 'WS Only', description: 'WS only skill' });
       const skills = loadAllSkills(workspaceRoot);
@@ -369,8 +367,8 @@ describe('loadAllSkills', () => {
       return;
     }
 
-    // Override one of the existing global skills with a workspace skill
-    const globalSlugToOverride = [...baselineGlobal][0]!;
+    // Override one of the existing lower-priority skills with a workspace skill.
+    const globalSlugToOverride = [...baselineSkills.keys()][0]!;
     const wsDir = getWorkspaceSkillsDir();
     createSkill(wsDir, globalSlugToOverride, {
       name: 'Workspace Override',
@@ -385,11 +383,11 @@ describe('loadAllSkills', () => {
     expect(overridden!.metadata.name).toBe('Workspace Override');
 
     // Total count should be same as baseline (overridden, not added)
-    expect(skills.length).toBe(baselineGlobal.size);
+    expect(skills.length).toBe(baselineSkills.size);
   });
 
   it('should override workspace skills with project skills (same slug)', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+    const baselineSkills = getBaselineSkills();
     const wsDir = getWorkspaceSkillsDir();
     const projDir = getProjectSkillsDir();
     mkdirSync(projDir, { recursive: true });
@@ -399,8 +397,8 @@ describe('loadAllSkills', () => {
 
     const skills = loadAllSkills(workspaceRoot, projectRoot);
 
-    // Only 1 skill for this slug (project overrides workspace), plus baseline globals
-    expect(skills.length).toBe(baselineGlobal.size + 1);
+    // Only 1 skill for this slug (project overrides workspace), plus baseline skills.
+    expect(skills.length).toBe(baselineSkills.size + 1);
     const deploy = skills.find(s => s.slug === `${TEST_PREFIX}deploy`);
     expect(deploy).toBeDefined();
     expect(deploy!.source).toBe('project');
@@ -408,8 +406,8 @@ describe('loadAllSkills', () => {
     expect(deploy!.metadata.description).toBe('Project version');
   });
 
-  it('should handle full three-tier override: project > workspace > global', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+  it('should handle override priority: project > workspace > global > built-in', () => {
+    const baselineSkills = getBaselineSkills();
     const wsDir = getWorkspaceSkillsDir();
     const projDir = getProjectSkillsDir();
     mkdirSync(projDir, { recursive: true });
@@ -434,26 +432,26 @@ describe('loadAllSkills', () => {
     expect(skills.find(s => s.slug === `${TEST_PREFIX}only_ws`)!.source).toBe('workspace');
     expect(skills.find(s => s.slug === `${TEST_PREFIX}only_proj`)!.source).toBe('project');
 
-    // Total: baseline globals + shared (1, deduplicated) + only_ws + only_proj = baseline + 3
-    expect(skills.length).toBe(baselineGlobal.size + 3);
+    // Total: baseline + shared (1, deduplicated) + only_ws + only_proj = baseline + 3.
+    expect(skills.length).toBe(baselineSkills.size + 3);
   });
 
   it('should handle missing project directory gracefully', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+    const baselineSkills = getBaselineSkills();
     const wsDir = getWorkspaceSkillsDir();
     createSkill(wsDir, `${TEST_PREFIX}ws_skill`);
 
     // Pass a non-existent project root
     const skills = loadAllSkills(workspaceRoot, join(tempDir, 'nonexistent-project'));
 
-    expect(skills.length).toBe(baselineGlobal.size + 1);
+    expect(skills.length).toBe(baselineSkills.size + 1);
     const wsSkill = skills.find(s => s.slug === `${TEST_PREFIX}ws_skill`);
     expect(wsSkill).toBeDefined();
     expect(wsSkill!.source).toBe('workspace');
   });
 
   it('should skip project tier when projectRoot is undefined', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+    const baselineSkills = getBaselineSkills();
     const projDir = getProjectSkillsDir();
     mkdirSync(projDir, { recursive: true });
     createSkill(projDir, `${TEST_PREFIX}project_only`);
@@ -461,30 +459,30 @@ describe('loadAllSkills', () => {
     const wsDir = getWorkspaceSkillsDir();
     createSkill(wsDir, `${TEST_PREFIX}ws_skill`);
 
-    // No projectRoot passed — project tier should be skipped
+    // No projectRoot passed 鈥?project tier should be skipped
     const skills = loadAllSkills(workspaceRoot);
 
     // Should NOT contain the project-only skill
     expect(skills.find(s => s.slug === `${TEST_PREFIX}project_only`)).toBeUndefined();
     // Should contain the workspace skill
     expect(skills.find(s => s.slug === `${TEST_PREFIX}ws_skill`)).toBeDefined();
-    expect(skills.length).toBe(baselineGlobal.size + 1);
+    expect(skills.length).toBe(baselineSkills.size + 1);
   });
 
-  it('should return only global skills when workspace and project are empty', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+  it('should return only baseline skills when workspace and project are empty', () => {
+    const baselineSkills = getBaselineSkills();
 
     const skills = loadAllSkills(workspaceRoot);
 
-    // With empty workspace and no project, only global skills remain
-    expect(skills.length).toBe(baselineGlobal.size);
-    for (const skill of skills) {
-      expect(skill.source).toBe('global');
+    // With empty workspace and no project, only baseline skills remain.
+    expect(skills.length).toBe(baselineSkills.size);
+    for (const [slug, source] of baselineSkills) {
+      expect(skills.find(skill => skill.slug === slug)?.source).toBe(source);
     }
   });
 
   it('should correctly assign source for workspace and project tiers', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+    const baselineSkills = getBaselineSkills();
     const wsDir = getWorkspaceSkillsDir();
     const projDir = getProjectSkillsDir();
     mkdirSync(projDir, { recursive: true });
@@ -499,20 +497,20 @@ describe('loadAllSkills', () => {
     expect(testSkills.filter(s => s.source === 'workspace')).toHaveLength(2);
     expect(testSkills.filter(s => s.source === 'project')).toHaveLength(1);
 
-    // Global skills should all have source 'global'
-    const globalSkills = skills.filter(s => !s.slug.startsWith(TEST_PREFIX));
-    for (const skill of globalSkills) {
-      expect(skill.source).toBe('global');
+    // Baseline skills should retain their source.
+    const baselineResults = skills.filter(s => !s.slug.startsWith(TEST_PREFIX));
+    for (const skill of baselineResults) {
+      expect(baselineSkills.get(skill.slug)).toBe(skill.source);
     }
   });
 
   it('should deduplicate by slug across workspace and project tiers', () => {
-    const baselineGlobal = getExistingGlobalSlugs();
+    const baselineSkills = getBaselineSkills();
     const wsDir = getWorkspaceSkillsDir();
     const projDir = getProjectSkillsDir();
     mkdirSync(projDir, { recursive: true });
 
-    // Same slug in workspace and project — only project should remain
+    // Same slug in workspace and project 鈥?only project should remain
     createSkill(wsDir, `${TEST_PREFIX}dup`, { name: 'WS Dup', description: 'From workspace' });
     createSkill(projDir, `${TEST_PREFIX}dup`, { name: 'Proj Dup', description: 'From project' });
     // Unique skills

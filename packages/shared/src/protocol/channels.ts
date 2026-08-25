@@ -432,6 +432,13 @@ export const RPC_CHANNELS = {
     REPLAY: 'automations:replay',
     CHANGED: 'automations:changed',
   },
+  agents: {
+    LIST: 'agents:list',
+    SAVE: 'agents:save',
+    DELETE: 'agents:delete',
+    GENERATE: 'agents:generate',
+    CHANGED: 'agents:changed',
+  },
   resources: {
     EXPORT: 'resources:export',
     IMPORT: 'resources:import',

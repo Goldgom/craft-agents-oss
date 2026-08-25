@@ -26,6 +26,7 @@ export type {
   WebhookAuth,
   AutomationAction,
   AutomationMatcher,
+  HostedScriptPermissions,
   HostedScriptMatcher,
   AutomationsConfig,
   PromptReferences,

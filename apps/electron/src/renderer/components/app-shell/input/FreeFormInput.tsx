@@ -2401,7 +2401,7 @@ export function FreeFormInput({
           </DropdownMenu>
           )}
 
-          {/* 5.5 Context Usage Warning Badge - shows when approaching auto-compaction threshold */}
+          {/* 5.5 Explicit context compaction action (the built-in compact agent). */}
           {(() => {
             // Calculate usage percentage based on compaction threshold (~77.5% of context window),
             // not the full context window - this gives users meaningful warnings before compaction kicks in.
@@ -2414,12 +2414,6 @@ export function FreeFormInput({
             const usagePercent = contextStatus?.inputTokens && compactionThreshold
               ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
               : null
-            // Show badge when >= 80% of compaction threshold AND not currently compacting
-            // Hide for Codex and Copilot models which don't support context compaction
-            const showWarning = usagePercent !== null && usagePercent >= 80 && !contextStatus?.isCompacting
-
-            if (!showWarning) return null
-
             const handleCompactClick = () => {
               if (!isProcessing) {
                 onSubmit('/compact', [])
@@ -2439,7 +2433,7 @@ export function FreeFormInput({
                       color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
                     } as React.CSSProperties}
                   >
-                    {usagePercent}%
+                    {contextStatus?.isCompacting ? t('chat.compacting') : 'Compact'}{usagePercent !== null ? ` · ${usagePercent}%` : ''}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">

@@ -17,6 +17,7 @@ import { join } from 'path';
 import matter from 'gray-matter';
 import type { LoadedSkill, SkillMetadata, SkillSource } from './types.ts';
 import { getWorkspaceSkillsPath } from '../workspaces/storage.ts';
+import { getBundledAssetsDir } from '../utils/paths.ts';
 import {
   validateIconValue,
   findIconFile,
@@ -34,6 +35,11 @@ export const GLOBAL_AGENT_SKILLS_DIR = join(homedir(), '.agents', 'skills');
 
 /** Project-level agent skills relative directory name */
 export const PROJECT_AGENT_SKILLS_DIR = '.agents/skills';
+
+/** App-shipped skills. They are visible and invocable but never user-writable. */
+export function getBuiltinSkillsDir(): string | undefined {
+  return getBundledAssetsDir('skills');
+}
 
 /**
  * Normalize requiredSources frontmatter to a clean string array.
@@ -203,9 +209,9 @@ export function invalidateSkillsCache(): void {
 }
 
 /**
- * Load all skills from all sources (global, workspace, project)
+ * Load all skills from all sources (built-in, global, workspace, project)
  * Skills with the same slug are overridden by higher-priority sources.
- * Priority: global (lowest) < workspace < project (highest)
+ * Priority: built-in (lowest) < global < workspace < project (highest)
  *
  * Results are cached per (workspaceRoot, projectRoot) pair. Call
  * invalidateSkillsCache() on working directory changes or skill file events.
@@ -223,17 +229,25 @@ export function loadAllSkills(workspaceRoot: string, projectRoot?: string): Load
 
   const skillsBySlug = new Map<string, LoadedSkill>();
 
-  // 1. Global skills (lowest priority): ~/.agents/skills/
+  // 1. Built-in skills (lowest priority): application resources/skills/
+  const builtinDir = getBuiltinSkillsDir();
+  if (builtinDir) {
+    for (const skill of loadSkillsFromDir(builtinDir, 'builtin')) {
+      skillsBySlug.set(skill.slug, skill);
+    }
+  }
+
+  // 2. Global skills: ~/.agents/skills/
   for (const skill of loadSkillsFromDir(GLOBAL_AGENT_SKILLS_DIR, 'global')) {
     skillsBySlug.set(skill.slug, skill);
   }
 
-  // 2. Workspace skills (medium priority)
+  // 3. Workspace skills
   for (const skill of loadWorkspaceSkills(workspaceRoot)) {
     skillsBySlug.set(skill.slug, skill);
   }
 
-  // 3. Project skills (highest priority): {projectRoot}/.agents/skills/
+  // 4. Project skills (highest priority): {projectRoot}/.agents/skills/
   if (projectRoot) {
     const projectSkillsDir = join(projectRoot, PROJECT_AGENT_SKILLS_DIR);
     for (const skill of loadSkillsFromDir(projectSkillsDir, 'project')) {
@@ -247,7 +261,7 @@ export function loadAllSkills(workspaceRoot: string, projectRoot?: string): Load
 }
 
 /**
- * Load a single skill by slug from all sources (project > workspace > global).
+ * Load a single skill by slug from all sources (project > workspace > global > built-in).
  * Unlike loadAllSkills(), this only reads the specific slug directory — O(1) not O(N).
  *
  * @param workspaceRoot - Absolute path to workspace root
@@ -267,7 +281,10 @@ export function loadSkillBySlug(workspaceRoot: string, slug: string, projectRoot
   if (workspaceSkill) return workspaceSkill;
 
   // Lowest priority: global
-  return loadSkillFromDir(GLOBAL_AGENT_SKILLS_DIR, slug, 'global');
+  const globalSkill = loadSkillFromDir(GLOBAL_AGENT_SKILLS_DIR, slug, 'global');
+  if (globalSkill) return globalSkill;
+  const builtinDir = getBuiltinSkillsDir();
+  return builtinDir ? loadSkillFromDir(builtinDir, slug, 'builtin') : null;
 }
 
 /**

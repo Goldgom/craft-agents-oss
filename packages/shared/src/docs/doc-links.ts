@@ -19,6 +19,7 @@ export type DocFeature =
   | 'app-settings'
   | 'preferences'
   | 'automations'
+  | 'agents'
   | 'messaging'
 
 export interface DocInfo {
@@ -108,6 +109,12 @@ export const DOCS: Record<DocFeature, DocInfo> = {
     title: 'Automations',
     summary:
       'Automate actions when events occur — run commands on schedules, react to label changes, or trigger prompts. Configured in automations.json.',
+  },
+  agents: {
+    path: '/agents/overview',
+    title: 'Agents',
+    summary:
+      'Reusable isolated workers with their own instructions and tool access. Delegate bounded side work from the main conversation and manage workspace agents from Automations.',
   },
   messaging: {
     path: '/messaging/overview',

@@ -227,6 +227,8 @@ export interface AutomationListItem {
   intervalMs?: number
   scriptTimeoutMs?: number
   scriptMetadata?: Record<string, unknown>
+  /** Explicit sandbox capabilities granted to a hosted script. */
+  scriptPermissions?: { env?: string[]; filesystem?: string[]; network?: string[] }
   /** Labels for prompt sessions */
   labels?: string[]
   /** Conditions that must pass before actions run */
@@ -399,6 +401,7 @@ interface AutomationsConfigMatcher {
   intervalMs?: number
   scriptTimeoutMs?: number
   scriptMetadata?: Record<string, unknown>
+  scriptPermissions?: { env?: string[]; filesystem?: string[]; network?: string[] }
   labels?: string[]
   conditions?: AutomationConditionUI[]
   enabled?: boolean
@@ -503,6 +506,7 @@ export function parseAutomationsConfig(json: unknown): AutomationListItem[] {
         intervalMs: matcher.intervalMs,
         scriptTimeoutMs: matcher.scriptTimeoutMs,
         scriptMetadata: matcher.scriptMetadata,
+        scriptPermissions: matcher.scriptPermissions,
         labels: matcher.labels,
         conditions: matcher.conditions,
         actions,

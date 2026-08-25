@@ -46,6 +46,7 @@ import {
   type AuthRequest,
 } from './session-scoped-tools.ts';
 import { type AutomationSystem, type SdkAutomationCallbackMatcher } from '../automations/index.ts';
+import { loadClaudeSubagents } from '../agents/index.ts';
 import {
   getPermissionMode,
   getPermissionModeDiagnostics,
@@ -1176,6 +1177,10 @@ export class ClaudeAgent extends BaseAgent {
 
       const options: Options = {
         ...getDefaultOptions(this.config.envOverrides),
+        // Workspace agents are isolated definitions exposed through Claude's
+        // native Agent/Task tool. The built-in `compact` agent is intentionally
+        // not passed here: /compact must use the SDK's native compaction flow.
+        agents: await loadClaudeSubagents(this.workspaceRootPath),
         model: effectiveModel,
         // Capture stderr from SDK subprocess for error diagnostics
         // This helps identify why sessions fail with "process exited with code 1"
