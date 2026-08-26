@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Bot, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { Bot, Plus, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -56,14 +56,16 @@ export function AgentManagerDialog({ workspaceId, workspaceRootPath }: { workspa
           <div className="space-y-1"><Label>Name</Label><Input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /></div>
         </div>
         <div className="space-y-1"><Label>When to use it</Label><Input value={editing.description} onChange={e => setEditing({ ...editing, description: e.target.value })} /></div>
-        <div className="space-y-1"><Label>Independent instructions</Label><Textarea className="min-h-36" value={editing.prompt} onChange={e => setEditing({ ...editing, prompt: e.target.value })} /></div>
-        <div className="space-y-1"><Label>Tools (comma-separated; empty inherits parent tools)</Label><Input value={editing.tools?.join(', ') ?? ''} onChange={e => setEditing({ ...editing, tools: e.target.value.split(',').map(item => item.trim()).filter(Boolean) })} /></div>
-        <div className="space-y-1"><Label>Model (optional)</Label><Input value={editing.model ?? ''} placeholder="inherit" onChange={e => setEditing({ ...editing, model: e.target.value || undefined })} /></div>
+        <div className="space-y-1"><Label>{editing.builtin ? 'Compaction instructions' : 'Independent instructions'}</Label><Textarea className="min-h-36" value={editing.prompt} onChange={e => setEditing({ ...editing, prompt: e.target.value })} /></div>
+        {!editing.builtin && <>
+          <div className="space-y-1"><Label>Tools (comma-separated; empty inherits parent tools)</Label><Input value={editing.tools?.join(', ') ?? ''} onChange={e => setEditing({ ...editing, tools: e.target.value.split(',').map(item => item.trim()).filter(Boolean) })} /></div>
+          <div className="space-y-1"><Label>Model (optional)</Label><Input value={editing.model ?? ''} placeholder="inherit" onChange={e => setEditing({ ...editing, model: e.target.value || undefined })} /></div>
+        </>}
       </div> : <div className="space-y-2 py-2">
         {agents.map(agent => <div key={agent.id} className="flex items-start gap-3 rounded-lg border border-foreground/10 p-3">
           <Bot className="mt-0.5 size-4 text-foreground/60" />
-          <button type="button" disabled={agent.builtin} onClick={() => setEditing(agent)} className="min-w-0 flex-1 text-left disabled:cursor-default"><div className="text-sm font-medium">{agent.name}{agent.builtin && <span className="ml-2 text-xs font-normal text-muted-foreground">Built-in</span>}</div><div className="text-xs text-muted-foreground">{agent.description}</div></button>
-          {!agent.builtin && <Button variant="ghost" size="icon" aria-label="Delete agent" onClick={async () => { await window.electronAPI.deleteAgent(workspaceId, agent.id); await refresh() }}><Trash2 className="size-4" /></Button>}
+          <button type="button" onClick={() => setEditing(agent)} className="min-w-0 flex-1 text-left"><div className="text-sm font-medium">{agent.name}{agent.builtin && <span className="ml-2 text-xs font-normal text-muted-foreground">Built-in</span>}</div><div className="text-xs text-muted-foreground">{agent.description}</div></button>
+          <Button variant="ghost" size="icon" aria-label={agent.builtin ? 'Reset built-in agent' : 'Delete agent'} onClick={async () => { await window.electronAPI.deleteAgent(workspaceId, agent.id); await refresh() }}>{agent.builtin ? <RotateCcw className="size-4" /> : <Trash2 className="size-4" />}</Button>
         </div>)}
       </div>}
       <DialogFooter className="gap-2 sm:justify-between">

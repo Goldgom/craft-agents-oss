@@ -4,7 +4,7 @@ Agents are reusable, isolated workers that the main conversation can delegate to
 
 ## Built-in compact agent
 
-`compact` is a built-in Agent that summarizes the active conversation to reduce context usage while preserving the goal, decisions, constraints, open work, and relevant paths. Use the **Compact** button in chat to run it. It is not stored in `agents.json` and cannot be overridden.
+`compact` is a built-in Agent that summarizes the active conversation to reduce context usage while preserving the goal, decisions, constraints, open work, and relevant paths. Use the **Compact** button in chat to run it. It is always available and continues to use the native context-compaction flow. Its display name, description, and compaction instructions can be customized from **Automations -> Agents**; the built-in behavior itself cannot be replaced.
 
 ## Custom agents
 
@@ -46,4 +46,4 @@ Use custom Agents for tasks that benefit from independent exploration or reasoni
 
 ## Managing agents
 
-Open **Automations → Agents** to view the built-in compact Agent and workspace Agents. The manager provides manual configuration and an AI-assisted configuration entry point. Workspace Agents update without restarting the app; a new main-session turn loads the current definitions.
+Open **Automations -> Agents** to view the built-in compact Agent and workspace Agents. The manager provides manual configuration and an AI-assisted configuration entry point. Workspace Agents update without restarting the app; a new main-session turn loads the current definitions.

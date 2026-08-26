@@ -77,6 +77,7 @@ import {
 } from '@craft-agent/session-tools-core';
 import { createClaudeContext, type SessionToolContext } from './claude-context.ts';
 import { getPermissionModeDiagnostics } from './mode-manager.ts';
+import { listAgents } from '../agents/index.ts';
 
 // call_llm pre-execution pipeline
 
@@ -2127,7 +2128,8 @@ export class PiAgent extends BaseAgent {
       const trimmedMessage = message.trim();
       const compactMatch = trimmedMessage.match(/^\/compact(?:\s+([\s\S]+))?$/i);
       if (compactMatch) {
-        const customInstructions = compactMatch[1]?.trim() || undefined;
+        const customInstructions = compactMatch[1]?.trim() ||
+          (await listAgents(this.config.workspace.rootPath)).find(agent => agent.id === 'compact')?.prompt;
         const compactResult = await this.requestCompact(customInstructions);
         if (compactResult) {
           yield {

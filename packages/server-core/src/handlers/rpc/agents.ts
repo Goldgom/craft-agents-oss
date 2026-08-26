@@ -17,9 +17,12 @@ export function registerAgentsHandlers(server: RpcServer, _deps: HandlerDeps): v
   server.handle(RPC_CHANNELS.agents.SAVE, async (_ctx, workspaceId: string, agent: CustomAgentDefinition) => {
     const root = workspaceRoot(workspaceId)
     const current = await loadAgentsConfig(root)
+    const storedAgent = agent.id === 'compact'
+      ? { ...agent, builtin: true }
+      : { ...agent, builtin: undefined }
     const next = current.agents.some(item => item.id === agent.id)
-      ? current.agents.map(item => item.id === agent.id ? { ...agent, builtin: undefined } : item)
-      : [...current.agents, { ...agent, builtin: undefined }]
+      ? current.agents.map(item => item.id === agent.id ? storedAgent : item)
+      : [...current.agents, storedAgent]
     return saveAgentsConfig(root, { version: 1, agents: next })
   })
   server.handle(RPC_CHANNELS.agents.DELETE, async (_ctx, workspaceId: string, agentId: string) => {

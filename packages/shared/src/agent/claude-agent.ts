@@ -46,7 +46,7 @@ import {
   type AuthRequest,
 } from './session-scoped-tools.ts';
 import { type AutomationSystem, type SdkAutomationCallbackMatcher } from '../automations/index.ts';
-import { loadClaudeSubagents } from '../agents/index.ts';
+import { listAgents, loadClaudeSubagents } from '../agents/index.ts';
 import {
   getPermissionMode,
   getPermissionModeDiagnostics,
@@ -1645,6 +1645,14 @@ export class ClaudeAgent extends BaseAgent {
       const isSlashCommand = commandName &&
         SDK_SLASH_COMMANDS.includes(commandName as typeof SDK_SLASH_COMMANDS[number]) &&
         !attachments?.length;
+      // A workspace may customize the built-in compact agent's instructions.
+      // Keep execution native, but use the configured prompt when no explicit
+      // instructions were supplied with /compact.
+      let slashCommandMessage = trimmedMessage;
+      if (isSlashCommand && commandName === 'compact' && !trimmedMessage.match(/^\/compact\s+/i)) {
+        const compactAgent = (await listAgents(this.workspaceRootPath)).find(agent => agent.id === 'compact');
+        if (compactAgent?.prompt) slashCommandMessage = `/compact ${compactAgent.prompt}`;
+      }
 
       // For SDK-fork branches: prepend a one-time context hint so the model treats
       // the parent conversation history (already in the SDK's messages via --fork-session)
@@ -1676,7 +1684,7 @@ This is a branched conversation. All prior messages in this conversation are par
         // Send slash commands directly to SDK without context wrapping.
         // The SDK processes these as internal commands (e.g., /compact triggers compaction).
         debug(`[chat] Detected SDK slash command: ${trimmedMessage}`);
-        this.currentQuery = query({ prompt: trimmedMessage, options: optionsWithAbort });
+        this.currentQuery = query({ prompt: slashCommandMessage, options: optionsWithAbort });
         turnMessageSource = this.currentQuery;
       } else if (hasBinaryAttachments) {
         const sdkMessage = this.buildSDKUserMessage(effectiveUserMessage, attachments);
