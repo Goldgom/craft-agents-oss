@@ -111,7 +111,7 @@ export interface BaileysModule {
 
 type BaileysSock = {
   ev: {
-    on(event: 'creds.update', fn: () => void): void
+    on(event: 'creds.update', fn: (update?: { me?: { id?: string; lid?: string } }) => void): void
     on(event: 'connection.update', fn: (u: Record<string, unknown>) => void): void
     on(event: 'messages.upsert', fn: (u: { messages: unknown[]; type: string }) => void): void
   }
@@ -151,6 +151,14 @@ interface SessionState {
    * messages newer than this wall-clock cutoff (minus a small grace).
    */
   connectedAtSec: number
+  /**
+   * Bare LID form of the account (`lid@lid`), captured from Baileys `creds.update` /
+   * `connection.update` as soon as WhatsApp delivers it. Null until (and unless) WA sends a
+   * LID for this account. Primary source for self-chat classification on LID-migrated
+   * accounts; the upsert path falls back to a live `sock.user.lid` read. See
+   * craft-agents-oss#1021.
+   */
+  selfLid: string | null
 }
 
 let session: SessionState | null = null
@@ -273,7 +281,13 @@ async function startSession(
       logger: silentLogger,
     }) as BaileysSock
 
-    sock.ev.on('creds.update', () => void saveCreds())
+    sock.ev.on('creds.update', (update) => {
+      // Capture the account's LID the moment WhatsApp delivers it (login / creds refresh).
+      // This is the authoritative source; the upsert path also keeps a live-read fallback.
+      const lid = bareJid(update?.me?.lid ?? sock.user?.lid)
+      if (lid && session) session.selfLid = lid
+      void saveCreds()
+    })
 
     sock.ev.on('connection.update', (u) => {
       const { connection, lastDisconnect, qr } = u as {
@@ -285,10 +299,16 @@ async function startSession(
         emit({ type: 'qr', qr })
       }
       if (connection === 'open') {
+        const selfLid = bareJid(sock.user?.lid)
         if (session) {
           session.reconnectAttempts = 0
           session.connectedAtSec = Math.floor(Date.now() / 1000)
+          if (selfLid) session.selfLid = selfLid
         }
+        // Diagnostic (craft-agents-oss#1021): `lid=?` means WhatsApp delivered no LID for this
+        // account, so LID-form self-chats cannot be classified — the cause is then upstream in
+        // Baileys/WA, not our classifier. Logged at connect so it's the first thing operators see.
+        log(`connected jid=${bareJid(sock.user?.id) ?? '?'} lid=${session?.selfLid ?? '?'}`)
         emit({ type: 'connected', jid: sock.user?.id, name: sock.user?.name })
         return
       }
@@ -362,7 +382,9 @@ async function startSession(
       // timestamp, with a 5s grace for clock skew.
       const cutoff = session.connectedAtSec - 5
       const selfJid = bareJid(sock.user?.id)
-      const selfLid = bareJid(sock.user?.lid)
+      // Prefer the LID captured from creds.update/connection.update; fall back to a live read
+      // so classic (non-LID) accounts and any capture-ordering gap still resolve correctly.
+      const selfLid = session.selfLid ?? bareJid(sock.user?.lid)
 
       // Per-message work is async (media download). Fire-and-forget the
       // batch with a per-message try/catch — Baileys' event handler must
@@ -405,6 +427,7 @@ async function startSession(
     responsePrefix: effectivePrefix,
     sentIds: new Set<string>(),
     connectedAtSec: 0,
+    selfLid: null,
   }
 }
 

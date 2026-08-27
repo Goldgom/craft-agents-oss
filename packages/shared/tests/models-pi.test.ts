@@ -34,4 +34,19 @@ describe('models-pi filtering', () => {
     expect(ids).toContain('pi/deepseek-v4-flash');
     expect(ids).toContain('pi/deepseek-v4-pro');
   });
+
+  it('includes Moonshot AI in the Pi API key provider list with human-readable labels', () => {
+    const providers = getPiApiKeyProviders();
+    expect(providers.some(provider => provider.key === 'moonshotai' && provider.label === 'Moonshot AI')).toBe(true);
+    expect(providers.some(provider => provider.key === 'moonshotai-cn' && provider.label === 'Moonshot AI (CN)')).toBe(true);
+  });
+
+  it('returns Kimi K3 from the Pi SDK catalog for both Moonshot providers', () => {
+    const ids = getPiModelsForAuthProvider('moonshotai').map(m => m.id);
+    expect(ids).toContain('pi/kimi-k3');
+    expect(ids).toContain('pi/kimi-k2.6');
+
+    const cnIds = getPiModelsForAuthProvider('moonshotai-cn').map(m => m.id);
+    expect(cnIds).toContain('pi/kimi-k3');
+  });
 });

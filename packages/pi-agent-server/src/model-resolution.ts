@@ -87,3 +87,25 @@ export function isModelNotFoundError(message: string): boolean {
     (normalized.includes('requested model') && normalized.includes('not') && normalized.includes('exist'))
   );
 }
+
+/**
+ * Stricter variant of `isModelNotFoundError` for contexts where a 400 can also mean a
+ * rejected *tool* or parameter — e.g. the ChatGPT Codex search path, where a hosted-tool
+ * refusal ("Hosted tool 'web_search' is not supported") must not be mistaken for a model
+ * rejection (that would skip the tool-type retry and burn every candidate model instead).
+ * The ambiguous phrasings ("is not supported", "does not exist") only count when the
+ * message names the requested model — the known Codex refusal quotes it verbatim
+ * ("The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.").
+ */
+export function isModelRejectionError(message: string, modelId: string): boolean {
+  if (!isModelNotFoundError(message)) return false;
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes('model_not_found') ||
+    normalized.includes('no such model') ||
+    normalized.includes('requested model')
+  ) {
+    return true;
+  }
+  return modelId.length > 0 && normalized.includes(modelId.toLowerCase());
+}

@@ -777,7 +777,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     error?: string
   }> => {
     try {
-      const { loginGitHubCopilot } = await import('@earendil-works/pi-ai/oauth')
+      const { loginGitHubCopilot } = await import('@craft-agent/shared/auth')
       const credentialManager = getCredentialManager()
 
       // Cancel any previous in-flight flow
@@ -786,9 +786,9 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
 
       deps.platform.logger?.info(`Starting GitHub Copilot OAuth device flow for connection: ${connectionSlug}`)
 
-      // Use Pi SDK's login flow — this handles the device code flow AND
-      // the critical Copilot token exchange that determines the correct
-      // API endpoint for the user's subscription tier (individual/business/enterprise).
+      // App-owned login flow (pi-ai 0.81.x no longer exports one) — handles the
+      // device code flow AND the critical Copilot token exchange that determines
+      // the correct API endpoint for the user's subscription tier via proxy-ep.
       const credentials = await loginGitHubCopilot({
         onDeviceCode: ({ userCode, verificationUri }) => {
           deps.platform.logger?.info(`[GitHub OAuth] Device code: ${userCode}`)
@@ -800,10 +800,6 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
           server.invokeClient(ctx.clientId, CLIENT_OPEN_EXTERNAL, verificationUri).catch(err => {
             deps.platform.logger?.warn(`Failed to open browser for GitHub OAuth: ${err}`)
           })
-        },
-        onPrompt: async () => {
-          // Pi SDK asks for GitHub Enterprise domain — return empty for github.com
-          return ''
         },
         onProgress: (message) => {
           deps.platform.logger?.info(`[GitHub OAuth] ${message}`)

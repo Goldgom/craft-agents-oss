@@ -197,4 +197,58 @@ describe('processUpsertMessage', () => {
     expect(events[0]?.attachments?.length).toBe(1)
     cleanup(events)
   })
+
+  // -------------------------------------------------------------------------
+  // craft-agents-oss#1021: WhatsApp LID (Linked Identity) accounts.
+  // -------------------------------------------------------------------------
+
+  test('fromMe LID self-chat emits when selfLid is resolved', async () => {
+    const LID_SELF = '111222333@lid'
+    const session = makeSession({ selfChatMode: true })
+    const { events, emit } = captureEmit()
+
+    const msg = {
+      key: { id: 'MID-LID-1', remoteJid: LID_SELF, fromMe: true },
+      messageTimestamp: Math.floor(Date.now() / 1000),
+      message: { conversation: '/new' },
+    }
+
+    await processUpsertMessage(
+      msg,
+      { cutoff: 0, selfJid: SELF_BARE, selfLid: LID_SELF },
+      session,
+      emit,
+      noopLog,
+    )
+
+    expect(events.length).toBe(1)
+    expect(events[0]?.text).toBe('/new')
+    expect(events[0]?.channelId).toBe(LID_SELF)
+  })
+
+  test('logs a LID-unresolved note when dropping a @lid message with no selfLid', async () => {
+    const logs: string[] = []
+    const captureLog = (...args: unknown[]): void => {
+      logs.push(args.map(String).join(' '))
+    }
+    const session = makeSession({ selfChatMode: true })
+    const { events, emit } = captureEmit()
+
+    const msg = {
+      key: { id: 'MID-LID-2', remoteJid: '444555666@lid', fromMe: true },
+      messageTimestamp: Math.floor(Date.now() / 1000),
+      message: { conversation: '/new' },
+    }
+
+    await processUpsertMessage(
+      msg,
+      { cutoff: 0, selfJid: SELF_BARE, selfLid: null },
+      session,
+      emit,
+      captureLog,
+    )
+
+    expect(events.length).toBe(0)
+    expect(logs.some((l) => l.includes('selfLid is unresolved') && l.includes('#1021'))).toBe(true)
+  })
 })

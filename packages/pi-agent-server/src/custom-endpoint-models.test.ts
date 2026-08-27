@@ -65,4 +65,21 @@ describe('buildCustomEndpointModelDef', () => {
     expect(model.input).toEqual(['text', 'image'])
     expect(model.contextWindow).toBe(262_144)
   })
+
+  // Regression: craft-agents-oss#1022 — strict OpenAI-compatible gateways 400 on the
+  // `store` param. supportsStore:false makes the pi-ai driver omit it entirely.
+  it('disables the store param for openai-completions endpoints', () => {
+    const model = buildCustomEndpointModelDef('gpt-model', undefined, undefined, 'openai-completions')
+    expect((model as { compat?: { supportsStore?: boolean } }).compat).toEqual({ supportsStore: false })
+  })
+
+  it('does not set store compat for anthropic-messages endpoints', () => {
+    const model = buildCustomEndpointModelDef('claude-model', undefined, undefined, 'anthropic-messages')
+    expect((model as { compat?: unknown }).compat).toBeUndefined()
+  })
+
+  it('does not set store compat when the api is unspecified', () => {
+    const model = buildCustomEndpointModelDef('some-model')
+    expect((model as { compat?: unknown }).compat).toBeUndefined()
+  })
 })
