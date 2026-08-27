@@ -429,10 +429,11 @@ Go to **APIs & Services → Library** and enable the APIs you need:
 
 1. Go to **APIs & Services → Credentials**
 2. Click **Create Credentials → OAuth Client ID**
-3. Application type: **Desktop app**
-4. Name: e.g., "Craft Agent Desktop"
-5. Click **Create**
-6. Note the **Client ID** and **Client Secret**
+3. Application type: **Web application** (not "Desktop app" — Craft Agent routes every OAuth flow through a hosted callback, which a Desktop-app client rejects with `redirect_uri_mismatch`)
+4. Name: e.g., "Craft Agent"
+5. Under **Authorized redirect URIs**, add: `https://thecraftagents.com/auth/callback`
+6. Click **Create**
+7. Note the **Client ID** and **Client Secret**
 
 #### 5. Configure in Craft Agent
 

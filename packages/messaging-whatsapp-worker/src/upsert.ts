@@ -78,6 +78,19 @@ export async function processUpsertMessage(
 
   if (decision.action === 'skip' && decision.reason !== 'empty') {
     log(`upsert skip: ${decision.reason}`)
+    // Diagnostic (craft-agents-oss#1021): a dropped @lid message while selfLid is unresolved is
+    // the signature of WhatsApp's LID rollout without a resolved self-LID — distinct from an
+    // ordinary own_outbound / non-self-chat drop. Surface it so it's greppable in the main log.
+    if (
+      upsertCtx.selfLid === null &&
+      (decision.reason === 'own_outbound' || decision.reason === 'non_self_chat_inbound') &&
+      (dbgKey.remoteJid?.endsWith('@lid') ?? false)
+    ) {
+      log(
+        'upsert note: dropped a @lid message but selfLid is unresolved — WhatsApp delivered no ' +
+          'LID for this account; self-chat classification cannot match until it does (see #1021).',
+      )
+    }
     return
   }
 

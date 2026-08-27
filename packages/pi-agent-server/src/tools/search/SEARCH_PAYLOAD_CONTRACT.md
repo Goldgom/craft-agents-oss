@@ -1,6 +1,6 @@
 # Search Payload Contract
 
-Last updated: 2026-03-06
+Last updated: 2026-08-25
 
 This file documents the **known-good request shape** for provider-native web search calls in `pi-agent-server`.
 
@@ -18,7 +18,7 @@ Required headers:
 - `Content-Type: application/json`
 
 Known-good body fields for search:
-- `model: "gpt-5.3-codex"`
+- `model`: derived from the active connection, NOT hardcoded. The plumbed active-session model is tried first, then the shared `openai-codex` catalog (`PI_PREFERRED_DEFAULTS['openai-codex']`) as fallbacks, capped at 4 candidates total (`MAX_MODEL_CANDIDATES`) so a fully-rejecting account is bounded to 4 round-trips before the DDG fallback. A 400 counts as a model rejection only when the error names the model (`isModelRejectionError`) — a hosted-tool "is not supported" refusal takes the tool-type retry instead. Hardcoding a single model here previously caused a total search outage when that model was retired (craft-agents-oss#1023).
 - `store: false`
 - `stream: true`
 - `instructions: string`
@@ -36,5 +36,5 @@ The backend may reply with either JSON or SSE-like payloads depending on edge be
 If search starts failing again (HTTP or parse path):
 1. Verify this payload shape in tests (`providers/chatgpt.test.ts`).
 2. Compare against current upstream SDK behavior (`@earendil-works/pi-ai` codex responses provider).
-3. Confirm model remains codex-compatible (`gpt-5.x-codex` family).
+3. Confirm the candidate models in `PI_PREFERRED_DEFAULTS['openai-codex']` are current — a stale/retired model at the top of the list means the first search attempt 400s (it then fails over to the next candidate, so this degrades latency rather than breaking search). Only the first 4 deduped candidates are tried (`MAX_MODEL_CANDIDATES`), so the working model must be near the front of the catalog.
 4. Inspect error fingerprint in thrown error (`tool/model/stream/tool_choice/text.verbosity`) and parse metadata (`content-type`, compact response snippet).

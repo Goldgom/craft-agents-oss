@@ -49,7 +49,12 @@ function getOpenAiCodexAccessToken(piAuth?: SearchProviderAuthConfig): string | 
   return getOAuthAccess(piAuth) ?? getApiKey(piAuth);
 }
 
-export function resolveSearchProvider(piAuth?: SearchProviderAuthConfig): WebSearchProvider {
+/**
+ * @param activeModel Bare (no `pi/` prefix) model ID of the active session/connection. Used
+ *   by the ChatGPT backend provider to search with a model the account actually supports,
+ *   instead of a hardcoded one that may have been retired (craft-agents-oss#1023).
+ */
+export function resolveSearchProvider(piAuth?: SearchProviderAuthConfig, activeModel?: string): WebSearchProvider {
   const provider = piAuth?.provider;
   const apiKey = getApiKey(piAuth);
   const openAiCodexAccess = getOpenAiCodexAccessToken(piAuth);
@@ -67,7 +72,11 @@ export function resolveSearchProvider(piAuth?: SearchProviderAuthConfig): WebSea
   if (provider === 'openai-codex' && openAiCodexAccess) {
     const accountId = extractChatGptAccountId(openAiCodexAccess);
     if (accountId) {
-      return new ChatGPTBackendSearchProvider(openAiCodexAccess, accountId);
+      return new ChatGPTBackendSearchProvider(
+        openAiCodexAccess,
+        accountId,
+        activeModel ? { model: activeModel } : undefined,
+      );
     }
     // Can't extract accountId (malformed/non-JWT token) → fall through to DDG
   }

@@ -90,7 +90,8 @@ describe('ChatGPTBackendSearchProvider', () => {
     expect(calledUrl).toBe('https://chatgpt.com/backend-api/codex/responses');
     expect(calledHeaders.Authorization).toBe('Bearer my-access-token');
     expect(calledHeaders['chatgpt-account-id']).toBe('acc_12345');
-    expect(calledBody.model).toBe('gpt-5.3-codex');
+    // No model plumbed → first candidate from the shared openai-codex catalog (#1023).
+    expect(calledBody.model).toBe('gpt-5.6-sol');
     expect(calledBody.store).toBe(false);
     expect(calledBody.stream).toBe(true);
     expect(calledBody.instructions).toContain('web search assistant');
@@ -352,5 +353,166 @@ describe('ChatGPTBackendSearchProvider', () => {
     expect(message).toContain('tool=web_search');
     expect(message).toContain('stream=true');
     expect(callCount).toBe(1);
+  });
+
+  // Regression: craft-agents-oss#1023 — the search model must come from the active
+  // connection, not a hardcoded (potentially retired) constant.
+  it('uses the plumbed active model instead of the default', async () => {
+    let calledBody: any = null;
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calledBody = init?.body ? JSON.parse(String(init.body)) : null;
+      return new Response(
+        JSON.stringify({
+          output: [
+            {
+              type: 'message',
+              content: [
+                {
+                  type: 'output_text',
+                  text: 'Results.',
+                  annotations: [{ type: 'url_citation', url: 'https://example.com', title: 'Example' }],
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    const provider = new ChatGPTBackendSearchProvider('token', 'acc_123', { model: 'gpt-5.6-terra' });
+    await provider.search('query', 5);
+
+    expect(calledBody.model).toBe('gpt-5.6-terra');
+  });
+
+  // Regression: craft-agents-oss#1023 — an "unsupported model" 400 must fail over to the next
+  // candidate model, not burn the tool-type retry on the same dead model and cascade to DDG.
+  it('retries with the next candidate model when the account rejects the model', async () => {
+    const attempts: Array<{ model: unknown; tool: unknown }> = [];
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      attempts.push({ model: body?.model, tool: body?.tools?.[0]?.type });
+
+      if (attempts.length === 1) {
+        return new Response(
+          JSON.stringify({
+            detail: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          output: [
+            {
+              type: 'message',
+              content: [
+                {
+                  type: 'output_text',
+                  text: 'Recovered with a supported model.',
+                  annotations: [{ type: 'url_citation', url: 'https://recovered.example', title: 'Recovered' }],
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    const provider = new ChatGPTBackendSearchProvider('token', 'acc_123', { model: 'gpt-5.6-sol' });
+    const results = await provider.search('failover query', 3);
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]?.model).toBe('gpt-5.6-sol');
+    // Second attempt uses a *different* model (next catalog candidate), still the primary tool type.
+    expect(attempts[1]?.model).not.toBe('gpt-5.6-sol');
+    expect(attempts[0]?.tool).toBe('web_search');
+    expect(attempts[1]?.tool).toBe('web_search');
+    expect(results[0]?.url).toBe('https://recovered.example');
+  });
+
+  // A hosted-tool refusal also phrased "is not supported" must NOT be treated as a model
+  // rejection — that would skip the web_search_preview retry and burn every candidate model.
+  it('retries the same model with the next tool type when the tool (not the model) is rejected', async () => {
+    const attempts: Array<{ model: unknown; tool: unknown }> = [];
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      attempts.push({ model: body?.model, tool: body?.tools?.[0]?.type });
+
+      if (attempts.length === 1) {
+        return new Response(
+          JSON.stringify({ detail: "Hosted tool 'web_search' is not supported." }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          output: [
+            {
+              type: 'message',
+              content: [
+                {
+                  type: 'output_text',
+                  text: 'Recovered with the preview tool.',
+                  annotations: [{ type: 'url_citation', url: 'https://preview.example', title: 'Preview' }],
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    const provider = new ChatGPTBackendSearchProvider('token', 'acc_123', { model: 'gpt-5.6-sol' });
+    const results = await provider.search('tool refusal query', 3);
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]?.model).toBe(attempts[0]?.model);
+    expect(attempts[0]?.tool).toBe('web_search');
+    expect(attempts[1]?.tool).toBe('web_search_preview');
+    expect(results[0]?.url).toBe('https://preview.example');
+  });
+
+  // Failover is bounded: an account that rejects everything makes MAX_MODEL_CANDIDATES (4)
+  // requests — not one per catalog entry — before throwing (and the tool layer falls to DDG).
+  // The thrown message is summarized rather than a raw concatenation of every attempt.
+  it('caps the failover sweep at 4 candidate models and summarizes the thrown error', async () => {
+    const modelsTried: unknown[] = [];
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      modelsTried.push(body?.model);
+      return new Response(
+        JSON.stringify({
+          detail: `The '${body?.model}' model is not supported when using Codex with a ChatGPT account.`,
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    const provider = new ChatGPTBackendSearchProvider('token', 'acc_123');
+
+    let thrown: Error | null = null;
+    try {
+      await provider.search('hopeless query', 3);
+    } catch (err) {
+      thrown = err as Error;
+    }
+
+    expect(thrown).not.toBeNull();
+    expect(thrown!.message).toContain('ChatGPT search failed');
+    expect(modelsTried).toHaveLength(4);
+    expect(new Set(modelsTried).size).toBe(4);
+    // 4 attempt errors → summarized as first 2 + elision marker + final.
+    expect(thrown!.message).toContain('(+1 more attempt)');
+    expect(thrown!.message).toContain(String(modelsTried[3]));
   });
 });
