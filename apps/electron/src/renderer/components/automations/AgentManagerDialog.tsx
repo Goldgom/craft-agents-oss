@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Bot, Plus, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -14,13 +14,7 @@ const EMPTY_AGENT: CustomAgentDefinition = {
   id: '', name: '', description: '', prompt: '', tools: ['Read', 'Grep', 'Glob'],
 }
 
-export function AgentManagerDialog({ workspaceId, workspaceRootPath, open: controlledOpen, onOpenChange: controlledOnOpenChange, showTrigger = true }: { workspaceId: string; workspaceRootPath: string; open?: boolean; onOpenChange?: (open: boolean) => void; showTrigger?: boolean }) {
-  const [internalOpen, setInternalOpen] = React.useState(false)
-  const open = controlledOpen ?? internalOpen
-  const setOpen = (value: boolean) => {
-    if (controlledOpen !== undefined) controlledOnOpenChange?.(value)
-    else setInternalOpen(value)
-  }
+export function AgentManagerPage({ workspaceId, workspaceRootPath }: { workspaceId: string; workspaceRootPath: string }) {
   const [agents, setAgents] = React.useState<CustomAgentDefinition[]>([])
   const [editing, setEditing] = React.useState<CustomAgentDefinition | null>(null)
   const [saving, setSaving] = React.useState(false)
@@ -30,7 +24,7 @@ export function AgentManagerDialog({ workspaceId, workspaceRootPath, open: contr
     catch (error) { toast.error(error instanceof Error ? error.message : 'Unable to load agents') }
   }, [workspaceId])
 
-  React.useEffect(() => { if (open) void refresh() }, [open, refresh])
+  React.useEffect(() => { void refresh() }, [refresh])
 
   const save = async () => {
     if (!editing) return
@@ -46,15 +40,11 @@ export function AgentManagerDialog({ workspaceId, workspaceRootPath, open: contr
     finally { setSaving(false) }
   }
 
-  return <Dialog open={open} onOpenChange={setOpen}>
-    {showTrigger && <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-[8px] border border-foreground/10 px-2.5 py-1.5 text-xs font-medium hover:bg-foreground/[0.04]">
-      <Bot className="size-3.5" /> Agents
-    </button>}
-    <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-      <DialogHeader>
-        <DialogTitle className="flex items-center gap-2"><Bot className="size-4" /> Agents <BuiltinDocHelpButton feature="agents" className="ml-auto border-0 px-1.5 py-1 font-normal text-muted-foreground" /></DialogTitle>
-        <DialogDescription>Agents have independent instructions and tool access. The main conversation can delegate bounded work to them.</DialogDescription>
-      </DialogHeader>
+  return <div className="flex h-full flex-col overflow-y-auto px-5 py-5">
+      <div className="mb-5">
+        <h2 className="flex items-center gap-2 text-base font-semibold"><Bot className="size-4" /> Agents <BuiltinDocHelpButton feature="agents" className="ml-auto border-0 px-1.5 py-1 font-normal text-muted-foreground" /></h2>
+        <p className="mt-1 text-sm text-muted-foreground">Agents have independent instructions and tool access. The main conversation can delegate bounded work to them.</p>
+      </div>
       {editing ? <div className="space-y-4 py-2">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1"><Label>Id</Label><Input value={editing.id} placeholder="code-review" onChange={e => setEditing({ ...editing, id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })} /></div>
@@ -73,9 +63,16 @@ export function AgentManagerDialog({ workspaceId, workspaceRootPath, open: contr
           <Button variant="ghost" size="icon" aria-label={agent.builtin ? 'Reset built-in agent' : 'Delete agent'} onClick={async () => { await window.electronAPI.deleteAgent(workspaceId, agent.id); await refresh() }}>{agent.builtin ? <RotateCcw className="size-4" /> : <Trash2 className="size-4" />}</Button>
         </div>)}
       </div>}
-      <DialogFooter className="gap-2 sm:justify-between">
+      <div className="mt-5 flex gap-2">
         {editing ? <><Button variant="ghost" onClick={() => setEditing(null)}>Back</Button><Button onClick={() => void save()} disabled={saving}>Save agent</Button></> : <><EditPopover trigger={<Button variant="outline"><Sparkles className="mr-1.5 size-4" />AI generate</Button>} {...getEditConfig('agent-config', workspaceRootPath)} /><Button onClick={() => setEditing(EMPTY_AGENT)}><Plus className="mr-1.5 size-4" />Manual configuration</Button></>}
-      </DialogFooter>
-    </DialogContent>
+      </div>
+  </div>
+}
+
+/** @deprecated Use AgentManagerPage for the Automations workspace page. */
+export function AgentManagerDialog({ workspaceId, workspaceRootPath, open = false, onOpenChange, showTrigger = true }: { workspaceId: string; workspaceRootPath: string; open?: boolean; onOpenChange?: (open: boolean) => void; showTrigger?: boolean }) {
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    {showTrigger && <button type="button" onClick={() => onOpenChange?.(true)} className="inline-flex items-center gap-1.5 rounded-[8px] border border-foreground/10 px-2.5 py-1.5 text-xs font-medium hover:bg-foreground/[0.04]"><Bot className="size-3.5" /> Agents</button>}
+    <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl"><AgentManagerPage workspaceId={workspaceId} workspaceRootPath={workspaceRootPath} /></DialogContent>
   </Dialog>
 }

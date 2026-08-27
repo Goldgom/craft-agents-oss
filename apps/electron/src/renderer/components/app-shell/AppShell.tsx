@@ -127,7 +127,6 @@ import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
 import CliToolsNavigator from "./CliToolsNavigator"
 import { AutomationsListPanel } from "../automations/AutomationsListPanel"
-import { AgentManagerDialog } from "../automations/AgentManagerDialog"
 import { ProjectsListPanel } from "./ProjectsListPanel"
 import { APP_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO_FILTER_KIND } from "../automations/types"
 import { useAutomations } from "@/hooks/useAutomations"
@@ -3731,23 +3730,6 @@ function AppShellContent({
        */}
       {activeWorkspace && (
         <>
-          {/* Automation children open these shared configuration surfaces directly. */}
-          <AgentManagerDialog
-            workspaceId={activeWorkspace.id}
-            workspaceRootPath={activeWorkspace.rootPath}
-            open={automationSection === 'agents'}
-            onOpenChange={(open) => { if (!open) navigate(routes.view.automations()) }}
-            showTrigger={false}
-          />
-          <EditPopover
-            open={automationSection === 'script-monitor'}
-            onOpenChange={(open) => { if (!open) navigate(routes.view.automations()) }}
-            modal={true}
-            trigger={<div className="fixed h-0 w-0 pointer-events-none" aria-hidden="true" />}
-            side="bottom"
-            align="start"
-            {...getEditConfig('script-monitor-config', activeWorkspace.rootPath)}
-          />
           {/* Configure Statuses EditPopover - anchored near sidebar */}
           <EditPopover
             open={editPopoverOpen === 'statuses'}

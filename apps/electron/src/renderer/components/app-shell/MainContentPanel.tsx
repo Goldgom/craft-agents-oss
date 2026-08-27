@@ -48,6 +48,11 @@ import type { ExecutionEntry } from '../automations/types'
 import { automationsAtom } from '@/atoms/automations'
 import { SendResourceToWorkspaceDialog, type SendResourceType } from './SendResourceToWorkspaceDialog'
 import CliToolsPage from '@/pages/CliToolsPage'
+import { AgentManagerPage } from '../automations/AgentManagerDialog'
+import { AutomationAvatar } from '../automations/AutomationAvatar'
+import { Button } from '@/components/ui/button'
+import { Code2 } from 'lucide-react'
+import { EditPopover, getEditConfig } from '@/components/ui/EditPopover'
 
 export interface MainContentPanelProps {
   /** Whether both sidebar and navigator are hidden (focus mode / CMD+.) */
@@ -59,6 +64,33 @@ export interface MainContentPanelProps {
    * Used by PanelSlot to render panels in the panel stack.
    */
   navStateOverride?: import('../../../shared/types').NavigationState | null
+}
+
+function ScriptMonitorPage({ automations }: { automations: import('../automations/types').AutomationListItem[] }) {
+  const { t } = useTranslation()
+  const { workspaces, activeWorkspaceId } = useAppShellContext()
+  const workspace = workspaces.find(item => item.id === activeWorkspaceId)
+  const monitors = automations.filter(automation => automation.event === 'HostedScriptTick')
+
+  return <div className="flex h-full flex-col overflow-y-auto px-5 py-5">
+    <div className="mb-5 flex items-start justify-between gap-4">
+      <div>
+        <h2 className="flex items-center gap-2 text-base font-semibold"><Code2 className="size-4" />{t('sidebar.scriptMonitor')}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{t('sidebar.scriptMonitorDescription')}</p>
+      </div>
+      {workspace?.rootPath && <EditPopover trigger={<Button><Code2 className="size-4" />Add monitor</Button>} {...getEditConfig('script-monitor-config', workspace.rootPath)} />}
+    </div>
+    {monitors.length === 0 ? <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">No script monitors configured.</div> : <div className="divide-y divide-foreground/10 border-y border-foreground/10">
+      {monitors.map(monitor => <div key={monitor.id} className="flex items-start gap-3 py-4">
+        <AutomationAvatar event={monitor.event} size="sm" />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">{monitor.name}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">{monitor.summary}</div>
+          <div className="mt-2 flex gap-3 text-xs text-muted-foreground"><span>{monitor.enabled ? 'Active' : 'Disabled'}</span><span>{monitor.intervalMs ? `${monitor.intervalMs / 1000}s interval` : 'No interval'}</span></div>
+        </div>
+      </div>)}
+    </div>}
+  </div>
 }
 
 export function MainContentPanel({
@@ -331,17 +363,7 @@ export function MainContentPanel({
       const isAgents = navState.section === 'agents'
       return wrapWithStoplight(
         <Panel variant="grow" className={className}>
-          <div className="flex h-full flex-col">
-            <div className="border-b border-foreground/10 px-5 py-4">
-              <h2 className="text-base font-semibold">{isAgents ? t('sidebar.agents') : t('sidebar.scriptMonitor')}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {isAgents ? t('sidebar.agentsDescription') : t('sidebar.scriptMonitorDescription')}
-              </p>
-            </div>
-            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-              {isAgents ? t('sidebar.agentsOpenManager') : t('sidebar.scriptMonitorOpenEditor')}
-            </div>
-          </div>
+          {isAgents ? <AgentManagerPage workspaceId={activeWorkspaceId ?? ''} workspaceRootPath={workspaces.find(workspace => workspace.id === activeWorkspaceId)?.rootPath ?? ''} /> : <ScriptMonitorPage automations={automations} />}
         </Panel>
       )
     }
