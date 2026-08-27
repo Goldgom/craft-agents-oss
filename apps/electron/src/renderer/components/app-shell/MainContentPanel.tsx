@@ -327,6 +327,24 @@ export function MainContentPanel({
 
   // Automations navigator - show automation info, multi-select panel, or empty state
   if (isAutomationsNavigation(navState)) {
+    if (navState.section) {
+      const isAgents = navState.section === 'agents'
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <div className="flex h-full flex-col">
+            <div className="border-b border-foreground/10 px-5 py-4">
+              <h2 className="text-base font-semibold">{isAgents ? t('sidebar.agents') : t('sidebar.scriptMonitor')}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {isAgents ? t('sidebar.agentsDescription') : t('sidebar.scriptMonitorDescription')}
+              </p>
+            </div>
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              {isAgents ? t('sidebar.agentsOpenManager') : t('sidebar.scriptMonitorOpenEditor')}
+            </div>
+          </div>
+        </Panel>
+      )
+    }
     if (isAutomationMultiSelectActive) {
       return wrapWithStoplight(
         <Panel variant="grow" className={className}>

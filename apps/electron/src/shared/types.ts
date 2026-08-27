@@ -1064,6 +1064,7 @@ export interface SkillsNavigationState {
 export interface AutomationsNavigationState {
   navigator: 'automations'
   filter?: AutomationFilter
+  section?: 'script-monitor' | 'agents'
   details: { type: 'automation'; automationId: string } | null
   rightSidebar?: RightSidebarPanel
 }
@@ -1196,6 +1197,9 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
 
   // Handle automations
   if (key === 'automations') return { navigator: 'automations', details: null }
+  if (key === 'automations/script-monitor' || key === 'automations/agents') {
+    return { navigator: 'automations', section: key.slice('automations/'.length) as 'script-monitor' | 'agents', details: null }
+  }
   if (key.startsWith('automations/automation/')) {
     const automationId = key.slice(22)
     if (automationId) {

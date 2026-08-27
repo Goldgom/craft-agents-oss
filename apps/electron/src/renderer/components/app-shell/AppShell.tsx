@@ -127,8 +127,9 @@ import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
 import CliToolsNavigator from "./CliToolsNavigator"
 import { AutomationsListPanel } from "../automations/AutomationsListPanel"
+import { AgentManagerDialog } from "../automations/AgentManagerDialog"
 import { ProjectsListPanel } from "./ProjectsListPanel"
-import { APP_EVENTS, AGENT_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO_FILTER_KIND } from "../automations/types"
+import { APP_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO_FILTER_KIND } from "../automations/types"
 import { useAutomations } from "@/hooks/useAutomations"
 import { useProjects } from "@/hooks/useProjects"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -640,6 +641,7 @@ function AppShellContent({
 
   // Derive automation filter from navigation state (only when in automations navigator)
   const automationFilter: AutomationFilter | null = isAutomationsNavigation(navState) ? navState.filter ?? null : null
+  const automationSection = isAutomationsNavigation(navState) ? navState.section : undefined
 
   // Per-view filter storage: each session list view (allSessions, flagged, state:X, label:X, view:X)
   // has its own independent set of status and label filters.
@@ -1533,11 +1535,10 @@ function AppShellContent({
 
   // Count automations by type for the Automations dropdown subcategories
   const automationTypeCounts = useMemo(() => {
-    const counts = { scheduled: 0, event: 0, agentic: 0 }
+    const counts = { scheduled: 0, event: 0 }
     for (const automation of automations) {
       if (automation.event === 'SchedulerTick' || automation.event === 'HostedScriptTick') counts.scheduled++
       else if ((APP_EVENTS as string[]).includes(automation.event)) counts.event++
-      else if ((AGENT_EVENTS as string[]).includes(automation.event)) counts.agentic++
     }
     return counts
   }, [automations])
@@ -1850,8 +1851,12 @@ function AppShellContent({
     navigate(routes.view.automationsEvent())
   }, [])
 
-  const handleAutomationsAgenticClick = useCallback(() => {
-    navigate(routes.view.automationsAgentic())
+  const handleScriptMonitorClick = useCallback(() => {
+    navigate(routes.view.automationsScriptMonitor())
+  }, [])
+
+  const handleAgentsClick = useCallback(() => {
+    navigate(routes.view.automationsAgents())
   }, [])
 
   // Handler for settings view. With no arg → bare `settings` route (navigator-only
@@ -2268,6 +2273,8 @@ function AppShellContent({
 
     // Automations navigator
     if (isAutomationsNavigation(navState)) {
+      if (navState.section === 'script-monitor') return t("sidebar.scriptMonitor")
+      if (navState.section === 'agents') return t("sidebar.agents")
       if (!automationFilter) return t("sidebar.allAutomations")
       switch (automationFilter.automationType) {
         case 'scheduled': return t("sidebar.scheduled")
@@ -2691,13 +2698,18 @@ function AppShellContent({
                           contextMenu: { type: 'automations' as const, onAddAutomation: openAddAutomation },
                         },
                         {
-                          id: "nav:automations:agentic",
-                          title: t("sidebar.agentic"),
-                          label: String(automationTypeCounts.agentic),
+                          id: "nav:automations:script-monitor",
+                          title: t("sidebar.scriptMonitor"),
+                          icon: Terminal,
+                          variant: automationSection === 'script-monitor' ? "default" : "ghost",
+                          onClick: handleScriptMonitorClick,
+                        },
+                        {
+                          id: "nav:automations:agents",
+                          title: t("sidebar.agents"),
                           icon: Bot,
-                          variant: (automationFilter?.kind === 'type' && automationFilter.automationType === 'agentic') ? "default" : "ghost",
-                          onClick: handleAutomationsAgenticClick,
-                          contextMenu: { type: 'automations' as const, onAddAutomation: openAddAutomation },
+                          variant: automationSection === 'agents' ? "default" : "ghost",
+                          onClick: handleAgentsClick,
                         },
                       ],
                     },
@@ -2726,8 +2738,6 @@ function AppShellContent({
                     },
                   ]}
                 />
-                {/* Agent Tree: Hierarchical list of agents */}
-                {/* Agents section removed */}
                 </div>
               </div>
 
@@ -3484,7 +3494,7 @@ function AppShellContent({
                     />
                   )}
                   {/* Add Automation button (only for automations mode) */}
-                  {isAutomationsNavigation(navState) && activeWorkspace && (
+                  {isAutomationsNavigation(navState) && !automationSection && activeWorkspace && (
                     <EditPopover
                       trigger={
                         <HeaderIconButton
@@ -3544,7 +3554,7 @@ function AppShellContent({
                 selectedProjectSlug={isProjectsNavigation(navState) ? navState.details?.projectSlug ?? null : null}
               />
             )}
-            {isAutomationsNavigation(navState) && (
+            {isAutomationsNavigation(navState) && !automationSection && (
               /* Automations List - filtered by type if automationFilter is active */
               <AutomationsListPanel
                 automations={automations}
@@ -3721,6 +3731,23 @@ function AppShellContent({
        */}
       {activeWorkspace && (
         <>
+          {/* Automation children open these shared configuration surfaces directly. */}
+          <AgentManagerDialog
+            workspaceId={activeWorkspace.id}
+            workspaceRootPath={activeWorkspace.rootPath}
+            open={automationSection === 'agents'}
+            onOpenChange={(open) => { if (!open) navigate(routes.view.automations()) }}
+            showTrigger={false}
+          />
+          <EditPopover
+            open={automationSection === 'script-monitor'}
+            onOpenChange={(open) => { if (!open) navigate(routes.view.automations()) }}
+            modal={true}
+            trigger={<div className="fixed h-0 w-0 pointer-events-none" aria-hidden="true" />}
+            side="bottom"
+            align="start"
+            {...getEditConfig('script-monitor-config', activeWorkspace.rootPath)}
+          />
           {/* Configure Statuses EditPopover - anchored near sidebar */}
           <EditPopover
             open={editPopoverOpen === 'statuses'}

@@ -14,8 +14,13 @@ const EMPTY_AGENT: CustomAgentDefinition = {
   id: '', name: '', description: '', prompt: '', tools: ['Read', 'Grep', 'Glob'],
 }
 
-export function AgentManagerDialog({ workspaceId, workspaceRootPath }: { workspaceId: string; workspaceRootPath: string }) {
-  const [open, setOpen] = React.useState(false)
+export function AgentManagerDialog({ workspaceId, workspaceRootPath, open: controlledOpen, onOpenChange: controlledOnOpenChange, showTrigger = true }: { workspaceId: string; workspaceRootPath: string; open?: boolean; onOpenChange?: (open: boolean) => void; showTrigger?: boolean }) {
+  const [internalOpen, setInternalOpen] = React.useState(false)
+  const open = controlledOpen ?? internalOpen
+  const setOpen = (value: boolean) => {
+    if (controlledOpen !== undefined) controlledOnOpenChange?.(value)
+    else setInternalOpen(value)
+  }
   const [agents, setAgents] = React.useState<CustomAgentDefinition[]>([])
   const [editing, setEditing] = React.useState<CustomAgentDefinition | null>(null)
   const [saving, setSaving] = React.useState(false)
@@ -42,9 +47,9 @@ export function AgentManagerDialog({ workspaceId, workspaceRootPath }: { workspa
   }
 
   return <Dialog open={open} onOpenChange={setOpen}>
-    <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-[8px] border border-foreground/10 px-2.5 py-1.5 text-xs font-medium hover:bg-foreground/[0.04]">
+    {showTrigger && <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-[8px] border border-foreground/10 px-2.5 py-1.5 text-xs font-medium hover:bg-foreground/[0.04]">
       <Bot className="size-3.5" /> Agents
-    </button>
+    </button>}
     <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2"><Bot className="size-4" /> Agents <BuiltinDocHelpButton feature="agents" className="ml-auto border-0 px-1.5 py-1 font-normal text-muted-foreground" /></DialogTitle>

@@ -50,6 +50,12 @@ describe('route-parser: automations routes', () => {
     expect(result!.details).toEqual({ type: 'automation', id: 'automation-1' })
   })
 
+  it.each(['script-monitor', 'agents'])('parses dedicated %s section', (section) => {
+    const result = parseCompoundRoute(`automations/${section}`)
+    expect(result).toEqual({ navigator: 'automations', section, details: null })
+    expect(buildCompoundRoute(result!)).toBe(`automations/${section}`)
+  })
+
   it('roundtrips automations (no filter, no details)', () => {
     const parsed = parseCompoundRoute('automations')!
     const built = buildCompoundRoute(parsed)

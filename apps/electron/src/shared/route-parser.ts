@@ -48,6 +48,8 @@ export interface ParsedCompoundRoute {
   toolsFilter?: 'builtin' | 'custom'
   /** Automation filter (only for automations navigator) */
   automationFilter?: AutomationFilter
+  /** Dedicated configuration section under Automations. */
+  section?: 'script-monitor' | 'agents'
   /** Sessions presentation mode (only for sessions navigator). 'board' = Kanban view. */
   viewMode?: 'list' | 'board'
   /** Details page info (null for empty state) */
@@ -209,6 +211,10 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
       return { navigator: 'automations', details: null }
     }
 
+    if (segments[1] === 'script-monitor' || segments[1] === 'agents') {
+      return { navigator: 'automations', section: segments[1], details: null }
+    }
+
     // Check for type filter: automations/scheduled, automations/event, automations/agentic
     const validAutomationTypes = ['scheduled', 'event', 'agentic']
     if (validAutomationTypes.includes(segments[1])) {
@@ -331,6 +337,7 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
     if (parsed.automationFilter?.kind === 'type') {
       base = `automations/${parsed.automationFilter.automationType}`
     }
+    if (parsed.section) return `automations/${parsed.section}`
     if (!parsed.details) return base
     return `${base}/automation/${parsed.details.id}`
   }
@@ -609,12 +616,14 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
       return {
         navigator: 'automations',
         filter: compound.automationFilter,
+        section: compound.section,
         details: null,
       }
     }
     return {
       navigator: 'automations',
       filter: compound.automationFilter,
+      section: compound.section,
       details: { type: 'automation', automationId: compound.details.id },
     }
   }
@@ -836,6 +845,7 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
     return {
       navigator: 'automations',
       automationFilter: state.filter ?? undefined,
+      section: state.section,
       details: state.details ? { type: 'automation', id: state.details.automationId } : null,
     }
   }
