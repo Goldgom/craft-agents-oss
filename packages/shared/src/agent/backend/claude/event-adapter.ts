@@ -70,6 +70,12 @@ interface AssistantUsage {
   cache_creation_input_tokens: number;
 }
 
+/** SDK usage fields are not guaranteed to be present for slash commands such
+ * as /compact. Never let an absent value turn the session total into NaN. */
+function finiteNumberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 export class ClaudeEventAdapter extends BaseEventAdapter {
   // Per-turn state (reset on each startTurn)
   private toolIndex = new ToolIndex();
@@ -230,9 +236,9 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
     if (!isSidechain && (message as any).message?.usage) {
       const usage = (message as any).message.usage;
       this.lastAssistantUsage = {
-        input_tokens: usage.input_tokens,
-        cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+        input_tokens: finiteNumberOrZero(usage.input_tokens),
+        cache_read_input_tokens: finiteNumberOrZero(usage.cache_read_input_tokens),
+        cache_creation_input_tokens: finiteNumberOrZero(usage.cache_creation_input_tokens),
       };
 
       const currentInputTokens =
@@ -462,6 +468,7 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
     let cacheRead: number;
     let cacheCreation: number;
 
+    const resultUsage = msg.usage ?? {};
     if (this.lastAssistantUsage) {
       inputTokens = this.lastAssistantUsage.input_tokens +
                     this.lastAssistantUsage.cache_read_input_tokens +
@@ -469,17 +476,17 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
       cacheRead = this.lastAssistantUsage.cache_read_input_tokens;
       cacheCreation = this.lastAssistantUsage.cache_creation_input_tokens;
     } else {
-      cacheRead = msg.usage.cache_read_input_tokens ?? 0;
-      cacheCreation = msg.usage.cache_creation_input_tokens ?? 0;
-      inputTokens = msg.usage.input_tokens + cacheRead + cacheCreation;
+      cacheRead = finiteNumberOrZero(resultUsage.cache_read_input_tokens);
+      cacheCreation = finiteNumberOrZero(resultUsage.cache_creation_input_tokens);
+      inputTokens = finiteNumberOrZero(resultUsage.input_tokens) + cacheRead + cacheCreation;
     }
 
     const usage = {
       inputTokens,
-      outputTokens: msg.usage.output_tokens,
+      outputTokens: finiteNumberOrZero(resultUsage.output_tokens),
       cacheReadTokens: cacheRead,
       cacheCreationTokens: cacheCreation,
-      costUsd: msg.total_cost_usd,
+      costUsd: finiteNumberOrZero(msg.total_cost_usd),
       contextWindow: primaryModelUsage?.contextWindow,
     };
 

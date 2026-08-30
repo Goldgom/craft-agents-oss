@@ -33,13 +33,41 @@ export interface PerformanceProcessInfo {
   pid?: number
   rssBytes?: number
   heapUsedBytes?: number
+  /** Whether the PID is measurable on this host or belongs to another process space. */
+  pidStatus?: 'measured' | 'in-process' | 'remote' | 'unavailable'
+  /** Explains why RSS is absent instead of leaving the UI with an ambiguous N/A. */
+  memoryStatus?: 'measured' | 'included' | 'remote' | 'unavailable'
   status?: string
   details?: string
 }
 
+export interface MemoryLeakCheckSample {
+  capturedAt: number
+  rssBytes: number
+  heapUsedBytes: number
+  heapTotalBytes: number
+  externalBytes: number
+  arrayBuffersBytes: number
+}
+
+export interface MemoryLeakCheckResult {
+  status: 'stable' | 'possible_leak' | 'inconclusive'
+  startedAt: number
+  completedAt: number
+  durationMs: number
+  sampleCount: number
+  gcAvailable: boolean
+  baseline: MemoryLeakCheckSample
+  final: MemoryLeakCheckSample
+  rssGrowthBytes: number
+  heapGrowthBytes: number
+  rssGrowthBytesPerMinute: number
+  heapGrowthBytesPerMinute: number
+}
+
 export interface PerformanceSnapshot {
   capturedAt: number
-  total: { rssBytes: number; heapUsedBytes: number; heapTotalBytes: number; externalBytes: number; arrayBuffersBytes: number; processCount: number; mcpCount: number; agentCount: number }
+  total: { rssBytes: number; serverRssBytes: number; heapUsedBytes: number; heapTotalBytes: number; externalBytes: number; arrayBuffersBytes: number; processCount: number; mcpCount: number; agentCount: number; unmeasuredProcessCount: number }
   processes: PerformanceProcessInfo[]
   warmRuntimeLimit: number
   warmRuntimeCount: number

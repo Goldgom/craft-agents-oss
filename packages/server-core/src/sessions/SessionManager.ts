@@ -85,7 +85,7 @@ import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer, getProcessRssBytes } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type PerformanceSnapshot, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type PerformanceSnapshot, type MemoryLeakCheckResult, type MemoryLeakCheckSample, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
@@ -1078,6 +1078,10 @@ export function createManagedSession(
     }
   }
 
+  if (sourceFields.tokenUsage) {
+    sourceFields.tokenUsage = normalizeTokenUsage(sourceFields.tokenUsage)
+  }
+
   const managed = {
     // Spread all session-like fields from source (id, name, permissionMode, labels, model, etc.)
     // This ensures new persistent fields automatically flow through without manual copying.
@@ -1136,6 +1140,26 @@ const DEFAULT_TOKEN_USAGE = {
   contextTokens: 0, costUsd: 0,
 }
 
+function finiteNumberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** Normalize persisted/runtime usage so malformed SDK values cannot become NaN
+ * and serialize as null in the renderer. */
+function normalizeTokenUsage(usage: ManagedSession['tokenUsage'] | null | undefined) {
+  if (!usage) return undefined
+  const inputTokens = finiteNumberOrZero(usage.inputTokens)
+  const outputTokens = finiteNumberOrZero(usage.outputTokens)
+  return {
+    ...usage,
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    contextTokens: finiteNumberOrZero(usage.contextTokens),
+    costUsd: finiteNumberOrZero(usage.costUsd),
+  }
+}
+
 /**
  * Convert a ManagedSession to a renderer-side Session object.
  * Uses pickSessionFields() for persistent fields so new fields propagate automatically.
@@ -1146,7 +1170,7 @@ function managedToSession(m: ManagedSession, overrides?: Partial<Session>): Sess
     // Pre-computed fields from header (not in SESSION_PERSISTENT_FIELDS)
     preview: m.preview,
     lastMessageRole: m.lastMessageRole,
-    tokenUsage: m.tokenUsage,
+    tokenUsage: normalizeTokenUsage(m.tokenUsage),
     messageCount: m.messageCount,
     lastFinalMessageId: m.lastFinalMessageId,
     // Runtime-only fields
@@ -1306,15 +1330,109 @@ export class SessionManager implements ISessionManager {
   }
   async getPerformanceSnapshot(): Promise<PerformanceSnapshot> {
     const memory = process.memoryUsage()
-    const processes: import('@craft-agent/shared/protocol').PerformanceProcessInfo[] = [{ id: 'server', kind: 'server', name: 'Craft server', pid: process.pid, rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, status: 'running' }]
+    const processes: import('@craft-agent/shared/protocol').PerformanceProcessInfo[] = [{
+      id: 'server', kind: 'server', name: 'Craft server', pid: process.pid,
+      rssBytes: memory.rss, heapUsedBytes: memory.heapUsed,
+      pidStatus: 'measured', memoryStatus: 'measured', status: 'running',
+    }]
     let mcpCount = 0; let agentCount = 0; let warmRuntimeCount = 0
     for (const managed of this.sessions.values()) {
       if (managed.agent || managed.mcpPool || managed.poolServer) warmRuntimeCount++
-      if (managed.agent) { agentCount++; const pid = managed.agent.getProcessId?.(); processes.push({ id: `agent:${managed.id}`, kind: 'agent', name: 'Agent runtime', sessionId: managed.id, workspaceId: managed.workspace.id, pid, rssBytes: await getProcessRssBytes(pid), status: managed.isProcessing ? 'processing' : 'idle', details: pid ? 'Pi subprocess' : 'Included in server total' }) }
-      if (managed.poolServer) processes.push({ id: `pool:${managed.id}`, kind: 'component', name: 'MCP pool server', sessionId: managed.id, workspaceId: managed.workspace.id, status: 'running', details: 'Included in server total' })
-      for (const diag of await (managed.mcpPool?.getDiagnosticsWithMemory() ?? Promise.resolve([]))) { mcpCount++; processes.push({ id: `mcp:${managed.id}:${diag.sourceSlug}`, kind: 'mcp', name: diag.sourceSlug, sessionId: managed.id, workspaceId: managed.workspace.id, sourceSlug: diag.sourceSlug, pid: diag.pid, rssBytes: diag.rssBytes, status: diag.connected ? 'connected' : 'disconnected', details: `${diag.transport} · ${diag.toolCount} tools` }) }
+      if (managed.agent) {
+        agentCount++
+        const pid = managed.agent.getProcessId?.()
+        const rssBytes = await getProcessRssBytes(pid)
+        processes.push({
+          id: `agent:${managed.id}`, kind: 'agent', name: 'Agent runtime', sessionId: managed.id,
+          workspaceId: managed.workspace.id, ...(pid ? { pid } : {}), ...(rssBytes ? { rssBytes } : {}),
+          pidStatus: pid ? 'measured' : 'in-process', memoryStatus: rssBytes ? 'measured' : 'included',
+          status: managed.isProcessing ? 'processing' : 'idle',
+          details: pid ? 'Claude/Pi subprocess' : 'Included in server total',
+        })
+      }
+      if (managed.poolServer) processes.push({
+        id: `pool:${managed.id}`, kind: 'component', name: 'MCP pool server', sessionId: managed.id,
+        workspaceId: managed.workspace.id, pidStatus: 'in-process', memoryStatus: 'included',
+        status: 'running', details: 'Included in server total',
+      })
+      for (const diag of await (managed.mcpPool?.getDiagnosticsWithMemory() ?? Promise.resolve([]))) {
+        mcpCount++
+        const isRemote = diag.transport === 'http'
+        const isInProcess = diag.transport === 'api'
+        processes.push({
+          id: `mcp:${managed.id}:${diag.sourceSlug}`, kind: 'mcp', name: diag.sourceSlug,
+          sessionId: managed.id, workspaceId: managed.workspace.id, sourceSlug: diag.sourceSlug,
+          ...(diag.pid ? { pid: diag.pid } : {}), ...(diag.rssBytes ? { rssBytes: diag.rssBytes } : {}),
+          pidStatus: diag.pid ? 'measured' : (isRemote ? 'remote' : isInProcess ? 'in-process' : 'unavailable'),
+          memoryStatus: diag.rssBytes ? 'measured' : (isRemote ? 'remote' : isInProcess ? 'included' : 'unavailable'),
+          status: diag.connected ? 'connected' : 'disconnected',
+          details: `${diag.transport} · ${diag.toolCount} tools`,
+        })
+      }
     }
-    return { capturedAt: Date.now(), total: { rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal, externalBytes: memory.external, arrayBuffersBytes: memory.arrayBuffers, processCount: processes.length, mcpCount, agentCount }, processes, warmRuntimeLimit: this.maxWarmRuntimes, warmRuntimeCount }
+    const measuredRssBytes = processes.reduce((total, item) => total + (item.rssBytes ?? 0), 0)
+    const unmeasuredProcessCount = processes.filter(item => item.rssBytes === undefined && item.memoryStatus !== 'remote' && item.memoryStatus !== 'included').length
+    return {
+      capturedAt: Date.now(),
+      total: {
+        // RSS is the sum of local processes that were measured. The server
+        // RSS remains available separately so callers never confuse a partial
+        // aggregate with the main process value.
+        rssBytes: measuredRssBytes, serverRssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal,
+        externalBytes: memory.external, arrayBuffersBytes: memory.arrayBuffers,
+        processCount: processes.length, mcpCount, agentCount, unmeasuredProcessCount,
+      },
+      processes, warmRuntimeLimit: this.maxWarmRuntimes, warmRuntimeCount,
+    }
+  }
+
+  async runMemoryLeakCheck(options: { durationMs?: number; intervalMs?: number } = {}): Promise<MemoryLeakCheckResult> {
+    const requestedDuration = typeof options.durationMs === 'number' && Number.isFinite(options.durationMs) ? options.durationMs : 4_000
+    const requestedInterval = typeof options.intervalMs === 'number' && Number.isFinite(options.intervalMs) ? options.intervalMs : 1_000
+    const durationMs = Math.min(15_000, Math.max(1_000, Math.floor(requestedDuration)))
+    const intervalMs = Math.min(durationMs, Math.max(250, Math.floor(requestedInterval)))
+    const startedAt = Date.now()
+    const gc = (globalThis as typeof globalThis & { gc?: () => void }).gc
+    const gcAvailable = typeof gc === 'function'
+    const collect = () => { if (gcAvailable) gc() }
+    const sample = (): MemoryLeakCheckSample => {
+      const current = process.memoryUsage()
+      return {
+        capturedAt: Date.now(), rssBytes: current.rss, heapUsedBytes: current.heapUsed,
+        heapTotalBytes: current.heapTotal, externalBytes: current.external,
+        arrayBuffersBytes: current.arrayBuffers,
+      }
+    }
+
+    collect()
+    const samples: MemoryLeakCheckSample[] = [sample()]
+    const deadline = startedAt + durationMs
+    while (Date.now() < deadline) {
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(intervalMs, Math.max(1, deadline - Date.now()))))
+      samples.push(sample())
+    }
+    collect()
+    const final = sample()
+    samples.push(final)
+    const baseline = samples[0]
+    const elapsedMs = Math.max(1, final.capturedAt - baseline.capturedAt)
+    const rssGrowthBytes = final.rssBytes - baseline.rssBytes
+    const heapGrowthBytes = final.heapUsedBytes - baseline.heapUsedBytes
+    const rssGrowthBytesPerMinute = Math.round(rssGrowthBytes * 60_000 / elapsedMs)
+    const heapGrowthBytesPerMinute = Math.round(heapGrowthBytes * 60_000 / elapsedMs)
+    const heapThreshold = Math.max(8 * 1024 * 1024, Math.round(baseline.heapUsedBytes * 0.1))
+    const rssThreshold = 16 * 1024 * 1024
+    const status = samples.length < 3
+      ? 'inconclusive'
+      : heapGrowthBytes > heapThreshold && rssGrowthBytes > rssThreshold
+        ? 'possible_leak'
+        : 'stable'
+    return {
+      status, startedAt, completedAt: Date.now(), durationMs: elapsedMs,
+      sampleCount: samples.length, gcAvailable, baseline, final,
+      rssGrowthBytes, heapGrowthBytes, rssGrowthBytesPerMinute, heapGrowthBytesPerMinute,
+    }
   }
 
   /**
@@ -2222,7 +2340,7 @@ export class SessionManager implements ISessionManager {
     const stored = loadStoredSession(managed.workspace.rootPath, managed.id)
     if (stored) {
       managed.messages = (stored.messages || []).map(storedToMessage)
-      managed.tokenUsage = stored.tokenUsage
+      managed.tokenUsage = normalizeTokenUsage(stored.tokenUsage)
       // Deferred-load fields (intentionally undefined after startup, see
       // loadSessionsFromDisk). Populate from disk only if not already set in
       // memory — a caller may have mutated them via setSessionSources etc.
@@ -2694,7 +2812,7 @@ export class SessionManager implements ISessionManager {
     const storedSession = loadStoredSession(managed.workspace.rootPath, managed.id)
     if (storedSession) {
       managed.messages = (storedSession.messages || []).map(storedToMessage)
-      managed.tokenUsage = storedSession.tokenUsage
+      managed.tokenUsage = normalizeTokenUsage(storedSession.tokenUsage)
       managed.lastReadMessageId = storedSession.lastReadMessageId
       managed.hasUnread = storedSession.hasUnread  // Explicit unread flag for NEW badge state machine
       managed.enabledSourceSlugs = storedSession.enabledSourceSlugs
@@ -8692,13 +8810,19 @@ export class SessionManager implements ISessionManager {
               costUsd: 0,
             }
           }
+          const inputTokens = Number.isFinite(event.usage.inputTokens)
+            ? event.usage.inputTokens
+            : managed.tokenUsage.inputTokens
+          const outputTokens = finiteNumberOrZero(event.usage.outputTokens)
+          const costUsd = finiteNumberOrZero(event.usage.costUsd)
+
           // inputTokens = current context size (full conversation sent this turn), NOT accumulated
           // Each API call sends the full conversation history, so we use the latest value
-          managed.tokenUsage.inputTokens = event.usage.inputTokens
+          managed.tokenUsage.inputTokens = inputTokens
           // outputTokens and costUsd are accumulated across all turns (total session usage)
-          managed.tokenUsage.outputTokens += event.usage.outputTokens
+          managed.tokenUsage.outputTokens = finiteNumberOrZero(managed.tokenUsage.outputTokens) + outputTokens
           managed.tokenUsage.totalTokens = managed.tokenUsage.inputTokens + managed.tokenUsage.outputTokens
-          managed.tokenUsage.costUsd += event.usage.costUsd ?? 0
+          managed.tokenUsage.costUsd = finiteNumberOrZero(managed.tokenUsage.costUsd) + costUsd
           // Cache tokens reflect current state, not accumulated
           managed.tokenUsage.cacheReadTokens = event.usage.cacheReadTokens ?? 0
           managed.tokenUsage.cacheCreationTokens = event.usage.cacheCreationTokens ?? 0

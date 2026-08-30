@@ -1,4 +1,5 @@
-import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options, type SpawnOptions, type SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
+import { spawn } from 'node:child_process';
 import { getDefaultOptions, resetClaudeConfigCheck } from './options.ts';
 // Local type for SDK user message content blocks (text, image, document)
 // Replaces import from @anthropic-ai/sdk/resources — keeps SDK as agent-only dependency
@@ -510,6 +511,8 @@ export class ClaudeAgent extends BaseAgent {
   private lastStderrOutput: string[] = [];
   /** Pending steer message — injected via additionalContext on next PreToolUse */
   private pendingSteerMessage: string | null = null;
+  /** Claude SDK hides its child process; keep the PIDs for diagnostics. */
+  private subprocessPids = new Set<number>();
 
   /**
    * WS2 keep-alive: when true, use one long-lived streaming-input `query()` per
@@ -533,6 +536,39 @@ export class ClaudeAgent extends BaseAgent {
   private activeTurnChannel: PushableInputStream<SDKMessage> | null = null;
   /** Sink for background task events that arrive between turns (wired by the session layer). */
   private onBackgroundEvent: ((event: AgentEvent) => void) | null = null;
+
+  /**
+   * Spawn Claude through a small adapter so the otherwise opaque SDK process
+   * can be shown in the performance panel. stderr is drained here because the
+   * SDK's custom-spawner contract only consumes stdin/stdout.
+   */
+  private spawnClaudeCodeProcess(options: SpawnOptions): SpawnedProcess {
+    const child = spawn(options.command, options.args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      signal: options.signal,
+      windowsHide: true,
+    });
+    const pid = child.pid;
+    if (pid) this.subprocessPids.add(pid);
+    child.stderr?.on('data', (data: Buffer | string) => {
+      // Keep the pipe flowing. The SDK's regular stderr callback is not used
+      // when a custom spawner is supplied.
+      const text = String(data);
+      if (text.trim()) debug('[Claude SDK stderr]', text);
+    });
+    const forget = () => {
+      if (pid) this.subprocessPids.delete(pid);
+    };
+    child.once('exit', forget);
+    child.once('error', forget);
+    return child as unknown as SpawnedProcess;
+  }
+
+  getProcessId(): number | undefined {
+    return Array.from(this.subprocessPids).at(-1);
+  }
 
   /**
    * Tear down the persistent query. Idempotent, and the single funnel for ALL
@@ -1177,6 +1213,7 @@ export class ClaudeAgent extends BaseAgent {
 
       const options: Options = {
         ...getDefaultOptions(this.config.envOverrides),
+        spawnClaudeCodeProcess: (spawnOptions) => this.spawnClaudeCodeProcess(spawnOptions),
         // Workspace agents are isolated definitions exposed through Claude's
         // native Agent/Task tool. The built-in `compact` agent is intentionally
         // not passed here: /compact must use the SDK's native compaction flow.
@@ -3030,6 +3067,7 @@ This is a branched conversation. All prior messages in this conversation are par
 
     const options = {
       ...getDefaultOptions(this.config.envOverrides),
+      spawnClaudeCodeProcess: (spawnOptions: SpawnOptions) => this.spawnClaudeCodeProcess(spawnOptions),
       model,
       maxTurns: 1,
       systemPrompt: 'Reply with ONLY the requested text. No explanation.', // Minimal - no Claude Code preset
@@ -3160,6 +3198,7 @@ This is a branched conversation. All prior messages in this conversation are par
 
     const options = {
       ...getDefaultOptions(this.config.envOverrides),
+      spawnClaudeCodeProcess: (spawnOptions: SpawnOptions) => this.spawnClaudeCodeProcess(spawnOptions),
       model,
       // Reasoning-model outputs (Opus extended thinking) can span multiple SDK-counted
       // turns even with no tools exposed. Tool surface here is empty, so no tool-use loop risk.

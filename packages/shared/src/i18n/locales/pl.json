@@ -1915,6 +1915,25 @@
   "settings.performance.processes": "Procesy",
   "settings.performance.agents": "Agenty",
   "settings.performance.mcpServices": "Usługi MCP"
+  ,"settings.performance.serverRss": "RSS serwera"
+  ,"settings.performance.includedInServer": "Uwzględnione w serwerze"
+  ,"settings.performance.remoteUnavailable": "Zdalne (brak pomiaru)"
+  ,"settings.performance.unavailable": "Niedostępne"
+  ,"settings.performance.unmeasured": "Nie udało się zmierzyć {{count}} lokalnych procesów."
+  ,"settings.performance.leak.title": "Sprawdzanie wycieku pamięci"
+  ,"settings.performance.leak.description": "Próbkuje pamięć serwera przez kilka sekund i wykrywa trwały wzrost. To heurystyka, nie dowód wycieku."
+  ,"settings.performance.leak.run": "Uruchom sprawdzanie"
+  ,"settings.performance.leak.running": "Sprawdzanie…"
+  ,"settings.performance.leak.failed": "Sprawdzanie wycieku pamięci nie powiodło się"
+  ,"settings.performance.leak.stable": "Nie wykryto trwałego wzrostu"
+  ,"settings.performance.leak.possible_leak": "Możliwy trwały wzrost"
+  ,"settings.performance.leak.inconclusive": "Niejednoznaczne"
+  ,"settings.performance.leak.samples": "{{count}} próbek"
+  ,"settings.performance.leak.noGc": "GC niedostępne"
+  ,"settings.performance.leak.rssGrowth": "Wzrost RSS"
+  ,"settings.performance.leak.heapGrowth": "Wzrost heap"
+  ,"settings.performance.leak.rssRate": "Tempo RSS"
+  ,"settings.performance.leak.heapRate": "Tempo heap"
   ,"settings.promptOverview.title": "Pełny prompt",
   "settings.promptOverview.description": "Wyświetl wszystkie sekcje promptu systemowego i ich źródła.",
   "settings.promptOverview.sectionTitle": "Bieżące prompty systemowe",

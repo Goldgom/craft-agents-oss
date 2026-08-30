@@ -1921,6 +1921,25 @@
   ,"settings.performance.processes": "Processes",
   "settings.performance.agents": "Agents",
   "settings.performance.mcpServices": "MCP services"
+  ,"settings.performance.serverRss": "Server RSS"
+  ,"settings.performance.includedInServer": "Included in server"
+  ,"settings.performance.remoteUnavailable": "Remote (not measurable)"
+  ,"settings.performance.unavailable": "Unavailable"
+  ,"settings.performance.unmeasured": "{{count}} local process(es) could not be measured."
+  ,"settings.performance.leak.title": "Memory leak check"
+  ,"settings.performance.leak.description": "Samples server memory for a few seconds and flags sustained growth. This is a heuristic, not a proof of a leak."
+  ,"settings.performance.leak.run": "Run leak check"
+  ,"settings.performance.leak.running": "Checking…"
+  ,"settings.performance.leak.failed": "Memory leak check failed"
+  ,"settings.performance.leak.stable": "No sustained growth detected"
+  ,"settings.performance.leak.possible_leak": "Possible sustained growth"
+  ,"settings.performance.leak.inconclusive": "Inconclusive"
+  ,"settings.performance.leak.samples": "{{count}} samples"
+  ,"settings.performance.leak.noGc": "GC unavailable"
+  ,"settings.performance.leak.rssGrowth": "RSS growth"
+  ,"settings.performance.leak.heapGrowth": "Heap growth"
+  ,"settings.performance.leak.rssRate": "RSS rate"
+  ,"settings.performance.leak.heapRate": "Heap rate"
   ,"settings.promptOverview.title": "Total prompt",
   "settings.promptOverview.description": "Inspect every system-prompt section and its source.",
   "settings.promptOverview.sectionTitle": "Current system prompts",

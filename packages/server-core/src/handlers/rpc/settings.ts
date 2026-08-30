@@ -55,6 +55,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.settings.GET_PERFORMANCE_SETTINGS,
   RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS,
   RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT,
+  RPC_CHANNELS.settings.RUN_MEMORY_LEAK_CHECK,
   RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
@@ -117,6 +118,7 @@ function parseGeneratedWorkspacePrompt(
 export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const performanceManager = deps.sessionManager as typeof deps.sessionManager & {
     getPerformanceSnapshot(): Promise<import('@craft-agent/shared/protocol').PerformanceSnapshot>
+    runMemoryLeakCheck(options?: { durationMs?: number; intervalMs?: number }): Promise<import('@craft-agent/shared/protocol').MemoryLeakCheckResult>
     getMaxWarmRuntimes(): number
     setMaxWarmRuntimes(value: number): Promise<void>
   }
@@ -151,6 +153,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     return { success: true }
   })
   server.handle(RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT, async () => performanceManager.getPerformanceSnapshot())
+  server.handle(RPC_CHANNELS.settings.RUN_MEMORY_LEAK_CHECK, async (_ctx, options?: { durationMs?: number; intervalMs?: number }) => performanceManager.runMemoryLeakCheck(options))
 
   // ============================================================
   // Settings - Model (Session-Specific)

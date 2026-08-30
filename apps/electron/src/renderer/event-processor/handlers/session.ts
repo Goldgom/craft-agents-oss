@@ -1001,11 +1001,18 @@ export function handleUsageUpdate(
 ): ProcessResult {
   const { session, streaming } = state
 
+  const inputTokens = typeof event.tokenUsage.inputTokens === 'number' && Number.isFinite(event.tokenUsage.inputTokens)
+    ? event.tokenUsage.inputTokens
+    : session.tokenUsage?.inputTokens ?? 0
+  const outputTokens = typeof session.tokenUsage?.outputTokens === 'number' && Number.isFinite(session.tokenUsage.outputTokens)
+    ? session.tokenUsage.outputTokens
+    : 0
+
   // Merge usage update into existing tokenUsage, providing defaults for required fields
   const updatedTokenUsage = {
-    inputTokens: event.tokenUsage.inputTokens,
-    outputTokens: session.tokenUsage?.outputTokens ?? 0,
-    totalTokens: session.tokenUsage?.totalTokens ?? 0,
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
     contextTokens: session.tokenUsage?.contextTokens ?? 0,
     costUsd: session.tokenUsage?.costUsd ?? 0,
     ...(session.tokenUsage?.cacheReadTokens !== undefined && { cacheReadTokens: session.tokenUsage.cacheReadTokens }),

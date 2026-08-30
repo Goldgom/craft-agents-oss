@@ -729,6 +729,7 @@ export interface ElectronAPI {
   getPerformanceSettings(): Promise<{ maxWarmRuntimes: number }>
   setPerformanceSettings(settings: { maxWarmRuntimes: number }): Promise<{ success: boolean }>
   getPerformanceSnapshot(): Promise<import('@craft-agent/shared/protocol').PerformanceSnapshot>
+  runMemoryLeakCheck(options?: { durationMs?: number; intervalMs?: number }): Promise<import('@craft-agent/shared/protocol').MemoryLeakCheckResult>
 
   refreshBadge(): Promise<void>
   setDockIconWithBadge(dataUrl: string): Promise<void>

@@ -328,6 +328,25 @@ describe('ClaudeEventAdapter', () => {
       });
     });
 
+    it('should default missing compact usage fields to zero', async () => {
+      const events = await adapter.adapt({
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 120 },
+        total_cost_usd: undefined,
+        modelUsage: {},
+        session_id: 'sess-1',
+      } as any);
+
+      const completeEvent = events.find(e => e.type === 'complete') as any;
+      expect(completeEvent.usage).toMatchObject({
+        inputTokens: 120,
+        outputTokens: 0,
+        costUsd: 0,
+      });
+      expect(Number.isFinite(completeEvent.usage.inputTokens + completeEvent.usage.outputTokens)).toBe(true);
+    });
+
     it('should emit error then complete on failure', async () => {
       const events = await adapter.adapt({
         type: 'result',

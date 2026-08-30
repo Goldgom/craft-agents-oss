@@ -1915,6 +1915,25 @@
   "settings.performance.processes": "Procesos",
   "settings.performance.agents": "Agentes",
   "settings.performance.mcpServices": "Servicios MCP"
+  ,"settings.performance.serverRss": "RSS del servidor"
+  ,"settings.performance.includedInServer": "Incluido en el servidor"
+  ,"settings.performance.remoteUnavailable": "Remoto (no medible)"
+  ,"settings.performance.unavailable": "No disponible"
+  ,"settings.performance.unmeasured": "No se pudieron medir {{count}} procesos locales."
+  ,"settings.performance.leak.title": "Comprobación de fugas de memoria"
+  ,"settings.performance.leak.description": "Muestrea la memoria del servidor durante unos segundos y detecta crecimiento sostenido. Es una heurística, no una prueba de fuga."
+  ,"settings.performance.leak.run": "Comprobar fugas"
+  ,"settings.performance.leak.running": "Comprobando…"
+  ,"settings.performance.leak.failed": "Falló la comprobación de memoria"
+  ,"settings.performance.leak.stable": "No se detectó crecimiento sostenido"
+  ,"settings.performance.leak.possible_leak": "Posible crecimiento sostenido"
+  ,"settings.performance.leak.inconclusive": "No concluyente"
+  ,"settings.performance.leak.samples": "{{count}} muestras"
+  ,"settings.performance.leak.noGc": "GC no disponible"
+  ,"settings.performance.leak.rssGrowth": "Crecimiento RSS"
+  ,"settings.performance.leak.heapGrowth": "Crecimiento del heap"
+  ,"settings.performance.leak.rssRate": "Tasa RSS"
+  ,"settings.performance.leak.heapRate": "Tasa del heap"
   ,"settings.promptOverview.title": "Prompt total",
   "settings.promptOverview.description": "Consulta cada sección del prompt del sistema y su origen.",
   "settings.promptOverview.sectionTitle": "Prompts del sistema actuales",

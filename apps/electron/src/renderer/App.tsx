@@ -2117,7 +2117,10 @@ export default function App() {
           {/* Main UI - always rendered, splash fades away to reveal it */}
           <div
             className="h-full flex flex-col text-foreground"
-            style={{ paddingTop: 'var(--topbar-height)' }}
+            // Android hides the desktop TopBar and uses a floating native menu,
+            // so the content should start at the top of the WebView instead of
+            // retaining an empty 56px reservation.
+            style={{ paddingTop: isAndroidEmbedded ? 0 : 'var(--topbar-height)' }}
           >
             {showTransportConnectionBanner && connectionState && (
               <TransportConnectionBanner

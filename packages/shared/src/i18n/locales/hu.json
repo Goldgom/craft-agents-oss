@@ -1915,6 +1915,25 @@
   "settings.performance.processes": "Folyamatok",
   "settings.performance.agents": "Agentek",
   "settings.performance.mcpServices": "MCP-szolgáltatások"
+  ,"settings.performance.serverRss": "Szerver RSS"
+  ,"settings.performance.includedInServer": "A szerver része"
+  ,"settings.performance.remoteUnavailable": "Távoli (nem mérhető)"
+  ,"settings.performance.unavailable": "Nem érhető el"
+  ,"settings.performance.unmeasured": "{{count}} helyi folyamat nem volt mérhető."
+  ,"settings.performance.leak.title": "Memóriaszivárgás-ellenőrzés"
+  ,"settings.performance.leak.description": "Néhány másodpercig mintavételezi a szerver memóriáját, és jelzi a tartós növekedést. Ez heurisztika, nem bizonyíték."
+  ,"settings.performance.leak.run": "Ellenőrzés indítása"
+  ,"settings.performance.leak.running": "Ellenőrzés…"
+  ,"settings.performance.leak.failed": "A memóriaszivárgás-ellenőrzés sikertelen"
+  ,"settings.performance.leak.stable": "Nem észlelhető tartós növekedés"
+  ,"settings.performance.leak.possible_leak": "Lehetséges tartós növekedés"
+  ,"settings.performance.leak.inconclusive": "Nem egyértelmű"
+  ,"settings.performance.leak.samples": "{{count}} minta"
+  ,"settings.performance.leak.noGc": "A GC nem érhető el"
+  ,"settings.performance.leak.rssGrowth": "RSS-növekedés"
+  ,"settings.performance.leak.heapGrowth": "Heap-növekedés"
+  ,"settings.performance.leak.rssRate": "RSS-sebesség"
+  ,"settings.performance.leak.heapRate": "Heap-sebesség"
   ,"settings.promptOverview.title": "Teljes prompt",
   "settings.promptOverview.description": "Az összes rendszerprompt-szakasz és forrásuk megtekintése.",
   "settings.promptOverview.sectionTitle": "Aktuális rendszerpromptok",

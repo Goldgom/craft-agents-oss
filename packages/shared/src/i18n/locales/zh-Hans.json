@@ -1921,6 +1921,25 @@
   ,"settings.performance.processes": "进程",
   "settings.performance.agents": "Agent",
   "settings.performance.mcpServices": "MCP 服务"
+  ,"settings.performance.serverRss": "服务器 RSS"
+  ,"settings.performance.includedInServer": "已计入服务器"
+  ,"settings.performance.remoteUnavailable": "远程（无法测量）"
+  ,"settings.performance.unavailable": "不可用"
+  ,"settings.performance.unmeasured": "有 {{count}} 个本地进程无法测量。"
+  ,"settings.performance.leak.title": "内存泄漏检查"
+  ,"settings.performance.leak.description": "采样几秒钟内的服务器内存并检测持续增长。这是启发式检查，不是泄漏证明。"
+  ,"settings.performance.leak.run": "运行泄漏检查"
+  ,"settings.performance.leak.running": "检查中…"
+  ,"settings.performance.leak.failed": "内存泄漏检查失败"
+  ,"settings.performance.leak.stable": "未检测到持续增长"
+  ,"settings.performance.leak.possible_leak": "可能存在持续增长"
+  ,"settings.performance.leak.inconclusive": "无法确定"
+  ,"settings.performance.leak.samples": "{{count}} 个样本"
+  ,"settings.performance.leak.noGc": "GC 不可用"
+  ,"settings.performance.leak.rssGrowth": "RSS 增长"
+  ,"settings.performance.leak.heapGrowth": "堆增长"
+  ,"settings.performance.leak.rssRate": "RSS 速率"
+  ,"settings.performance.leak.heapRate": "堆速率"
   ,"settings.promptOverview.title": "总提示词",
   "settings.promptOverview.description": "查看当前系统提示词及其来源。",
   "settings.promptOverview.sectionTitle": "当前系统提示词",

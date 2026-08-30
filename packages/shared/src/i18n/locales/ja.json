@@ -1915,6 +1915,25 @@
   "settings.performance.processes": "プロセス",
   "settings.performance.agents": "Agent",
   "settings.performance.mcpServices": "MCP サービス"
+  ,"settings.performance.serverRss": "サーバー RSS"
+  ,"settings.performance.includedInServer": "サーバーに含む"
+  ,"settings.performance.remoteUnavailable": "リモート（測定不可）"
+  ,"settings.performance.unavailable": "利用不可"
+  ,"settings.performance.unmeasured": "{{count}} 個のローカルプロセスを測定できませんでした。"
+  ,"settings.performance.leak.title": "メモリリーク検査"
+  ,"settings.performance.leak.description": "数秒間サーバーメモリをサンプリングし、持続的な増加を検出します。ヒューリスティックであり、リークの証明ではありません。"
+  ,"settings.performance.leak.run": "リーク検査を実行"
+  ,"settings.performance.leak.running": "検査中…"
+  ,"settings.performance.leak.failed": "メモリリーク検査に失敗しました"
+  ,"settings.performance.leak.stable": "持続的な増加は検出されませんでした"
+  ,"settings.performance.leak.possible_leak": "持続的な増加の可能性"
+  ,"settings.performance.leak.inconclusive": "判定不能"
+  ,"settings.performance.leak.samples": "{{count}} サンプル"
+  ,"settings.performance.leak.noGc": "GC は利用できません"
+  ,"settings.performance.leak.rssGrowth": "RSS 増加"
+  ,"settings.performance.leak.heapGrowth": "ヒープ増加"
+  ,"settings.performance.leak.rssRate": "RSS 速度"
+  ,"settings.performance.leak.heapRate": "ヒープ速度"
   ,"settings.promptOverview.title": "総合プロンプト",
   "settings.promptOverview.description": "すべてのシステムプロンプトとソースを確認します。",
   "settings.promptOverview.sectionTitle": "現在のシステムプロンプト",

@@ -278,6 +278,7 @@ export function PanelHeader({
       initial={false}
       animate={{ paddingLeft: shouldCompensate ? STOPLIGHT_PADDING : basePadding }}
       transition={springTransition}
+      data-mobile-panel-header="true"
       className={baseClassName}
     >
       {content}

@@ -25,12 +25,34 @@ export async function getProcessRssBytes(pid: number | undefined): Promise<numbe
     }
     if (process.platform === 'win32') {
       try {
+        // PowerShell returns the native byte count and is not affected by the
+        // user's tasklist locale or thousands separator.
+        const { stdout } = await execFileAsync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `$p = Get-Process -Id ${pid} -ErrorAction Stop; [Console]::WriteLine($p.WorkingSet64)`,
+        ], { windowsHide: true });
+        const bytes = Number(stdout.trim());
+        if (Number.isSafeInteger(bytes) && bytes > 0) return bytes;
+      } catch {
+        // Fall through to tasklist on minimal Windows installations.
+      }
+      try {
         const { stdout } = await execFileAsync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true });
         const row = stdout.trim();
         if (row && !row.startsWith('INFO:')) {
           const fields = row.split('","').map(field => field.replace(/^"|"$/g, ''));
-          const memory = fields[4]?.replace(/[,.\s]*/g, '');
-          if (memory && /^\d+$/.test(memory)) return Number(memory) * 1024;
+          const memory = fields[4];
+          const match = memory?.match(/^\s*([\d.,\s]+)\s*K(?:B)?\s*$/i);
+          if (match) {
+            const raw = (match[1] ?? '').trim();
+            const normalized = raw.includes(',') && raw.includes('.')
+              ? (raw.lastIndexOf('.') > raw.lastIndexOf(',')
+                ? raw.replace(/,/g, '')
+                : raw.replace(/\./g, '').replace(',', '.'))
+              : raw.replace(/[,\s]/g, '');
+            const kilobytes = Number(normalized);
+            if (Number.isFinite(kilobytes) && kilobytes > 0) return Math.round(kilobytes * 1024);
+          }
         }
       } catch {
         // Fall through to the PowerShell implementation below.

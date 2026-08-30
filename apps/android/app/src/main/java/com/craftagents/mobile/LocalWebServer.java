@@ -191,7 +191,10 @@ final class LocalWebServer {
             line.write(current);
             previous = current;
         }
-        return line.size() == 0 ? null : line.toString(StandardCharsets.ISO_8859_1);
+        // ByteArrayOutputStream.toString(Charset) was added in API 33. The
+        // Android client still supports API 26, so decode explicitly instead
+        // of allowing a request on an older device to throw NoSuchMethodError.
+        return line.size() == 0 ? null : new String(line.toByteArray(), StandardCharsets.ISO_8859_1);
     }
 
     private static byte[] readAll(InputStream input) throws IOException {

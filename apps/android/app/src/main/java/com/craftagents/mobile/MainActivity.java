@@ -1,6 +1,7 @@
 package com.craftagents.mobile;
 
 import android.app.Activity;
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -14,6 +15,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -84,7 +86,6 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        enableImmersiveMode();
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         migrateLegacyServerProfile();
         buildUi();
@@ -108,6 +109,7 @@ public final class MainActivity extends Activity {
     }
 
     private void buildUi() {
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(16, 17, 20));
@@ -122,6 +124,12 @@ public final class MainActivity extends Activity {
     }
 
     private void configureWebView(WebView view) {
+        // The app owns the full-screen surface; native WebView chrome and
+        // overscroll glow only add visual noise on Android.
+        view.setBackgroundColor(Color.rgb(16, 17, 20));
+        view.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        view.setVerticalScrollBarEnabled(false);
+        view.setHorizontalScrollBarEnabled(false);
         WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -379,6 +387,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    @SuppressLint("GestureBackNavigation")
     public void onBackPressed() {
         if (showingServerConfiguration && activeMode != null) {
             showWebView();

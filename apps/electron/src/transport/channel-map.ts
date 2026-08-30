@@ -179,6 +179,7 @@ export const CHANNEL_MAP = {
   getPerformanceSettings: invoke(RPC_CHANNELS.settings.GET_PERFORMANCE_SETTINGS),
   setPerformanceSettings: invoke(RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS),
   getPerformanceSnapshot: invoke(RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT),
+  runMemoryLeakCheck: invoke(RPC_CHANNELS.settings.RUN_MEMORY_LEAK_CHECK),
 
   // Pi provider discovery
   getPiApiKeyProviders: invoke(RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS),

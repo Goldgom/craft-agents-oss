@@ -23,6 +23,10 @@ import { PI_TOOL_NAME_MAP } from './constants.ts';
 import { toolMetadataStore } from '../../../interceptor-common.ts';
 import { parseError } from '../../errors.ts';
 
+function finiteNumberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 /**
  * Pi SDK auto-compaction race signature — the AbortController crash described
  * in `_runAutoCompaction` (`@earendil-works/pi-coding-agent` agent-session.ts).
@@ -264,15 +268,15 @@ export class PiEventAdapter extends BaseEventAdapter {
           this.overflowState = 'none';
         }
         if (this.lastUsage) {
-          const inputTokens = this.lastUsage.input + (this.lastUsage.cacheRead || 0);
+          const inputTokens = finiteNumberOrZero(this.lastUsage.input) + finiteNumberOrZero(this.lastUsage.cacheRead);
           yield {
             type: 'complete',
             usage: {
               inputTokens,
-              outputTokens: this.lastUsage.output,
-              cacheReadTokens: this.lastUsage.cacheRead,
-              cacheCreationTokens: this.lastUsage.cacheWrite,
-              costUsd: this.lastUsage.cost.total,
+              outputTokens: finiteNumberOrZero(this.lastUsage.output),
+              cacheReadTokens: finiteNumberOrZero(this.lastUsage.cacheRead),
+              cacheCreationTokens: finiteNumberOrZero(this.lastUsage.cacheWrite),
+              costUsd: finiteNumberOrZero(this.lastUsage.cost?.total),
               contextWindow: this.contextWindow,
             },
           };
@@ -384,8 +388,15 @@ export class PiEventAdapter extends BaseEventAdapter {
 
         // Emit usage_update if the assistant message includes token usage
         if (msg.usage && typeof msg.usage.input === 'number') {
-          this.lastUsage = msg.usage;
-          const inputTokens = msg.usage.input + (msg.usage.cacheRead || 0);
+          this.lastUsage = {
+            input: finiteNumberOrZero(msg.usage.input),
+            output: finiteNumberOrZero(msg.usage.output),
+            cacheRead: finiteNumberOrZero(msg.usage.cacheRead),
+            cacheWrite: finiteNumberOrZero(msg.usage.cacheWrite),
+            totalTokens: finiteNumberOrZero(msg.usage.totalTokens),
+            cost: { total: finiteNumberOrZero(msg.usage.cost?.total) },
+          };
+          const inputTokens = this.lastUsage.input + this.lastUsage.cacheRead;
           yield {
             type: 'usage_update',
             usage: {

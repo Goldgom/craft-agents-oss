@@ -2746,6 +2746,11 @@ function AppShellContent({
           sidebarWidth={effectiveSidebarAndNavigatorHidden ? 0 : (isSidebarVisible ? sidebarWidth : 0)}
           navigatorSlot={
             <div
+              data-mobile-session-view={
+                isSessionsNavigation(navState) && sessionFilter?.kind === 'allSessions'
+                  ? 'all-sessions'
+                  : undefined
+              }
               style={{ width: isAutoCompact ? '100%' : sessionListWidth }}
               className="h-full flex flex-col min-w-0 relative z-panel"
             >

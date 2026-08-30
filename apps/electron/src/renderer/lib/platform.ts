@@ -42,6 +42,19 @@ export const isWebUI: boolean = Boolean(
 )
 
 /**
+ * True when the web UI is hosted by the native Android WebView shell.
+ *
+ * Keep this check in one place so shared renderer components can opt into
+ * Android-specific layout without treating every narrow browser window as an
+ * Android device.
+ */
+export function isAndroidEmbedded(): boolean {
+  return typeof window !== 'undefined'
+    && isWebUI
+    && new URLSearchParams(window.location.search).get('embedded') === 'android'
+}
+
+/**
  * Get the platform-specific file manager name.
  * macOS → "Finder", Windows → "Explorer", Linux → "File Manager"
  */
