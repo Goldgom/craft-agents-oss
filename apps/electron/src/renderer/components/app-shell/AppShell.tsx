@@ -787,7 +787,7 @@ function AppShellContent({
         }
       }
     })
-    navigate(routes.view.allSessions())
+    navigate(routes.view.allSessions(), { skipAutoSelect: true })
   }, [])
 
   // Jump to All Sessions scoped to a task: replace the allSessions view's label filter
@@ -1766,7 +1766,7 @@ function AppShellContent({
   }, [collapsedItems, activeWorkspaceId])
 
   const handleAllSessionsClick = useCallback(() => {
-    navigate(routes.view.allSessions())
+    navigate(routes.view.allSessions(), { skipAutoSelect: true })
   }, [])
 
   const handleFlaggedClick = useCallback(() => {
@@ -1861,7 +1861,7 @@ function AppShellContent({
   // Handler for settings view. With no arg → bare `settings` route (navigator-only
   // in compact mode, App fallback on desktop). With an arg → `settings/<subpage>`.
   const handleSettingsClick = useCallback((subpage?: SettingsSubpage) => {
-    navigate(routes.view.settings(subpage))
+    navigate(routes.view.settings(subpage ?? 'app'))
   }, [])
 
   // Handler for What's New overlay
@@ -2746,6 +2746,26 @@ function AppShellContent({
           sidebarWidth={effectiveSidebarAndNavigatorHidden ? 0 : (isSidebarVisible ? sidebarWidth : 0)}
           navigatorSlot={
             <div
+              onClick={(event) => {
+                // In compact mode, tapping unused space on the All Sessions
+                // navigator is the mobile equivalent of pressing Back: return
+                // to the currently selected chat instead of leaving the user
+                // stranded on a list-only screen.
+                if (
+                  !isAutoCompact
+                  || !isSessionsNavigation(navState)
+                  || sessionFilter?.kind !== 'allSessions'
+                  || navState.details
+                ) return
+                const target = event.target as HTMLElement
+                if (target.closest('button, a, [role="button"], [role="option"]')) return
+
+                if (session.selected) {
+                  navigateToSession(session.selected)
+                } else if (canGoBack) {
+                  goBack()
+                }
+              }}
               data-mobile-session-view={
                 isSessionsNavigation(navState) && sessionFilter?.kind === 'allSessions'
                   ? 'all-sessions'
@@ -3609,7 +3629,7 @@ function AppShellContent({
                   }}
                   onNavigateToView={(view) => {
                     if (view === 'allSessions') {
-                      navigate(routes.view.allSessions())
+                      navigate(routes.view.allSessions(), { skipAutoSelect: true })
                     } else if (view === 'flagged') {
                       navigate(routes.view.flagged())
                     }

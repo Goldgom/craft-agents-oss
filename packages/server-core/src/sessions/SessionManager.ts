@@ -84,7 +84,7 @@ import { toolMetadataStore, getLastApiError } from '@craft-agent/shared/intercep
 import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
-import { CraftMcpClient, McpClientPool, McpPoolServer, getProcessRssBytes } from '@craft-agent/shared/mcp'
+import { CraftMcpClient, McpClientPool, McpPoolServer, getProcessRssBytes, mcpRuntimeLimiter, resolveMcpRuntimeLimits, type McpRuntimeLimits } from '@craft-agent/shared/mcp'
 import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type PerformanceSnapshot, type MemoryLeakCheckResult, type MemoryLeakCheckSample, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
@@ -1318,6 +1318,12 @@ export class SessionManager implements ISessionManager {
 
   constructor(options: SessionManagerOptions = {}) {
     const preferenceLimit = loadPreferences().performance?.maxWarmRuntimes
+    const mcpPreferences = loadPreferences().performance
+    mcpRuntimeLimiter.configure(resolveMcpRuntimeLimits(
+      mcpPreferences?.mcpHardLimit === undefined ? undefined : String(mcpPreferences.mcpHardLimit),
+      mcpPreferences?.mcpSoftLimit === undefined ? undefined : String(mcpPreferences.mcpSoftLimit),
+      mcpPreferences?.mcpMemoryHardLimitBytes === undefined ? undefined : String(mcpPreferences.mcpMemoryHardLimitBytes / (1024 * 1024 * 1024)),
+    ))
     this.maxWarmRuntimes = options.maxWarmRuntimes === undefined
       ? (Number.isSafeInteger(preferenceLimit) && preferenceLimit! >= 0 ? preferenceLimit! : resolveMaxWarmRuntimes())
       : resolveMaxWarmRuntimes(String(options.maxWarmRuntimes))
@@ -1327,6 +1333,14 @@ export class SessionManager implements ISessionManager {
   async setMaxWarmRuntimes(value: number): Promise<void> {
     this.maxWarmRuntimes = Math.max(0, Math.floor(value))
     await this.enforceWarmRuntimeLimit()
+  }
+  getMcpRuntimeLimits(): McpRuntimeLimits { return mcpRuntimeLimiter.getLimits() }
+  async setMcpRuntimeLimits(limits: McpRuntimeLimits): Promise<void> {
+    mcpRuntimeLimiter.configure(limits)
+    await mcpRuntimeLimiter.enforceLimits()
+  }
+  async clearIdleMcpRuntimes(): Promise<number> {
+    return mcpRuntimeLimiter.clearIdleRuntimes()
   }
   async getPerformanceSnapshot(): Promise<PerformanceSnapshot> {
     const memory = process.memoryUsage()
@@ -1384,6 +1398,12 @@ export class SessionManager implements ISessionManager {
         processCount: processes.length, mcpCount, agentCount, unmeasuredProcessCount,
       },
       processes, warmRuntimeLimit: this.maxWarmRuntimes, warmRuntimeCount,
+      mcpRuntime: {
+        ...mcpRuntimeLimiter.getLimits(),
+        activeCount: mcpRuntimeLimiter.getActiveCount(),
+        queuedCount: mcpRuntimeLimiter.getQueuedCount(),
+        memoryUsedBytes: await mcpRuntimeLimiter.getMemoryUsageBytes(),
+      },
     }
   }
 

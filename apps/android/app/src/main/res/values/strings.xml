@@ -3,7 +3,8 @@
     <string name="server_home_title">Choose a server</string>
     <string name="server_home_description">Connect to a Craft Agent server. Model settings are managed after connecting.</string>
     <string name="local_server">Local server</string>
-    <string name="local_server_description">A Craft Agent server running on this device or your local network.</string>
+    <string name="local_server_description">Start the built-in Craft Agent server on this device.</string>
+    <string name="starting_local_server">Starting local server…</string>
     <string name="remote_server">Remote server</string>
     <string name="remote_server_description">A Craft Agent server reached over the internet. Use wss:// in production.</string>
     <string name="server_url_hint">WebSocket URL</string>

@@ -726,10 +726,11 @@ export interface ElectronAPI {
   // Network proxy settings
   getNetworkProxySettings(): Promise<NetworkProxySettings | undefined>
   setNetworkProxySettings(settings: NetworkProxySettings): Promise<void>
-  getPerformanceSettings(): Promise<{ maxWarmRuntimes: number }>
-  setPerformanceSettings(settings: { maxWarmRuntimes: number }): Promise<{ success: boolean }>
+  getPerformanceSettings(): Promise<{ maxWarmRuntimes: number; mcpHardLimit: number; mcpSoftLimit: number; mcpMemoryHardLimitGb: number }>
+  setPerformanceSettings(settings: { maxWarmRuntimes?: number; mcpHardLimit?: number; mcpSoftLimit?: number; mcpMemoryHardLimitGb?: number }): Promise<{ success: boolean }>
   getPerformanceSnapshot(): Promise<import('@craft-agent/shared/protocol').PerformanceSnapshot>
   runMemoryLeakCheck(options?: { durationMs?: number; intervalMs?: number }): Promise<import('@craft-agent/shared/protocol').MemoryLeakCheckResult>
+  clearIdleMcpRuntimes(): Promise<{ cleared: number }>
 
   refreshBadge(): Promise<void>
   setDockIconWithBadge(dataUrl: string): Promise<void>

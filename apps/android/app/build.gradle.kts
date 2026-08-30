@@ -18,6 +18,19 @@ android {
         versionName = "0.12.0"
 
         buildConfigField("String", "SERVER_URL", "\"${configuredServerUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+
+        // The bundled Bun runtime is currently available for Android ARM64.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Extract the Bun executable into nativeLibraryDir so
+            // ProcessBuilder can run it as a normal Android ELF executable.
+            useLegacyPackaging = true
+        }
     }
 
     buildFeatures {

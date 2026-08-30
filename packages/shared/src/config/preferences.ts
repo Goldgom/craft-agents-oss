@@ -53,7 +53,15 @@ export function getSystemPromptSettings(): Required<Pick<SystemPromptSettings, '
 
 export interface UserPreferences {
   systemPrompt?: SystemPromptSettings;
-  performance?: { maxWarmRuntimes?: number }
+  performance?: {
+    maxWarmRuntimes?: number
+    /** Maximum connected MCP runtimes (hard cap). */
+    mcpHardLimit?: number
+    /** Idle MCP runtimes retained after calls finish (soft cap). */
+    mcpSoftLimit?: number
+    /** Maximum measured RSS of local MCP runtimes, persisted in bytes. */
+    mcpMemoryHardLimitBytes?: number
+  }
   name?: string;
   timezone?: string;
   location?: UserLocation;

@@ -1,4 +1,27 @@
 import { useEffect, useState } from 'react'
+import {
+  Archive,
+  Bot,
+  Database,
+  FileCode,
+  Flag,
+  FolderKanban,
+  FolderOpen,
+  History,
+  Menu,
+  MousePointerClick,
+  PlugZap,
+  RefreshCw,
+  Server,
+  Settings,
+  Sparkles,
+  Tag,
+  Wrench,
+  Clock,
+  MonitorCog,
+  X,
+  Zap,
+} from 'lucide-react'
 import { navigate, routes } from '../../electron/src/renderer/lib/navigate'
 
 type AndroidBridge = {
@@ -17,11 +40,7 @@ function isAndroidApp() {
     && Boolean(window.CraftAgentAndroid)
 }
 
-/**
- * Makes the shared desktop renderer behave predictably inside an Android
- * WebView. In particular, visualViewport gives us the usable height when the
- * software keyboard is open instead of relying on the often stale 100vh.
- */
+/** Keep the shared renderer sized to the usable Android WebView viewport. */
 export function useMobileAppViewport() {
   useEffect(() => {
     if (!isAndroidApp()) return
@@ -55,170 +74,149 @@ export function useMobileAppViewport() {
   }, [])
 }
 
-/**
- * The native header is deliberately removed in fullscreen mode. This compact
- * menu keeps the app-level actions discoverable without taking
- * persistent vertical space away from chat.
- */
-export function MobileAppMenu() {
-  const [open, setOpen] = useState(false)
-  const android = isAndroidApp()
-
-  useEffect(() => {
-    if (!open) return
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [open])
-
-  if (!android) return null
-
-  const closeAndRun = (action: () => void) => {
-    setOpen(false)
-    action()
-  }
-
-  return (
-    <div className="mobile-app-menu" data-open={open || undefined}>
-      {open && (
-        <button
-          type="button"
-          className="mobile-app-menu__backdrop"
-          aria-label="关闭应用菜单"
-          onClick={() => setOpen(false)}
-        />
-      )}
-      <div className="mobile-app-menu__surface">
-        <button
-          type="button"
-          className="mobile-app-menu__trigger"
-          aria-label="应用菜单"
-          aria-expanded={open}
-          aria-controls="mobile-app-menu-panel"
-          onClick={() => setOpen(value => !value)}
-        >
-          <span aria-hidden="true">⋮</span>
-        </button>
-        {open && (
-          <div id="mobile-app-menu-panel" className="mobile-app-menu__panel" role="menu" aria-label="应用菜单">
-            <button type="button" role="menuitem" onClick={() => closeAndRun(() => window.CraftAgentAndroid?.reload())}>
-              刷新页面
-            </button>
-            <button type="button" role="menuitem" onClick={() => closeAndRun(() => window.CraftAgentAndroid?.configureServer())}>
-              服务器配置
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 type MobileNavigationItem = {
   label: string
   route: Parameters<typeof navigate>[0]
+  icon: typeof History
+  subitem?: boolean
 }
 
 const MOBILE_NAVIGATION_ITEMS: MobileNavigationItem[] = [
-  { label: '全部会话', route: routes.view.allSessions() },
-  { label: '已标记', route: routes.view.flagged() },
-  { label: '已归档', route: routes.view.archived() },
-  { label: '标签', route: routes.view.label('__all__') },
-  { label: '数据源', route: routes.view.sources() },
-  { label: '  API', route: routes.view.sourcesApi() },
-  { label: '  MCP', route: routes.view.sourcesMcp() },
-  { label: '  本地文件夹', route: routes.view.sourcesLocal() },
-  { label: '工具', route: routes.view.tools() },
-  { label: '  内置 CLI', route: routes.view.tools('builtin') },
-  { label: '  自定义 CLI', route: routes.view.tools('custom') },
-  { label: '技能', route: routes.view.skills() },
-  { label: '项目', route: routes.view.projects() },
-  { label: '自动化', route: routes.view.automations() },
-  { label: '  定时自动化', route: routes.view.automationsScheduled() },
-  { label: '  事件自动化', route: routes.view.automationsEvent() },
-  { label: '  脚本监控', route: routes.view.automationsScriptMonitor() },
-  { label: '  Agents', route: routes.view.automationsAgents() },
-  { label: '设置', route: routes.view.settings() },
+  { label: '历史会话', route: routes.view.allSessions(), icon: History },
+  { label: '已标记', route: routes.view.flagged(), icon: Flag },
+  { label: '已归档', route: routes.view.archived(), icon: Archive },
+  { label: '标签', route: routes.view.label('__all__'), icon: Tag },
+  { label: '自动化', route: routes.view.automations(), icon: Zap },
+  { label: '定时自动化', route: routes.view.automationsScheduled(), icon: Clock, subitem: true },
+  { label: '事件自动化', route: routes.view.automationsEvent(), icon: MousePointerClick, subitem: true },
+  { label: '脚本监控', route: routes.view.automationsScriptMonitor(), icon: MonitorCog, subitem: true },
+  { label: 'Agents', route: routes.view.automationsAgents(), icon: Bot, subitem: true },
+  { label: '数据源', route: routes.view.sources(), icon: Database },
+  { label: 'API', route: routes.view.sourcesApi(), icon: PlugZap, subitem: true },
+  { label: 'MCP', route: routes.view.sourcesMcp(), icon: PlugZap, subitem: true },
+  { label: '本地文件夹', route: routes.view.sourcesLocal(), icon: FolderOpen, subitem: true },
+  { label: '工具', route: routes.view.tools(), icon: Wrench },
+  { label: '内置 CLI', route: routes.view.tools('builtin'), icon: FileCode, subitem: true },
+  { label: '自定义 CLI', route: routes.view.tools('custom'), icon: FileCode, subitem: true },
+  { label: 'Skill', route: routes.view.skills(), icon: Sparkles },
+  { label: '项目', route: routes.view.projects(), icon: FolderKanban },
+  { label: '设置', route: routes.view.settings('app'), icon: Settings },
 ]
 
 /**
- * Android-only navigation drawer. The desktop sidebar remains owned by
- * AppShell; this drawer is just a compact, always-discoverable way to reach
- * the same views when the desktop sidebar is hidden in compact mode.
+ * Android compact controls. These are intentionally separate buttons in one
+ * fixed row: frequent destinations are one tap away, while the menu button
+ * opens the complete navigation drawer.
  */
-export function MobileNavigationMenu() {
-  const [open, setOpen] = useState(false)
+export function MobileControls() {
+  const [navigationOpen, setNavigationOpen] = useState(false)
   const android = isAndroidApp()
 
   useEffect(() => {
-    if (!open) return
+    if (!navigationOpen) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') setNavigationOpen(false)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [open])
+  }, [navigationOpen])
 
   if (!android) return null
 
+  const closeNavigation = () => setNavigationOpen(false)
+  const navigateTo = (route: Parameters<typeof navigate>[0]) => {
+    closeNavigation()
+    navigate(route, route === routes.view.allSessions() ? { skipAutoSelect: true } : undefined)
+  }
+
   return (
-    <div className="mobile-navigation-menu" data-open={open || undefined}>
-      {open && (
+    <div className="mobile-controls" data-open={navigationOpen || undefined}>
+      {navigationOpen && (
         <button
           type="button"
-          className="mobile-navigation-menu__backdrop"
-          aria-label="关闭导航栏"
-          onClick={() => setOpen(false)}
+          className="mobile-controls__backdrop"
+          aria-label="关闭菜单"
+          onClick={closeNavigation}
         />
       )}
-      <div className="mobile-navigation-menu__surface">
+
+      <div className="mobile-controls__pill" role="toolbar" aria-label="快捷操作">
         <button
           type="button"
-          className="mobile-navigation-menu__trigger"
-          aria-label="打开导航栏"
-          aria-expanded={open}
-          aria-controls="mobile-navigation-menu-panel"
-          onClick={() => setOpen(value => !value)}
+          className="mobile-controls__quick-trigger"
+          aria-label="打开历史会话"
+          title="历史会话"
+          onClick={() => navigateTo(routes.view.allSessions())}
         >
-          <span aria-hidden="true">☰</span>
+          <History aria-hidden="true" />
+          <span>历史</span>
         </button>
-        {open && (
-          <nav
-            id="mobile-navigation-menu-panel"
-            className="mobile-navigation-menu__panel"
-            aria-label="应用导航"
-          >
-            <div className="mobile-navigation-menu__title">
-              <span>应用导航</span>
-              <button
-                type="button"
-                className="mobile-navigation-menu__close"
-                aria-label="关闭导航栏"
-                onClick={() => setOpen(false)}
-              >
-                ×
-              </button>
-            </div>
-            {MOBILE_NAVIGATION_ITEMS.map(item => (
-              <button
-                key={`${item.label}-${item.route}`}
-                type="button"
-                onClick={() => {
-                  setOpen(false)
-                  navigate(item.route)
-                }}
-                className={item.label.startsWith('  ') ? 'mobile-navigation-menu__subitem' : undefined}
-              >
-                {item.label.trim()}
-              </button>
-            ))}
-          </nav>
-        )}
+        <button
+          type="button"
+          className="mobile-controls__quick-trigger"
+          aria-label="刷新页面"
+          title="刷新页面"
+          onClick={() => {
+            closeNavigation()
+            window.CraftAgentAndroid?.reload()
+          }}
+        >
+          <RefreshCw aria-hidden="true" />
+          <span>刷新</span>
+        </button>
+        <button
+          type="button"
+          className="mobile-controls__quick-trigger mobile-controls__menu-trigger"
+          aria-label={navigationOpen ? '关闭应用菜单' : '打开应用菜单'}
+          title="菜单"
+          aria-expanded={navigationOpen}
+          aria-controls="mobile-controls-panel"
+          onClick={() => setNavigationOpen(value => !value)}
+        >
+          {navigationOpen ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
+          <span>菜单</span>
+        </button>
       </div>
+
+      {navigationOpen && (
+        <nav
+          id="mobile-controls-panel"
+          className="mobile-controls__panel"
+          aria-label="应用菜单"
+        >
+          <div className="mobile-controls__header">
+            <span>应用菜单</span>
+            <button type="button" onClick={closeNavigation} aria-label="关闭菜单">
+              <X aria-hidden="true" />
+            </button>
+          </div>
+
+          {MOBILE_NAVIGATION_ITEMS.map(({ label, route, icon: Icon, subitem }) => (
+            <button
+              key={label}
+              type="button"
+              className={subitem ? 'mobile-controls__subitem' : undefined}
+              onClick={() => navigateTo(route)}
+            >
+              <Icon aria-hidden="true" />
+              <span>{label}</span>
+            </button>
+          ))}
+
+          <div className="mobile-controls__separator" />
+          <button
+            type="button"
+            onClick={() => {
+              closeNavigation()
+              window.CraftAgentAndroid?.configureServer()
+            }}
+          >
+            <Server aria-hidden="true" />
+            <span>服务器配置</span>
+          </button>
+        </nav>
+      )}
     </div>
   )
 }

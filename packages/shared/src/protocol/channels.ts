@@ -253,6 +253,7 @@ export const RPC_CHANNELS = {
     SET_PERFORMANCE_SETTINGS: 'settings:setPerformanceSettings',
     GET_PERFORMANCE_SNAPSHOT: 'settings:getPerformanceSnapshot',
     RUN_MEMORY_LEAK_CHECK: 'settings:runMemoryLeakCheck',
+    CLEAR_IDLE_MCP_RUNTIMES: 'settings:clearIdleMcpRuntimes',
     PROMPTS_GET: 'settings:getWorkspacePrompts',
     PROMPTS_SAVE: 'settings:saveWorkspacePrompt',
     PROMPTS_DELETE: 'settings:deleteWorkspacePrompt',

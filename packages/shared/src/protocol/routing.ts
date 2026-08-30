@@ -370,6 +370,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.GET_PERFORMANCE_SETTINGS,
   RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS,
   RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT,
+  RPC_CHANNELS.settings.RUN_MEMORY_LEAK_CHECK,
+  RPC_CHANNELS.settings.CLEAR_IDLE_MCP_RUNTIMES,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
   // data migration import — runs on the server that owns the active workspace
   // (remote-path import reads a server-side file; payload import receives the

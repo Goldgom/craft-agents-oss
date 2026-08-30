@@ -19,7 +19,10 @@ export default defineConfig({
   base: './',
   build: {
     outDir: resolve(__dirname, 'dist'),
-    emptyDirBeforeWrite: true,
+    // Remove previous hashed chunks before every build. The Android packager
+    // copies dist wholesale, so the old misspelled option caused the APK to
+    // grow on every build.
+    emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
       input: {

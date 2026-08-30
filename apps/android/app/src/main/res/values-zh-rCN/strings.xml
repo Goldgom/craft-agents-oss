@@ -3,7 +3,8 @@
     <string name="server_home_title">选择服务器</string>
     <string name="server_home_description">连接 Craft Agent 服务器。模型配置将在连接后通过设置管理。</string>
     <string name="local_server">本地服务器</string>
-    <string name="local_server_description">连接手机本机或局域网中已运行的 Craft Agent 服务。</string>
+    <string name="local_server_description">在此设备上自动启动内置的 Craft Agent 服务。</string>
+    <string name="starting_local_server">正在启动本地服务…</string>
     <string name="remote_server">远程服务器</string>
     <string name="remote_server_description">连接互联网中的 Craft Agent 服务，生产环境建议使用 wss://。</string>
     <string name="server_url_hint">WebSocket 地址</string>

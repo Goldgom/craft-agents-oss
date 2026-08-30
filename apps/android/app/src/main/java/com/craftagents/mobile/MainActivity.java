@@ -36,6 +36,8 @@ import android.widget.Toast;
 import java.io.IOException;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "craft_agent_mobile";
@@ -80,6 +82,8 @@ public final class MainActivity extends Activity {
     private FrameLayout content;
     private WebView webView;
     private LocalWebServer localWebServer;
+    private LocalAgentServer localAgentServer;
+    private final ExecutorService serverExecutor = Executors.newSingleThreadExecutor();
     private ServerMode activeMode;
     private boolean showingServerConfiguration;
 
@@ -87,6 +91,7 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        localAgentServer = new LocalAgentServer(this);
         migrateLegacyServerProfile();
         buildUi();
 
@@ -167,7 +172,7 @@ public final class MainActivity extends Activity {
         if (initialMode == null) {
             initialMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
         }
-        if (initialMode == null) initialMode = ServerMode.REMOTE;
+        if (initialMode == null) initialMode = ServerMode.LOCAL;
 
         Map<ServerMode, ServerProfile> drafts = new EnumMap<>(ServerMode.class);
         drafts.put(ServerMode.LOCAL, getSavedProfile(ServerMode.LOCAL));
@@ -233,10 +238,13 @@ public final class MainActivity extends Activity {
             ServerProfile profile = drafts.get(editingMode[0]);
             urlInput.setText(profile == null ? "" : profile.url);
             tokenInput.setText(profile == null ? "" : profile.token);
-            modeDescription.setText(editingMode[0] == ServerMode.LOCAL
+            boolean builtInLocal = editingMode[0] == ServerMode.LOCAL;
+            urlInput.setEnabled(!builtInLocal);
+            tokenInput.setEnabled(!builtInLocal);
+            modeDescription.setText(builtInLocal
                     ? R.string.local_server_description
                     : R.string.remote_server_description);
-            modeGroup.check(editingMode[0] == ServerMode.LOCAL ? local.getId() : remote.getId());
+            modeGroup.check(builtInLocal ? local.getId() : remote.getId());
             changingMode[0] = false;
         };
 
@@ -255,7 +263,12 @@ public final class MainActivity extends Activity {
         connectButton.setTextSize(15);
         connectButton.setOnClickListener(view -> {
             ServerMode mode = editingMode[0];
-            String normalizedUrl = normalizeUrl(urlInput.getText().toString(), mode);
+            // Local mode always targets the backend bundled in this APK. The
+            // URL field is retained for profile compatibility, but must not
+            // redirect the embedded server to an arbitrary endpoint.
+            String normalizedUrl = mode == ServerMode.LOCAL
+                    ? DEFAULT_LOCAL_SERVER_URL
+                    : normalizeUrl(urlInput.getText().toString(), mode);
             if (normalizedUrl == null) {
                 urlInput.setError(getString(R.string.server_url_invalid));
                 return;
@@ -330,6 +343,12 @@ public final class MainActivity extends Activity {
     }
 
     private void connect(ServerMode mode) {
+        if (mode == ServerMode.LOCAL) {
+            connectLocalServer();
+            return;
+        }
+
+        if (localAgentServer != null) localAgentServer.stop();
         ServerProfile profile = getSavedProfile(mode);
         String url = normalizeUrl(profile.url, mode);
         if (url == null) {
@@ -348,6 +367,37 @@ public final class MainActivity extends Activity {
         } catch (IOException error) {
             Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    /** Start the bundled Bun backend before opening the WebView. */
+    private void connectLocalServer() {
+        activeMode = ServerMode.LOCAL;
+        showingServerConfiguration = false;
+        Toast.makeText(this, R.string.starting_local_server, Toast.LENGTH_SHORT).show();
+
+        serverExecutor.execute(() -> {
+            try {
+                String token = localAgentServer.start();
+                runOnUiThread(() -> {
+                    if (isFinishing()) return;
+                    try {
+                        int webPort = getLocalWebPort();
+                        localWebServer.setConnectionConfig(
+                                "ws://127.0.0.1:9100", token, ServerMode.LOCAL.value);
+                        showWebView();
+                        webView.loadUrl("http://127.0.0.1:" + webPort + "/index.html?embedded=android");
+                    } catch (IOException error) {
+                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (IOException error) {
+                runOnUiThread(() -> {
+                    showingServerConfiguration = true;
+                    Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                    showServerConfiguration(activeMode != null);
+                });
+            }
+        });
     }
 
     private void showWebView() {
@@ -400,6 +450,8 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        serverExecutor.shutdownNow();
+        if (localAgentServer != null) localAgentServer.stop();
         if (webView != null) {
             webView.stopLoading();
             webView.destroy();

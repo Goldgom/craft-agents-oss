@@ -203,7 +203,7 @@ export function PanelHeader({
   const content = isCompactMode ? (
     <>
       {leadingAction && (
-        <div className="titlebar-no-drag shrink-0 z-[1]">
+        <div className="titlebar-no-drag shrink-0 z-[1]" data-mobile-panel-back="true">
           {leadingAction}
         </div>
       )}
@@ -235,7 +235,7 @@ export function PanelHeader({
   ) : (
     <>
       {leadingAction && (
-        <div className="titlebar-no-drag shrink-0">
+        <div className="titlebar-no-drag shrink-0" data-mobile-panel-back="true">
           {leadingAction}
         </div>
       )}

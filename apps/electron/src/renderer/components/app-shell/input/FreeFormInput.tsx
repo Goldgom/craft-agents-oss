@@ -85,6 +85,7 @@ import {
 import { WorkingDirectorySelector, formatPathForDisplay } from './WorkingDirectorySelector'
 import { CompactPermissionModeSelector } from './CompactPermissionModeSelector'
 import { CompactModelSelector } from './CompactModelSelector'
+import { SftpToolbarButton } from './SftpToolbarButton'
 import {
   formatTokenCount,
   groupConnectionsByProvider,
@@ -1917,6 +1918,7 @@ export function FreeFormInput({
               workspaceId={workspaceId}
             />
           )}
+          <SftpToolbarButton compactMode disabled={disabled} />
           </div>
           )}
 
@@ -2025,6 +2027,7 @@ export function FreeFormInput({
               workspaceId={workspaceId}
             />
           )}
+          <SftpToolbarButton disabled={disabled} />
           </div>
           )}
 

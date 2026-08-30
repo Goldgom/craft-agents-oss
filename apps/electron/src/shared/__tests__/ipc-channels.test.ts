@@ -271,6 +271,7 @@ const EXPECTED_CHANNELS: string[] = [
   'sessions:unreadSummaryChanged',
   'sessions:unwatchFiles',
   'sessions:watchFiles',
+  'settings:clearIdleMcpRuntimes',
   'settings:deleteWorkspacePrompt',
   'settings:exportAllData',
   'settings:generateWorkspacePrompt',

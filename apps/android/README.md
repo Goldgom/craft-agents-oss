@@ -8,7 +8,7 @@ Requirements:
 
 - Android SDK with platform `android-36` and build tools `36.1.0` or newer.
 - JDK 17. The build script downloads a portable Temurin JDK 17 into `.toolchains/android/jdk17` when no JDK 17 is available.
-- Network access on the first build so the Gradle wrapper can download Gradle 8.13 and Android Gradle Plugin dependencies.
+- Network access on the first build so the Gradle wrapper can download Gradle 8.13, Android Gradle Plugin dependencies, and the ARM64 Android Bun runtime.
 
 With command-line tools installed, the SDK packages can be prepared with:
 
@@ -31,6 +31,6 @@ powershell -ExecutionPolicy Bypass -File apps/android/build.ps1 -Release -Server
 
 Release output is `dist/android/craft-agent-release-unsigned.apk`. Configure a private Android signing key in your release pipeline before distributing it.
 
-The app starts a localhost-only HTTP server inside the APK and loads the bundled frontend from it. On first launch, the server home lets the user choose and independently configure a **Local server** or **Remote server** profile. The selected profile and optional bearer token are stored locally and can be changed later with **Configure**.
+The app starts a localhost-only HTTP server inside the APK and loads the bundled frontend from it. In **Local server** mode, the APK also extracts and starts the bundled ARM64 Bun backend automatically, waits for it on `127.0.0.1:9100`, and connects the frontend with a generated per-launch token. The selected profile and optional bearer token are stored locally and can be changed later with **Configure**.
 
-“Local server” means a Craft Agent backend already running on the Android device or local network; the loopback HTTP server bundled in the APK serves frontend assets only. A LAN development server can use `ws://192.168.1.20:9100`; production deployments should use `wss://`. Android skips the model onboarding screen, so model connections are managed on the selected server from Settings after connecting.
+The Android local backend currently targets ARM64 devices and uses the Pi/API-backed runtime. Optional desktop-native features such as Sharp image processing, Office conversion, Claude's desktop binary, and ripgrep are not included in the Android bundle. A LAN development server can still be configured with `ws://192.168.1.20:9100` under **Remote server**; production deployments should use `wss://`. Android skips the model onboarding screen, so model connections are managed on the selected server from Settings after connecting.

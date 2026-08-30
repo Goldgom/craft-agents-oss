@@ -582,7 +582,7 @@ export function KanbanBoardContainer() {
           <BoardListToggle
             value="board"
             onChange={view => {
-              if (view === 'list') navigate(routes.view.allSessions())
+              if (view === 'list') navigate(routes.view.allSessions(), { skipAutoSelect: true })
             }}
           />
         </div>

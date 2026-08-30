@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createWebApi } from './adapter/web-api'
-import { MobileAppMenu, MobileNavigationMenu, useMobileAppViewport } from './mobile-app'
+import { MobileControls, useMobileAppViewport } from './mobile-app'
 import type { WsRpcClient } from '../../electron/src/transport/client'
 
 // Lazy-load the Electron App after window.electronAPI is set up.
@@ -169,8 +169,7 @@ export default function App() {
   return (
     <Suspense fallback={<LoadingScreen />}>
       <ElectronApp />
-      <MobileNavigationMenu />
-      <MobileAppMenu />
+      <MobileControls />
     </Suspense>
   )
 }

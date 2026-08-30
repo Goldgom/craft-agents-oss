@@ -71,6 +71,7 @@ export interface PerformanceSnapshot {
   processes: PerformanceProcessInfo[]
   warmRuntimeLimit: number
   warmRuntimeCount: number
+  mcpRuntime: { hardLimit: number; softLimit: number; memoryHardLimitBytes: number; memoryUsedBytes: number; activeCount: number; queuedCount: number }
 }
 
 /** A labelled section of the system prompt shown in Prompt Overview. */

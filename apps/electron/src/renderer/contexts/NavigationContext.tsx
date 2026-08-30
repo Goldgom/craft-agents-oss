@@ -1152,10 +1152,10 @@ export function NavigationProvider({
 
   useEffect(() => {
     const handleNavigateEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ route: Route; newPanel?: boolean; targetLaneId?: 'main' }>
+      const customEvent = event as CustomEvent<NavigateOptions & { route: Route }>
       if (customEvent.detail?.route) {
-        const { route: r, newPanel, targetLaneId } = customEvent.detail
-        navigate(r, newPanel ? { newPanel, targetLaneId } : undefined)
+        const { route: r, newPanel, targetLaneId, skipAutoSelect } = customEvent.detail
+        navigate(r, { newPanel, targetLaneId, skipAutoSelect })
       }
     }
 

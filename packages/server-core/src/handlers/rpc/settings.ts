@@ -56,6 +56,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS,
   RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT,
   RPC_CHANNELS.settings.RUN_MEMORY_LEAK_CHECK,
+  RPC_CHANNELS.settings.CLEAR_IDLE_MCP_RUNTIMES,
   RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
@@ -119,6 +120,9 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   const performanceManager = deps.sessionManager as typeof deps.sessionManager & {
     getPerformanceSnapshot(): Promise<import('@craft-agent/shared/protocol').PerformanceSnapshot>
     runMemoryLeakCheck(options?: { durationMs?: number; intervalMs?: number }): Promise<import('@craft-agent/shared/protocol').MemoryLeakCheckResult>
+    getMcpRuntimeLimits(): import('@craft-agent/shared/mcp').McpRuntimeLimits
+    setMcpRuntimeLimits(limits: import('@craft-agent/shared/mcp').McpRuntimeLimits): Promise<void>
+    clearIdleMcpRuntimes(): Promise<number>
     getMaxWarmRuntimes(): number
     setMaxWarmRuntimes(value: number): Promise<void>
   }
@@ -143,17 +147,37 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
 
   server.handle(RPC_CHANNELS.settings.GET_PERFORMANCE_SETTINGS, async () => {
     const prefs = (await import('@craft-agent/shared/config')).loadPreferences()
-    return { maxWarmRuntimes: prefs.performance?.maxWarmRuntimes ?? performanceManager.getMaxWarmRuntimes() }
+    const mcp = performanceManager.getMcpRuntimeLimits()
+    return {
+      maxWarmRuntimes: prefs.performance?.maxWarmRuntimes ?? performanceManager.getMaxWarmRuntimes(),
+      mcpHardLimit: mcp.hardLimit,
+      mcpSoftLimit: mcp.softLimit,
+      mcpMemoryHardLimitGb: mcp.memoryHardLimitBytes / (1024 * 1024 * 1024),
+    }
   })
-  server.handle(RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS, async (_ctx, settings: { maxWarmRuntimes: number }) => {
-    if (!Number.isSafeInteger(settings?.maxWarmRuntimes) || settings.maxWarmRuntimes < 0) throw new Error('maxWarmRuntimes must be a non-negative integer')
+  server.handle(RPC_CHANNELS.settings.SET_PERFORMANCE_SETTINGS, async (_ctx, settings: { maxWarmRuntimes?: number; mcpHardLimit?: number; mcpSoftLimit?: number; mcpMemoryHardLimitGb?: number }) => {
+    if (settings?.maxWarmRuntimes !== undefined && (!Number.isSafeInteger(settings.maxWarmRuntimes) || settings.maxWarmRuntimes < 0)) throw new Error('maxWarmRuntimes must be a non-negative integer')
+    const currentMcp = performanceManager.getMcpRuntimeLimits()
+    const mcpHardLimit = settings?.mcpHardLimit ?? currentMcp.hardLimit
+    const mcpSoftLimit = settings?.mcpSoftLimit ?? currentMcp.softLimit
+    const mcpMemoryHardLimitGb = settings?.mcpMemoryHardLimitGb ?? currentMcp.memoryHardLimitBytes / (1024 * 1024 * 1024)
+    if (!Number.isSafeInteger(mcpHardLimit) || mcpHardLimit < 1) throw new Error('mcpHardLimit must be a positive integer')
+    if (!Number.isSafeInteger(mcpSoftLimit) || mcpSoftLimit < 0 || mcpSoftLimit > mcpHardLimit) throw new Error('mcpSoftLimit must be between 0 and mcpHardLimit')
+    if (!Number.isFinite(mcpMemoryHardLimitGb) || mcpMemoryHardLimitGb <= 0) throw new Error('mcpMemoryHardLimitGb must be positive')
+    const mcpMemoryHardLimitBytes = Math.round(mcpMemoryHardLimitGb * 1024 * 1024 * 1024)
+    if (!Number.isSafeInteger(mcpMemoryHardLimitBytes) || mcpMemoryHardLimitBytes <= 0) throw new Error('mcpMemoryHardLimitGb is too large')
     const { updatePreferences } = await import('@craft-agent/shared/config')
-    updatePreferences({ performance: { maxWarmRuntimes: settings.maxWarmRuntimes } })
-    await performanceManager.setMaxWarmRuntimes(settings.maxWarmRuntimes)
+    updatePreferences({ performance: {
+      ...(settings?.maxWarmRuntimes === undefined ? {} : { maxWarmRuntimes: settings.maxWarmRuntimes }),
+      mcpHardLimit, mcpSoftLimit, mcpMemoryHardLimitBytes,
+    } })
+    if (settings?.maxWarmRuntimes !== undefined) await performanceManager.setMaxWarmRuntimes(settings.maxWarmRuntimes)
+    await performanceManager.setMcpRuntimeLimits({ hardLimit: mcpHardLimit, softLimit: mcpSoftLimit, memoryHardLimitBytes: mcpMemoryHardLimitBytes })
     return { success: true }
   })
   server.handle(RPC_CHANNELS.settings.GET_PERFORMANCE_SNAPSHOT, async () => performanceManager.getPerformanceSnapshot())
   server.handle(RPC_CHANNELS.settings.RUN_MEMORY_LEAK_CHECK, async (_ctx, options?: { durationMs?: number; intervalMs?: number }) => performanceManager.runMemoryLeakCheck(options))
+  server.handle(RPC_CHANNELS.settings.CLEAR_IDLE_MCP_RUNTIMES, async () => ({ cleared: await performanceManager.clearIdleMcpRuntimes() }))
 
   // ============================================================
   // Settings - Model (Session-Specific)
