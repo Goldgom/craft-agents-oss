@@ -608,9 +608,20 @@ if (!gotTheLock) {
 async function createInitialWindows(): Promise<void> {
   if (!windowManager) return
 
-  // Load saved window state
+  // Thin clients do not own the local workspace registry.  Starting with a
+  // locally-created/default workspace here would pass an id unknown to the
+  // selected remote server after a server-mode switch.  Let the renderer
+  // resolve the remote server's first workspace (or create the default one).
+  if (process.env.CRAFT_SERVER_URL) {
+    windowManager.createWindow({ workspaceId: '' })
+    mainLog.info('Created thin-client window without a workspace; resolving remote workspace in renderer')
+    return
+  }
+
+  // Load saved window state. Remote workspace stubs belong to their remote
+  // server and must not be used when starting the embedded local server.
   const savedState = loadWindowState()
-  let workspaces = getWorkspaces()
+  let workspaces = getWorkspaces().filter((workspace) => !workspace.remoteServer)
 
   // If no workspaces exist, create default "My Workspace" on first run
   if (workspaces.length === 0) {

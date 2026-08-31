@@ -3,7 +3,7 @@
  * Lists remote server workspaces and allows selection or creation.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus } from 'lucide-react'
 import { Spinner } from '@craft-agent/ui'
@@ -25,19 +25,45 @@ export function WorkspacePicker({ onSelectWorkspace }: WorkspacePickerProps) {
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  // A server switch can relaunch the app without a workspace id. In that
+  // case, immediately enter the first available workspace (or provision the
+  // default one) instead of requiring an extra picker interaction.
+  const autoInitialized = useRef(false)
 
   // Load workspaces from server
   useEffect(() => {
+    let alive = true
     window.electronAPI.getServerWorkspaces()
-      .then(ws => {
+      .then(async (ws) => {
+        if (!alive) return
         setWorkspaces(ws)
         setLoading(false)
+
+        if (autoInitialized.current) return
+        autoInitialized.current = true
+        try {
+          if (ws.length > 0) {
+            await onSelectWorkspace(ws[0].id)
+          } else {
+            const created = await window.electronAPI.createServerWorkspace('My Workspace')
+            await onSelectWorkspace(created.id)
+          }
+        } catch (err) {
+          // Keep the picker available as a fallback if auto-initialization
+          // fails (for example, a transient connection error).
+          if (alive) {
+            setError(err instanceof Error ? err.message : 'Failed to initialize workspace')
+            setCreating(false)
+          }
+        }
       })
       .catch(err => {
+        if (!alive) return
         setError(err instanceof Error ? err.message : 'Failed to load workspaces')
         setLoading(false)
       })
-  }, [])
+    return () => { alive = false }
+  }, [onSelectWorkspace])
 
   const handleCreate = useCallback(async () => {
     if (!newName.trim()) return

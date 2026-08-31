@@ -249,7 +249,7 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
   const binDir = join(outputDir, 'resources', 'bin');
   mkdirSync(binDir, { recursive: true });
   copyFileSync(electronUvPath, uvDest);
-  await $`chmod +x ${uvDest}`.quiet();
+  if (process.platform !== 'win32') await $`chmod +x ${uvDest}`.quiet();
   console.log(`  uv binary installed (${(lstatSync(uvDest).size / 1024 / 1024).toFixed(1)} MB)`);
 }
 
@@ -295,7 +295,7 @@ async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
 
   mkdirSync(runtimeDir, { recursive: true });
   copyFileSync(electronBunPath, bunDest);
-  await $`chmod +x ${bunDest}`.quiet();
+  if (process.platform !== 'win32') await $`chmod +x ${bunDest}`.quiet();
   console.log(`  Bun runtime installed (${(lstatSync(bunDest).size / 1024 / 1024).toFixed(1)} MB)`);
 }
 

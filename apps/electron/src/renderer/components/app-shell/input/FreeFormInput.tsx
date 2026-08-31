@@ -2417,6 +2417,15 @@ export function FreeFormInput({
             const usagePercent = contextStatus?.inputTokens && compactionThreshold
               ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
               : null
+            // A context window is not always available (for example for custom
+            // models), so usagePercent can legitimately be null even when the
+            // SDK has reported input token usage.  Never interpolate that null
+            // value into the tooltip (which previously rendered "null%").
+            const usageDescription = usagePercent !== null
+              ? `${usagePercent}% context used`
+              : contextStatus?.inputTokens != null
+                ? `${formatTokenCount(contextStatus.inputTokens)} tokens used`
+                : 'Context usage unavailable'
             const handleCompactClick = () => {
               if (!isProcessing) {
                 onSubmit('/compact', [])
@@ -2441,8 +2450,8 @@ export function FreeFormInput({
                 </TooltipTrigger>
                 <TooltipContent side="top">
                   {isProcessing
-                    ? `${usagePercent}% context used — wait for current operation`
-                    : `${usagePercent}% context used — click to compact`
+                    ? `${usageDescription} — wait for current operation`
+                    : `${usageDescription} — click to compact`
                   }
                 </TooltipContent>
               </Tooltip>

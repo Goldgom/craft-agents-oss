@@ -180,7 +180,13 @@ export async function downloadBun(config: BuildConfig): Promise<void> {
 
     // Extract
     console.log('  Extracting...');
-    await $`unzip -o ${zipPath} -d ${tempDir}`.quiet();
+    if (process.platform === 'win32') {
+      // Windows development hosts do not necessarily have unzip installed.
+      // Use the inbox PowerShell cmdlet so Linux cross-builds work out of the box.
+      await $`powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${tempDir}' -Force"`.quiet();
+    } else {
+      await $`unzip -o ${zipPath} -d ${tempDir}`.quiet();
+    }
 
     // Copy binary
     const bunBinary = platform === 'win32' ? 'bun.exe' : 'bun';
@@ -190,7 +196,7 @@ export async function downloadBun(config: BuildConfig): Promise<void> {
     copyFileSync(sourcePath, destPath);
 
     // Make executable on Unix
-    if (platform !== 'win32') {
+    if (platform !== 'win32' && process.platform !== 'win32') {
       await $`chmod +x ${destPath}`.quiet();
     }
 
@@ -286,7 +292,7 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
     }
 
     copyFileSync(extractedUv, targetPath);
-    if (platform !== 'win32') {
+    if (platform !== 'win32' && process.platform !== 'win32') {
       await $`chmod +x ${targetPath}`.quiet();
     }
 

@@ -275,7 +275,7 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 | 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `craft-server-<ver>-<platform>-<arch>.tar.gz` |
 | 服务器（Docker） | `docker buildx build -f Dockerfile.server -t craft-agent-server .`               | 容器镜像                                                           |
 
-版本号取自 `apps/electron/package.json`（当前 `1.0.0-community`），产物命名统一为
+版本号取自 `apps/electron/package.json`（当前 `1.0.0-community.1`），产物命名统一为
 `Craft-Agents-<arch>.<ext>` / `craft-server-<version>-<platform>-<arch>.tar.gz`。
 
 ---
