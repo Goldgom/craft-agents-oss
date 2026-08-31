@@ -50,7 +50,7 @@ function loadEnvFile(): void {
 // To enable in the future, add @sentry/esbuild-plugin. See apps/electron/CLAUDE.md.
 // NOTE: Google OAuth credentials are NOT baked into the build - users provide their own
 // via source config. See README_FOR_OSS.md for setup instructions.
-function getBuildDefines(): string[] {
+function getBuildDefines(): Record<string, string> {
   const definedVars = [
     "SLACK_OAUTH_CLIENT_ID",
     "SLACK_OAUTH_CLIENT_SECRET",
@@ -60,10 +60,12 @@ function getBuildDefines(): string[] {
     "CRAFT_DEV_RUNTIME",
   ];
 
-  return definedVars.map((varName) => {
+  const defines: Record<string, string> = {};
+  for (const varName of definedVars) {
     const value = process.env[varName] || "";
-    return `--define:process.env.${varName}="${value}"`;
-  });
+    defines[`process.env.${varName}`] = JSON.stringify(value);
+  }
+  return defines;
 }
 
 // Wait for file to stabilize (no size changes)
@@ -332,42 +334,43 @@ async function main(): Promise<void> {
 
   console.log("🔨 Building main process...");
 
-  const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
-      "apps/electron/src/main/index.ts",
-      "--bundle",
-      "--platform=node",
-      "--format=cjs",
-      "--outfile=apps/electron/dist/main.cjs",
-      "--external:electron",
-      // Claude Agent SDK is pure ESM (sdk.mjs) and calls `createRequire(import.meta.url)`
-      // at module init. esbuild's CJS bundling leaves the synthesized `import_meta.url`
-      // undefined for inner ESM modules, which throws ERR_INVALID_ARG_VALUE on load.
-      // Externalize so Node loads the SDK natively as ESM (with a real import.meta.url).
-      // Electron 39 ships Node 22.x which supports require() of ESM without TLA, so the
-      // bundled main.cjs's `require('@anthropic-ai/claude-agent-sdk')` works.
-      "--external:@anthropic-ai/claude-agent-sdk",
-      // Replace grammY's bundled polyfills (node-fetch@2 + abort-controller@3)
-      // with native Node globals. esbuild otherwise renames the polyfill's
-      // `class AbortSignal` to `_AbortSignal` to dodge collision with the
-      // global, which then breaks node-fetch@2's `constructor.name` check and
-      // fails every Telegram API call with a TypeError.
-      "--alias:node-fetch=./apps/electron/src/main/shims/node-fetch.cjs",
-      "--alias:abort-controller=./apps/electron/src/main/shims/abort-controller.cjs",
-      "--alias:cpu-features=./apps/electron/src/main/shims/cpu-features.cjs",
-      ...buildDefines,
-    ],
-    cwd: ROOT_DIR,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-
-  const exitCode = await proc.exited;
-
-  if (exitCode !== 0) {
-    console.error("❌ esbuild failed with exit code", exitCode);
-    process.exit(exitCode);
+  // Use esbuild's JS API directly (instead of spawning `bun run esbuild`) so the
+  // build is cross-platform. Spawning the esbuild CLI through the `bun` `.cmd`
+  // shim on Windows fails because the --define values contain `"` characters,
+  // which cannot be safely passed to a .bat/.cmd file (ERR_INVALID_ARG_VALUE).
+  try {
+    await esbuild.build({
+      entryPoints: [join(ROOT_DIR, "apps/electron/src/main/index.ts")],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      outfile: OUTPUT_FILE,
+      external: [
+        "electron",
+        // Claude Agent SDK is pure ESM (sdk.mjs) and calls `createRequire(import.meta.url)`
+        // at module init. esbuild's CJS bundling leaves the synthesized `import_meta.url`
+        // undefined for inner ESM modules, which throws ERR_INVALID_ARG_VALUE on load.
+        // Externalize so Node loads the SDK natively as ESM (with a real import.meta.url).
+        // Electron 39 ships Node 22.x which supports require() of ESM without TLA, so the
+        // bundled main.cjs's `require('@anthropic-ai/claude-agent-sdk')` works.
+        "@anthropic-ai/claude-agent-sdk",
+      ],
+      alias: {
+        // Replace grammY's bundled polyfills (node-fetch@2 + abort-controller@3)
+        // with native Node globals. esbuild otherwise renames the polyfill's
+        // `class AbortSignal` to `_AbortSignal` to dodge collision with the
+        // global, which then breaks node-fetch@2's `constructor.name` check and
+        // fails every Telegram API call with a TypeError.
+        "node-fetch": join(ROOT_DIR, "apps/electron/src/main/shims/node-fetch.cjs"),
+        "abort-controller": join(ROOT_DIR, "apps/electron/src/main/shims/abort-controller.cjs"),
+        "cpu-features": join(ROOT_DIR, "apps/electron/src/main/shims/cpu-features.cjs"),
+      },
+      define: buildDefines,
+      logLevel: "info",
+    });
+  } catch (err) {
+    console.error("❌ esbuild failed:", err);
+    process.exit(1);
   }
 
   // Wait for file to stabilize

@@ -16,7 +16,6 @@
  * That's why we emit CJS + platform=node — it must stay Node-compatible.
  */
 
-import { spawn } from "bun";
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, statSync, readFileSync } from "fs";
 import { join } from "path";
@@ -77,40 +76,20 @@ async function main(): Promise<void> {
   const gitSha = resolveGitSha(ROOT_DIR);
   console.log(`📨 Building WhatsApp worker (bundling Baileys) — build ${buildId} (${gitSha})...`);
 
-  const proc = spawn({
-    cmd: [
-      "bun", "run", "esbuild",
-      SOURCE,
-      "--bundle",
-      "--platform=node",
-      "--format=cjs",
-      "--target=node20",
-      `--outfile=${OUTPUT}`,
-      // Inject build provenance. The worker logs these on startup so an
-      // operator can confirm a rebuild actually propagated to the running
-      // subprocess after `bun run build:wa-worker`.
-      `--define:__WA_WORKER_BUILD_ID__=${JSON.stringify(buildId)}`,
-      `--define:__WA_WORKER_GIT_SHA__=${JSON.stringify(gitSha)}`,
-      // Mark only Electron + Baileys' runtime-optional peers external.
-      // Baileys itself and all its required transitive deps get bundled.
-      //
-      // The three optional deps below are unused by Craft Agent (no link
-      // previews, no terminal QR, no inline image transforms). Baileys
-      // guards them with try/catch so they fail silently at runtime.
-      "--external:electron",
-      "--external:link-preview-js",
-      "--external:qrcode-terminal",
-      "--external:jimp",
-    ],
-    cwd: ROOT_DIR,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    console.error("❌ WhatsApp worker build failed with exit code", exitCode);
-    process.exit(exitCode);
+  try {
+    await esbuild.build({
+      entryPoints: [SOURCE], bundle: true, platform: "node", format: "cjs",
+      target: "node20", outfile: OUTPUT,
+      define: {
+        __WA_WORKER_BUILD_ID__: JSON.stringify(buildId),
+        __WA_WORKER_GIT_SHA__: JSON.stringify(gitSha),
+      },
+      external: ["electron", "link-preview-js", "qrcode-terminal", "jimp"],
+      logLevel: "info",
+    });
+  } catch (error) {
+    console.error("❌ WhatsApp worker build failed:", error);
+    process.exit(1);
   }
 
   console.log("🔍 Verifying worker output...");

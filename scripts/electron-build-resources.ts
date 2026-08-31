@@ -8,6 +8,7 @@ import {
   copyPiAgentServer,
   copySessionServer,
   verifyMcpServersExist,
+  downloadUv,
   type Arch,
   type BuildConfig,
   type Platform,
@@ -41,15 +42,26 @@ const buildConfig: BuildConfig = {
   electronDir: ELECTRON_DIR,
 };
 
-// electron-build-main compiles these into packages/*/dist. Assemble them into
-// Electron resources before copying the resource tree into dist/ for packaging.
-copySessionServer(buildConfig);
-copyPiAgentServer(buildConfig);
-verifyMcpServersExist(buildConfig);
+async function main(): Promise<void> {
+  // electron-build-main compiles these into packages/*/dist. Assemble them into
+  // Electron resources before copying the resource tree into dist/ for packaging.
+  copySessionServer(buildConfig);
+  copyPiAgentServer(buildConfig);
+  verifyMcpServersExist(buildConfig);
 
-if (existsSync(srcDir)) {
-  cpSync(srcDir, destDir, { recursive: true, force: true });
-  console.log("📦 Copied resources to dist");
-} else {
-  console.log("⚠️ No resources directory found");
+  // Document tools rely on uv. Provision the platform binary during every
+  // build so development and release bundles do not silently depend on PATH.
+  await downloadUv(buildConfig);
+
+  if (existsSync(srcDir)) {
+    cpSync(srcDir, destDir, { recursive: true, force: true });
+    console.log("📦 Copied resources to dist");
+  } else {
+    console.log("⚠️ No resources directory found");
+  }
 }
+
+main().catch((error) => {
+  console.error("❌ Resource build failed:", error);
+  process.exit(1);
+});

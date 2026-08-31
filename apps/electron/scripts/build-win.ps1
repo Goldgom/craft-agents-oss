@@ -10,6 +10,19 @@ $RootDir = Split-Path -Parent (Split-Path -Parent $ElectronDir)
 # Configuration
 $BunVersion = "bun-v1.3.9"  # Pinned version for reproducible builds
 
+# Windows PowerShell installations used in minimal/older environments may not
+# provide the Microsoft.PowerShell.Utility Get-FileHash cmdlet. Use certutil,
+# which is part of Windows, as a compatible SHA-256 fallback.
+function Get-Sha256([string]$Path) {
+    try {
+        $cmd = Get-Command Get-FileHash -ErrorAction Stop
+        return (Get-FileHash $Path -Algorithm SHA256).Hash.ToLower()
+    } catch {
+        $line = certutil -hashfile $Path SHA256 | Select-Object -Index 1
+        return ($line -replace '\s', '').ToLower()
+    }
+}
+
 Write-Host "=== Building Craft Agents Windows Installer using electron-builder ===" -ForegroundColor Cyan
 
 # Debug: System information
@@ -121,7 +134,7 @@ try {
     # Verify checksum
     Write-Host "Verifying checksum..."
     $ExpectedHash = (Get-Content "$TempDir\SHASUMS256.txt" | Select-String "$BunDownload.zip").ToString().Split(" ")[0]
-    $ActualHash = (Get-FileHash "$TempDir\$BunDownload.zip" -Algorithm SHA256).Hash.ToLower()
+    $ActualHash = Get-Sha256 "$TempDir\$BunDownload.zip"
 
     if ($ActualHash -ne $ExpectedHash) {
         throw "Checksum verification failed! Expected: $ExpectedHash, Got: $ActualHash"
@@ -327,6 +340,10 @@ try {
 Write-Host "  Copying resources and bundled assets..."
 Push-Location $ElectronDir
 try {
+    # Provision platform-specific runtime resources (including uv.exe) before
+    # copying the resource tree into dist for packaging.
+    bun run ..\..\scripts\electron-build-resources.ts
+    if ($LASTEXITCODE -ne 0) { throw "Resource build failed" }
     bun scripts/copy-assets.ts
     if ($LASTEXITCODE -ne 0) { throw "Asset copy failed" }
     Write-Host "  Assets copied" -ForegroundColor Green
@@ -358,7 +375,7 @@ if (Test-Path $BunExe) {
     }
 
     # Check file hash
-    $hash = (Get-FileHash $BunExe -Algorithm SHA256).Hash
+    $hash = Get-Sha256 $BunExe
     Write-Host "SHA256: $hash"
 } else {
     Write-Host "ERROR: bun.exe not found at $BunExe" -ForegroundColor Red
