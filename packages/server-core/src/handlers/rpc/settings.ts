@@ -471,6 +471,16 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     setBrowserToolEnabled(enabled)
   })
 
+  server.handle(RPC_CHANNELS.tools.GET_REQUIRE_SOURCE_GUIDE, async () => {
+    const { getRequireSourceGuide } = await import('@craft-agent/shared/config/storage')
+    return getRequireSourceGuide()
+  })
+
+  server.handle(RPC_CHANNELS.tools.SET_REQUIRE_SOURCE_GUIDE, async (_ctx, enabled: boolean) => {
+    const { setRequireSourceGuide } = await import('@craft-agent/shared/config/storage')
+    setRequireSourceGuide(enabled)
+  })
+
   // ============================================================
   // Network Proxy Settings
   // ============================================================

@@ -127,7 +127,11 @@ export function MobileControls() {
   const closeNavigation = () => setNavigationOpen(false)
   const navigateTo = (route: Parameters<typeof navigate>[0]) => {
     closeNavigation()
-    navigate(route, route === routes.view.allSessions() ? { skipAutoSelect: true } : undefined)
+    // List navigators must open on their list in compact mode. In particular,
+    // Android's automation entry should not immediately drill into the first
+    // automation while the user is trying to browse the available entries.
+    const skipAutoSelect = route === routes.view.allSessions() || route.startsWith('automations')
+    navigate(route, skipAutoSelect ? { skipAutoSelect: true } : undefined)
   }
 
   return (

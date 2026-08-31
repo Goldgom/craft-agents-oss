@@ -77,6 +77,7 @@ export interface StoredConfig {
   richToolDescriptions?: boolean;  // Add intent/action metadata to all tool calls (default: true)
   // Tools
   browserToolEnabled?: boolean;  // Enable built-in browser tool (default: true). Disable for Playwright/Puppeteer.
+  requireSourceGuide?: boolean;  // Require reading source guide.md before MCP/API tools (default: true)
   allowRemoteEvaluate?: boolean;  // Allow remote agents to call `browser_tool evaluate` on local browser (default: true).
   // Prompt caching & context
   extendedPromptCache?: boolean;  // Use 1h prompt cache TTL instead of 5m (default: false)
@@ -126,6 +127,7 @@ const FALLBACK_CONFIG_DEFAULTS: ConfigDefaults = {
     richToolDescriptions: true,
     extendedPromptCache: false,
     browserToolEnabled: true,
+    requireSourceGuide: true,
     allowRemoteEvaluate: true,
   },
   workspaceDefaults: {
@@ -505,6 +507,25 @@ export function getBrowserToolEnabled(): boolean {
   }
   const defaults = loadConfigDefaults();
   return defaults.defaults.browserToolEnabled;
+}
+
+/** Whether MCP/API source tools require reading guide.md first. Defaults to true. */
+export function getRequireSourceGuide(): boolean {
+  const config = loadStoredConfig();
+  if (config?.requireSourceGuide !== undefined) return config.requireSourceGuide;
+  try {
+    return loadConfigDefaults().defaults.requireSourceGuide ?? true;
+  } catch {
+    return true;
+  }
+}
+
+/** Set whether MCP/API source tools require reading guide.md first. */
+export function setRequireSourceGuide(enabled: boolean): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  config.requireSourceGuide = enabled;
+  saveConfig(config);
 }
 
 /**

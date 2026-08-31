@@ -199,7 +199,10 @@ win:
       to: messaging-qqbot-worker/worker.cjs
 
 nsis:
-  oneClick: true
+  # Show the NSIS wizard so users can choose the installation directory before
+  # files are copied. This is required for custom per-user install locations.
+  oneClick: false
+  allowToChangeInstallationDirectory: true
   # Per-user install to %LOCALAPPDATA%\Programs\ (not Program Files).
   # Bun subprocess cannot read/write files in Program Files due to Windows permissions.
   perMachine: false

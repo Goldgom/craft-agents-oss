@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { expandPath } from './path-processor.ts';
-import { getBrowserToolEnabled } from '../../config/storage.ts';
+import { getBrowserToolEnabled, getRequireSourceGuide } from '../../config/storage.ts';
 
 // ============================================================
 // Types
@@ -153,7 +153,15 @@ export class PrerequisiteManager {
     const skillResult = this.checkSkillPrerequisites(toolName);
     if (!skillResult.allowed) return skillResult;
 
+    const isSourceTool = toolName.startsWith('api_') ||
+      (toolName.startsWith('mcp__') && !toolName.startsWith('mcp__session__'));
+    const requireSourceGuide = isSourceTool ? getRequireSourceGuide() : true;
     for (const rule of RULES) {
+      // Source guide enforcement can be disabled independently. Keep browser
+      // and dynamic skill prerequisites active.
+      if (!requireSourceGuide && isSourceTool) {
+        continue;
+      }
       if (!rule.toolMatcher(toolName)) continue;
 
       const requiredPath = rule.resolveRequiredPath(toolName, this.workspaceRootPath);

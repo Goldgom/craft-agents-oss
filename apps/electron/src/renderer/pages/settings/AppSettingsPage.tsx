@@ -130,6 +130,7 @@ export default function AppSettingsPage() {
 
   // Tools state
   const [browserToolEnabled, setBrowserToolEnabled] = useState(true)
+  const [requireSourceGuide, setRequireSourceGuide] = useState(true)
 
   // Proxy state
   const [proxyForm, setProxyForm] = useState<ProxyFormState>(EMPTY_PROXY_FORM)
@@ -168,15 +169,17 @@ export default function AppSettingsPage() {
   const loadSettings = useCallback(async () => {
     if (!window.electronAPI) return
     try {
-      const [notificationsOn, keepAwakeOn, browserToolOn, proxySettings] = await Promise.all([
+      const [notificationsOn, keepAwakeOn, browserToolOn, requireGuideOn, proxySettings] = await Promise.all([
         window.electronAPI.getNotificationsEnabled(),
         window.electronAPI.getKeepAwakeWhileRunning(),
         window.electronAPI.getBrowserToolEnabled(),
+        window.electronAPI.getRequireSourceGuide(),
         window.electronAPI.getNetworkProxySettings(),
       ])
       setNotificationsEnabled(notificationsOn)
       setKeepAwakeEnabled(keepAwakeOn)
       setBrowserToolEnabled(browserToolOn)
+      setRequireSourceGuide(requireGuideOn)
       const form = toProxyFormState(proxySettings)
       setProxyForm(form)
       setSavedProxyForm(form)
@@ -202,6 +205,11 @@ export default function AppSettingsPage() {
   const handleBrowserToolEnabledChange = useCallback(async (enabled: boolean) => {
     setBrowserToolEnabled(enabled)
     await window.electronAPI.setBrowserToolEnabled(enabled)
+  }, [])
+
+  const handleRequireSourceGuideChange = useCallback(async (enabled: boolean) => {
+    setRequireSourceGuide(enabled)
+    await window.electronAPI.setRequireSourceGuide(enabled)
   }, [])
 
   // Proxy handlers
@@ -359,6 +367,12 @@ export default function AppSettingsPage() {
                     description={t("settings.tools.builtInBrowserDesc")}
                     checked={browserToolEnabled}
                     onCheckedChange={handleBrowserToolEnabledChange}
+                  />
+                  <SettingsToggle
+                    label={t("settings.tools.requireSourceGuide")}
+                    description={t("settings.tools.requireSourceGuideDesc")}
+                    checked={requireSourceGuide}
+                    onCheckedChange={handleRequireSourceGuideChange}
                   />
                 </SettingsCard>
               </SettingsSection>

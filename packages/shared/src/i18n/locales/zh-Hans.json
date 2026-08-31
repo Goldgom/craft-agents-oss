@@ -1392,6 +1392,8 @@
   "settings.tools.addedTitle": "后来添加的工具",
   "settings.tools.builtInBrowser": "内置浏览器",
   "settings.tools.builtInBrowserDesc": "如果使用外部浏览器工具 (如 Playwright、Puppeteer 或浏览器 MCP 服务器) 则禁用。",
+  "settings.tools.requireSourceGuide": "调用 MCP 前阅读来源指南",
+  "settings.tools.requireSourceGuideDesc": "使用 MCP 或 API 工具前，要求先阅读 sources/<名称>/guide.md。",
   "settings.tools.builtinDescription": "程序内置的 {{count}} 个核心和会话工具。",
   "settings.tools.builtinTitle": "程序自带工具",
   "settings.tools.categories.api": "API",

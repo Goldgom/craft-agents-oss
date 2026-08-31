@@ -1392,6 +1392,8 @@
   "settings.tools.addedTitle": "Added tools",
   "settings.tools.builtInBrowser": "Built-in browser",
   "settings.tools.builtInBrowserDesc": "Disable if you use external browser tools like Playwright, Puppeteer, or browser MCP servers.",
+  "settings.tools.requireSourceGuide": "Require MCP source guide",
+  "settings.tools.requireSourceGuideDesc": "Require reading sources/<name>/guide.md before using MCP or API tools.",
   "settings.tools.builtinDescription": "{{count}} core and session tools included with the app.",
   "settings.tools.builtinTitle": "Built-in tools",
   "settings.tools.categories.api": "API",

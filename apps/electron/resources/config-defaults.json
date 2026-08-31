@@ -11,6 +11,7 @@
     "richToolDescriptions": true,
     "extendedPromptCache": false,
     "browserToolEnabled": true,
+    "requireSourceGuide": true,
     "allowRemoteEvaluate": true
   },
   "workspaceDefaults": {

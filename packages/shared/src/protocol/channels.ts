@@ -369,6 +369,8 @@ export const RPC_CHANNELS = {
   tools: {
     GET_BROWSER_TOOL_ENABLED: 'tools:getBrowserToolEnabled',
     SET_BROWSER_TOOL_ENABLED: 'tools:setBrowserToolEnabled',
+    GET_REQUIRE_SOURCE_GUIDE: 'tools:getRequireSourceGuide',
+    SET_REQUIRE_SOURCE_GUIDE: 'tools:setRequireSourceGuide',
   },
   caching: {
     GET_EXTENDED_PROMPT_CACHE: 'caching:getExtendedPromptCache',

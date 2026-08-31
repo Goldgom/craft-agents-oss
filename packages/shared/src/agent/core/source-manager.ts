@@ -13,6 +13,7 @@
  */
 
 import { join } from 'node:path';
+import { getRequireSourceGuide } from '../../config/storage.ts';
 import type { LoadedSource } from '../../sources/types.ts';
 import { sourceNeedsAuthentication } from '../../sources/credential-manager.ts';
 import type { SourceManagerConfig } from './types.ts';
@@ -215,7 +216,7 @@ export class SourceManager {
     const activeSourcesWithGuides = activeSources.filter(
       (s) => s.guide?.raw && !GUIDE_EXEMPT_SLUGS.has(s.config.slug)
     );
-    if (activeSourcesWithGuides.length > 0) {
+    if (getRequireSourceGuide() && activeSourcesWithGuides.length > 0) {
       parts.push('Read each source\'s guide.md before first tool use — calls are blocked until guide is read.');
     }
 
@@ -231,12 +232,12 @@ export class SourceManager {
         const tagline = s.config.tagline || s.config.provider;
         parts.push(`- ${s.config.slug}: ${tagline}`);
         // Add guide path for sources that have guides (excluding internal sources)
-        if (s.guide?.raw && !GUIDE_EXEMPT_SLUGS.has(s.config.slug)) {
+        if (getRequireSourceGuide() && s.guide?.raw && !GUIDE_EXEMPT_SLUGS.has(s.config.slug)) {
           parts.push(`  Guide: ${join(s.folderPath, 'guide.md')}`);
           hasGuides = true;
         }
       }
-      if (hasGuides) {
+      if (getRequireSourceGuide() && hasGuides) {
         parts.push('');
         parts.push('IMPORTANT: You MUST read a source\'s guide with the Read tool BEFORE using any of its tools. Tool calls WILL BE REJECTED if the guide has not been read first.');
       }

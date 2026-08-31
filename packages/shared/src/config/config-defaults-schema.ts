@@ -21,6 +21,7 @@ export interface ConfigDefaults {
     richToolDescriptions: boolean;
     extendedPromptCache: boolean;
     browserToolEnabled: boolean;
+    requireSourceGuide?: boolean;
     /**
      * Allow remote agents to call `browser_tool evaluate <expression>`.
      * When false, the local dispatcher rejects with `BROWSER_REMOTE_EVALUATE_BLOCKED`.

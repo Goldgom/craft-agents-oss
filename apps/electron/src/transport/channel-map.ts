@@ -356,6 +356,8 @@ export const CHANNEL_MAP = {
   // Tools settings
   getBrowserToolEnabled: invoke(RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED),
   setBrowserToolEnabled: invoke(RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED),
+  getRequireSourceGuide: invoke(RPC_CHANNELS.tools.GET_REQUIRE_SOURCE_GUIDE),
+  setRequireSourceGuide: invoke(RPC_CHANNELS.tools.SET_REQUIRE_SOURCE_GUIDE),
 
   // Prompt caching & context
   getExtendedPromptCache: invoke(RPC_CHANNELS.caching.GET_EXTENDED_PROMPT_CACHE),
