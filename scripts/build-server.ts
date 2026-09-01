@@ -64,7 +64,7 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
-type ServerPlatform = 'darwin' | 'linux';
+type ServerPlatform = 'darwin' | 'linux' | 'win32';
 
 interface ServerBuildConfig {
   platform: ServerPlatform;
@@ -89,7 +89,7 @@ Usage:
   bun run scripts/build-server.ts [options]
 
 Options:
-  --platform=<platform>  Target platform: darwin, linux
+  --platform=<platform>  Target platform: darwin, linux, win32
                          (default: ${process.platform})
   --arch=<arch>          Target architecture: x64, arm64
                          (default: ${process.arch === 'arm64' ? 'arm64' : 'x64'})
@@ -156,7 +156,7 @@ function assembleResources(config: ServerBuildConfig): void {
     }
   }
 
-  // Shell wrappers for doc tools (not .cmd files — those are Windows-only)
+  // Copy wrappers matching the target platform.
   console.log('  Copying doc tool wrappers...');
   const binDir = join(destResources, 'bin');
   mkdirSync(binDir, { recursive: true });
@@ -165,8 +165,9 @@ function assembleResources(config: ServerBuildConfig): void {
     for (const entry of readdirSync(srcBin)) {
       const src = join(srcBin, entry);
       const stat = lstatSync(src);
-      // Only copy files (not platform directories), skip .cmd
-      if (stat.isFile() && !entry.endsWith('.cmd')) {
+      // POSIX builds do not need Windows command wrappers, and vice versa.
+      const isWindowsWrapper = entry.endsWith('.cmd');
+      if (stat.isFile() && (platform === 'win32' ? isWindowsWrapper : !isWindowsWrapper)) {
         copyFileSync(src, join(binDir, entry));
       }
     }
@@ -208,12 +209,12 @@ function assembleResources(config: ServerBuildConfig): void {
 
 async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
   const { platform, arch, outputDir, skipDownload } = config;
-  const uvDest = join(outputDir, 'resources', 'bin', 'uv');
+  const uvDest = join(outputDir, 'resources', 'bin', platform === 'win32' ? 'uv.exe' : 'uv');
 
   // Use common.ts downloadUv which writes to electronDir/resources/bin/{platform-arch}/
   // Then we'll copy the binary to our flat layout
   const platformKey = getPlatformKey(platform, arch);
-  const electronUvPath = join(config.electronDir, 'resources', 'bin', platformKey, 'uv');
+  const electronUvPath = join(config.electronDir, 'resources', 'bin', platformKey, platform === 'win32' ? 'uv.exe' : 'uv');
 
   if (skipDownload) {
     // --skip-download is authoritative: never hit the network.
@@ -245,7 +246,7 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
     throw new Error(`uv binary not found after download at ${electronUvPath}`);
   }
 
-  // Flatten: copy to resources/bin/uv (no platform subdirectory in server dist)
+  // Flatten to resources/bin (without the platform subdirectory).
   const binDir = join(outputDir, 'resources', 'bin');
   mkdirSync(binDir, { recursive: true });
   copyFileSync(electronUvPath, uvDest);
@@ -260,8 +261,9 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
 async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
   const { platform, arch, outputDir, skipDownload } = config;
   const runtimeDir = join(outputDir, 'vendor', 'bun');
-  const bunDest = join(runtimeDir, 'bun');
-  const electronBunPath = join(config.electronDir, 'vendor', 'bun', 'bun');
+  const bunName = platform === 'win32' ? 'bun.exe' : 'bun';
+  const bunDest = join(runtimeDir, bunName);
+  const electronBunPath = join(config.electronDir, 'vendor', 'bun', bunName);
 
   if (skipDownload) {
     // --skip-download is authoritative: never hit the network.
@@ -603,7 +605,7 @@ function createRootConfig(config: ServerBuildConfig): void {
 // ---------------------------------------------------------------------------
 
 function createEntryScripts(config: ServerBuildConfig): void {
-  const { outputDir } = config;
+  const { outputDir, platform } = config;
   const binDir = join(outputDir, 'bin');
   mkdirSync(binDir, { recursive: true });
 
@@ -733,6 +735,26 @@ echo ""
 `;
   writeFileSync(join(outputDir, 'install.sh'), installSh);
 
+  if (platform === 'win32') {
+    const windowsEntry = [
+      '@echo off',
+      'setlocal',
+      'set "DIR=%~dp0.."',
+      'set "CRAFT_BUNDLED_ASSETS_ROOT=%DIR%"',
+      'set "CRAFT_IS_PACKAGED=true"',
+      'set "CRAFT_APP_ROOT=%DIR%"',
+      'set "CRAFT_RESOURCES_PATH=%DIR%\\resources"',
+      'set "CRAFT_UV=%DIR%\\resources\\bin\\uv.exe"',
+      'set "CRAFT_SCRIPTS=%DIR%\\resources\\scripts"',
+      'set "PATH=%DIR%\\resources\\bin;%DIR%\\vendor\\bun;%PATH%"',
+      '"%DIR%\\vendor\\bun\\bun.exe" run "%DIR%\\packages\\server\\src\\index.ts" %*',
+      'endlocal',
+      '',
+    ].join('\r\n');
+    writeFileSync(join(binDir, 'craft-server.cmd'), windowsEntry);
+    writeFileSync(join(outputDir, 'start.cmd'), '@echo off\r\ncall "%~dp0bin\\craft-server.cmd" %*\r\n');
+  }
+
   // Make scripts executable at build time
   for (const script of [
     join(binDir, 'craft-server'),
@@ -825,8 +847,8 @@ async function main(): Promise<void> {
   }
 
   const platform = values.platform as ServerPlatform;
-  if (platform !== 'darwin' && platform !== 'linux') {
-    console.error(`Unsupported platform: ${platform}. Use darwin or linux.`);
+  if (platform !== 'darwin' && platform !== 'linux' && platform !== 'win32') {
+    console.error(`Unsupported platform: ${platform}. Use darwin, linux, or win32.`);
     process.exit(1);
   }
 

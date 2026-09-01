@@ -3,6 +3,21 @@
 本文档介绍如何编译 Craft Agents 的各端产物：**Windows / macOS / Linux 客户端** 与 **服务器端**。
 仓库根目录命令均以 `bun run <script>` 形式执行。
 
+## 全量编译与统一产物目录
+
+使用根目录的编排脚本可以一次构建 Windows、Linux、Android，以及 Linux/Windows/macOS
+无头服务，并将结果统一放入 `dist/` 的对应子目录：
+
+```bash
+bun run build:all
+# 仅构建指定目标，发布 APK 使用 --release
+bun run build:all win linux android --release
+```
+
+目标名称为 `win`、`linux`、`android`、`linux-headless`、`win-headless`、`mac-headless`。
+桌面包必须在对应的构建环境中执行（Linux 桌面包在 Linux/WSL，Windows 包在 Windows）；
+无头服务支持交叉下载目标运行时。当前主机无法构建的目标会自动跳过；已开始的构建若发生实际错误则立即停止。
+
 ---
 
 ## 一、环境准备（所有平台通用）
@@ -143,7 +158,7 @@ apps/electron/release/
 
 ## 五、服务器端编译（Server）
 
-服务器是**无头**进程，仅支持 `darwin` 与 `linux`（Windows 请用 Docker / WSL）。
+服务器是**无头**进程，支持 `darwin`、`linux` 与 `win32`。
 
 ### 方式 A：原生构建（推荐给 Linux / macOS 部署）
 
@@ -152,6 +167,7 @@ apps/electron/release/
 bun run scripts/build-server.ts --platform=linux --arch=x64 --compress
 bun run scripts/build-server.ts --platform=linux --arch=arm64 --compress
 bun run scripts/build-server.ts --platform=darwin --arch=arm64 --compress
+bun run scripts/build-server.ts --platform=win32 --arch=x64 --compress
 ```
 
 参数说明：

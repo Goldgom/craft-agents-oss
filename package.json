@@ -97,6 +97,7 @@
     "docs:build": "cd apps/docs-site && bun run build",
     "docs:preview": "cd apps/docs-site && bun run preview",
     "build": "bun run scripts/build.ts",
+    "build:all": "bun run scripts/build-all.ts",
     "release": "bun run scripts/release.ts",
     "check-version": "bun run scripts/check-version.ts",
     "oss:sync": "bun run scripts/oss-sync.ts",
