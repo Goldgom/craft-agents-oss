@@ -56,7 +56,7 @@ function collectRelease(target: string): void {
   mkdirSync(destination, { recursive: true });
   if (!existsSync(source)) throw new Error(`Electron release directory not found: ${source}`);
   for (const file of readdirSync(source)) {
-    if (!/\.(exe|AppImage|dmg|zip|yml|blockmap)$/i.test(file)) continue;
+    if (!/\.(exe|msi|AppImage|dmg|zip|yml|blockmap)$/i.test(file)) continue;
     cpSync(join(source, file), join(destination, file), { recursive: true });
   }
 }

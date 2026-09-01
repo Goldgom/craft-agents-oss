@@ -72,7 +72,8 @@ bun run dist:win
 
 ```
 apps/electron/release/
-└── Craft-Agents-x64.exe          # 一键式 NSIS 安装包（按用户安装到 %LOCALAPPDATA%\Programs）
+├── Craft-Agents-x64.exe          # NSIS 安装包
+└── Craft-Agents-x64.msi          # MSI 安装包（适合企业部署）
 ```
 
 - 配置位于 `apps/electron/electron-builder.yml` 的 `win:` / `nsis:` 段。

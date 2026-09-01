@@ -167,6 +167,9 @@ win:
     - target: nsis
       arch:
         - x64
+    - target: msi
+      arch:
+        - x64
   # Use predictable naming: Craft-Agents-x64.exe
   artifactName: "Craft-Agents-${arch}.${ext}"
   files:
