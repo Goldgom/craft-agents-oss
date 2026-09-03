@@ -267,6 +267,11 @@ export class PiAgent extends BaseAgent {
     return this.stderrBuffer.join('');
   }
 
+  private resetStderrBuffer(): void {
+    this.stderrBuffer = [];
+    this.stderrBufferBytes = 0;
+  }
+
   // Pending permission requests (used by handlePreToolUseRequest for ask-mode prompting)
   private pendingPermissions: Map<string, {
     resolve: (allowed: boolean) => void;
@@ -479,6 +484,7 @@ export class PiAgent extends BaseAgent {
 
     this.debug(`Spawning Pi subprocess: ${nodePath} ${piServerPath}`);
     this.resetSubprocessErrorDedup();
+    this.resetStderrBuffer();
 
     // Set up ready promise before spawning
     this.subprocessReady = new Promise<void>((resolve, reject) => {
@@ -1835,7 +1841,15 @@ export class PiAgent extends BaseAgent {
     this.debug(`Pi subprocess exited: code=${code}, signal=${signal}`);
 
     const exitReason = signal ? `signal ${signal}` : `code ${code}`;
-    this.subprocessReadyReject?.(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+    // Preserve the subprocess' last stderr lines in the rejection.  A bare
+    // exit code is not actionable (and is rendered as a generic Service Error
+    // by the UI), while Bun/SDK startup failures normally explain the cause
+    // on stderr before terminating.
+    const stderr = this.getRecentStderr().trim();
+    const diagnostic = stderr
+      ? `Pi subprocess exited unexpectedly (${exitReason})\n--- subprocess stderr ---\n${stderr}`
+      : `Pi subprocess exited unexpectedly (${exitReason})`;
+    this.subprocessReadyReject?.(new Error(diagnostic));
 
     this.subprocess = null;
     this.readline = null;
@@ -1848,7 +1862,7 @@ export class PiAgent extends BaseAgent {
     if (this._isProcessing) {
       this.eventQueue.enqueue({
         type: 'error',
-        message: `Pi subprocess exited unexpectedly (${exitReason})`,
+        message: diagnostic,
       });
       this.eventQueue.complete();
     }
@@ -1856,40 +1870,40 @@ export class PiAgent extends BaseAgent {
     // Reject pending mini completions with error (not null) so callers
     // get a meaningful error instead of silently returning "no response"
     for (const [, pending] of this.pendingMiniCompletions) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+      pending.reject(new Error(diagnostic));
     }
     this.pendingMiniCompletions.clear();
 
     // Reject pending llm_query calls (call_llm in-flight during subprocess crash)
     for (const [, pending] of this.pendingLlmQueries) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+      pending.reject(new Error(diagnostic));
     }
     this.pendingLlmQueries.clear();
 
     // Reject pending ensure_session_ready requests
     for (const [, pending] of this.pendingEnsureSessionReady) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+      pending.reject(new Error(diagnostic));
     }
     this.pendingEnsureSessionReady.clear();
 
     // Reject pending compact/toggle requests
     for (const [, pending] of this.pendingCompactions) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+      pending.reject(new Error(diagnostic));
     }
     this.pendingCompactions.clear();
 
     for (const [, pending] of this.pendingAutoCompactionToggles) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+      pending.reject(new Error(diagnostic));
     }
     this.pendingAutoCompactionToggles.clear();
 
     for (const [, pending] of this.pendingRuntimeConfigUpdates) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+      pending.reject(new Error(diagnostic));
     }
     this.pendingRuntimeConfigUpdates.clear();
 
     for (const [, pending] of this.pendingToolRegistrations) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
+      pending.reject(new Error(diagnostic));
     }
     this.pendingToolRegistrations.clear();
 

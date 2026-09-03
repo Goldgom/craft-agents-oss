@@ -42,6 +42,7 @@ import type { SessionStatusId } from '@/config/session-status-config'
 import { SourceInfoPage, ChatPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
+import AndroidSettingsPage from '@/pages/settings/AndroidSettingsPage'
 import { AutomationInfoPage } from '../automations/AutomationInfoPage'
 import ProjectInfoPage from '@/pages/ProjectInfoPage'
 import { KanbanBoardContainer } from './kanban/KanbanBoardContainer'
@@ -274,6 +275,13 @@ export function MainContentPanel({
   // PanelStackContainer hides the content panel entirely. On desktop the panel still
   // mounts, so fall back to the App page so it isn't empty.
   if (isSettingsNavigation(navState)) {
+    // Android uses a single WebView panel; the desktop settings navigator
+    // depends on the three-column shell and is not a reliable mobile surface.
+    // Keep the Android entry point self-contained and touch friendly.
+    const isAndroidEmbedded = new URLSearchParams(window.location.search).get('embedded') === 'android'
+    if (isAndroidEmbedded && navState.subpage === 'app') {
+      return wrapWithStoplight(<AndroidSettingsPage />)
+    }
     const subpage = navState.subpage ?? 'app'
     const SettingsPageComponent = getSettingsPageComponent(subpage)
     return wrapWithStoplight(

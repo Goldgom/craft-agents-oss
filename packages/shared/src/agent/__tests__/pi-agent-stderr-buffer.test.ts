@@ -88,4 +88,22 @@ describe('PiAgent stderr ring buffer', () => {
     expect(recent.endsWith('y')).toBe(true)
     agent.destroy()
   })
+
+  it('includes captured stderr when the subprocess exits unexpectedly', async () => {
+    const agent = new PiAgent(createConfig())
+    record(agent, 'Error: native module failed to load\n')
+
+    let rejection: Error | undefined
+    ;(agent as unknown as {
+      subprocessReadyReject: (error: Error) => void
+      handleSubprocessExit: (code: number | null, signal: string | null) => void
+    }).subprocessReadyReject = (error) => { rejection = error }
+    ;(agent as unknown as {
+      handleSubprocessExit: (code: number | null, signal: string | null) => void
+    }).handleSubprocessExit(1, null)
+
+    expect(rejection?.message).toContain('code 1')
+    expect(rejection?.message).toContain('native module failed to load')
+    agent.destroy()
+  })
 })

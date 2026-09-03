@@ -1886,9 +1886,12 @@ function main(): void {
   // (e.g. EFAULT from a closed pipe), and we must not let the error
   // report trigger another uncaughtException (which would loop).
   process.on('uncaughtException', (error) => {
-    debugLog(`Uncaught exception: ${error.message}`);
+    // Include the stack: the parent process can only observe exit code 1 and
+    // otherwise has no way to distinguish an SDK crash from a bad bundle or
+    // runtime dependency.
+    debugLog(`Uncaught exception: ${error.stack || error.message}`);
     try {
-      send({ type: 'error', message: `Uncaught exception: ${error.message}`, code: 'uncaught' });
+      send({ type: 'error', message: `Uncaught exception: ${error.stack || error.message}`, code: 'uncaught' });
     } catch {
       // stdout may be broken — swallow to avoid re-triggering
     }
@@ -1897,9 +1900,10 @@ function main(): void {
 
   process.on('unhandledRejection', (reason) => {
     const msg = reason instanceof Error ? reason.message : String(reason);
-    debugLog(`Unhandled rejection: ${msg}`);
+    const details = reason instanceof Error && reason.stack ? reason.stack : msg;
+    debugLog(`Unhandled rejection: ${details}`);
     try {
-      send({ type: 'error', message: `Unhandled rejection: ${msg}`, code: 'unhandled_rejection' });
+      send({ type: 'error', message: `Unhandled rejection: ${details}`, code: 'unhandled_rejection' });
     } catch {
       // stdout may be broken — swallow to avoid re-triggering
     }
