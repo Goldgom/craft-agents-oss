@@ -17,7 +17,7 @@
  * workspace-level discovered-tools cache below is the only cross-session cache.
  */
 
-import { CraftMcpClient, getProcessRssBytes, type McpClientConfig, type PoolClient } from './client.ts';
+import { CraftMcpClient, getProcessRssBytes, type McpClientConfig, type PoolCallToolOptions, type PoolClient } from './client.ts';
 import { mcpRuntimeLimiter } from './runtime-limiter.ts';
 import { ApiSourcePoolClient } from './api-source-pool-client.ts';
 import { proxyToolName } from './proxy-tool-name.ts';
@@ -180,7 +180,7 @@ export class McpClientPool {
     this.debug(`Soft-evicted idle MCP runtime ${sourceSlug}`);
   }
 
-  private async ensureConnected(sourceSlug: string): Promise<PoolClient | undefined> {
+  private async ensureClientConnected(sourceSlug: string): Promise<PoolClient | undefined> {
     const existing = this.clients.get(sourceSlug);
     if (existing) return existing;
     const config = this.activeConfigs.get(sourceSlug);
@@ -558,7 +558,7 @@ export class McpClientPool {
 
     let client: PoolClient | undefined;
     try {
-      client = await this.ensureConnected(slug);
+      client = await this.ensureClientConnected(slug);
     } catch (err) {
       return {
         content: `MCP client for source "${slug}" could not be connected: ${err instanceof Error ? err.message : String(err)}`,
@@ -575,7 +575,7 @@ export class McpClientPool {
     }
 
     try {
-      const call = () => client.callTool(originalName, args)
+      const call = () => client.callTool(originalName, args, options)
       const result = await (client instanceof CraftMcpClient
         ? mcpRuntimeLimiter.run(this.runtimeKey(slug), call)
         : call()) as {

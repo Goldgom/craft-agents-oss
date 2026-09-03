@@ -33,6 +33,7 @@ import {
   Info,
   MailOpen,
   FolderKanban,
+  PanelsTopLeft,
   Terminal,
   Wrench,
 } from "lucide-react"

@@ -138,6 +138,17 @@ export type {
   CreateTaskResult,
   SftpTransferArgs,
   SftpTransferResult,
+  // Pages types
+  PagesToolCallbacks,
+  PageToolRefreshSpec,
+  PageToolSummary,
+  PageToolDataSummary,
+  PageToolDetails,
+  CreatePageToolInput,
+  UpdatePageToolPatch,
+  PageDataToolPatch,
+  PageDataWriteSummary,
+  DeletePageToolResult,
 } from './context.ts';
 
 export { createNodeFileSystem } from './context.ts';

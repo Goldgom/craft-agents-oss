@@ -414,7 +414,7 @@ export function MainContentPanel({
   if (isPagesNavigation(navState)) {
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
-        {navState.details ? (
+        {navState.details?.type === 'page' ? (
           <PageView key={navState.details.pageSlug} pageSlug={navState.details.pageSlug} />
         ) : (
           <PagesHome />
