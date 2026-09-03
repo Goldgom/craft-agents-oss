@@ -331,6 +331,31 @@ export class McpClientPool {
   }
 
   /**
+   * Ensure one source is connected with the given config, without touching
+   * other pool members (unlike sync(), which reconciles the full set).
+   * Reconnects when the config changed (e.g. refreshed OAuth token), and
+   * applies the same local-MCP gate as sync(): stdio configs are refused
+   * when local MCP is disabled for this workspace.
+   *
+   * @throws Error for stdio configs while local MCP is disabled, and on
+   *   connection failure (propagated from connect()).
+   */
+  async ensureConnected(slug: string, config: SdkMcpServerConfig): Promise<void> {
+    if (config.type === 'stdio' && this.workspaceRootPath && !isLocalMcpEnabled(this.workspaceRootPath)) {
+      throw new Error(`Local MCP is disabled for this workspace — cannot connect stdio source "${slug}"`);
+    }
+
+    if (this.clients.has(slug)) {
+      const oldConfig = this.activeConfigs.get(slug);
+      if (!oldConfig || !mcpConfigChanged(oldConfig, config)) return;
+      this.debug(`Config changed for ${slug}, reconnecting with fresh credentials`);
+      await this.disconnect(slug);
+    }
+
+    await this.connect(slug, config);
+  }
+
+  /**
    * Disconnect a source and remove its tools from the pool.
    */
   async disconnect(slug: string): Promise<void> {
@@ -520,7 +545,7 @@ export class McpClientPool {
    * Execute an MCP tool by its proxy name (mcp__{slug}__{toolName}).
    * Returns a result matching the subprocess protocol format.
    */
-  async callTool(proxyName: string, args: Record<string, unknown>): Promise<McpToolResult> {
+  async callTool(proxyName: string, args: Record<string, unknown>, options?: PoolCallToolOptions): Promise<McpToolResult> {
     const info = this.proxyTools.get(proxyName);
     if (!info) {
       return {

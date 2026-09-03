@@ -130,6 +130,17 @@
         "typescript": "^5.8.2",
       },
     },
+    "apps/docs-site": {
+      "name": "craft-agents-docs-site",
+      "version": "0.13.0",
+      "dependencies": {
+        "@astrojs/starlight": "^0.36.0",
+        "astro": "^5.6.0",
+        "astro-auto-import": "^0.5.2",
+        "sharp": "^0.33.0",
+        "zod": "^3.25.76",
+      },
+    },
     "apps/electron": {
       "name": "@craft-agent/electron",
       "version": "1.0.0-community.2",
@@ -642,6 +653,8 @@
     "@cacheable/node-cache": ["@cacheable/node-cache@1.7.6", "http://registry.npm.taobao.org/@cacheable/node-cache/-/node-cache-1.7.6.tgz", { "dependencies": { "cacheable": "^2.3.1", "hookified": "^1.14.0", "keyv": "^5.5.5" } }, "sha512-6Omk2SgNnjtxB5f/E6bTIWIt5xhdpx39fGNRQgU9lojvRxU68v+qY+SXXLsp3ZGukqoPjsK21wZ6XABFr/Ge3A=="],
 
     "@cacheable/utils": ["@cacheable/utils@2.4.1", "http://registry.npm.taobao.org/@cacheable/utils/-/utils-2.4.1.tgz", { "dependencies": { "hashery": "^1.5.1", "keyv": "^5.6.0" } }, "sha512-eiFgzCbIneyMlLOmNG4g9xzF7Hv3Mga4LjxjcSC/ues6VYq2+gUbQI8JqNuw/ZM8tJIeIaBGpswAsqV2V7ApgA=="],
+
+    "@capsizecss/unpack": ["@capsizecss/unpack@4.0.1", "", { "dependencies": { "fontkitten": "^1.0.3" } }, "sha512-CuNiSqg7+e1cO/GjffyMOm5Tt2jUF9CWHHnvQ/UkqvtkGfHdgwEC0wpmq7fkN3gxwpRnrAN0WzO3vREKmNolMQ=="],
 
     "@craft-agent/cli": ["@craft-agent/cli@workspace:apps/cli"],
 
