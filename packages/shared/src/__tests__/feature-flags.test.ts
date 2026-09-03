@@ -82,10 +82,10 @@ describe('feature-flags runtime helpers', () => {
     expect(isCraftAgentsCliEnabled()).toBe(false);
   });
 
-  it('isEmbeddedServerEnabled defaults to false when no override is set', () => {
+  it('isEmbeddedServerEnabled defaults to true when no override is set', () => {
     delete process.env.CRAFT_FEATURE_EMBEDDED_SERVER;
 
-    expect(isEmbeddedServerEnabled()).toBe(false);
+    expect(isEmbeddedServerEnabled()).toBe(true);
   });
 
   it('isEmbeddedServerEnabled honors explicit override true', () => {

@@ -41,6 +41,7 @@ describe('normalizeServerUrl', () => {
   it('rejects non-ws URLs', () => {
     expect(() => mod.normalizeServerUrl('http://example.com')).toThrow();
     expect(() => mod.normalizeServerUrl('not a url')).toThrow();
+    expect(() => mod.normalizeServerUrl('ws://example.com:not-a-port')).toThrow();
   });
 });
 
@@ -132,5 +133,17 @@ describe('profile CRUD', () => {
     // Corrupt the file.
     writeFileSync(file, '{not json', 'utf-8');
     expect(mod.loadRemoteServerProfiles()).toEqual([]);
+  });
+
+  it('ignores malformed profiles without hiding valid profiles', () => {
+    const file = join(tempDir, 'remote-servers.json');
+    writeFileSync(file, JSON.stringify([
+      { id: 'bad', name: 'Bad', url: 'http://not-a-ws-server' },
+      { id: 'bad-2', name: 'Bad 2', url: 'ws://' },
+      { id: 'bad-3', name: { rendered: 'Bad 3' }, url: 'wss://bad.example.com:50003' },
+      { id: 'good', name: 'Good', url: 'wss://example.com:50003', token: 'token' },
+    ]), 'utf-8');
+
+    expect(mod.loadRemoteServerProfiles().map((profile) => profile.id)).toEqual(['good']);
   });
 });

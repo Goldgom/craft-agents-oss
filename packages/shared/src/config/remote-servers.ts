@@ -92,18 +92,62 @@ export function loadRemoteServerProfiles(): RemoteServerProfile[] {
   try {
     const parsed = JSON.parse(readFileSync(remoteServersFile, 'utf-8')) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (p): p is RemoteServerProfile =>
-          !!p &&
-          typeof p === 'object' &&
-          typeof (p as RemoteServerProfile).id === 'string' &&
-          typeof (p as RemoteServerProfile).url === 'string',
-      )
-      .map((p) => ({ ...p, token: typeof p.token === 'string' ? p.token : '' }));
+
+    // Validate each entry independently. A stale or manually edited profile
+    // must not prevent otherwise healthy servers (or local server mode) from
+    // being loaded. In particular, invalid URLs would otherwise be passed to
+    // the thin-client preload and abort the whole renderer during startup.
+    return parsed.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const profile = value as Partial<RemoteServerProfile>;
+      if (
+        typeof profile.id !== 'string'
+        || typeof profile.name !== 'string'
+        || !profile.name.trim()
+        || typeof profile.url !== 'string'
+      ) return [];
+      try {
+        const url = normalizeServerUrl(profile.url);
+        const parsedUrl = new URL(url);
+        if (!parsedUrl.hostname) return [];
+        const normalized: RemoteServerProfile = {
+          ...profile,
+          name: profile.name.trim(),
+          url,
+          token: typeof profile.token === 'string' ? profile.token : '',
+        } as RemoteServerProfile;
+
+        // SFTP is optional. Ignore malformed SFTP data while retaining the
+        // server profile so the main remote-server picker remains usable.
+        if (profile.sftp !== undefined && !isValidSftpConfig(profile.sftp)) {
+          delete normalized.sftp;
+        }
+        return [normalized];
+      } catch {
+        return [];
+      }
+    });
   } catch {
     return [];
   }
+}
+
+function isValidSftpConfig(value: unknown): value is RemoteServerSftpConfig {
+  if (!value || typeof value !== 'object') return false;
+  const config = value as Partial<RemoteServerSftpConfig>;
+  const port = config.port;
+  return typeof config.enabled === 'boolean'
+    && typeof config.host === 'string'
+    && typeof port === 'number'
+    && Number.isInteger(port)
+    && port >= 1
+    && port <= 65535
+    && typeof config.username === 'string'
+    && (config.authMethod === 'password' || config.authMethod === 'privateKey')
+    && (config.password === undefined || typeof config.password === 'string')
+    && (config.privateKeyPath === undefined || typeof config.privateKeyPath === 'string')
+    && (config.passphrase === undefined || typeof config.passphrase === 'string')
+    && (config.remoteRoot === undefined || typeof config.remoteRoot === 'string');
 }
 
 function persistProfiles(profiles: RemoteServerProfile[]): void {
@@ -114,6 +158,14 @@ function persistProfiles(profiles: RemoteServerProfile[]): void {
 export function normalizeServerUrl(input: string): string {
   const trimmed = input.trim().replace(/\/+$/, '');
   if (!/^wss?:\/\/[^\s/$.?#].[^\s]*$/i.test(trimmed)) {
+    throw new Error('Server URL must be ws:// or wss:// (e.g. ws://1.2.3.4:50003)');
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if ((parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') || !parsed.hostname) {
+      throw new Error('invalid protocol or hostname');
+    }
+  } catch {
     throw new Error('Server URL must be ws:// or wss:// (e.g. ws://1.2.3.4:50003)');
   }
   return trimmed;

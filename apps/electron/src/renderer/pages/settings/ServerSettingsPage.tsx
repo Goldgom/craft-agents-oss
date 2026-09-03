@@ -25,6 +25,7 @@ import {
   SettingsRow,
   SettingsToggle,
   SettingsInputRow,
+  SettingsSecretInput,
 } from '@/components/settings'
 
 export const meta: DetailsPageMeta = {
@@ -56,7 +57,7 @@ function formToConfig(form: ServerFormState): ServerConfig {
     port: parseInt(form.port, 10) || 9100,
     tlsCertPath: form.tlsCertPath.trim() || undefined,
     tlsKeyPath: form.tlsKeyPath.trim() || undefined,
-    token: form.token || undefined,
+    token: form.token.trim() || undefined,
   }
 }
 
@@ -273,6 +274,14 @@ export default function ServerSettingsPage() {
                 description={t("settings.server.allowRemoteConnections")}
                 checked={form.enabled}
                 onCheckedChange={(enabled) => setForm(f => ({ ...f, enabled }))}
+              />
+              <SettingsSecretInput
+                label={t("settings.server.token")}
+                value={form.token}
+                onChange={(token) => setForm(f => ({ ...f, token }))}
+                placeholder={t("settings.remoteServers.tokenPlaceholder")}
+                description={t("settings.server.tokenDescription", "Used to authenticate remote clients")}
+                inCard
               />
             </SettingsCard>
 

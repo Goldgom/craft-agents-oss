@@ -125,6 +125,11 @@ function resolveClaudeBinaryPath(hostRuntime: BackendHostRuntimeContext): string
     : undefined;
 
   const candidates: string[] = [
+    // Android bundles the Linux ARM64 Claude executable as an app asset and
+    // extracts it under the server's private resources directory. There is no
+    // Android-specific optional npm package, so check this stable path before
+    // the desktop node_modules layouts.
+    join(hostRuntime.appRootPath, 'resources', 'claude-agent-sdk', binaryName),
     join(hostRuntime.appRootPath, aliasRel),
     join(hostRuntime.appRootPath, '..', '..', aliasRel),
   ];

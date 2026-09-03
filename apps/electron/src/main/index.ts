@@ -934,14 +934,17 @@ app.whenReady().then(async () => {
       const resolveClientId = (wcId: number) => clientMap.get(wcId)
 
       // Read embedded server config (Server settings page)
-      const { getServerConfig } = await import('@craft-agent/shared/config')
+      const { getServerConfig, setServerConfig } = await import('@craft-agent/shared/config')
       const embeddedServerConfig = getServerConfig()
       const serverModeEnabled = embeddedServerConfig.enabled && !isClientOnly
 
-      // Derive host/port/token from server config (or env overrides)
-      const serverToken = serverModeEnabled && embeddedServerConfig.token
-        ? embeddedServerConfig.token
-        : randomUUID()
+      // The shared RPC bootstrap always authenticates clients.  Use the
+      // persisted token in full desktop mode as well (previously a disabled
+      // server-mode config caused a new, undiscoverable token to be generated
+      // on every launch).  Persist a token for older configs that predate the
+      // token setting so enabling remote access works without another setup
+      // step.
+      const serverToken = embeddedServerConfig.token ?? randomUUID()
       const rpcHost = process.env.CRAFT_RPC_HOST
         ?? (serverModeEnabled ? '0.0.0.0' : '127.0.0.1')
       const rpcPort = process.env.CRAFT_RPC_PORT
@@ -1075,6 +1078,13 @@ app.whenReady().then(async () => {
           cleanupSessionFileWatchForClient(clientId)
         },
       })
+
+      // bootstrapServer creates the global config on a fresh install. Persist
+      // the generated token after bootstrap so it remains stable even when no
+      // config.json existed before this launch.
+      if (!embeddedServerConfig.token) {
+        setServerConfig({ ...embeddedServerConfig, token: serverToken })
+      }
 
       // Capture module-level references for before-quit cleanup and deep-link handlers
       sessionManager = instance.sessionManager

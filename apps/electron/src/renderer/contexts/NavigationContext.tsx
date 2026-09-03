@@ -226,8 +226,11 @@ export function NavigationProvider({
   // Flag: workspace switch was triggered by popstate (URL already correct)
   const isPopstateSwitchRef = useRef(false)
 
-  // Queue navigation if not ready yet
-  const pendingNavigationRef = useRef<ParsedRoute | null>(null)
+  // Queue the original route if navigation is not ready yet. Keeping the
+  // route string intact is important for compound routes such as
+  // `settings/ai`; converting to ParsedRoute here would lose the settings
+  // parent segment and replay an invalid route once the provider is ready.
+  const pendingNavigationRef = useRef<Route | null>(null)
 
   // Suppress auto-select for one cycle (used by skipAutoSelect to prevent the effect from re-selecting)
   const suppressAutoSelectRef = useRef(false)
@@ -872,7 +875,7 @@ export function NavigationProvider({
       }
 
       if (!isReady) {
-        pendingNavigationRef.current = parsed
+        pendingNavigationRef.current = route
         return
       }
 
@@ -1088,16 +1091,19 @@ export function NavigationProvider({
 
   useEffect(() => {
     if (isReady && pendingNavigationRef.current) {
-      const pending = pendingNavigationRef.current
+      const pendingRoute = pendingNavigationRef.current
       pendingNavigationRef.current = null
+
+      if (!pendingRoute) return
+      const pending = parseRoute(pendingRoute)
+      if (!pending) return
 
       if (pending.type === 'action') {
         handleActionNavigation(pending)
         return
       }
 
-      const routeStr = `${pending.name}${pending.id ? `/${pending.id}` : ''}`
-      const navState = parseRouteToNavigationState(routeStr)
+      const navState = parseRouteToNavigationState(pendingRoute)
       if (navState) {
         const resolved = resolveAutoSelection(navState)
         const finalRoute = buildRouteFromNavigationState(resolved) as ViewRoute

@@ -1,7 +1,7 @@
 # Craft Agents 编译指南（Build Guide）
 
 本文档介绍如何编译 Craft Agents 的各端产物：**Windows / macOS / Linux 客户端** 与 **服务器端**。
-仓库根目录命令均以 `bun run <script>` 形式执行。
+除特别注明外，命令均从仓库根目录执行。
 
 ## 全量编译与统一产物目录
 
@@ -22,20 +22,40 @@ bun run build:all win linux android --release
 
 ## 一、环境准备（所有平台通用）
 
-| 依赖    | 版本要求                   | 说明                                                   |
-| ------- | -------------------------- | ------------------------------------------------------ |
-| Bun     | ≥ 1.0（仓库开发用 1.3.x） | 包管理器与运行时                                       |
-| Node.js | ≥ 18                      | `npx esbuild` / `npx vite` / electron-builder 需要 |
-| Git     | 任意                       | 拉取依赖                                               |
+| 依赖       | 版本要求                           | 说明                                  |
+| ---------- | ---------------------------------- | ------------------------------------- |
+| Bun        | 1.3.x                              | 包管理器与构建运行时                  |
+| Node.js    | ≥ 18                              | `npm pack` 和 electron-builder 需要 |
+| npm        | 随 Node.js 安装                    | 跨架构下载 Claude Agent SDK 时使用    |
+| Git        | 任意                               | 拉取源码                              |
+| Linux 工具 | `curl`、`unzip`、`sha256sum` | Linux 客户端脚本下载和校验运行时      |
+
+在 Ubuntu/Debian 上可先安装 Linux 客户端脚本需要的系统工具：
 
 ```bash
-# 1. 克隆仓库并安装依赖（在仓库根目录）
+sudo apt update
+sudo apt install -y ca-certificates curl git unzip coreutils
+```
+
+确认 Bun、Node.js 和 npm 已在 `PATH` 中：
+
+```bash
+bun --version
+node --version
+npm --version
+```
+
+```bash
+# 1. 克隆仓库
 git clone <repo-url> craft-agents-oss
 cd craft-agents-oss
+
+# 2. 首次安装依赖。如果 Bun 提示阻止了原生安装脚本，先执行第 3 步。
 bun install
 
-# 2. 信任需要执行安装脚本的原生依赖（如 @vscode/ripgrep）
+# 3. 允许 ripgrep 的安装脚本运行，再安装一次使二进制完成安装
 bun pm trust @vscode/ripgrep
+bun install
 ```
 
 > 编译过程会联网下载：Bun 运行时（约 30 MB，带 SHA256 校验）、Electron 二进制、
@@ -51,10 +71,10 @@ bun pm trust @vscode/ripgrep
 ### 命令
 
 ```powershell
-# 0) 先编译 WhatsApp Worker 子进程（安装包会引用它）
-bun run build:wa-worker
+# 在仓库根目录执行；脚本会自行构建 WhatsApp Worker
+powershell -ExecutionPolicy Bypass -File apps/electron/scripts/build-win.ps1
 
-# 1) 编译安装包
+# 也可以使用 Electron 工作区脚本
 cd apps/electron
 bun run dist:win
 ```
@@ -135,15 +155,36 @@ bash scripts/build-dmg.sh arm64 --upload --latest
 
 ## 四、Linux 客户端（AppImage）
 
-### 命令
+当前 Linux 桌面包的打包配置只声明了 **x64**。请使用 x64 Linux 主机或 x64 WSL2；
+ARM64 Linux 目前不是受支持的发布目标。使用 WSL2 时，建议把仓库 clone 到 WSL 的 Linux
+文件系统（例如 `~/src`），不要直接使用 Windows 的 `/mnt/c/...` 工作区。
+
+### 全新拉取后的完整步骤
 
 ```bash
-cd apps/electron
-bash scripts/build-linux.sh x64      # 默认 x64
-bash scripts/build-linux.sh arm64
+# 在仓库根目录执行
+git clone <repo-url> craft-agents-oss
+cd craft-agents-oss
+
+# 安装系统依赖（Ubuntu/Debian；其他发行版安装同名工具）
+sudo apt update
+sudo apt install -y ca-certificates curl git unzip coreutils
+
+# 安装并确认 Bun 1.3.x、Node.js 18+ 和 npm 后执行
+bun install
+bun pm trust @vscode/ripgrep
+bun install
+
+# 构建 x64 AppImage
+bash apps/electron/scripts/build-linux.sh x64
 ```
 
-脚本流程与 Windows/macOS 一致（下载固定版本 Bun、暂存 SDK 二进制、esbuild + vite 编译、electron-builder 打包）。
+构建脚本会清理旧的打包暂存目录，并完成依赖安装、下载并校验固定版本 Bun、准备
+Claude Agent SDK 原生二进制和 ripgrep、下载 uv、构建 Electron 资源，最后调用
+electron-builder 生成 AppImage。因此不需要先手动执行 `bun run electron:build`。
+
+首次构建需要访问 npm registry、GitHub 和 Electron 下载源，至少需要约 300 MB 的下载空间，
+并需要足够的磁盘空间解压依赖和打包文件。
 
 ### 产物
 
@@ -152,8 +193,34 @@ apps/electron/release/
 └── Craft-Agents-x64.AppImage
 ```
 
-- 需在 Linux 环境编译；如需在 CI 构建，使用带 `--privileged` 的容器（AppImage 打包需要 FUSE 相关能力，通常普通 Docker 即可完成）。
-- 上传通道：`bash scripts/build-linux.sh x64 --upload --latest`。
+- 构建必须在 Linux 环境执行。Windows 原生 PowerShell 不能直接生成 Linux AppImage；
+  可使用 Linux 主机、WSL2 或 Linux CI。
+- 如果 WSL2 工作区中的脚本因 Windows 换行符报 `syntax error near unexpected token`，
+  先执行 `sed -i 's/\r$//' apps/electron/scripts/build-linux.sh`，然后重新运行构建。
+- 运行 AppImage 时，如果系统提示缺少 FUSE，在 Ubuntu 22.04 安装 `libfuse2`，
+  在 Ubuntu 24.04 安装 `libfuse2t64`：
+
+  ```bash
+  # Ubuntu 22.04
+  sudo apt install -y libfuse2
+  # Ubuntu 24.04 使用：sudo apt install -y libfuse2t64
+  ```
+- 发布上传需要 S3 凭据：
+
+  ```bash
+  bash apps/electron/scripts/build-linux.sh x64 --upload --latest
+  ```
+
+### Linux 构建常见错误
+
+| 现象                                                             | 处理                                                  |
+| ---------------------------------------------------------------- | ----------------------------------------------------- |
+| `sha256sum: command not found` 或 `unzip: command not found` | 安装上面的 Linux 系统依赖                             |
+| `SDK core not found`                                           | 在仓库根目录执行`bun install`                       |
+| `@vscode/ripgrep` 或 `bin/rg` 不存在                         | 执行`bun pm trust @vscode/ripgrep && bun install`   |
+| `Could not resolve "ssh2"`                                  | 确认使用包含 `ssh2` 的最新代码，并在仓库根目录执行 `bun install`；不要在 `apps/electron/scripts` 中执行 `npm install` |
+| `claude-agent-sdk-linux-x64` 下载失败                          | 检查 npm registry 和 GitHub 网络连接后重新运行        |
+| AppImage 启动时报 FUSE 错误                                      | 安装对应 Ubuntu 版本的`libfuse2` 或 `libfuse2t64` |
 
 ---
 
@@ -173,12 +240,12 @@ bun run scripts/build-server.ts --platform=win32 --arch=x64 --compress
 
 参数说明：
 
-| 参数                | 取值                   | 说明                        |
-| ------------------- | ---------------------- | --------------------------- |
-| `--platform`      | `darwin` / `linux` | 目标平台（默认当前平台）    |
-| `--arch`          | `x64` / `arm64`    | 目标架构（默认当前架构）    |
-| `--compress`      | 布尔                   | 构建完成后打包为`.tar.gz` |
-| `--skip-download` | 布尔                   | 复用已有 Bun/uv 二进制      |
+| 参数                | 取值                               | 说明                        |
+| ------------------- | ---------------------------------- | --------------------------- |
+| `--platform`      | `darwin` / `linux` / `win32` | 目标平台（默认当前平台）    |
+| `--arch`          | `x64` / `arm64`                | 目标架构（默认当前架构）    |
+| `--compress`      | 布尔                               | 构建完成后打包为`.tar.gz` |
+| `--skip-download` | 布尔                               | 复用已有 Bun/uv 二进制      |
 
 快捷命令（等价封装）：
 
@@ -288,7 +355,7 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 | ---------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Windows 客户端   | `cd apps/electron && bun run dist:win`                                           | `apps/electron/release/Craft-Agents-x64.exe`                     |
 | macOS 客户端     | `cd apps/electron && bash scripts/build-dmg.sh <arm64\|x64>`                      | `apps/electron/release/Craft-Agents-<arch>.dmg/.zip`             |
-| Linux 客户端     | `cd apps/electron && bash scripts/build-linux.sh <x64\|arm64>`                    | `apps/electron/release/Craft-Agents-<arch>.AppImage`             |
+| Linux 客户端     | `bash apps/electron/scripts/build-linux.sh x64`                                  | `apps/electron/release/Craft-Agents-x64.AppImage`                |
 | 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `craft-server-<ver>-<platform>-<arch>.tar.gz` |
 | 服务器（Docker） | `docker buildx build -f Dockerfile.server -t craft-agent-server .`               | 容器镜像                                                           |
 
@@ -304,7 +371,7 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 2. **macOS 签名**：未签名的 DMG 在用户机器上会被 Gatekeeper 拦截，正式分发必须配置
    Apple Developer ID 并完成公证。
 3. **自动更新**：`electron-builder.yml` 的 `publish.url` 指向
-   `https://agents.craft.do/electron/latest`，electron-updater 依据生成的
+   `https://thecraftagents.com/electron/latest`，electron-updater 依据生成的
    `latest.yml` / `latest-mac.yml` 检查更新；自建分发时需把 `release/` 下的清单文件一起上传。
 4. **跨系统数据迁移**：编译好的客户端内置“数据导出/导入”功能
    （设置 → App → 数据），导出为 ZIP 后可在任意平台导入，路径会自动重映射。

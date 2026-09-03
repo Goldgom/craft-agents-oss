@@ -185,6 +185,23 @@ describe('resolveClaudeBinaryPath (native binary, SDK ≥ 0.2.113)', () => {
     const paths = resolveBackendRuntimePaths(hostRuntime);
     expect(paths.claudeCliPath).toBeUndefined();
   });
+
+  it('finds the Claude executable bundled in the Android resources directory', () => {
+    const appRoot = join(tmpBase, 'android-app');
+    const claudeDir = join(appRoot, 'resources', 'claude-agent-sdk');
+    mkdirSync(claudeDir, { recursive: true });
+    const claudePath = join(claudeDir, process.platform === 'win32' ? 'claude.exe' : 'claude');
+    writeFileSync(claudePath, '#!/bin/sh\n');
+
+    const hostRuntime: BackendHostRuntimeContext = {
+      appRootPath: appRoot,
+      resourcesPath: join(appRoot, 'resources'),
+      isPackaged: true,
+    };
+
+    const paths = resolveBackendRuntimePaths(hostRuntime);
+    expect(paths.claudeCliPath).toBe(claudePath);
+  });
 });
 
 describe('resolveInterceptorBundlePath dev-mode source preference', () => {

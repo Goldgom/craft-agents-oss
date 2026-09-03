@@ -15,7 +15,7 @@ export interface ServerConfig {
   tlsCertPath?: string
   /** Path to PEM private key file (required when cert is set) */
   tlsKeyPath?: string
-  /** Stable auth token for remote clients (auto-generated on first enable) */
+  /** Stable auth token for local and remote clients (auto-generated when missing) */
   token?: string
 }
 

@@ -51,12 +51,14 @@ export function isCraftAgentsCliEnabled(): boolean {
 /**
  * Runtime-evaluated check for embedded server settings page.
  *
- * Defaults to disabled. Override with CRAFT_FEATURE_EMBEDDED_SERVER=1|0.
+ * The embedded server is part of the full desktop application and its
+ * settings page must be discoverable by default. Override with
+ * CRAFT_FEATURE_EMBEDDED_SERVER=1|0 when a deployment needs to hide it.
  */
 export function isEmbeddedServerEnabled(): boolean {
   const override = parseBooleanEnv(getEnv('CRAFT_FEATURE_EMBEDDED_SERVER'));
   if (override !== undefined) return override;
-  return false;
+  return true;
 }
 
 export const FEATURE_FLAGS = {
@@ -82,7 +84,7 @@ export const FEATURE_FLAGS = {
   /**
    * Enable embedded server settings page.
    *
-   * Defaults to disabled. Override with CRAFT_FEATURE_EMBEDDED_SERVER=1|0.
+   * Defaults to enabled. Override with CRAFT_FEATURE_EMBEDDED_SERVER=1|0.
    */
   get embeddedServer(): boolean {
     return isEmbeddedServerEnabled();

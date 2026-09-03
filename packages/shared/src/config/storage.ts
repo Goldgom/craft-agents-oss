@@ -3147,17 +3147,24 @@ export function getServerConfig(): ServerConfig {
 
 /**
  * Persist server configuration.
- * Auto-generates a stable auth token on first enable if none exists.
+ *
+ * The embedded server always authenticates WebSocket clients, including the
+ * regular (full desktop) application mode.  Generate the token whenever a
+ * config is saved without one rather than only when the remote-server toggle
+ * is enabled, so the full app can be reached remotely after enabling it and
+ * keeps the same token across restarts.
  */
 export function setServerConfig(serverConfig: ServerConfig): void {
   const config = loadStoredConfig();
   if (!config) return;
 
-  // Generate a stable token when first enabled (or if token is missing)
-  if (serverConfig.enabled && !serverConfig.token) {
-    serverConfig.token = randomUUID();
+  const normalizedConfig = { ...serverConfig };
+  // Generate a stable token whenever it is missing.  Token authentication is
+  // enabled for both full and server modes by the shared bootstrap layer.
+  if (!normalizedConfig.token) {
+    normalizedConfig.token = randomUUID();
   }
 
-  config.serverConfig = serverConfig;
+  config.serverConfig = normalizedConfig;
   saveConfig(config);
 }

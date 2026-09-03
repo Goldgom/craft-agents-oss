@@ -451,7 +451,9 @@ while (-not $builderSuccess -and $builderRetry -lt $maxBuilderRetries) {
         Start-Sleep -Seconds 1
     }
 
-    npx electron-builder --win --x64 2>&1 | Tee-Object -Variable builderOutput
+    # Build NSIS first so an unavailable MSI/WiX toolchain cannot discard the
+    # otherwise usable Windows installer.
+    npx electron-builder --win nsis --x64 2>&1 | Tee-Object -Variable builderOutput
 
     if ($LASTEXITCODE -eq 0) {
         $builderSuccess = $true
@@ -477,6 +479,22 @@ Pop-Location
 
 if (-not $builderSuccess) {
     throw "electron-builder failed after $maxBuilderRetries attempts"
+}
+
+# MSI requires the WiX toolchain, which electron-builder downloads on demand.
+# Treat that optional target independently: network/toolchain failures should
+# not make the NSIS build fail.
+Push-Location $ElectronDir
+try {
+    Write-Host "  Building optional MSI installer..." -ForegroundColor Cyan
+    npx electron-builder --win msi --x64 2>&1 | Tee-Object -Variable msiOutput
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  WARNING: MSI build skipped (WiX unavailable or download failed)." -ForegroundColor Yellow
+    } else {
+        Write-Host "  MSI installer built successfully." -ForegroundColor Green
+    }
+} finally {
+    Pop-Location
 }
 
 # 8. Verify the installer was built
