@@ -1,6 +1,6 @@
 import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options, type SpawnOptions, type SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import { spawn } from 'node:child_process';
-import { getDefaultOptions, resetClaudeConfigCheck } from './options.ts';
+import { getDefaultOptions, resetClaudeConfigCheck, isAndroidRuntime } from './options.ts';
 // Local type for SDK user message content blocks (text, image, document)
 // Replaces import from @anthropic-ai/sdk/resources — keeps SDK as agent-only dependency
 type ContentBlockParam =
@@ -12,7 +12,7 @@ import { getSystemPrompt } from '../prompts/system.ts';
 import { BaseAgent, type MiniAgentConfig, MINI_AGENT_TOOLS, MINI_AGENT_MCP_KEYS } from './base-agent.ts';
 import type { BackendConfig, PostInitResult, PermissionRequestType, SdkMcpServerConfig } from './backend/types.ts';
 // Plan types are used by UI components; not needed in craft-agent.ts since Safe Mode is user-controlled
-import { parseError, type AgentError } from './errors.ts';
+import { parseError, buildAndroidClaudeUnsupportedError, type AgentError } from './errors.ts';
 import { mapClaudeSdkAssistantError, type ClaudeSdkApiError } from './claude-sdk-error-mapper.ts';
 import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
@@ -1087,6 +1087,15 @@ export class ClaudeAgent extends BaseAgent {
       // Validate we have something to send
       if (!userMessage.trim() && (!attachments || attachments.length === 0)) {
         yield { type: 'error', message: 'Cannot send empty message' };
+        yield { type: 'complete' };
+        return;
+      }
+
+      // Android: Claude Code's native binary is glibc Linux only and cannot
+      // run under Android's bionic libc. Surface the real reason up front
+      // instead of letting the SDK fail with a libc-mismatch spawn error.
+      if (isAndroidRuntime()) {
+        yield { type: 'typed_error', error: buildAndroidClaudeUnsupportedError() };
         yield { type: 'complete' };
         return;
       }
@@ -2214,6 +2223,15 @@ This is a branched conversation. All prior messages in this conversation are par
         });
 
         if (isSpawnEnoent) {
+          // Android defense-in-depth: an older APK may still bundle the glibc
+          // binary; its spawn fails here. Report the real reason rather than
+          // retrying or blaming a "missing" binary.
+          if (isAndroidRuntime()) {
+            yield { type: 'typed_error', error: buildAndroidClaudeUnsupportedError(rawErrorMsg) };
+            yield { type: 'complete' };
+            return;
+          }
+
           const reportedBinaryPath = extractSdkReportedBinaryPath(rawErrorMsg || '');
           const { getPathToClaudeCodeExecutable } = await import('./options.ts');
           const probedBinary = reportedBinaryPath || resolvedBinaryPath || getPathToClaudeCodeExecutable();

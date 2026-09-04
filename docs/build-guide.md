@@ -213,14 +213,14 @@ apps/electron/release/
 
 ### Linux 构建常见错误
 
-| 现象                                                             | 处理                                                  |
-| ---------------------------------------------------------------- | ----------------------------------------------------- |
-| `sha256sum: command not found` 或 `unzip: command not found` | 安装上面的 Linux 系统依赖                             |
-| `SDK core not found`                                           | 在仓库根目录执行`bun install`                       |
-| `@vscode/ripgrep` 或 `bin/rg` 不存在                         | 执行`bun pm trust @vscode/ripgrep && bun install`   |
-| `Could not resolve "ssh2"`                                  | 确认使用包含 `ssh2` 的最新代码，并在仓库根目录执行 `bun install`；不要在 `apps/electron/scripts` 中执行 `npm install` |
-| `claude-agent-sdk-linux-x64` 下载失败                          | 检查 npm registry 和 GitHub 网络连接后重新运行        |
-| AppImage 启动时报 FUSE 错误                                      | 安装对应 Ubuntu 版本的`libfuse2` 或 `libfuse2t64` |
+| 现象                                                             | 处理                                                                                                                         |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `sha256sum: command not found` 或 `unzip: command not found` | 安装上面的 Linux 系统依赖                                                                                                    |
+| `SDK core not found`                                           | 在仓库根目录执行`bun install`                                                                                              |
+| `@vscode/ripgrep` 或 `bin/rg` 不存在                         | 执行`bun pm trust @vscode/ripgrep && bun install`                                                                          |
+| `Could not resolve "ssh2"`                                     | 确认使用包含`ssh2` 的最新代码，并在仓库根目录执行 `bun install`；不要在 `apps/electron/scripts` 中执行 `npm install` |
+| `claude-agent-sdk-linux-x64` 下载失败                          | 检查 npm registry 和 GitHub 网络连接后重新运行                                                                               |
+| AppImage 启动时报 FUSE 错误                                      | 安装对应 Ubuntu 版本的`libfuse2` 或 `libfuse2t64`                                                                        |
 
 ---
 

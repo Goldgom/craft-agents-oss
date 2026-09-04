@@ -333,6 +333,9 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.llmConnections.SET_DEFAULT,
   RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT,
   RPC_CHANNELS.llmConnections.REFRESH_MODELS,
+  RPC_CHANNELS.llmConnections.GET_BALANCES,
+  RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES,
+  RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES,
   RPC_CHANNELS.llmConnections.CHANGED,
 
   // chatgpt — OAuth via capability passthrough

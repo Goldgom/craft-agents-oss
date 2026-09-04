@@ -84,6 +84,8 @@ export interface StoredConfig {
   enable1MContext?: boolean;  // Enable 1M context window for supported models (default: false — opt-in; requires Anthropic Tier 4+)
   // Token optimization
   rtkEnabled?: boolean;  // Route Bash commands through rtk to compress tool output (default: false). https://github.com/rtk-ai/rtk
+  // Show provider-reported remaining API credit in AI settings and model picker (default: true).
+  showApiBalances?: boolean;
   // Network proxy
   networkProxy?: import('./types.ts').NetworkProxySettings;
   // Windows: path to Git Bash (bash.exe) for the SDK subprocess
@@ -3166,5 +3168,19 @@ export function setServerConfig(serverConfig: ServerConfig): void {
   }
 
   config.serverConfig = normalizedConfig;
+  saveConfig(config);
+}
+
+/** Whether API-credit balances should be queried and displayed. Defaults to enabled. */
+export function getShowApiBalances(): boolean {
+  const config = loadStoredConfig();
+  return config?.showApiBalances !== false;
+}
+
+/** Persist the API-credit balance visibility preference. */
+export function setShowApiBalances(enabled: boolean): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  config.showApiBalances = enabled;
   saveConfig(config);
 }

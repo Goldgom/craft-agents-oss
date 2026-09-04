@@ -252,6 +252,15 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
     canRetry: true,
     retryDelayMs: 1000,
   },
+  android_claude_unsupported: {
+    title: 'Claude Code is not supported on Android',
+    message:
+      'Claude Code cannot run locally on this device. Reason: the Claude binary bundled with the SDK is built for glibc Linux, but Android uses bionic libc, and Anthropic publishes no Android build. Use an OpenAI/Pi model on-device, or connect a remote Craft Agent server to run Claude.',
+    actions: [
+      { key: 's', label: 'Open settings', command: '/settings', action: 'settings' },
+    ],
+    canRetry: false,
+  },
   unknown_error: {
     title: 'Error',
     message: 'Something went wrong. If this persists, check the provider status page or retry.',
@@ -495,6 +504,22 @@ export function parseError(
     ...definition,
     originalError: errorMessage,
     providerInfo,
+  };
+}
+
+/**
+ * Build the typed error surfaced when the Claude agent is requested on Android.
+ * The SDK binary is glibc Linux only and cannot execute under bionic libc.
+ */
+export function buildAndroidClaudeUnsupportedError(originalError?: string): AgentError {
+  return {
+    code: 'android_claude_unsupported',
+    ...ERROR_DEFINITIONS.android_claude_unsupported,
+    details: [
+      'Reason: the Claude SDK binary is built for glibc Linux, but Android uses bionic libc and has no glibc dynamic loader.',
+      'Anthropic does not publish an Android build of Claude Code.',
+    ],
+    originalError,
   };
 }
 

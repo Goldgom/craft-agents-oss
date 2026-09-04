@@ -621,6 +621,18 @@ export interface FileSearchResult {
 // LLM connection types
 // ---------------------------------------------------------------------------
 
+/** A provider-reported prepaid/API credit balance. Monetary values are never inferred. */
+export interface LlmConnectionBalance {
+  connectionSlug: string
+  /** Credit remaining. Undefined means the provider reports an unlimited balance. */
+  remaining?: number
+  /** Original provider currency code, when supplied. */
+  currency?: string
+  /** Provider supplied text for non-numeric or unlimited balances. */
+  display?: string
+  updatedAt: number
+}
+
 /**
  * Resolved Anthropic OAuth identity (issue #838), captured from the
  * token-exchange response. Shape mirrors `ClaudeOAuthIdentity` in

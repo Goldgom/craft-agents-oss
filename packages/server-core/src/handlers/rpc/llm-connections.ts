@@ -14,11 +14,14 @@ import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { randomUUID } from 'node:crypto'
 import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
+import { fetchApiBalance, supportsApiBalance, type LlmConnectionBalance } from '@craft-agent/server-core/domain'
 
 // Local OAuth state
 let copilotOAuthAbort: AbortController | null = null
 
 const CUSTOM_MODELS_REQUEST_TIMEOUT_MS = 15_000
+const BALANCE_CACHE_TTL_MS = 60_000
+const balanceCache = new Map<string, { value: LlmConnectionBalance | null; expiresAt: number }>()
 
 /** Resolve the provider's conventional model-list endpoint from the configured base URL. */
 export function resolveCustomModelsUrl(baseUrl: string, api: ListCustomModelsParams['api']): string {
@@ -133,6 +136,9 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.llmConnections.SET_DEFAULT,
   RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT,
   RPC_CHANNELS.llmConnections.REFRESH_MODELS,
+  RPC_CHANNELS.llmConnections.GET_BALANCES,
+  RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES,
+  RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES,
   RPC_CHANNELS.chatgpt.START_OAUTH,
   RPC_CHANNELS.chatgpt.COMPLETE_OAUTH,
   RPC_CHANNELS.chatgpt.CANCEL_OAUTH,
@@ -548,6 +554,36 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     }))
   })
 
+  // Querying a balance is deliberately separate from listing connections: it is
+  // optional, requires a network call, and must never delay normal chat startup.
+  server.handle(RPC_CHANNELS.llmConnections.GET_BALANCES, async (): Promise<LlmConnectionBalance[]> => {
+    const { getShowApiBalances } = await import('@craft-agent/shared/config/storage')
+    if (!getShowApiBalances()) return []
+
+    const credentialManager = getCredentialManager()
+    const now = Date.now()
+    const balances = await Promise.all(getLlmConnections().filter(supportsApiBalance).map(async connection => {
+      const cached = balanceCache.get(connection.slug)
+      if (cached && cached.expiresAt > now) return cached.value
+      const apiKey = await credentialManager.getLlmApiKey(connection.slug)
+      const value = apiKey ? await fetchApiBalance(connection, apiKey) : null
+      balanceCache.set(connection.slug, { value, expiresAt: Date.now() + BALANCE_CACHE_TTL_MS })
+      return value
+    }))
+    return balances.filter((balance): balance is LlmConnectionBalance => balance !== null)
+  })
+
+  server.handle(RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES, async (): Promise<boolean> => {
+    const { getShowApiBalances } = await import('@craft-agent/shared/config/storage')
+    return getShowApiBalances()
+  })
+
+  server.handle(RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES, async (_ctx, enabled: boolean): Promise<void> => {
+    const { setShowApiBalances } = await import('@craft-agent/shared/config/storage')
+    setShowApiBalances(enabled)
+    if (!enabled) balanceCache.clear()
+  })
+
   // Get a specific LLM connection by slug
   server.handle(RPC_CHANNELS.llmConnections.GET, async (_ctx, slug: string): Promise<LlmConnection | null> => {
     return getLlmConnection(slug)
@@ -585,6 +621,9 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
           return { success: false, error: 'Connection with this slug already exists' }
         }
       }
+      // Credentials may have changed along with the connection. Do not retain a
+      // previous account's balance until the normal cache TTL elapses.
+      balanceCache.delete(connection.slug)
       deps.platform.logger?.info(`LLM connection saved: ${connection.slug}`)
       // Push runtime updates (e.g. supportsImages toggle) to live sessions on
       // this connection. Detached so SAVE doesn't block on the per-session
@@ -620,6 +659,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       // deleteLlmConnection handles the "at least one must remain" check
       const success = deleteLlmConnection(slug)
       if (success) {
+        balanceCache.delete(slug)
         // Stop any periodic model refresh timer for this connection
         getModelRefreshService().stopConnection(slug)
         // Also delete associated credentials

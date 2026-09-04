@@ -803,6 +803,9 @@ export interface ElectronAPI {
   getDefaultThinkingLevel(): Promise<ThinkingLevel>
   setDefaultThinkingLevel(level: ThinkingLevel): Promise<{ success: boolean; error?: string }>
   setWorkspaceDefaultLlmConnection(workspaceId: string, slug: string | null): Promise<{ success: boolean; error?: string }>
+  getLlmConnectionBalances(): Promise<Array<import('@craft-agent/shared/protocol').LlmConnectionBalance>>
+  getShowApiBalances(): Promise<boolean>
+  setShowApiBalances(enabled: boolean): Promise<void>
 
   // Projects (workspace-scoped)
   getProjects(workspaceId: string): Promise<unknown>

@@ -50,15 +50,6 @@ final class LocalAgentServer {
             serverRoot = new File(context.getFilesDir(), "craft-agent-server");
             prepareAssets(serverRoot);
 
-            // Claude Agent SDK is shipped as an APK asset (Android has no
-            // optional npm platform package). Asset extraction creates regular
-            // files without the executable bit, so restore it before the SDK
-            // tries to spawn the native Claude process.
-            File claude = new File(serverRoot, "resources/claude-agent-sdk/claude");
-            if (claude.isFile() && !claude.setExecutable(true, false)) {
-                throw new IOException("Unable to mark bundled Claude Agent SDK executable");
-            }
-
             File bun = new File(context.getApplicationInfo().nativeLibraryDir, "libbun.so");
             if (!bun.isFile()) {
                 // Fallback for packaging environments that do not extract the

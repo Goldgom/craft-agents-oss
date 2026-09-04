@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import type { BackendHostRuntimeContext } from '../types.ts';
-import { setPathToClaudeCodeExecutable } from '../../options.ts';
+import { setPathToClaudeCodeExecutable, isAndroidRuntime, ANDROID_CLAUDE_UNSUPPORTED_MESSAGE } from '../../options.ts';
 
 /**
  * When set, the resolver walks further up from the .app bundle to find SDK,
@@ -125,10 +125,10 @@ function resolveClaudeBinaryPath(hostRuntime: BackendHostRuntimeContext): string
     : undefined;
 
   const candidates: string[] = [
-    // Android bundles the Linux ARM64 Claude executable as an app asset and
-    // extracts it under the server's private resources directory. There is no
-    // Android-specific optional npm package, so check this stable path before
-    // the desktop node_modules layouts.
+    // Legacy back-compat: older Android builds bundled the Linux ARM64 Claude
+    // executable under resources/claude-agent-sdk. Current builds omit it (the
+    // glibc binary cannot run on Android's bionic libc), so this lookup simply
+    // returns undefined and the runtime guard reports a clear error.
     join(hostRuntime.appRootPath, 'resources', 'claude-agent-sdk', binaryName),
     join(hostRuntime.appRootPath, aliasRel),
     join(hostRuntime.appRootPath, '..', '..', aliasRel),
@@ -273,6 +273,14 @@ export function applyAnthropicRuntimeBootstrap(
   options?: { strict?: boolean },
 ): void {
   const strict = options?.strict ?? true;
+
+  // Android cannot execute the native Claude binary (glibc vs bionic libc);
+  // surface an actionable error instead of "binary not found" or the SDK's
+  // cryptic libc spawn failure.
+  if (isAndroidRuntime()) {
+    if (strict) throw new Error(ANDROID_CLAUDE_UNSUPPORTED_MESSAGE);
+    return;
+  }
 
   if (paths.claudeCliPath) {
     setPathToClaudeCodeExecutable(paths.claudeCliPath);

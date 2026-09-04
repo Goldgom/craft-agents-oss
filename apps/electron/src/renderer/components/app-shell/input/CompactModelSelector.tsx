@@ -44,6 +44,22 @@ import {
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
 
+type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
+
+function formatApiBalance(balance: ApiBalance): string {
+  if (balance.display) return balance.display
+  if (balance.remaining === undefined) return '—'
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: balance.currency ? 'currency' : 'decimal',
+      currency: balance.currency,
+      maximumFractionDigits: 4,
+    }).format(balance.remaining)
+  } catch {
+    return `${balance.currency ?? ''} ${balance.remaining}`.trim()
+  }
+}
+
 interface CompactModelSelectorProps {
   currentModel: string
   currentConnection?: string
@@ -74,6 +90,7 @@ export function CompactModelSelector({
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
   const [expandedConnection, setExpandedConnection] = React.useState<string | null>(null)
+  const [apiBalances, setApiBalances] = React.useState<ApiBalance[]>([])
 
   const appShellCtx = useOptionalAppShellContext()
   const llmConnections = appShellCtx?.llmConnections ?? []
@@ -91,6 +108,11 @@ export function CompactModelSelector({
     if (!effectiveConnection) return null
     return llmConnections.find(c => c.slug === effectiveConnection) ?? null
   }, [llmConnections, effectiveConnection])
+
+  const activeBalance = React.useMemo(
+    () => apiBalances.find(item => item.connectionSlug === effectiveConnection),
+    [apiBalances, effectiveConnection],
+  )
 
   const connectionDefaultModel = React.useMemo(() => {
     const conn = effectiveConnectionDetails
@@ -143,6 +165,25 @@ export function CompactModelSelector({
   // Reset accordion state when the drawer closes so re-open shows top-level switcher.
   React.useEffect(() => {
     if (!open) setExpandedConnection(null)
+  }, [open])
+
+  React.useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const enabled = await window.electronAPI.getShowApiBalances()
+        if (!enabled || cancelled) {
+          if (!cancelled) setApiBalances([])
+          return
+        }
+        const balances = await window.electronAPI.getLlmConnectionBalances()
+        if (!cancelled) setApiBalances(balances)
+      } catch {
+        if (!cancelled) setApiBalances([])
+      }
+    })()
+    return () => { cancelled = true }
   }, [open])
 
   const handlePickFlatModel = React.useCallback(
@@ -203,6 +244,11 @@ export function CompactModelSelector({
       <DrawerContent>
         <DrawerHeader>
           <DrawerTitle>{t('common.model')}</DrawerTitle>
+          {activeBalance && effectiveConnectionDetails && (
+            <div className="text-xs text-muted-foreground">
+              {effectiveConnectionDetails.name} · {t('chat.modelPicker.apiBalance', { balance: formatApiBalance(activeBalance) })}
+            </div>
+          )}
         </DrawerHeader>
 
         <div className="px-2 pb-4 flex flex-col gap-0.5 max-h-[55vh] overflow-y-auto">
@@ -243,6 +289,7 @@ export function CompactModelSelector({
                   const isCurrentConnection = effectiveConnection === conn.slug
                   const isAuthenticated = conn.isAuthenticated
                   const isExpanded = expandedConnection === conn.slug
+                  const balance = apiBalances.find(item => item.connectionSlug === conn.slug)
                   return (
                     <React.Fragment key={conn.slug}>
                       <button
@@ -261,6 +308,11 @@ export function CompactModelSelector({
                         <ConnectionIcon connection={conn} size={14} />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate">{conn.name}</div>
+                          {balance && (
+                            <div className="text-xs text-muted-foreground truncate">
+                              {t('chat.modelPicker.apiBalance', { balance: formatApiBalance(balance) })}
+                            </div>
+                          )}
                           {!isAuthenticated && (
                             <div className="text-xs text-muted-foreground">
                               {t('settings.ai.notAuthenticated')}

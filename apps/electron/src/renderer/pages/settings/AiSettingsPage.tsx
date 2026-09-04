@@ -16,7 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check } from 'lucide-react'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, WalletCards } from 'lucide-react'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
@@ -189,6 +189,22 @@ const PI_AUTH_PROVIDER_LABELS: Record<string, string> = {
 
 type ValidationState = 'idle' | 'validating' | 'success' | 'error'
 
+type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
+
+function formatApiBalance(balance: ApiBalance): string {
+  if (balance.display) return balance.display
+  if (balance.remaining === undefined) return '—'
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: balance.currency ? 'currency' : 'decimal',
+      currency: balance.currency,
+      maximumFractionDigits: 4,
+    }).format(balance.remaining)
+  } catch {
+    return `${balance.currency ?? ''} ${balance.remaining}`.trim()
+  }
+}
+
 interface ConnectionRowProps {
   connection: LlmConnectionWithStatus
   isLastConnection: boolean
@@ -201,11 +217,12 @@ interface ConnectionRowProps {
   onSetMidStreamBehavior: (behavior: MidStreamBehavior) => void
   validationState: ValidationState
   validationError?: string
+  balance?: ApiBalance
   /** True when another OAuth connection resolves to the same Anthropic account (issue #838) */
   isDuplicateAccount?: boolean
 }
 
-function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, onSetDefault, onValidate, onReauthenticate, onEdit, onSetMidStreamBehavior, validationState, validationError, isDuplicateAccount }: ConnectionRowProps) {
+function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, onSetDefault, onValidate, onReauthenticate, onEdit, onSetMidStreamBehavior, validationState, validationError, balance, isDuplicateAccount }: ConnectionRowProps) {
   const { t } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
   const [piBaseUrl, setPiBaseUrl] = useState<string | undefined>(undefined)
@@ -318,6 +335,12 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
           </div>
           {oauthIdentityLine && (
             <span className="text-xs text-muted-foreground truncate">{oauthIdentityLine}</span>
+          )}
+          {balance && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <WalletCards className="h-3 w-3" />
+              {t('settings.ai.apiBalance')}: {formatApiBalance(balance)}
+            </span>
           )}
         </div>
       )}
@@ -657,6 +680,8 @@ export default function AiSettingsPage() {
   const [rtkStatus, setRtkStatus] = useState<{ installed: boolean; path: string | null; version: string | null } | null>(null)
   const [rtkRechecking, setRtkRechecking] = useState(false)
   const [rtkGain, setRtkGain] = useState<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>(null)
+  const [showApiBalances, setShowApiBalances] = useState(true)
+  const [apiBalances, setApiBalances] = useState<ApiBalance[]>([])
 
   // Validation state per connection
   const [validationStates, setValidationStates] = useState<Record<string, {
@@ -691,6 +716,10 @@ export default function AiSettingsPage() {
 
         const rtkOn = await window.electronAPI.getRtkEnabled()
         setRtkEnabled(rtkOn)
+
+        const showBalances = await window.electronAPI.getShowApiBalances()
+        setShowApiBalances(showBalances)
+        if (showBalances) setApiBalances(await window.electronAPI.getLlmConnectionBalances())
 
         const status = await window.electronAPI.getRtkStatus()
         setRtkStatus(status)
@@ -1007,6 +1036,12 @@ export default function AiSettingsPage() {
     await window.electronAPI?.setRtkEnabled(enabled)
   }, [])
 
+  const handleShowApiBalancesChange = useCallback(async (enabled: boolean) => {
+    setShowApiBalances(enabled)
+    await window.electronAPI?.setShowApiBalances(enabled)
+    setApiBalances(enabled ? await window.electronAPI?.getLlmConnectionBalances() ?? [] : [])
+  }, [])
+
   const handleRecheckRtk = useCallback(async () => {
     setRtkRechecking(true)
     try {
@@ -1140,6 +1175,7 @@ export default function AiSettingsPage() {
                         onSetMidStreamBehavior={(behavior) => handleSetMidStreamBehavior(conn, behavior)}
                         validationState={validationStates[conn.slug]?.state || 'idle'}
                         validationError={validationStates[conn.slug]?.error}
+                        balance={apiBalances.find(balance => balance.connectionSlug === conn.slug)}
                         isDuplicateAccount={!!conn.oauthAccountUuid && duplicateAccountUuids.has(conn.oauthAccountUuid)}
                       />
                     ))
@@ -1158,6 +1194,12 @@ export default function AiSettingsPage() {
               {/* Performance */}
               <SettingsSection title={t("settings.ai.performance")} description={t("settings.ai.performanceDesc")}>
                 <SettingsCard>
+                  <SettingsToggle
+                    label={t('settings.ai.showApiBalances')}
+                    description={t('settings.ai.showApiBalancesDesc')}
+                    checked={showApiBalances}
+                    onCheckedChange={handleShowApiBalancesChange}
+                  />
                   <SettingsToggle
                     label={t("settings.ai.extendedContext")}
                     description={t("settings.ai.extendedContextDesc")}

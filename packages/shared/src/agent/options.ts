@@ -218,7 +218,31 @@ function nativeBinaryName(): string {
     return process.platform === 'win32' ? 'claude.exe' : 'claude';
 }
 
+/**
+ * Detect the Android backend runtime. The Android APK previously bundled the
+ * Linux ARM64 `claude` binary, but that binary is linked against glibc and
+ * cannot execute on Android's bionic libc (no /lib/ld-linux-aarch64.so.1).
+ * Anthropic publishes no Android build of Claude Code, so the local Claude
+ * agent is unsupported on-device.
+ */
+export function isAndroidRuntime(): boolean {
+    return process.env.CRAFT_ANDROID === 'true';
+}
+
+/**
+ * Actionable message shown when the Claude agent is requested on Android.
+ * The raw SDK failure is the cryptic "binary does not match this system's libc".
+ */
+export const ANDROID_CLAUDE_UNSUPPORTED_MESSAGE =
+    'Claude Code cannot run locally on Android. The bundled Claude binary is built for glibc Linux, but Android uses bionic libc and has no glibc dynamic loader. Use a remote Craft Agent server to run the agent on this device.';
+
 export function getDefaultOptions(envOverrides?: Record<string, string>): Partial<Options> {
+    // Android cannot execute the native Claude binary (glibc vs bionic); fail
+    // fast with an actionable message instead of the SDK's libc spawn error.
+    if (isAndroidRuntime()) {
+        throw new Error(ANDROID_CLAUDE_UNSUPPORTED_MESSAGE);
+    }
+
     // Repair corrupted ~/.claude.json before the SDK subprocess reads it
     ensureClaudeConfig();
 

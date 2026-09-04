@@ -10,7 +10,6 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $androidRoot = $PSScriptRoot
 $sdkRoot = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA "Android\Sdk" }
 $bunAndroidVersion = "1.3.14"
-$claudeSdkVersion = "0.3.220"
 
 function Find-Jdk17 {
     $candidates = @()
@@ -81,8 +80,8 @@ try {
     # deliberately external: both depend on desktop/native components and are
     # loaded only when the corresponding optional image/document feature is
     # used. The Claude Agent SDK JavaScript is bundled here as well; its native
-    # ARM64 executable is copied below because Android has no npm platform
-    # package that can be resolved from node_modules at runtime.
+    # executable is NOT bundled (the glibc Linux binary cannot run on Android's
+    # bionic libc) — local Claude agent turns are unsupported on-device.
     $serverEntry = Join-Path $serverAssetRoot "server.js"
     & bun build --target=bun --external=markitdown-js --external=sharp --outfile=$serverEntry (Join-Path $projectRoot "packages\server\src\index.ts")
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -105,44 +104,15 @@ try {
     Copy-Item (Join-Path $projectRoot "packages\pi-agent-server\dist\index.js") (Join-Path $piDest "index.js") -Force
     Copy-Item (Join-Path $projectRoot "packages\session-mcp-server\dist\index.js") (Join-Path $sessionDest "index.js") -Force
 
-    # Claude Agent SDK >= 0.2.113 launches a native `claude` executable. The
-    # SDK publishes a Linux ARM64 binary but no Android npm package. Download
-    # it during the build and ship it as an extracted app asset. Keeping this
-    # out of git avoids committing a ~270 MB generated binary to the repository.
-    $claudeSdkRoot = Join-Path $projectRoot ".toolchains\android\claude-agent-sdk-linux-arm64-$claudeSdkVersion"
-    $claudeSdkSource = Join-Path $claudeSdkRoot "package\claude"
-    if (-not (Test-Path $claudeSdkSource)) {
-        if ($SkipServerRuntimeDownload) {
-            throw "Claude Agent SDK ARM64 binary not found at $claudeSdkSource. Remove -SkipServerRuntimeDownload to download it."
-        }
-        $claudeSdkArchive = Join-Path $projectRoot ".toolchains\android\claude-agent-sdk-linux-arm64-$claudeSdkVersion.tgz"
-        if (-not (Test-Path $claudeSdkArchive)) {
-            New-Item -ItemType Directory -Force (Split-Path $claudeSdkArchive) | Out-Null
-            Write-Output "Downloading Claude Agent SDK $claudeSdkVersion ARM64 runtime..."
-            & curl.exe -L --fail --output $claudeSdkArchive "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-$claudeSdkVersion.tgz"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        }
-        if (Test-Path $claudeSdkRoot) { Remove-Item -Recurse -Force $claudeSdkRoot }
-        New-Item -ItemType Directory -Force $claudeSdkRoot | Out-Null
-        & tar.exe -xzf $claudeSdkArchive -C $claudeSdkRoot
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    }
-    if (-not (Test-Path $claudeSdkSource)) {
-        throw "Claude Agent SDK archive did not contain $claudeSdkSource."
-    }
-    $claudeDest = Join-Path $resourceRoot "claude-agent-sdk"
-    New-Item -ItemType Directory -Force $claudeDest | Out-Null
-    Copy-Item $claudeSdkSource (Join-Path $claudeDest "claude") -Force
-
     $bridgeSource = Join-Path $electronResourceRoot "bridge-mcp-server\index.js"
     if (Test-Path $bridgeSource) {
         $bridgeDest = Join-Path $resourceRoot "bridge-mcp-server"
         New-Item -ItemType Directory -Force $bridgeDest | Out-Null
         Copy-Item $bridgeSource (Join-Path $bridgeDest "index.js") -Force
     }
-    # Include both runtime versions so LocalAgentServer re-extracts assets
-    # after a Claude SDK update instead of retaining a stale executable.
-    Set-Content -Path (Join-Path $serverAssetRoot "version.txt") -Value "$bunAndroidVersion-claude-$claudeSdkVersion" -NoNewline
+    # Bump the version marker when the bundled runtime changes so
+    # LocalAgentServer re-extracts assets instead of retaining stale files.
+    Set-Content -Path (Join-Path $serverAssetRoot "version.txt") -Value "$bunAndroidVersion" -NoNewline
 
     # Bun publishes a native Android runtime rather than a Windows host
     # executable. Store it as a JNI library so Android extracts it into the
