@@ -245,6 +245,76 @@ export interface ImportRemoteSessionTransferResult {
 }
 
 // ---------------------------------------------------------------------------
+// Session collaboration (coordinator-owned, durable)
+// ---------------------------------------------------------------------------
+
+/** A session reference is deliberately address based: a member may be local,
+ * in another workspace, or represented by a relay on another server. Tokens
+ * are never part of this persisted object. */
+export interface CollaborationMember {
+  id: string
+  sessionId: string
+  workspaceId: string
+  /** Omitted for the coordinator server; a URL identifies a remote relay. */
+  serverUrl?: string
+  name?: string
+  role: 'primary' | 'secondary'
+  addedAt: number
+}
+
+export interface CollaborationBoardItem {
+  id: string
+  value: unknown
+  version: number
+  updatedAt: number
+  updatedBy: string
+  deleted?: boolean
+}
+
+export interface CollaborationFile {
+  id: string
+  name: string
+  contentType?: string
+  size: number
+  sha256: string
+  version: number
+  updatedAt: number
+  updatedBy: string
+}
+
+export interface CollaborationEvent {
+  id: string
+  /** Stable client supplied id makes retries idempotent. */
+  operationId: string
+  type: 'request' | 'report' | 'board' | 'file'
+  fromMemberId: string
+  toMemberId?: string
+  text?: string
+  createdAt: number
+  revision: number
+}
+
+export interface CollaborationGroup {
+  id: string
+  version: 1
+  /** Monotonic revision for all mutable group state. */
+  revision: number
+  primaryMemberId: string
+  members: CollaborationMember[]
+  board: Record<string, CollaborationBoardItem>
+  files: Record<string, CollaborationFile>
+  events: CollaborationEvent[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CollaborationChangeResult {
+  group: CollaborationGroup
+  /** False when the same operationId was already committed. */
+  applied: boolean
+}
+
+// ---------------------------------------------------------------------------
 // Tasks (Conductor) DTOs — wire contract for the tasks:* channels.
 // ---------------------------------------------------------------------------
 

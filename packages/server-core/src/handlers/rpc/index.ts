@@ -28,6 +28,7 @@ import { registerTransferHandlers } from './transfer'
 import { registerWorkspaceCoreHandlers } from './workspace'
 import { registerMessagingHandlers } from './messaging'
 import { registerAgentsHandlers } from './agents'
+import { registerCollaborationHandlers } from './collaborations'
 
 export function registerCoreRpcHandlers(
   server: RpcServer,
@@ -38,6 +39,7 @@ export function registerCoreRpcHandlers(
   registerAutomationsHandlers(server, deps)
   registerAgentsHandlers(server, deps)
   registerCatalogHandlers(server, deps)
+  registerCollaborationHandlers(server, deps)
   registerFilesHandlers(server, deps)
   registerLabelsHandlers(server, deps)
   registerLlmConnectionsHandlers(server, deps)

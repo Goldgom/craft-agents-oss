@@ -60,6 +60,22 @@ export const RPC_CHANNELS = {
     EXPORT_REMOTE_TRANSFER: 'sessions:exportRemoteTransfer',
     IMPORT_REMOTE_TRANSFER: 'sessions:importRemoteTransfer',
   },
+  /**
+   * A coordinator-owned collaboration group.  These channels intentionally do
+   * not reuse sessions:sendMessage: membership and optimistic-concurrency
+   * checks must happen at the server boundary, not in the renderer.
+   */
+  collaborations: {
+    CREATE: 'collaborations:create',
+    GET: 'collaborations:get',
+    LIST: 'collaborations:list',
+    REQUEST: 'collaborations:request',
+    REPORT: 'collaborations:report',
+    UPDATE_BOARD: 'collaborations:updateBoard',
+    PUT_FILE: 'collaborations:putFile',
+    GET_FILE: 'collaborations:getFile',
+    EVENT: 'collaborations:event',
+  },
   transfer: {
     START: 'transfer:start',
     CHUNK: 'transfer:chunk',
