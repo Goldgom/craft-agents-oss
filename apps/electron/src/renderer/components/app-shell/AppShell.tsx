@@ -1879,7 +1879,7 @@ function AppShellContent({
   }, [])
 
   const handleCollaborationsClick = useCallback(() => {
-    window.electronAPI.openUrl('craftagents://settings/collaborations?window=focused')
+    navigate(routes.view.settings('collaborations'))
   }, [])
 
   // Handler for What's New overlay
