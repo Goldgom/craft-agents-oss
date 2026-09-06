@@ -1379,6 +1379,8 @@
   "settings.prompts.toasts.applied": "プロンプトを追加しました",
   "settings.prompts.toasts.deleted": "プロンプトを削除しました",
   "settings.prompts.toasts.saved": "プロンプトを保存しました",
+  "settings.collaborations.title": "Collaboration management",
+  "settings.collaborations.description": "Manage active session collaborations",
   "settings.remoteServers.add": "サーバーを追加",
   "settings.remoteServers.chooseLocalPath": "Choose local path",
   "settings.remoteServers.create": "作成",

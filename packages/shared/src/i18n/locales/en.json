@@ -1379,6 +1379,8 @@
   "settings.prompts.toasts.applied": "Prompt added",
   "settings.prompts.toasts.deleted": "Prompt deleted",
   "settings.prompts.toasts.saved": "Prompt saved",
+  "settings.collaborations.title": "Collaborations",
+  "settings.collaborations.description": "Manage active session collaborations",
   "settings.remoteServers.add": "Add server",
   "settings.remoteServers.chooseLocalPath": "Choose local path",
   "settings.remoteServers.create": "Create",

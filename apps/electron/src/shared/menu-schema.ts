@@ -396,6 +396,7 @@ const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
   server: 'Server',
   shortcuts: 'Keyboard',
   preferences: 'UserCircle',
+  collaborations: 'Users',
 }
 
 /**

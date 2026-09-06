@@ -37,7 +37,7 @@ export const SESSION_PERSISTENT_FIELDS = [
   // Model/Connection
   'model', 'llmConnection', 'connectionLocked', 'thinkingLevel',
   // Agent-created session identity/config provenance
-  'agentId',
+  'agentId', 'collaboration',
   // Sharing
   'sharedUrl', 'sharedId',
   // Plan execution
@@ -69,6 +69,13 @@ export const SESSION_PERSISTENT_FIELDS = [
 ] as const;
 
 export type SessionPersistentField = typeof SESSION_PERSISTENT_FIELDS[number];
+
+export interface SessionCollaboration {
+  groupId: string;
+  memberId: string;
+  role: 'primary' | 'secondary';
+  coordinatorWorkspaceId: string;
+}
 
 /**
  * Session status (user-controlled, never automatic)
@@ -160,6 +167,8 @@ export interface SessionConfig {
   thinkingLevel?: ThinkingLevel;
   /** Agent definition that created this special session, if any. */
   agentId?: string;
+  /** Collaboration membership and role metadata. */
+  collaboration?: SessionCollaboration;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -290,6 +299,8 @@ export interface SessionHeader {
   llmConnection?: string;
   /** Whether the connection is locked (cannot be changed after first agent creation) */
   connectionLocked?: boolean;
+  /** Collaboration membership and role metadata. */
+  collaboration?: SessionCollaboration;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
   /**
@@ -393,6 +404,8 @@ export interface SessionMetadata {
   llmConnection?: string;
   /** Whether the connection is locked (cannot be changed after first agent creation) */
   connectionLocked?: boolean;
+  /** Collaboration membership and role metadata. */
+  collaboration?: SessionCollaboration;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
   /** ID of last message user has read - for unread detection */

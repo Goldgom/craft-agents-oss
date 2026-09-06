@@ -31,6 +31,7 @@ import RemoteServersPage from './RemoteServersPage'
 import ServerSettingsPage from './ServerSettingsPage'
 import ShortcutsPage from './ShortcutsPage'
 import PreferencesPage from './PreferencesPage'
+import CollaborationManagementPage from './CollaborationManagementPage'
 
 /**
  * Map of settings subpage IDs to their page components.
@@ -54,6 +55,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   server: ServerSettingsPage,
   shortcuts: ShortcutsPage,
   preferences: PreferencesPage,
+  collaborations: CollaborationManagementPage,
 }
 
 /**

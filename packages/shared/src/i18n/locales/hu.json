@@ -1379,6 +1379,8 @@
   "settings.prompts.toasts.applied": "Prompt hozzáadva",
   "settings.prompts.toasts.deleted": "Prompt törölve",
   "settings.prompts.toasts.saved": "Prompt mentve",
+  "settings.collaborations.title": "Collaboration management",
+  "settings.collaborations.description": "Manage active session collaborations",
   "settings.remoteServers.add": "Kiszolgáló hozzáadása",
   "settings.remoteServers.chooseLocalPath": "Choose local path",
   "settings.remoteServers.create": "Létrehozás",

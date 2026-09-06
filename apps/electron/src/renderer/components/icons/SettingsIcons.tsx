@@ -23,6 +23,7 @@ import {
   UserCircle,
   Wrench,
   Activity,
+  Users,
 } from 'lucide-react'
 import type { SettingsSubpage } from '../../../shared/types'
 
@@ -45,6 +46,7 @@ export const RemoteServersIcon = ({ className }: IconProps) => <Cloud className=
 export const ServerSettingsIcon = ({ className }: IconProps) => <Server className={className} />
 export const ShortcutsIcon = ({ className }: IconProps) => <Keyboard className={className} />
 export const PreferencesIcon = ({ className }: IconProps) => <UserCircle className={className} />
+export const CollaborationsIcon = ({ className }: IconProps) => <Users className={className} />
 
 /**
  * Map of settings subpage IDs to their icon components.
@@ -68,4 +70,5 @@ export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconPro
   server: ServerSettingsIcon,
   shortcuts: ShortcutsIcon,
   preferences: PreferencesIcon,
+  collaborations: CollaborationsIcon,
 }

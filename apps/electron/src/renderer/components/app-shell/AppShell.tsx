@@ -36,6 +36,7 @@ import {
   PanelsTopLeft,
   Terminal,
   Wrench,
+  Users,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -1877,6 +1878,10 @@ function AppShellContent({
     navigate(routes.view.settings(subpage ?? 'app'))
   }, [])
 
+  const handleCollaborationsClick = useCallback(() => {
+    window.electronAPI.openUrl('craftagents://settings/collaborations?window=focused')
+  }, [])
+
   // Handler for What's New overlay
   const handleWhatsNewClick = useCallback(async () => {
     const content = await window.electronAPI.getReleaseNotes()
@@ -2154,10 +2159,11 @@ function AppShellContent({
     result.push({ id: 'nav:pages', type: 'nav', action: handlePagesClick })
     result.push({ id: 'nav:automations', type: 'nav', action: handleAutomationsClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick() })
+    result.push({ id: 'nav:collaborations', type: 'nav', action: handleCollaborationsClick })
     result.push({ id: 'nav:whats-new', type: 'nav', action: handleWhatsNewClick })
 
     return result
-  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleToolsClick, handleSkillsClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
+  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleToolsClick, handleSkillsClick, handleAutomationsClick, handleSettingsClick, handleCollaborationsClick, handleWhatsNewClick])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -2760,6 +2766,13 @@ function AppShellContent({
                       icon: Settings,
                       variant: isSettingsNavigation(navState) ? "default" : "ghost",
                       onClick: () => handleSettingsClick(),
+                    },
+                    {
+                      id: "nav:collaborations",
+                      title: "协作管理",
+                      icon: Users,
+                      variant: (isSettingsNavigation(navState) && navState.subpage === 'collaborations') ? "default" : "ghost",
+                      onClick: handleCollaborationsClick,
                     },
                     // --- What's New ---
                     {

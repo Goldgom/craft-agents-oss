@@ -96,6 +96,14 @@ export type LlmAuthType =
  */
 export type ModelSelectionMode = 'automaticallySyncedFromProvider' | 'userDefined3Tier';
 
+/** Per-model prompt behavior overrides. Stored on the owning LLM connection. */
+export interface ModelPromptSettings {
+  /** Use a compact system prompt intended for smaller/lightweight models. */
+  lightweight?: boolean;
+  /** Add explicit MCP tool discovery/calling workflow guidance. */
+  mcpPromptEnhancement?: boolean;
+}
+
 /**
  * Protocol for custom API endpoints.
  * Determines which streaming adapter the Pi SDK uses for requests.
@@ -156,6 +164,9 @@ export interface LlmConnection {
 
   /** Override available models (for custom endpoints that don't support model listing) */
   models?: Array<ModelDefinition | string>;
+
+  /** Prompt behavior overrides keyed by model id. */
+  modelSettings?: Record<string, ModelPromptSettings>;
 
   /** Default model for this connection */
   defaultModel?: string;

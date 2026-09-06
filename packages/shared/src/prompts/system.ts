@@ -12,6 +12,7 @@ import { formatBytes } from '../utils/binary-detection.ts';
 import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
+import type { ModelPromptSettings } from '../config/llm-connections.ts';
 import type { SystemPromptSource } from '../protocol/dto.ts';
 import {
   loadWorkspacePrompts,
@@ -301,6 +302,17 @@ export interface SystemPromptOptions {
   backendName?: string;
 }
 
+/** Additional guidance for models that need explicit MCP tool-calling steps. */
+export const MCP_PROMPT_ENHANCEMENT = `
+## MCP Tool Calling Workflow
+- Identify the relevant connected source and use its MCP tools directly.
+- Discover tools with the source's \`list_tools\` tool when needed, or call the requested tool directly.
+- Never use shell/bash to invoke MCP tools and never use \`list_mcp_resources\` to discover tools.
+- Read the source guide before setup/authentication when required.
+- Call the tool, inspect its result, then continue with the next step.
+- If authentication or activation is required, follow the source authentication flow and retry after it completes.
+`;
+
 /**
  * System prompt preset types for different agent contexts.
  * - 'default': Full Craft Agent system prompt
@@ -338,6 +350,26 @@ Use config_validate to verify changes match the expected schema.
 `;
 }
 
+/** Compact prompt for per-model lightweight mode. */
+export function getLightweightModelSystemPrompt(
+  workspaceRootPath?: string,
+  backendName: string = 'Craft Agent',
+  includeCoAuthoredBy: boolean = true,
+  agentPrompt?: string,
+): string {
+  const workspace = workspaceRootPath ? `\nWorkspace: \`${workspaceRootPath}\`` : '';
+  const coAuthor = includeCoAuthoredBy ? '\n- Include co-authored attribution when appropriate.' : '';
+  const agent = agentPrompt?.trim() ? `\n\n<agent_instructions>\n${agentPrompt.trim()}\n</agent_instructions>` : '';
+  return `You are Craft Agent, powered by ${backendName}. Help the user complete their request accurately and safely.${workspace}
+
+## Essential rules
+- Follow the user's goal, permission mode, and safety constraints.
+- Use available tools directly; understand parameters first, inspect results, and recover from errors.
+- For file or command changes, make only requested modifications and verify the result.
+- Be concise; state what you did and any blockers.${coAuthor}
+${agent}`;
+}
+
 /**
  * Get the full system prompt with current date/time and user preferences
  *
@@ -361,11 +393,19 @@ export function getSystemPrompt(
   includeCoAuthoredBy?: boolean,
   projectContext?: ProjectPromptContext,
   agentPrompt?: string,
+  modelPromptSettings?: ModelPromptSettings,
 ): string {
   // Use mini agent prompt for quick edits (pass workspace root for config paths)
   if (preset === 'mini') {
     debug('[getSystemPrompt] 🤖 Generating MINI agent system prompt for workspace:', workspaceRootPath);
     return getMiniAgentSystemPrompt(workspaceRootPath);
+  }
+
+  const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference();
+  if (modelPromptSettings?.lightweight) {
+    let prompt = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, agentPrompt);
+    if (modelPromptSettings.mcpPromptEnhancement) prompt += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`;
+    return prompt;
   }
 
   // Use pinned preferences if provided (for session consistency after compaction)
@@ -387,8 +427,6 @@ export function getSystemPrompt(
 
   // Fall back to the user's current preference when callers don't pin/pass a value,
   // so forgetting the argument can't silently re-enable the co-author trailer (see #576).
-  const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference();
-
   // Note: Date/time context is now added to user messages instead of system prompt
   // to enable prompt caching. The system prompt stays static and cacheable.
   // Safe Mode context is also in user messages for the same reason.
@@ -396,7 +434,10 @@ export function getSystemPrompt(
   const agentBlock = agentPrompt?.trim()
     ? `\n\n<agent_instructions>\n${agentPrompt.trim()}\n</agent_instructions>`
     : '';
-  const fullPrompt = `${basePrompt}${preferences}${workspacePromptsBlock}${projectBlock}${debugContext}${projectContextFiles}${agentBlock}`;
+  let fullPrompt = `${basePrompt}${preferences}${workspacePromptsBlock}${projectBlock}${debugContext}${projectContextFiles}${agentBlock}`;
+  if (modelPromptSettings?.mcpPromptEnhancement && !fullPrompt.includes('## MCP Tool Calling Workflow')) {
+    fullPrompt += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`;
+  }
 
   debug('[getSystemPrompt] full prompt length:', fullPrompt.length);
 
@@ -1340,10 +1381,16 @@ export function getSystemPromptSources(
   backendName?: string,
   includeCoAuthoredBy?: boolean,
   projectContext?: ProjectPromptContext,
+  modelPromptSettings?: ModelPromptSettings,
 ): SystemPromptSource[] {
   if (preset === 'mini') return [{ id: 'mini-system', source: 'builtin', title: 'Mini system prompt', content: getMiniAgentSystemPrompt(workspaceRootPath), enabled: true }]
   const preferences = pinnedPreferencesPrompt ?? formatPreferencesForPrompt()
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference()
+  if (modelPromptSettings?.lightweight) {
+    let content = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy)
+    if (modelPromptSettings.mcpPromptEnhancement) content += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`
+    return [{ id: 'lightweight-system', source: 'builtin', title: 'Lightweight system prompt', content, enabled: true }]
+  }
   const fullBuiltin = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy)
   let coreBuiltin = fullBuiltin
   const sources: SystemPromptSource[] = []

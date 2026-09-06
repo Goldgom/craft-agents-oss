@@ -23,7 +23,7 @@ import type {
   UnreadSummary,
   ShareResult,
 } from '@craft-agent/shared/protocol'
-import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
+import type { SessionBundle, DispatchMode, SessionCollaboration } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
 import type { McpReloadResult } from '@craft-agent/core/types'
 
@@ -103,6 +103,7 @@ export interface ISessionManager {
   ): Promise<boolean>
   setSessionConnection(sessionId: string, connectionSlug: string): Promise<void>
   updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string): Promise<void>
+  setSessionCollaboration?(sessionId: string, collaboration: SessionCollaboration | null): Promise<void>
 
   // ---------------------------------------------------------------------------
   // Messaging

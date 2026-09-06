@@ -68,12 +68,26 @@ export function registerCollaborationHandlers(server: RpcServer, deps: HandlerDe
       return { sessionId, workspaceId, serverUrl: item.serverUrl, name: item.name }
     }))
     const group = await manager.create({ sessionId: primary.id, workspaceId: primary.workspaceId, name: primary.name }, secondaries)
+    // Persist role metadata on sessions hosted by this server. Remote members
+    // are updated by their own relay/server and must not be impersonated here.
+    for (const member of group.members) {
+      if (member.serverUrl) continue
+      await deps.sessionManager.setSessionCollaboration?.(member.sessionId, {
+        groupId: group.id,
+        memberId: member.id,
+        role: member.role,
+        coordinatorWorkspaceId: primary.workspaceId,
+      })
+    }
     pushTyped(server, RPC_CHANNELS.collaborations.EVENT, { to: 'workspace', workspaceId: primary.workspaceId }, { groupId: group.id, revision: group.revision })
     return group
   })
 
   server.handle(RPC_CHANNELS.collaborations.GET, async (_ctx, groupId: string, coordinatorWorkspaceId: string) => manager.open(text(groupId, 'groupId'), text(coordinatorWorkspaceId, 'coordinatorWorkspaceId')))
   server.handle(RPC_CHANNELS.collaborations.LIST, async (_ctx, workspaceId: string) => manager.list(text(workspaceId, 'workspaceId')))
+  // Collaboration is deliberately allowed across workspaces on the same
+  // server. This distinct endpoint avoids changing normal session-list scope.
+  server.handle(RPC_CHANNELS.collaborations.LIST_CANDIDATES, async () => deps.sessionManager.getSessions())
 
   server.handle(RPC_CHANNELS.collaborations.REQUEST, async (_ctx, input: { groupId: string; coordinatorWorkspaceId: string; actorMemberId: string; targetMemberId: string; message: string; operationId: string; expectedRevision: number }) => {
     const group = await manager.open(text(input.groupId, 'groupId'), text(input.coordinatorWorkspaceId, 'coordinatorWorkspaceId'))

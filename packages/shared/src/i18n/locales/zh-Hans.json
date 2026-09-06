@@ -1379,6 +1379,8 @@
   "settings.prompts.toasts.applied": "提示词已添加",
   "settings.prompts.toasts.deleted": "提示词已删除",
   "settings.prompts.toasts.saved": "提示词已保存",
+  "settings.collaborations.title": "协作管理",
+  "settings.collaborations.description": "管理正在进行的会话协作",
   "settings.remoteServers.add": "添加服务器",
   "settings.remoteServers.chooseLocalPath": "选择本地路径",
   "settings.remoteServers.create": "创建",

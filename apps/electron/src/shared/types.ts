@@ -872,8 +872,10 @@ export interface ElectronAPI {
   generateAgent(workspaceId: string, request: { name?: string; goal: string }): Promise<import('@craft-agent/shared/agents').CustomAgentDefinition>
 
   // Session collaboration
-  createCollaboration(primarySessionId: string, secondarySessions: Array<{ sessionId: string; workspaceId: string; name?: string }>): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>
+  createCollaboration(primarySessionId: string, secondarySessions: Array<{ sessionId: string; workspaceId: string; serverUrl?: string; name?: string }>): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>
   listCollaborations(workspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationGroup[]>
+  listCollaborationCandidates(): Promise<Session[]>
+  onCollaborationChanged(callback: (event: { groupId: string; revision: number }) => void): () => void
 
   // Language
   changeLanguage(lang: string): Promise<void>

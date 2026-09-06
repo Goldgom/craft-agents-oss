@@ -49,6 +49,7 @@ import {
   Send,
   Tag,
   Trash2,
+  Users,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -106,6 +107,7 @@ export interface CompactSessionMenuProps {
   onOpenInNewWindow: () => void
   onSendToWorkspace?: () => void
   onDelete: () => void
+  onConfigureCollaboration?: () => void
 
   // ---------------------------------------------------------------------------
   // Controlled-component shim — used by EntityRow / SessionItem so a single
@@ -142,6 +144,7 @@ export function CompactSessionMenu({
   onOpenInNewWindow,
   onSendToWorkspace,
   onDelete,
+  onConfigureCollaboration,
   open: controlledOpen,
   onOpenChange,
   trigger,
@@ -317,6 +320,7 @@ export function CompactSessionMenu({
               onShowInFinder={closeAfter(actions.showInFinder)}
               onCopyPath={closeAfter(actions.copyPath)}
               onDelete={closeAfter(onDelete)}
+              onConfigureCollaboration={closeAfter(onConfigureCollaboration)}
             />
           )}
 
@@ -390,6 +394,7 @@ interface RootPaneProps {
   onShowInFinder?: () => void
   onCopyPath?: () => void
   onDelete?: () => void
+  onConfigureCollaboration?: () => void
 }
 
 function RootPane({
@@ -421,6 +426,7 @@ function RootPane({
   onShowInFinder,
   onCopyPath,
   onDelete,
+  onConfigureCollaboration,
 }: RootPaneProps) {
   const { t } = useTranslation()
 
@@ -458,6 +464,8 @@ function RootPane({
       />
 
       <Separator />
+
+      {onConfigureCollaboration && <Row icon={<Users className="h-4 w-4" />} label="Configure collaboration" onTap={onConfigureCollaboration} />}
 
       <Row
         icon={<span style={statusColor ? { color: statusColor } : undefined}>{statusIconNode}</span>}

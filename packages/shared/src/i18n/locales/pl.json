@@ -1379,6 +1379,8 @@
   "settings.prompts.toasts.applied": "Dodano prompt",
   "settings.prompts.toasts.deleted": "Usunięto prompt",
   "settings.prompts.toasts.saved": "Zapisano prompt",
+  "settings.collaborations.title": "Collaboration management",
+  "settings.collaborations.description": "Manage active session collaborations",
   "settings.remoteServers.add": "Dodaj serwer",
   "settings.remoteServers.chooseLocalPath": "Choose local path",
   "settings.remoteServers.create": "Utwórz",

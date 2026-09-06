@@ -30,7 +30,7 @@ export { AbortReason, type RecoveryMessage };
 import type { ModelProvider } from '../../config/models.ts';
 
 // Import LLM connection types for auth
-import type { LlmAuthType, LlmProviderType } from '../../config/llm-connections.ts';
+import type { LlmAuthType, LlmProviderType, ModelPromptSettings } from '../../config/llm-connections.ts';
 export type { LlmAuthType, LlmProviderType } from '../../config/llm-connections.ts';
 
 export interface BackendRuntimeUpdate {
@@ -175,6 +175,9 @@ export interface CoreBackendConfig {
 
   /** Initial model ID */
   model?: string;
+
+  /** Per-model prompt behavior resolved from the LLM connection. */
+  modelPromptSettings?: ModelPromptSettings;
 
   /** Mini/utility model for summarization/title generation/mini-completions */
   miniModel?: string;

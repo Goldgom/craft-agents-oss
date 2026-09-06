@@ -185,6 +185,7 @@ export function SessionItem({
           onOpenInNewWindow={() => ctx.onOpenInNewWindow(item)}
           onSendToWorkspace={ctx.onSendToWorkspace ? () => ctx.onSendToWorkspace!([item.id]) : undefined}
           onDelete={() => ctx.onDelete(item.id)}
+          onConfigureCollaboration={() => setCollaborationOpen(true)}
         />
       )}
       icon={

@@ -72,6 +72,7 @@ import {
   type SessionMetadata,
   type SessionStatus,
   type SessionHeader,
+  type SessionCollaboration,
   pickSessionFields,
 } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, loadAllSources, getSourcesBySlugs, isSourceUsable, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, TokenRefreshManager } from '@craft-agent/shared/sources'
@@ -828,6 +829,7 @@ interface ManagedSession {
   agentId?: string
   agentPrompt?: string
   agentSessionSettings?: AgentSessionSettings
+  collaboration?: SessionCollaboration
   // Role/type of the last message (for badge display without loading messages)
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error'
   // ID of the last final (non-intermediate) assistant message - pre-computed for unread detection
@@ -3956,7 +3958,9 @@ export class SessionManager implements ISessionManager {
         skipConfigWatcher: true, // Server owns workspace-level ConfigWatcher — don't duplicate in agents
         automationSystem: this.automationSystems.get(managed.workspace.rootPath),
         systemPromptPreset: managed.systemPromptPreset,
-        agentPrompt: managed.agentPrompt,
+        agentPrompt: [managed.agentPrompt, managed.collaboration && (managed.collaboration.role === 'primary'
+          ? `<collaboration_status>\nYou are the primary session in collaboration group "${managed.collaboration.groupId}". Coordinate work and send requests to secondary sessions; secondary sessions report back to you. Use shared board/files for coordination.\n</collaboration_status>`
+          : `<collaboration_status>\nYou are a secondary session in collaboration group "${managed.collaboration.groupId}". Only report results and status to the primary session; do not send requests to other secondary sessions. Use shared board/files when contributing.\n</collaboration_status>`)].filter(Boolean).join('\n\n') || undefined,
         debugMode: _platform?.isDebugMode ? { enabled: true, logFilePath: _platform.getLogFilePath?.() } : undefined,
         enable1MContext: await (async () => { const { getEnable1MContext } = await import('@craft-agent/shared/config/storage'); return getEnable1MContext(); })(),
         // Image resize callback — prevents oversized images from entering conversation history
@@ -7770,6 +7774,16 @@ export class SessionManager implements ISessionManager {
       const watcher = this.configWatchers.get(managed.workspace.rootPath)
       watcher?.notifyFileChange(`sessions/${sessionId}/session.jsonl`)
     }
+  }
+
+  async setSessionCollaboration(sessionId: string, collaboration: SessionCollaboration | null): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    managed.collaboration = collaboration ?? undefined
+    this.setMetadataWriteGuard(managed)
+    this.persistSession(managed)
+    await this.flushSession(managed.id)
+    this.sendEvent({ type: 'session_metadata_changed', sessionId, changes: { collaboration: collaboration ?? undefined } }, managed.workspace.id)
   }
 
   /**

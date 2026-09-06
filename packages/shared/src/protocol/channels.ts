@@ -69,6 +69,7 @@ export const RPC_CHANNELS = {
     CREATE: 'collaborations:create',
     GET: 'collaborations:get',
     LIST: 'collaborations:list',
+    LIST_CANDIDATES: 'collaborations:listCandidates',
     REQUEST: 'collaborations:request',
     REPORT: 'collaborations:report',
     UPDATE_BOARD: 'collaborations:updateBoard',
