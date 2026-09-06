@@ -38,7 +38,8 @@ import { getModelById } from '../config/models.ts';
 
 // BaseAgent provides common functionality
 import { BaseAgent } from './base-agent.ts';
-import { getGitBashPath, type Workspace } from '../config/storage.ts';
+import { getGitBashPath, getLlmConnection, type Workspace } from '../config/storage.ts';
+import { getModelPromptSettings } from '../config/llm-connections.ts';
 
 // Event adapter
 import { PiEventAdapter } from './backend/pi/event-adapter.ts';
@@ -2169,6 +2170,7 @@ export class PiAgent extends BaseAgent {
         getCoAuthorPreference(), // respect user's includeCoAuthoredBy preference (#576)
         projectContext ?? undefined,
         this.config.agentPrompt,
+        this.config.modelPromptSettings,
       );
 
       // Build context from sources
@@ -2338,6 +2340,10 @@ export class PiAgent extends BaseAgent {
       providerType: update.providerType ?? this.config.providerType,
       authType: update.authType ?? this.config.authType,
       model: update.model,
+      modelPromptSettings: getModelPromptSettings(
+        this.config.connectionSlug ? getLlmConnection(this.config.connectionSlug) ?? undefined : undefined,
+        update.model,
+      ),
       runtime: {
         ...previousRuntime,
         ...(update.runtime ?? {}),

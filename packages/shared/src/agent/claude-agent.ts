@@ -8,8 +8,9 @@ type ContentBlockParam =
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } };
 import { z } from 'zod';
-import { getSystemPrompt } from '../prompts/system.ts';
+import { getSystemPrompt, getLightweightModelSystemPrompt, MCP_PROMPT_ENHANCEMENT } from '../prompts/system.ts';
 import { BaseAgent, type MiniAgentConfig, MINI_AGENT_TOOLS, MINI_AGENT_MCP_KEYS } from './base-agent.ts';
+import { getModelPromptSettings } from '../config/llm-connections.ts';
 import type { BackendConfig, PostInitResult, PermissionRequestType, SdkMcpServerConfig } from './backend/types.ts';
 // Plan types are used by UI components; not needed in craft-agent.ts since Safe Mode is user-controlled
 import { parseError, buildAndroidClaudeUnsupportedError, type AgentError } from './errors.ts';
@@ -1269,7 +1270,9 @@ export class ClaudeAgent extends BaseAgent {
         // - Normal agents: Append to Claude Code's system prompt (recommended by docs)
         systemPrompt: miniConfig.enabled
           ? this.getMiniSystemPrompt()
-          : {
+          : this.config.modelPromptSettings?.lightweight
+            ? `${getLightweightModelSystemPrompt(this.workspaceRootPath, 'Claude Code', this.pinnedIncludeCoAuthoredBy ?? undefined, this.config.agentPrompt)}${this.config.modelPromptSettings.mcpPromptEnhancement ? `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}` : ''}`
+            : {
               type: 'preset' as const,
               preset: 'claude_code' as const,
               // Working directory included for monorepo context file discovery
@@ -1283,6 +1286,7 @@ export class ClaudeAgent extends BaseAgent {
                 this.pinnedIncludeCoAuthoredBy ?? undefined,
                 this.pinnedProjectContext ?? undefined,
                 this.config.agentPrompt,
+                this.config.modelPromptSettings,
               ),
             },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.
@@ -2884,6 +2888,8 @@ This is a branched conversation. All prior messages in this conversation are par
 
   setModel(model: string): void {
     super.setModel(model);
+    const connection = this.config.connectionSlug ? getLlmConnection(this.config.connectionSlug) ?? undefined : undefined;
+    this.config.modelPromptSettings = getModelPromptSettings(connection, model);
   }
 
   // ============================================================

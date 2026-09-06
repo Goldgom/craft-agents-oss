@@ -1426,6 +1426,9 @@ export function getSystemPromptSources(
   if (projectContextFiles.trim()) sources.push({ id: 'context-files', source: 'context', title: 'Project context files', content: projectContextFiles, enabled: true })
   const debugContext = debugMode?.enabled ? formatDebugModeContext(debugMode.logFilePath) : ''
   if (debugContext.trim()) sources.push({ id: 'debug-mode', source: 'debug', title: 'Debug mode', content: debugContext, enabled: true })
+  if (modelPromptSettings?.mcpPromptEnhancement && !sources.some((source) => source.content.includes('## MCP Tool Calling Workflow'))) {
+    sources.push({ id: 'mcp-prompt-enhancement', source: 'builtin', title: 'MCP calling guidance', content: MCP_PROMPT_ENHANCEMENT.trim(), enabled: true })
+  }
   return sources
 }
 

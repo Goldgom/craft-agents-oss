@@ -35,6 +35,7 @@ import type { LlmConnectionType, CustomEndpointConfig } from '../../config/llm-c
 // Import validation helpers for provider-auth combinations
 import {
   isValidProviderAuthCombination,
+  getModelPromptSettings,
 } from '../../config/llm-connections.ts';
 import { parseValidationError, type LlmValidationResult } from '../../config/llm-validation.ts';
 import type { ModelFetchResult } from '../../config/model-fetcher.ts';
@@ -181,6 +182,7 @@ export function createBackendFromResolvedContext(args: {
     providerType: context.connection?.providerType ?? getDefaultProviderType(context.provider),
     authType: context.authType || getDefaultAuthType(context.provider),
     model: context.resolvedModel,
+    modelPromptSettings: getModelPromptSettings(context.connection ?? undefined, context.resolvedModel),
     connectionSlug: context.connection?.slug,
     runtime,
   };
@@ -514,6 +516,7 @@ export function createConfigFromConnection(
     connectionSlug: connection.slug,
     // Use connection's default model if no model specified in baseConfig
     model: baseConfig.model || connection.defaultModel,
+    modelPromptSettings: getModelPromptSettings(connection, baseConfig.model || connection.defaultModel),
   };
 }
 

@@ -205,6 +205,44 @@ function formatApiBalance(balance: ApiBalance): string {
   }
 }
 
+function ModelPromptSettingsCard({
+  connection,
+  onChange,
+}: {
+  connection: LlmConnectionWithStatus
+  onChange: (model: string, key: 'lightweight' | 'mcpPromptEnhancement', value: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const models = getModelOptionsForConnection(connection)
+  if (models.length === 0) return null
+  return (
+    <SettingsSection title={`${t('settings.ai.modelPromptSettings')}: ${connection.name}`} description={t('settings.ai.modelPromptSettingsDesc')}>
+      <SettingsCard>
+        {models.map((model, index) => {
+          const settings = connection.modelSettings?.[model.value] ?? {}
+          return (
+            <div key={model.value} className={cn(index > 0 && 'border-t border-border/50')}>
+              <div className="px-4 pt-3 text-sm font-medium">{model.label}</div>
+              <SettingsToggle
+                label={t('settings.ai.lightweightPrompt')}
+                description={t('settings.ai.lightweightPromptDesc')}
+                checked={settings.lightweight === true}
+                onCheckedChange={(value) => onChange(model.value, 'lightweight', value)}
+              />
+              <SettingsToggle
+                label={t('settings.ai.mcpPromptEnhancement')}
+                description={t('settings.ai.mcpPromptEnhancementDesc')}
+                checked={settings.mcpPromptEnhancement === true}
+                onCheckedChange={(value) => onChange(model.value, 'mcpPromptEnhancement', value)}
+              />
+            </div>
+          )
+        })}
+      </SettingsCard>
+    </SettingsSection>
+  )
+}
+
 interface ConnectionRowProps {
   connection: LlmConnectionWithStatus
   isLastConnection: boolean
@@ -974,6 +1012,26 @@ export default function AiSettingsPage() {
     }
   }, [refreshLlmConnections, t])
 
+  const handleModelPromptSettingChange = useCallback(async (
+    connection: LlmConnectionWithStatus,
+    model: string,
+    key: 'lightweight' | 'mcpPromptEnhancement',
+    value: boolean,
+  ) => {
+    if (!window.electronAPI) return
+    const modelSettings = { ...(connection.modelSettings ?? {}) }
+    const current = { ...(modelSettings[model] ?? {}) }
+    if (value) current[key] = true
+    else delete current[key]
+    if (Object.keys(current).length) modelSettings[model] = current
+    else delete modelSettings[model]
+    const updated = { ...connection, modelSettings }
+    const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = updated
+    const result = await window.electronAPI.saveLlmConnection(connectionData as import('../../../shared/types').LlmConnection)
+    if (result.success) await refreshLlmConnections()
+    else toast.error(t('settings.ai.modelPromptSettingsUpdateFailed'))
+  }, [refreshLlmConnections, t])
+
   // Get the default connection for display
   const defaultConnection = useMemo(() => {
     return llmConnections.find(c => c.isDefault)
@@ -1190,6 +1248,14 @@ export default function AiSettingsPage() {
                   </button>
                 </div>
               </SettingsSection>
+
+              {llmConnections.map((connection) => (
+                <ModelPromptSettingsCard
+                  key={`prompt-${connection.slug}`}
+                  connection={connection}
+                  onChange={(model, key, value) => handleModelPromptSettingChange(connection, model, key, value)}
+                />
+              ))}
 
               {/* Performance */}
               <SettingsSection title={t("settings.ai.performance")} description={t("settings.ai.performanceDesc")}>

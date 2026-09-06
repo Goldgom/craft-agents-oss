@@ -104,6 +104,15 @@ export interface ModelPromptSettings {
   mcpPromptEnhancement?: boolean;
 }
 
+/** Resolve prompt settings while accepting legacy/deprecated model ids. */
+export function getModelPromptSettings(
+  connection: Pick<LlmConnection, 'modelSettings'> | undefined,
+  model: string | undefined,
+): ModelPromptSettings | undefined {
+  if (!connection?.modelSettings || !model) return undefined;
+  return connection.modelSettings[model] ?? connection.modelSettings[normalizeDeprecatedModelId(model)];
+}
+
 /**
  * Protocol for custom API endpoints.
  * Determines which streaming adapter the Pi SDK uses for requests.
