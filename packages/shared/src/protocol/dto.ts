@@ -177,6 +177,8 @@ export interface Session {
   taskNodeCount?: number
   /** Tasks Conductor: generate-time draft orchestrator, hidden from the board until adopted by createTask. */
   taskDraft?: boolean
+  /** Agent definition used to start this special session, when applicable. */
+  agentId?: string
 }
 
 export interface CreateSessionOptions {
@@ -198,6 +200,11 @@ export interface CreateSessionOptions {
   workingDirectory?: string | 'user_default' | 'none'
   model?: string
   llmConnection?: string
+  /** Start this session from a reusable workspace Agent definition. Agent
+   * settings override these fields; this is intended for backend/tool calls. */
+  agentId?: string
+  /** Additional system instructions supplied by the selected Agent. */
+  agentSystemPrompt?: string
   systemPromptPreset?: 'default' | 'mini' | string
   hidden?: boolean
   sessionStatus?: SessionStatus

@@ -70,6 +70,10 @@ export function createWebApi(options: WebApiOptions): {
   client: WsRpcClient
 } {
   const { serverUrl, workspaceId, token } = options
+  // The browser adapter has no native window manager to retain this value.
+  // Keep it in sync locally so components mounted after the Android workspace
+  // picker (such as the floating switcher) see the selected workspace.
+  let activeWorkspaceId = workspaceId
 
   const client = new WsRpcClient(serverUrl, {
     workspaceId,
@@ -143,12 +147,13 @@ export function createWebApi(options: WebApiOptions): {
     },
 
     // Workspace operations — web UI works with a single connection
-    getWindowWorkspace: () => Promise.resolve(workspaceId ?? null),
+    getWindowWorkspace: () => Promise.resolve(activeWorkspaceId ?? null),
     getWindowMode: () => Promise.resolve('main'),
     // switchWorkspace must call the server so it registers the client's
     // workspaceId — otherwise push events (session updates) won't arrive.
     switchWorkspace: async (wsId: string) => {
       await client.invoke('window:switchWorkspace', wsId)
+      activeWorkspaceId = wsId
     },
     openWorkspace: async () => {},
     openSessionInNewWindow: async (_wsId: string, sessionId: string) => {

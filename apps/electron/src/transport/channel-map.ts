@@ -487,6 +487,10 @@ export const CHANNEL_MAP = {
   deleteAgent: invoke(RPC_CHANNELS.agents.DELETE),
   generateAgent: invoke(RPC_CHANNELS.agents.GENERATE),
 
+  // Session collaboration
+  createCollaboration: invoke(RPC_CHANNELS.collaborations.CREATE),
+  listCollaborations: invoke(RPC_CHANNELS.collaborations.LIST),
+
   // Resources (cross-workspace export/import)
   exportResources: invoke(RPC_CHANNELS.resources.EXPORT),
   importResources: invoke(RPC_CHANNELS.resources.IMPORT),

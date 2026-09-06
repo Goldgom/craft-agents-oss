@@ -218,6 +218,8 @@ export interface ClaudeAgentConfig {
   };
   /** System prompt preset for mini agents ('default' | 'mini' or custom string) */
   systemPromptPreset?: 'default' | 'mini' | string;
+  /** Extra system instructions supplied by an Agent-created session. */
+  agentPrompt?: string;
   /** Workspace-level AutomationSystem instance (shared across all agents in the workspace) */
   automationSystem?: AutomationSystem;
   /**
@@ -1280,6 +1282,7 @@ export class ClaudeAgent extends BaseAgent {
                 undefined, // backendName
                 this.pinnedIncludeCoAuthoredBy ?? undefined,
                 this.pinnedProjectContext ?? undefined,
+                this.config.agentPrompt,
               ),
             },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.

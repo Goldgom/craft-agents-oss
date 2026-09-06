@@ -78,6 +78,7 @@ import { ToolbarStatusSlot } from './ToolbarStatusSlot'
 import { buildPlanApprovalMessage } from '../plan-approval-message'
 import { shouldHandleScopedInputEvent, shouldRecallPromptOnArrowUp } from './input-event-guards'
 import { clearPendingFocusForSession, consumePendingFocusForSession } from './focus-input-events'
+import { AUTO_CAPITALISATION_CHANGE_EVENT } from './input-settings-events'
 import {
   getRecentWorkingDirs,
   addRecentWorkingDir,
@@ -591,6 +592,16 @@ export function FreeFormInput({
       }
     }
     loadInputSettings()
+  }, [])
+
+  // Keep already-mounted chat inputs in sync when this setting changes.
+  React.useEffect(() => {
+    const handleAutoCapitalisationChange = (event: Event) => {
+      setAutoCapitalisation((event as CustomEvent<boolean>).detail)
+    }
+
+    window.addEventListener(AUTO_CAPITALISATION_CHANGE_EVENT, handleAutoCapitalisationChange)
+    return () => window.removeEventListener(AUTO_CAPITALISATION_CHANGE_EVENT, handleAutoCapitalisationChange)
   }, [])
 
   // Double-Esc interrupt: show warning overlay on first Esc, interrupt on second

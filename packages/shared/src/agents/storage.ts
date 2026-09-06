@@ -6,12 +6,21 @@ import { COMPACT_AGENT, type AgentsConfig, type CustomAgentDefinition } from './
 export const AGENTS_CONFIG_FILE = 'agents.json'
 
 const AgentSchema = z.object({
-  id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]*$/, 'Use lowercase letters, numbers, and hyphens').max(64),
+  id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]*$/, '只能使用小写字母、数字和连字符').max(64),
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().min(1).max(1000),
   prompt: z.string().trim().min(1).max(20_000),
   tools: z.array(z.string().trim().min(1)).max(100).optional(),
   model: z.string().trim().min(1).max(200).optional(),
+  session: z.object({
+    model: z.string().trim().min(1).max(200).optional(),
+    llmConnection: z.string().trim().min(1).max(200).optional(),
+    systemPrompt: z.string().trim().min(1).max(20_000).optional(),
+    enabledSourceSlugs: z.array(z.string().trim().min(1)).max(100).optional(),
+    mcpSourceSlugs: z.array(z.string().trim().min(1)).max(100).optional(),
+    apiSourceSlugs: z.array(z.string().trim().min(1)).max(100).optional(),
+    showInSessionList: z.boolean().optional(),
+  }).strict().optional(),
   builtin: z.boolean().optional(),
 }).strict()
 const ConfigSchema = z.object({ version: z.literal(1), agents: z.array(AgentSchema).max(100) }).strict()
@@ -22,9 +31,9 @@ function validateAgents(config: AgentsConfig): AgentsConfig {
   const parsed = ConfigSchema.parse(config)
   const ids = new Set<string>()
   for (const agent of parsed.agents) {
-    if (agent.id === COMPACT_AGENT.id && agent.builtin !== true) throw new Error('"compact" is reserved for the built-in agent')
-    if (agent.id !== COMPACT_AGENT.id && agent.builtin === true) throw new Error('Only the built-in "compact" agent may use the builtin marker')
-    if (ids.has(agent.id)) throw new Error(`Duplicate agent id: ${agent.id}`)
+    if (agent.id === COMPACT_AGENT.id && agent.builtin !== true) throw new Error('“compact” 是内置智能体的保留标识符')
+    if (agent.id !== COMPACT_AGENT.id && agent.builtin === true) throw new Error('只有内置“compact”智能体可以使用 builtin 标记')
+    if (ids.has(agent.id)) throw new Error(`智能体标识符重复：${agent.id}`)
     ids.add(agent.id)
   }
   return parsed

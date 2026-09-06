@@ -23,6 +23,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { navigate, routes } from '../../electron/src/renderer/lib/navigate'
+import type { Workspace } from '../../electron/src/shared/types'
 
 type AndroidBridge = {
   reload: () => void
@@ -90,7 +91,7 @@ const MOBILE_NAVIGATION_ITEMS: MobileNavigationItem[] = [
   { label: '定时自动化', route: routes.view.automationsScheduled(), icon: Clock, subitem: true },
   { label: '事件自动化', route: routes.view.automationsEvent(), icon: MousePointerClick, subitem: true },
   { label: '脚本监控', route: routes.view.automationsScriptMonitor(), icon: MonitorCog, subitem: true },
-  { label: 'Agents', route: routes.view.automationsAgents(), icon: Bot, subitem: true },
+  { label: '智能体', route: routes.view.automationsAgents(), icon: Bot, subitem: true },
   { label: '数据源', route: routes.view.sources(), icon: Database },
   { label: 'API', route: routes.view.sourcesApi(), icon: PlugZap, subitem: true },
   { label: 'MCP', route: routes.view.sourcesMcp(), icon: PlugZap, subitem: true },
@@ -110,6 +111,10 @@ const MOBILE_NAVIGATION_ITEMS: MobileNavigationItem[] = [
  */
 export function MobileControls() {
   const [navigationOpen, setNavigationOpen] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState<string | null>(null)
   const android = isAndroidApp()
 
   useEffect(() => {
@@ -122,9 +127,37 @@ export function MobileControls() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [navigationOpen])
 
+  useEffect(() => {
+    if (!android) return
+
+    let cancelled = false
+    const loadWorkspaces = async () => {
+      try {
+        const [availableWorkspaces, activeId] = await Promise.all([
+          window.electronAPI.getWorkspaces(),
+          window.electronAPI.getWindowWorkspace(),
+        ])
+        if (cancelled) return
+        setWorkspaces(availableWorkspaces)
+        setActiveWorkspaceId(activeId)
+      } catch (error) {
+        // The main app has its own loading/error handling. Do not make a
+        // secondary floating control prevent it from rendering.
+        console.error('[MobileControls] Failed to load workspaces:', error)
+      }
+    }
+
+    void loadWorkspaces()
+    return () => { cancelled = true }
+  }, [android])
+
   if (!android) return null
 
   const closeNavigation = () => setNavigationOpen(false)
+  const closeOverlays = () => {
+    setNavigationOpen(false)
+    setWorkspaceOpen(false)
+  }
   const navigateTo = (route: Parameters<typeof navigate>[0]) => {
     closeNavigation()
     // List navigators must open on their list in compact mode. In particular,
@@ -133,9 +166,87 @@ export function MobileControls() {
     const skipAutoSelect = route === routes.view.allSessions() || route.startsWith('automations')
     navigate(route, skipAutoSelect ? { skipAutoSelect: true } : undefined)
   }
+  const switchWorkspace = async (workspaceId: string) => {
+    if (workspaceId === activeWorkspaceId || switchingWorkspaceId) {
+      setWorkspaceOpen(false)
+      return
+    }
+
+    setSwitchingWorkspaceId(workspaceId)
+    try {
+      await window.electronAPI.switchWorkspace(workspaceId)
+
+      // The shared Electron App owns several workspace-scoped stores. Reload
+      // with the selected ID so it starts with a clean, correctly scoped state.
+      const url = new URL(window.location.href)
+      url.searchParams.set('workspace', workspaceId)
+      url.searchParams.delete('session')
+      window.location.assign(url.toString())
+    } catch (error) {
+      console.error('[MobileControls] Failed to switch workspace:', error)
+      setSwitchingWorkspaceId(null)
+    }
+  }
+
+  const activeWorkspace = workspaces.find(workspace => workspace.id === activeWorkspaceId)
 
   return (
-    <div className="mobile-controls" data-open={navigationOpen || undefined}>
+    <>
+      <div className="mobile-workspace-controls" data-open={workspaceOpen || undefined}>
+        {workspaceOpen && (
+          <button
+            type="button"
+            className="mobile-workspace-controls__backdrop"
+            aria-label="关闭工作区列表"
+            onClick={closeOverlays}
+          />
+        )}
+
+        <button
+          type="button"
+          className="mobile-workspace-controls__trigger"
+          aria-label={`切换工作区${activeWorkspace ? `，当前：${activeWorkspace.name}` : ''}`}
+          title={activeWorkspace?.name ?? '切换工作区'}
+          aria-expanded={workspaceOpen}
+          aria-controls="mobile-workspace-controls-panel"
+          onClick={() => {
+            setNavigationOpen(false)
+            setWorkspaceOpen(value => !value)
+          }}
+        >
+          <FolderKanban aria-hidden="true" />
+        </button>
+
+        {workspaceOpen && (
+          <section
+            id="mobile-workspace-controls-panel"
+            className="mobile-workspace-controls__panel"
+            aria-label="切换工作区"
+          >
+            <div className="mobile-workspace-controls__header">切换工作区</div>
+            {workspaces.map(workspace => {
+              const selected = workspace.id === activeWorkspaceId
+              const switching = workspace.id === switchingWorkspaceId
+              return (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  className={selected ? 'mobile-workspace-controls__item is-active' : 'mobile-workspace-controls__item'}
+                  disabled={selected || Boolean(switchingWorkspaceId)}
+                  onClick={() => void switchWorkspace(workspace.id)}
+                >
+                  <span className="mobile-workspace-controls__name">{workspace.name}</span>
+                  <span className="mobile-workspace-controls__status">
+                    {switching ? '切换中…' : selected ? '当前' : ''}
+                  </span>
+                </button>
+              )
+            })}
+          </section>
+        )}
+      </div>
+
+      <div className="mobile-controls" data-open={navigationOpen || undefined}>
       {navigationOpen && (
         <button
           type="button"
@@ -221,6 +332,7 @@ export function MobileControls() {
           </button>
         </nav>
       )}
-    </div>
+      </div>
+    </>
   )
 }

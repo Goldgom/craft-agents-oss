@@ -17,6 +17,7 @@ import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
 import { isMac } from '@/lib/platform'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
+import { dispatchAutoCapitalisationChange } from '@/components/app-shell/input/input-settings-events'
 
 import {
   SettingsSection,
@@ -68,6 +69,7 @@ export default function InputSettingsPage() {
 
   const handleAutoCapitalisationChange = useCallback(async (enabled: boolean) => {
     setAutoCapitalisation(enabled)
+    dispatchAutoCapitalisationChange(enabled)
     await window.electronAPI.setAutoCapitalisation(enabled)
   }, [])
 

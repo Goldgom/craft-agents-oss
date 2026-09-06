@@ -93,6 +93,7 @@ import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlA
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
 import { invalidateContextFileCache } from '@craft-agent/shared/prompts/system'
 import { getToolIconsDir, getMiniModel } from '@craft-agent/shared/config'
+import { listAgents, type AgentSessionSettings } from '@craft-agent/shared/agents'
 import { getDefaultSummarizationModel } from '@craft-agent/shared/config/models'
 import type { SummarizeCallback } from '@craft-agent/shared/sources'
 import { type ThinkingLevel, DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
@@ -382,6 +383,20 @@ async function buildServersFromSources(
   summarize?: SummarizeCallback
 ) {
   return buildServersFromSourcesShared(sources, sessionPath, tokenRefreshManager, summarize, sessionLog)
+}
+
+/** Apply an Agent's independent MCP/API source switches. Ordinary sessions
+ * have no policy and retain the workspace behaviour unchanged. */
+function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'agentSessionSettings'>): LoadedSource[] {
+  const settings = managed?.agentSessionSettings
+  if (!settings) return sources
+  const mcp = settings.mcpSourceSlugs ? new Set(settings.mcpSourceSlugs) : null
+  const api = settings.apiSourceSlugs ? new Set(settings.apiSourceSlugs) : null
+  return sources.filter(source => {
+    if (source.config.type === 'mcp' && mcp) return mcp.has(source.config.slug)
+    if (source.config.type === 'api' && api) return api.has(source.config.slug)
+    return source.config.type === 'local' || (!mcp && !api)
+  })
 }
 
 /**
@@ -809,6 +824,10 @@ interface ManagedSession {
   thinkingLevel?: ThinkingLevel
   // System prompt preset for mini agents ('default' | 'mini')
   systemPromptPreset?: 'default' | 'mini' | string
+  /** Agent-created session provenance and effective system instructions. */
+  agentId?: string
+  agentPrompt?: string
+  agentSessionSettings?: AgentSessionSettings
   // Role/type of the last message (for badge display without loading messages)
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error'
   // ID of the last final (non-intermediate) assistant message - pre-computed for unread detection
@@ -2090,9 +2109,9 @@ export class SessionManager implements ISessionManager {
 
     // Rebuild MCP and API servers for session's enabled sources
     const enabledSlugs = managed.enabledSourceSlugs || []
-    const enabledSources = allSources.filter(s =>
+    const enabledSources = filterAgentSources(allSources.filter(s =>
       enabledSlugs.includes(s.config.slug) && isSourceUsable(s)
-    )
+    ), managed)
     // Pass session path so large API responses can be saved to session folder
     const sessionPath = getSessionStoragePath(workspaceRootPath, managed.id)
     const { mcpServers, apiServers } = await buildServersFromSources(enabledSources, sessionPath, managed.tokenRefreshManager, managed.agent?.getSummarizeCallback())
@@ -2852,6 +2871,18 @@ export class SessionManager implements ISessionManager {
     const wsConfig = loadWorkspaceConfig(workspaceRootPath)
     const globalDefaults = loadConfigDefaults()
 
+    let selectedAgent: Awaited<ReturnType<typeof listAgents>>[number] | undefined
+    if (options?.agentId) {
+      selectedAgent = (await listAgents(workspaceRootPath)).find(agent => agent.id === options.agentId)
+      if (!selectedAgent) throw new Error(`Agent "${options.agentId}" not found in workspace ${workspaceId}`)
+    }
+    const agentSettings = selectedAgent?.session
+    const effectiveModel = agentSettings?.model ?? selectedAgent?.model ?? options?.model
+    const effectiveConnection = agentSettings?.llmConnection ?? options?.llmConnection
+    const effectiveSources = agentSettings?.enabledSourceSlugs ?? options?.enabledSourceSlugs
+    const effectiveHidden = agentSettings?.showInSessionList === undefined ? options?.hidden : !agentSettings.showInSessionList
+    const effectiveAgentPrompt = agentSettings?.systemPrompt ?? selectedAgent?.prompt
+
     // Read permission mode from workspace config, fallback to global defaults
     const defaultPermissionMode = options?.permissionMode
       ?? wsConfig?.defaults?.permissionMode
@@ -2868,15 +2899,15 @@ export class SessionManager implements ISessionManager {
     // Get default model from workspace config (used when no session-specific model is set)
     const defaultModel = wsConfig?.defaults?.model
     // Get default enabled sources from workspace config
-    const defaultEnabledSourceSlugs = options?.enabledSourceSlugs ?? wsConfig?.defaults?.enabledSourceSlugs
+    const defaultEnabledSourceSlugs = effectiveSources ?? wsConfig?.defaults?.enabledSourceSlugs
 
     // Resolve model tier hints ('fast' / 'default') to actual model IDs.
     // EditPopover uses tier hints instead of hardcoded Anthropic model names
     // so the right model is selected regardless of the active LLM provider.
-    let resolvedModelOption = options?.model || defaultModel
+    let resolvedModelOption = effectiveModel || defaultModel
     if (resolvedModelOption === 'fast' || resolvedModelOption === 'default') {
       const tierConnection = resolveSessionConnection(
-        options?.llmConnection,
+        effectiveConnection,
         wsConfig?.defaults?.defaultLlmConnection,
       )
       if (tierConnection) {
@@ -2890,7 +2921,7 @@ export class SessionManager implements ISessionManager {
 
     // Resolve backend target early for branching policy checks.
     const targetBackendContext = resolveBackendContext({
-      sessionConnectionSlug: options?.llmConnection,
+      sessionConnectionSlug: effectiveConnection,
       workspaceDefaultConnectionSlug: wsConfig?.defaults?.defaultLlmConnection,
       managedModel: resolvedModelOption,
     })
@@ -3137,7 +3168,7 @@ export class SessionManager implements ISessionManager {
       name: options?.name,
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
-      hidden: options?.hidden,
+      hidden: effectiveHidden,
       sessionStatus: options?.sessionStatus,
       labels: options?.labels,
       isFlagged: options?.isFlagged,
@@ -3150,7 +3181,11 @@ export class SessionManager implements ISessionManager {
       // Persist only an EXPLICIT selection (e.g. a task's spec.sources on its subtasks).
       // The workspace-default fallback stays dynamic — freezing it into the header would
       // pin every ordinary session to the defaults as of its creation time.
-      enabledSourceSlugs: options?.enabledSourceSlugs,
+      // Preserve the existing dynamic workspace-default behaviour. Agent and
+      // explicit request selections are persisted; an omitted selection is
+      // re-resolved from workspace defaults on the next start.
+      enabledSourceSlugs: effectiveSources,
+      agentId: selectedAgent?.id,
     })
 
     // Branch: copy messages from source session up to and including the branch point
@@ -3232,9 +3267,12 @@ export class SessionManager implements ISessionManager {
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
       model: resolvedModel,
-      llmConnection: options?.llmConnection,
+      llmConnection: effectiveConnection,
       thinkingLevel: defaultThinkingLevel,
       systemPromptPreset: options?.systemPromptPreset,
+      agentId: selectedAgent?.id,
+      agentPrompt: effectiveAgentPrompt,
+      agentSessionSettings: agentSettings,
       enabledSourceSlugs: defaultEnabledSourceSlugs,
       branchFromMessageId: validatedBranch?.sourceMessageId,
       branchContextStrategy: validatedBranch?.branchContextStrategy,
@@ -3729,11 +3767,23 @@ export class SessionManager implements ISessionManager {
       // ============================================================
 
       const sessionPath = getSessionStoragePath(managed.workspace.rootPath, managed.id)
+      // Rehydrate the selected Agent after restart. The persisted id is the
+      // source of truth; malformed/deleted definitions fail soft to preserve
+      // access to the conversation with workspace defaults.
+      if (managed.agentId && !managed.agentSessionSettings) {
+        try {
+          const restoredAgent = (await listAgents(managed.workspace.rootPath)).find(agent => agent.id === managed.agentId)
+          managed.agentPrompt = restoredAgent?.session?.systemPrompt ?? restoredAgent?.prompt
+          managed.agentSessionSettings = restoredAgent?.session
+        } catch (error) {
+          sessionLog.warn(`Failed to restore Agent settings for session ${managed.id}:`, error)
+        }
+      }
       const enabledSlugs = managed.enabledSourceSlugs || []
       const allSources = loadAllSources(managed.workspace.rootPath)
-      const enabledSources = allSources.filter(s =>
+      const enabledSources = filterAgentSources(allSources.filter(s =>
         enabledSlugs.includes(s.config.slug) && isSourceUsable(s)
-      )
+      ), managed)
 
       // Build server configs for enabled sources
       const { mcpServers, apiServers } = await buildServersFromSources(enabledSources, sessionPath, managed.tokenRefreshManager)
@@ -3906,6 +3956,7 @@ export class SessionManager implements ISessionManager {
         skipConfigWatcher: true, // Server owns workspace-level ConfigWatcher — don't duplicate in agents
         automationSystem: this.automationSystems.get(managed.workspace.rootPath),
         systemPromptPreset: managed.systemPromptPreset,
+        agentPrompt: managed.agentPrompt,
         debugMode: _platform?.isDebugMode ? { enabled: true, logFilePath: _platform.getLogFilePath?.() } : undefined,
         enable1MContext: await (async () => { const { getEnable1MContext } = await import('@craft-agent/shared/config/storage'); return getEnable1MContext(); })(),
         // Image resize callback — prevents oversized images from entering conversation history
@@ -4563,6 +4614,7 @@ export class SessionManager implements ISessionManager {
         sessionLog.info(`Spawn session request from session ${managed.id}:`, request.name || '(unnamed)')
 
         const session = await this.createSession(managed.workspace.id, {
+          agentId: request.agentId,
           name: request.name,
           llmConnection: request.llmConnection ?? managed.llmConnection,
           model: request.model ?? managed.model,
@@ -4973,6 +5025,19 @@ export class SessionManager implements ISessionManager {
         }
 
         const source = sources[0]
+
+        // Agent-created sessions cannot escape their independent integration
+        // policy through lazy source activation.
+        const agentPolicy = managed.agentSessionSettings
+        const allowedByAgent = source.config.type === 'mcp'
+          ? (!agentPolicy?.mcpSourceSlugs || agentPolicy.mcpSourceSlugs.includes(sourceSlug))
+          : source.config.type === 'api'
+            ? (!agentPolicy?.apiSourceSlugs || agentPolicy.apiSourceSlugs.includes(sourceSlug))
+            : true
+        if (!allowedByAgent) {
+          sessionLog.warn(`Agent policy blocked source activation for ${managed.id}: ${sourceSlug}`)
+          return false
+        }
 
         // Check if source is usable (enabled and authenticated if auth is required)
         if (!isSourceUsable(source)) {
@@ -5488,7 +5553,7 @@ export class SessionManager implements ISessionManager {
       const sources = getSourcesBySlugs(workspaceRootPath, sourceSlugs)
       // Pass session path so large API responses can be saved to session folder
       const sessionPath = getSessionStoragePath(workspaceRootPath, sessionId)
-      const { mcpServers, apiServers, errors } = await buildServersFromSources(sources, sessionPath, managed.tokenRefreshManager, managed.agent.getSummarizeCallback())
+      const { mcpServers, apiServers, errors } = await buildServersFromSources(filterAgentSources(sources, managed), sessionPath, managed.tokenRefreshManager, managed.agent.getSummarizeCallback())
       if (errors.length > 0) {
         sessionLog.warn(`Source build errors:`, errors)
       }
@@ -6531,7 +6596,7 @@ export class SessionManager implements ISessionManager {
     // and emits AUTH_REQUIRED, causing a brief "needs_auth" UI flicker before the
     // post-build refresh restores state (#710).
     const sources: LoadedSource[] = hasSources
-      ? getSourcesBySlugs(workspaceRootPath, enabledSlugs)
+      ? filterAgentSources(getSourcesBySlugs(workspaceRootPath, enabledSlugs), managed)
       : []
 
     if (hasSources && managed.tokenRefreshManager) {

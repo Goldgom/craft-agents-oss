@@ -102,6 +102,8 @@ export interface SpawnSessionRequest {
   workingDirectory?: string;
   /** Workspace project id to bind the spawned session to */
   projectId?: string;
+  /** Reusable Agent definition to apply with highest precedence. */
+  agentId?: string;
   attachments?: Array<{ path: string; name?: string }>;
 }
 
@@ -1193,6 +1195,7 @@ ${formattedMessages}
         ? expandPath(input.workingDirectory)
         : undefined,
       projectId: input.projectId as string | undefined,
+      agentId: input.agentId as string | undefined,
       attachments: input.attachments as SpawnSessionRequest['attachments'],
     };
 

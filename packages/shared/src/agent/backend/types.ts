@@ -196,6 +196,8 @@ export interface CoreBackendConfig {
 
   /** System prompt preset ('default' | 'mini' | custom string) */
   systemPromptPreset?: 'default' | 'mini' | string;
+  /** Extra system instructions supplied by an Agent-created session. */
+  agentPrompt?: string;
 
   /** Workspace-level automation system for user-defined automations (automations.json) */
   automationSystem?: AutomationSystem;

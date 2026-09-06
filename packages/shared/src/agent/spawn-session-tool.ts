@@ -47,7 +47,7 @@ Use this to delegate tasks to parallel sessions — research, analysis, drafts, 
 Call with help=true first to discover available connections, models, and sources.
 When spawning, the 'prompt' parameter is required.
 
-Optional overrides: model, llmConnection, permissionMode, thinkingLevel, enabledSourceSlugs, labels, workingDirectory. Omitted fields inherit from the spawning session or the workspace default.
+Optional overrides: agentId, model, llmConnection, permissionMode, thinkingLevel, enabledSourceSlugs, labels, workingDirectory. When agentId is supplied, the Agent's configured session settings take precedence over these overrides.
 
 thinkingLevel is silently ignored on non-reasoning models (e.g. gpt-4o, gemini-2.5-flash) — the SDK drops the reasoning param rather than erroring.
 
@@ -60,6 +60,8 @@ Only use 'attachments' for existing file paths on disk — the tool reads them a
         .describe('Instructions for the new session (required when not in help mode)'),
       name: z.string().optional()
         .describe('Session name'),
+      agentId: z.string().optional()
+        .describe('Workspace Agent definition to use for this special session'),
       llmConnection: z.string().optional()
         .describe('Connection slug (e.g., "anthropic-api", "codex")'),
       model: z.string().optional()

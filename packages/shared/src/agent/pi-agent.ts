@@ -2168,6 +2168,7 @@ export class PiAgent extends BaseAgent {
         'Craft Agents Backend', // backendName
         getCoAuthorPreference(), // respect user's includeCoAuthoredBy preference (#576)
         projectContext ?? undefined,
+        this.config.agentPrompt,
       );
 
       // Build context from sources

@@ -273,6 +273,121 @@ html.keyboard-open .mobile-navigation-menu {
   display: none;
 }
 
+/* Workspace selection remains available in Android even though the desktop
+   TopBar is hidden. It deliberately occupies the opposite corner from the
+   app-action controls so both controls stay easy to reach. */
+.mobile-workspace-controls {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: calc(env(safe-area-inset-left, 0px) + 12px);
+  z-index: var(--z-modal, 200);
+  pointer-events: none;
+}
+
+.mobile-workspace-controls__backdrop {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.mobile-workspace-controls__trigger {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 22px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--background) 90%, transparent);
+  box-shadow: var(--shadow-modal-small, 0 6px 18px rgb(0 0 0 / 18%));
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-workspace-controls__trigger svg {
+  width: 20px;
+  height: 20px;
+}
+
+.mobile-workspace-controls__trigger:active {
+  transform: scale(.94);
+}
+
+.mobile-workspace-controls__panel {
+  position: absolute;
+  top: 52px;
+  left: 0;
+  z-index: 3;
+  display: grid;
+  width: min(280px, calc(100vw - 24px));
+  max-height: min(60vh, calc(var(--app-viewport-height, 100dvh) - 76px));
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover, var(--background));
+  box-shadow: var(--shadow-modal-small, 0 6px 18px rgb(0 0 0 / 18%));
+  pointer-events: auto;
+}
+
+.mobile-workspace-controls__header {
+  padding: 13px 16px 9px;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mobile-workspace-controls__item {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+  background: transparent;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mobile-workspace-controls__item:active:not(:disabled) {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.mobile-workspace-controls__item:disabled {
+  cursor: default;
+}
+
+.mobile-workspace-controls__item.is-active {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.mobile-workspace-controls__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-workspace-controls__status {
+  flex: none;
+  color: var(--foreground);
+  font-size: 12px;
+  opacity: .55;
+}
+
 /* Android uses one top-right capsule for both navigation and app actions.
    Keeping its hit area in the corner leaves the All Sessions header clear. */
 .mobile-controls {
@@ -442,6 +557,10 @@ html.keyboard-open .mobile-navigation-menu {
 }
 
 html.keyboard-open .mobile-controls {
+  display: none;
+}
+
+html.keyboard-open .mobile-workspace-controls {
   display: none;
 }
 

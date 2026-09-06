@@ -9,7 +9,7 @@
  * Convert a string to a URL/filesystem-safe slug
  * - Lowercase
  * - Replace spaces and underscores with hyphens
- * - Remove non-alphanumeric characters (except hyphens)
+ * - Remove non-letter/non-number characters (except hyphens)
  * - Collapse multiple hyphens
  * - Trim leading/trailing hyphens
  */
@@ -19,8 +19,10 @@ export function slugify(str: string): string {
     .trim()
     // Replace spaces and underscores with hyphens
     .replace(/[\s_]+/g, '-')
-    // Remove non-alphanumeric characters except hyphens
-    .replace(/[^a-z0-9-]/g, '')
+    // Keep Unicode letters and numbers (e.g. Chinese workspace names) while
+    // removing punctuation and other characters that are unsafe in a folder
+    // name. Unicode property escapes are supported by the app's target runtimes.
+    .replace(/[^\p{L}\p{N}-]/gu, '')
     // Collapse multiple hyphens into one
     .replace(/-+/g, '-')
     // Remove leading/trailing hyphens
@@ -31,5 +33,5 @@ export function slugify(str: string): string {
  * Check if a string is a valid slug (already slugified)
  */
 export function isValidSlug(str: string): boolean {
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(str)
+  return /^[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*$/u.test(str)
 }

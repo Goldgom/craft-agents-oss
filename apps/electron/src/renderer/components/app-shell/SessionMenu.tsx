@@ -31,6 +31,7 @@ import {
   Tag,
   Send,
   FolderKanban,
+  Users,
   Check,
 } from 'lucide-react'
 import { useMenuComponents } from '@/components/ui/menu-context'
@@ -76,6 +77,7 @@ export interface SessionMenuProps {
   onOpenInNewWindow: () => void
   onSendToWorkspace?: () => void
   onDelete: () => void
+  onConfigureCollaboration?: () => void
 }
 
 /**
@@ -97,6 +99,7 @@ export function SessionMenu({
   onOpenInNewWindow,
   onSendToWorkspace,
   onDelete,
+  onConfigureCollaboration,
   hasTransferTargets,
   projects = [],
   onSetProjectId,
@@ -148,6 +151,13 @@ export function SessionMenu({
         <MenuItem onClick={onSendToWorkspace}>
           <Send className="h-3.5 w-3.5" />
           <span className="flex-1">{t("sessionMenu.sendToWorkspace")}</span>
+        </MenuItem>
+      )}
+
+      {onConfigureCollaboration && (
+        <MenuItem onClick={onConfigureCollaboration}>
+          <Users className="h-3.5 w-3.5" />
+          <span className="flex-1">Configure collaboration</span>
         </MenuItem>
       )}
 

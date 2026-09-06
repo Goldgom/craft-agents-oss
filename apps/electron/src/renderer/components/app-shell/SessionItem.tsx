@@ -1,4 +1,5 @@
 import { formatDistanceToNowStrict } from "date-fns"
+import * as React from 'react'
 import type { Locale } from "date-fns"
 import { Flag, ShieldAlert } from "lucide-react"
 import { useActionLabel } from "@/actions"
@@ -10,6 +11,7 @@ import { EntityListBadge } from "@/components/ui/entity-list-badge"
 import { SessionMenu } from "./SessionMenu"
 import { BatchSessionMenu } from "./BatchSessionMenu"
 import { CompactSessionMenu } from "./CompactSessionMenu"
+import { CollaborationDialog } from './CollaborationDialog'
 import { SessionStatusIcon } from "./SessionStatusIcon"
 import { SessionBadges } from "./SessionBadges"
 import { SessionProjectColorWrapper } from "./SessionProjectColorWrapper"
@@ -57,6 +59,7 @@ export function SessionItem({
   onToggleSelect,
   onRangeSelect,
 }: SessionItemProps) {
+  const [collaborationOpen, setCollaborationOpen] = React.useState(false)
   const ctx = useSessionListContext()
   const { workspaces, isCompactMode } = useAppShellContext()
   const canSendToWorkspace = hasTransferTargets(workspaces)
@@ -154,6 +157,7 @@ export function SessionItem({
           onSendToWorkspace={ctx.onSendToWorkspace ? () => ctx.onSendToWorkspace!([item.id]) : undefined}
           hasTransferTargets={canSendToWorkspace}
           onDelete={() => ctx.onDelete(item.id)}
+          onConfigureCollaboration={() => setCollaborationOpen(true)}
           projects={ctx.projects}
           onSetProjectId={ctx.onSetProjectId ? (pid) => ctx.onSetProjectId!(item.id, pid) : undefined}
         />
@@ -268,6 +272,7 @@ export function SessionItem({
       ) : undefined}
       badges={hasLabels ? <SessionBadges item={item} /> : undefined}
     />
+      <CollaborationDialog primary={item} open={collaborationOpen} onOpenChange={setCollaborationOpen} />
     </SessionProjectColorWrapper>
   )
 }

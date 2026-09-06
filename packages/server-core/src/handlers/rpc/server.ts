@@ -72,9 +72,12 @@ export function registerServerHandlers(
     if (!name?.trim()) throw new Error('Workspace name is required')
     const trimmed = name.trim()
 
+    // Preserve Unicode letters/numbers (including Chinese) in the generated
+    // folder name. The previous ASCII-only expression produced an empty slug
+    // for pure non-Latin names and made creation fail or fall back incorrectly.
     const slug = trimmed
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/[^\p{L}\p{N}]+/gu, '-')
       .replace(/^-|-$/g, '')
       || 'workspace'
 

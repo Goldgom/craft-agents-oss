@@ -245,7 +245,9 @@ export function getWorkspaceSummary(rootPath: string): WorkspaceSummary | null {
 export function generateSlug(name: string): string {
   let slug = name
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
+    // Keep Unicode letters/numbers so names such as "我的工作区" remain
+    // usable as workspace folder names instead of collapsing to "workspace".
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-|-$/g, '')
     .substring(0, 50);
 
@@ -521,8 +523,15 @@ export function ensurePluginManifest(rootPath: string, workspaceName: string): v
   }
 
   // Create minimal plugin manifest
+  // Plugin package names must be ASCII. Keep the human-readable workspace
+  // name in config.json, and derive a deterministic ASCII suffix here so a
+  // pure Chinese name does not produce the invalid trailing `-` name.
+  const workspaceSlug = generateSlug(workspaceName)
+  const pluginSlug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(workspaceSlug)
+    ? workspaceSlug
+    : `workspace-${Buffer.from(workspaceName, 'utf8').toString('hex').slice(0, 24)}`
   const manifest = {
-    name: `craft-workspace-${workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    name: `craft-workspace-${pluginSlug}`,
     version: '1.0.0',
   };
 
