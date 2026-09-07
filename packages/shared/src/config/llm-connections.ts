@@ -632,9 +632,13 @@ export function getModelsForProviderType(providerType: LlmProviderType, piAuthPr
 export const PI_PREFERRED_DEFAULTS: Record<string, string[]> = {
   // TODO(opus-4.6-sunset): drop 'claude-opus-4-6' from anthropic and amazon-bedrock
   // when Opus 4.6 is deprecated.
-  anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
-  openai: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
-  'openai-codex': ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
+  // Opus 5 entered the Pi catalog in SDK 0.82.1; rank it right below the
+  // Opus 4.8 default so it surfaces near the top without changing the default.
+  anthropic: ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  // GPT-6 Astra entered the Pi catalog in SDK 0.85.1 for both the API-key and
+  // the ChatGPT-account (openai-codex) flows; new connections default to it.
+  openai: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
+  'openai-codex': ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
   // Stable models first so the connection-setup test (which uses
   // getDefaultModelForConnection) lands on a reliable model.
   // gemini-3-pro-preview and gemini-3.1-pro-preview are intermittently
@@ -660,23 +664,28 @@ export function getDefaultModelsForConnection(providerType: LlmProviderType, piA
     // comparison and reverse Bedrock ID mapping.
     const preferred = (piAuthProvider && PI_PREFERRED_DEFAULTS[piAuthProvider]) || [];
     if (preferred.length > 0) {
-      const findPreferredIndex = (id: string): number => {
+      // Rank of a catalog entry among the preferred defaults. Unranked entries
+      // sort after every preferred model, keeping the SDK's catalog order.
+      const UNRANKED = preferred.length
+      const matchIndex = (candidate: string): number =>
+        preferred.findIndex(p => candidate === p || candidate.startsWith(`${p}-`))
+      const preferredRank = (id: string): number => {
         const bare = id.startsWith('pi/') ? id.slice(3) : id
-        // Try direct match first (works for non-Bedrock providers)
-        const direct = preferred.findIndex(p => bare === p || bare.startsWith(`${p}-`))
+        // Deprecated IDs normalize to their replacement for stored-config
+        // migration. Rank them explicitly as unranked: fromBedrockNativeId()
+        // below applies the same normalization, and letting a retired snapshot
+        // (e.g. claude-opus-4-5-20251101) inherit its replacement's rank made
+        // the stable sort pick it as the connection default.
+        if (normalizeDeprecatedModelId(bare) !== bare) return UNRANKED
+        // Direct match (non-Bedrock providers)
+        const direct = matchIndex(bare)
         if (direct >= 0) return direct
-        // For Bedrock: reverse-map native ID to bare, then match
+        // Bedrock: reverse-map the native inference-profile ID to bare, then match
         const reversed = fromBedrockNativeId(bare)
-        if (reversed !== bare) {
-          return preferred.findIndex(p => reversed === p || reversed.startsWith(`${p}-`))
-        }
-        return -1
+        const viaBedrock = reversed !== bare ? matchIndex(reversed) : -1
+        return viaBedrock >= 0 ? viaBedrock : UNRANKED
       }
-      models.sort((a, b) => {
-        const aPrio = findPreferredIndex(a.id) ?? preferred.length;
-        const bPrio = findPreferredIndex(b.id) ?? preferred.length;
-        return (aPrio >= 0 ? aPrio : preferred.length) - (bPrio >= 0 ? bPrio : preferred.length);
-      });
+      models.sort((a, b) => preferredRank(a.id) - preferredRank(b.id));
     }
     return models;
   }
