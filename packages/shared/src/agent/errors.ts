@@ -431,7 +431,7 @@ export function parseError(
     }
   } else if (lowerMessage.includes('429') || lowerMessage.includes('rate limit') || lowerMessage.includes('too many requests')) {
     code = 'rate_limited';
-  } else if (lowerMessage.includes('500') || lowerMessage.includes('502') || lowerMessage.includes('503') || lowerMessage.includes('504') || lowerMessage.includes('internal server error') || lowerMessage.includes('service unavailable')) {
+  } else if (lowerMessage.includes('500') || lowerMessage.includes('502') || lowerMessage.includes('503') || lowerMessage.includes('504') || lowerMessage.includes('529') || lowerMessage.includes('internal server error') || lowerMessage.includes('service unavailable') || lowerMessage.includes('overloaded')) {
     code = 'service_error';
   } else if (lowerMessage.includes('network') || lowerMessage.includes('econnrefused') || lowerMessage.includes('enotfound') || lowerMessage.includes('fetch failed') || lowerMessage.includes('connection')) {
     code = 'network_error';
@@ -520,6 +520,36 @@ export function buildAndroidClaudeUnsupportedError(originalError?: string): Agen
       'Anthropic does not publish an Android build of Claude Code.',
     ],
     originalError,
+  };
+}
+
+/**
+ * Build a typed {@link AgentError} for a code the caller has already
+ * determined, e.g. when a backend-specific classifier (the Pi SDK's
+ * `isRetryableAssistantError`) recognizes a transient failure that
+ * {@link parseError}'s generic text matching does not.
+ *
+ * Same shape as a `parseError` result: user-facing text and recovery actions
+ * come from `ERROR_DEFINITIONS`, the raw provider text is kept in
+ * `originalError` for diagnostics.
+ */
+export function createAgentError(
+  code: ErrorCode,
+  originalError?: string,
+  providerContext?: { providerType?: string; piAuthProvider?: string },
+): AgentError {
+  const definition = ERROR_DEFINITIONS[code]!;
+  const providerInfo = providerContext
+    ? getProviderMetadata(
+        providerContext.providerType ?? 'anthropic',
+        providerContext.piAuthProvider,
+      ) ?? undefined
+    : undefined;
+  return {
+    code,
+    ...definition,
+    originalError,
+    providerInfo,
   };
 }
 

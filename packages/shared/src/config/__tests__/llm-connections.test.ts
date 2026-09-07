@@ -3,6 +3,7 @@ import '../../../tests/setup/register-pi-model-resolver.ts'
 import {
   getDefaultModelsForConnection,
   getDefaultModelForConnection,
+  PI_PREFERRED_DEFAULTS,
   isCompatProvider,
   isAnthropicProvider,
   isPiProvider,
@@ -11,7 +12,7 @@ import {
   normalizeBedrockModelId,
   deriveBedrockRegionPrefix,
 } from '../llm-connections'
-import { ANTHROPIC_MODELS, getModelDisplayName, getModelContextWindow, getModelShortName, isClaudeModel } from '../models'
+import { ANTHROPIC_MODELS, getModelDisplayName, getModelContextWindow, getModelShortName, isClaudeModel, normalizeDeprecatedModelId } from '../models'
 
 // ============================================================
 // getDefaultModelsForConnection
@@ -67,11 +68,53 @@ describe('getDefaultModelForConnection', () => {
     expect(modelIds).toContain(defaultModel)
   })
 
+  it('Pi anthropic keeps Opus 4.8 as default with Opus 5 ranked directly below it', () => {
+    const ids = getDefaultModelsForConnection('pi', 'anthropic').map(m => typeof m === 'string' ? m : m.id)
+    expect(ids[0]).toBe('pi/claude-opus-4-8')
+    expect(ids[1]).toBe('pi/claude-opus-5')
+    expect(getDefaultModelForConnection('pi', 'anthropic')).toBe('pi/claude-opus-4-8')
+  })
+
+  // Regression: the Pi catalogs still list the retired Opus 4.5 snapshot. Its
+  // deprecated ID normalizes to claude-opus-4-8 and used to inherit that rank,
+  // so the stable sort made it the default for anthropic and amazon-bedrock.
+  it('never ranks a deprecated catalog entry as the Pi default', () => {
+    for (const provider of ['anthropic', 'amazon-bedrock'] as const) {
+      const ids = getDefaultModelsForConnection('pi', provider).map(m => typeof m === 'string' ? m : m.id)
+      const defaultModel = getDefaultModelForConnection('pi', provider)
+      expect(defaultModel).toBe(ids[0]!)
+      expect(normalizeDeprecatedModelId(defaultModel)).toBe(defaultModel)
+      expect(defaultModel).toMatch(/claude-opus-4-8$/)
+      // Deprecated entries stay listed, but only after every preferred model
+      // (matched directly or via the Bedrock reverse mapping).
+      const preferred = PI_PREFERRED_DEFAULTS[provider]!
+      const isPreferred = (id: string) => {
+        const bare = id.slice('pi/'.length)
+        if (normalizeDeprecatedModelId(bare) !== bare) return false
+        return [bare, fromBedrockNativeId(bare)].some(candidate =>
+          preferred.some(p => candidate === p || candidate.startsWith(`${p}-`)))
+      }
+      const firstDeprecatedIndex = ids.findIndex(id => normalizeDeprecatedModelId(id) !== id)
+      const lastPreferredIndex = ids.findLastIndex(isPreferred)
+      expect(firstDeprecatedIndex).toBeGreaterThan(-1)
+      expect(firstDeprecatedIndex).toBeGreaterThan(lastPreferredIndex)
+    }
+  })
+
   it('Pi openai default is in its own model list', () => {
     const defaultModel = getDefaultModelForConnection('pi', 'openai')
     const models = getDefaultModelsForConnection('pi', 'openai')
     const modelIds = models.map(m => typeof m === 'string' ? m : m.id)
     expect(modelIds).toContain(defaultModel)
+  })
+
+  it('Pi openai and openai-codex default to GPT-6 Astra with GPT-5.6 Sol ranked next', () => {
+    for (const provider of ['openai', 'openai-codex'] as const) {
+      const ids = getDefaultModelsForConnection('pi', provider).map(m => typeof m === 'string' ? m : m.id)
+      expect(ids[0]).toBe('pi/gpt-6-astra')
+      expect(ids[1]).toBe('pi/gpt-5.6-sol')
+      expect(getDefaultModelForConnection('pi', provider)).toBe('pi/gpt-6-astra')
+    }
   })
 
   it('Pi deepseek default is in its own model list', () => {

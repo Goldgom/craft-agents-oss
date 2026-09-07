@@ -741,6 +741,8 @@ interface ManagedSession {
   /** In-flight full runtime teardown; new sends await it before recreating. */
   runtimeTeardown?: Promise<void>
   streamingText: string
+  /** Identity of the unfinished assistant text, used for retry discard boundaries. */
+  streamingTurnId?: string
   // Incremented each time a new message starts processing.
   // Used to detect if a follow-up message has superseded the current one (stale-request guard).
   processingGeneration: number
@@ -6614,6 +6616,7 @@ export class SessionManager implements ISessionManager {
     managed.lastMessageAt = Date.now()
     this.setProcessing(managed, true)
     managed.streamingText = ''
+    managed.streamingTurnId = undefined
     managed.processingGeneration++
     managed.turnStartFinalMessageId = this.getLastFinalAssistantMessageId(managed.messages)
 
@@ -8297,8 +8300,25 @@ export class SessionManager implements ISessionManager {
     switch (event.type) {
       case 'text_delta':
         managed.streamingText += event.text
+        managed.streamingTurnId = event.turnId
         // Queue delta for batched sending (performance: reduces IPC from 50+/sec to ~20/sec)
         this.queueDelta(sessionId, workspaceId, event.text, event.turnId)
+        break
+
+      case 'text_discard':
+        // Discard, NEVER flush, the failed attempt's batch before announcing
+        // backoff. Otherwise a delayed failed token can arrive after retry start.
+        this.discardDelta(sessionId, event.turnId)
+        if (managed.streamingTurnId === event.turnId) {
+          managed.streamingText = ''
+          managed.streamingTurnId = undefined
+        }
+        this.sendEvent({ ...event, sessionId }, workspaceId)
+        break
+
+      case 'retry':
+        // Retry progress is transient; do not persist it as transcript history.
+        this.sendEvent({ ...event, sessionId }, workspaceId)
         break
 
       case 'text_complete': {
@@ -8316,6 +8336,7 @@ export class SessionManager implements ISessionManager {
         }
         managed.messages.push(assistantMessage)
         managed.streamingText = ''
+        managed.streamingTurnId = undefined
 
         // Update lastMessageRole and lastFinalMessageId for badge/unread display (only for final messages)
         if (!event.isIntermediate) {
@@ -9142,6 +9163,15 @@ export class SessionManager implements ISessionManager {
       }, DELTA_BATCH_INTERVAL_MS)
       this.deltaFlushTimers.set(sessionId, timer)
     }
+  }
+
+  /** Remove a failed assistant's unsent batch without affecting another stream. */
+  private discardDelta(sessionId: string, turnId: string): void {
+    if (this.pendingDeltas.get(sessionId)?.turnId !== turnId) return
+    const timer = this.deltaFlushTimers.get(sessionId)
+    if (timer) clearTimeout(timer)
+    this.deltaFlushTimers.delete(sessionId)
+    this.pendingDeltas.delete(sessionId)
   }
 
   /**

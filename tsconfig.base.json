@@ -16,6 +16,7 @@
     "types": ["node", "bun"],
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedParameters": false,
+    "forceConsistentCasingInFileNames": true
   }
 }
