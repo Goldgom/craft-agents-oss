@@ -7,6 +7,8 @@ import type { HandlerDeps } from '../handler-deps'
 const managers = new WeakMap<object, CollaborationManager>()
 
 function managerFor(deps: HandlerDeps): CollaborationManager {
+  const owned = deps.sessionManager.getCollaborationManager?.()
+  if (owned) return owned
   let manager = managers.get(deps.sessionManager)
   if (!manager) {
     manager = new CollaborationManager(workspaceId => {
@@ -45,7 +47,7 @@ async function deliverLocal(deps: HandlerDeps, member: CollaborationMember, mess
   const target = await deps.sessionManager.getSession(member.sessionId)
   if (!target) throw new Error(`Target session ${member.sessionId} no longer exists`)
   const busy = target.isProcessing
-  await deps.sessionManager.sendMessage(member.sessionId, message)
+  await deps.sessionManager.sendMessage(member.sessionId, message, undefined, undefined, { collaborationDispatch: true })
   return busy ? 'queued' : 'delivered'
 }
 

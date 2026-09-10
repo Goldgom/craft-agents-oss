@@ -122,6 +122,10 @@ export interface SessionScopedToolCallbacks {
   resolveStatusFn?: (status: string) => import('@craft-agent/session-tools-core').ResolvedStatusResult;
   /** Send a message to another session (inter-session messaging). Resolves with delivery status. */
   sendAgentMessageFn?: (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => Promise<import('@craft-agent/session-tools-core').SendAgentMessageResult>;
+  /** Read the invoking session's collaboration snapshot. */
+  getCollaborationFn?: () => Promise<unknown>;
+  /** Update one shared-board item as the invoking collaboration member. */
+  updateCollaborationBoardFn?: (itemId: string, value: unknown) => Promise<unknown>;
   /**
    * Activate a source in the running session (source_test auto-enable flow).
    * Wired by SessionManager to the per-session onSourceActivationRequest callback

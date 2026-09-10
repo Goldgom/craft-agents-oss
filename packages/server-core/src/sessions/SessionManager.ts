@@ -106,6 +106,8 @@ import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { validateArchiveTarget } from './archive-guards'
+import { CollaborationConflictError, CollaborationManager } from '../collaboration/CollaborationManager'
+import type { CollaborationChangeResult, CollaborationGroup } from '@craft-agent/shared/protocol'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -1186,6 +1188,13 @@ export class SessionManager implements ISessionManager {
   /** Serializes LRU eviction so concurrent turn completions cannot over-evict. */
   private warmRuntimeEviction: Promise<void> = Promise.resolve()
   private sessions: Map<string, ManagedSession> = new Map()
+  /** One coordinator instance is shared by RPC handlers and agent tools so
+   * every mutation participates in the same queue and file-lock discipline. */
+  private readonly collaborationManager = new CollaborationManager(workspaceId => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error(`Workspace ${workspaceId} not found`)
+    return workspace.rootPath
+  })
   // Delta batching for performance - reduces IPC events from 50+/sec to ~20/sec
   private pendingDeltas: Map<string, PendingDelta> = new Map()
   private deltaFlushTimers: Map<string, NodeJS.Timeout> = new Map()
@@ -4901,6 +4910,39 @@ export class SessionManager implements ISessionManager {
 
           return { resolved: null, available }
         },
+        getCollaborationFn: async () => {
+          const collaboration = managed.collaboration
+          if (!collaboration) throw new Error('This session is not a member of a collaboration')
+          const group = await this.collaborationManager.open(
+            collaboration.groupId,
+            collaboration.coordinatorWorkspaceId,
+          )
+          const actor = group.members.find(member => member.id === collaboration.memberId)
+          if (!actor || actor.sessionId !== managed.id) {
+            throw new Error('Collaboration membership is stale or invalid')
+          }
+          return group
+        },
+        updateCollaborationBoardFn: async (itemId: string, value: unknown) => {
+          const collaboration = managed.collaboration
+          if (!collaboration) throw new Error('This session is not a member of a collaboration')
+          const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) => {
+            const actor = group.members.find(member => member.id === collaboration.memberId)
+            if (!actor || actor.sessionId !== managed.id) {
+              throw new Error('Collaboration membership is stale or invalid')
+            }
+            return this.collaborationManager.updateBoard(
+              group.id,
+              actor.id,
+              itemId,
+              value,
+              operationId,
+              group.revision,
+            )
+          })
+          this.broadcastCollaborationChanged(result.group)
+          return result.group
+        },
         sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => {
           // Build FileAttachment[] from paths (same pattern as spawn_session)
           let fileAttachments: FileAttachment[] | undefined
@@ -4923,13 +4965,61 @@ export class SessionManager implements ISessionManager {
             if (builtAttachments.length > 0) fileAttachments = builtAttachments
           }
 
+          let deliveredMessage = message
+          const collaboration = managed.collaboration
+          if (collaboration) {
+            const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) => {
+              const actor = group.members.find(member => member.id === collaboration.memberId)
+              if (!actor || actor.sessionId !== managed.id) {
+                throw new Error('Collaboration membership is stale or invalid')
+              }
+              const target = group.members.find(member => member.sessionId === sessionId)
+              if (!target) throw new Error('Collaboration members may only message another member of their group')
+              if (target.serverUrl) throw new Error('Remote collaboration delivery requires an authenticated relay')
+              if (actor.role === 'primary') {
+                if (target.role !== 'secondary') throw new Error('The primary session may only send collaboration requests to secondary sessions')
+                return this.collaborationManager.request(
+                  group.id,
+                  actor.id,
+                  target.id,
+                  message,
+                  operationId,
+                  group.revision,
+                )
+              }
+              if (target.id !== group.primaryMemberId) {
+                throw new Error('A secondary session may only report to the primary session')
+              }
+              return this.collaborationManager.report(
+                group.id,
+                actor.id,
+                message,
+                operationId,
+                group.revision,
+              )
+            })
+            this.broadcastCollaborationChanged(result.group)
+            deliveredMessage = [
+              `[Collaboration ${collaboration.role === 'primary' ? 'request' : 'report'} ${result.group.id}; shared board revision ${result.group.revision}]`,
+              'Use collaboration_board with action=get to read the current goal and shared work records.',
+              '',
+              message,
+            ].join('\n')
+          }
+
           // Capture the target's busy state BEFORE delivery so the sender gets a
           // truthful ack. A busy (mid-turn) target queues the message and replays
           // it after the current turn (anthropic defaults to 'queue'); an idle
           // target starts processing immediately. sendMessage throws for an
           // unknown session — that rejection propagates to the handler's catch.
           const targetBusy = this.sessions.get(sessionId)?.isProcessing === true
-          await this.sendMessage(sessionId, message, fileAttachments)
+          await this.sendMessage(
+            sessionId,
+            deliveredMessage,
+            fileAttachments,
+            undefined,
+            { collaborationDispatch: true },
+          )
           return {
             delivery: targetBusy ? ('queued' as const) : ('delivered' as const),
             targetBusy,
@@ -6314,6 +6404,23 @@ export class SessionManager implements ISessionManager {
 
     // Ensure messages are loaded before we try to add new ones
     await this.ensureMessagesLoaded(managed)
+
+    // A real user request sent to the primary becomes the collaboration's
+    // current goal before either the primary or its secondaries continue. Tool
+    // deliveries carry collaborationDispatch so reports cannot recursively
+    // replace the user's goal.
+    if (!options?.hidden && !options?.collaborationDispatch && !_isAuthRetry) {
+      try {
+        await this.recordPrimaryRequirement(managed, message)
+      } catch (error) {
+        // Collaboration metadata must never make the user's main conversation
+        // unavailable. Surface the storage problem in logs while continuing.
+        sessionLog.error('Failed to record primary collaboration requirement', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
 
     // If currently processing, behavior depends on the connection's
     // `midStreamBehavior` (resolved via {@link resolveMidStreamBehavior},
@@ -7774,6 +7881,65 @@ export class SessionManager implements ISessionManager {
       const watcher = this.configWatchers.get(managed.workspace.rootPath)
       watcher?.notifyFileChange(`sessions/${sessionId}/session.jsonl`)
     }
+  }
+
+  getCollaborationManager(): CollaborationManager { return this.collaborationManager }
+
+  /** Retry a trusted, session-bound collaboration mutation against the latest
+   * revision. Public RPC clients still use explicit optimistic revisions. */
+  private async mutateCollaborationLatest(
+    collaboration: SessionCollaboration,
+    mutate: (group: CollaborationGroup, operationId: string) => Promise<CollaborationChangeResult>,
+  ): Promise<CollaborationChangeResult> {
+    const operationId = randomUUID()
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const group = await this.collaborationManager.open(
+        collaboration.groupId,
+        collaboration.coordinatorWorkspaceId,
+      )
+      try {
+        return await mutate(group, operationId)
+      } catch (error) {
+        if (!(error instanceof CollaborationConflictError) || attempt === 4) throw error
+      }
+    }
+    throw new Error('Unable to update collaboration after concurrent changes')
+  }
+
+  private broadcastCollaborationChanged(group: CollaborationGroup): void {
+    if (!this.eventSink) return
+    const workspaceIds = new Set(
+      group.members.filter(member => !member.serverUrl).map(member => member.workspaceId),
+    )
+    for (const workspaceId of workspaceIds) {
+      this.eventSink(
+        RPC_CHANNELS.collaborations.EVENT,
+        { to: 'workspace', workspaceId },
+        { groupId: group.id, revision: group.revision },
+      )
+    }
+  }
+
+  private async recordPrimaryRequirement(managed: ManagedSession, message: string): Promise<void> {
+    const collaboration = managed.collaboration
+    if (!collaboration || collaboration.role !== 'primary' || !message.trim()) return
+    const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) =>
+      this.collaborationManager.updateBoard(
+        group.id,
+        collaboration.memberId,
+        'goal.current',
+        {
+          kind: 'goal',
+          text: message.trim(),
+          status: 'active',
+          requestedAt: Date.now(),
+          requestedBySessionId: managed.id,
+        },
+        operationId,
+        group.revision,
+      ),
+    )
+    this.broadcastCollaborationChanged(result.group)
   }
 
   async setSessionCollaboration(sessionId: string, collaboration: SessionCollaboration | null): Promise<void> {

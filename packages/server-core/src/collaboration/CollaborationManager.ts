@@ -113,7 +113,13 @@ export class CollaborationManager {
       const revision = group.revision + 1
       const item: CollaborationBoardItem = { id: itemId, value, version: revision, updatedAt: Date.now(), updatedBy: actorMemberId }
       group.board[itemId] = item
-      return this.appendEvent(group, { operationId, type: 'board', fromMemberId: actorMemberId })
+      return this.appendEvent(group, {
+        operationId,
+        type: 'board',
+        fromMemberId: actorMemberId,
+        boardItemId: itemId,
+        boardValue: value,
+      })
     })
   }
 

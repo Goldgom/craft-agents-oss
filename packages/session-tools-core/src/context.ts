@@ -439,6 +439,12 @@ export interface SessionToolContext {
    */
   sendAgentMessage?(sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>): Promise<SendAgentMessageResult>;
 
+  /** Read the collaboration shared board and durable activity history for this session. */
+  getCollaboration?(): Promise<unknown>;
+
+  /** Write one item to the collaboration shared board. */
+  updateCollaborationBoard?(itemId: string, value: unknown): Promise<unknown>;
+
   /**
    * Activate a source in the running session: add to enabledSourceSlugs,
    * build its MCP/API servers, apply to the agent.

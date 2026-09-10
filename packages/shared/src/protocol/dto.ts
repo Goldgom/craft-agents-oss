@@ -298,6 +298,10 @@ export interface CollaborationEvent {
   fromMemberId: string
   toMemberId?: string
   text?: string
+  /** Present for board events so the history remains useful after an item is overwritten. */
+  boardItemId?: string
+  /** Snapshot written by this board event. */
+  boardValue?: unknown
   createdAt: number
   revision: number
 }
@@ -569,6 +573,9 @@ export interface SendMessageOptions {
    * surfacing) that should wake the agent without looking user-authored.
    */
   hidden?: boolean
+  /** Internal delivery marker. Collaboration-to-collaboration messages must not
+   * be mistaken for a new user requirement on the receiving primary session. */
+  collaborationDispatch?: boolean
 }
 
 // ---------------------------------------------------------------------------

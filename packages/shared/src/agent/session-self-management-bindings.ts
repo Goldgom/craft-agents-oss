@@ -123,6 +123,22 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'getCollaboration', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.getCollaborationFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
+  Object.defineProperty(context, 'updateCollaborationBoard', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.updateCollaborationBoardFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   Object.defineProperty(context, 'activateSourceInSession', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.activateSourceInSessionFn;

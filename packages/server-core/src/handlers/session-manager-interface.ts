@@ -26,6 +26,7 @@ import type {
 import type { SessionBundle, DispatchMode, SessionCollaboration } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
 import type { McpReloadResult } from '@craft-agent/core/types'
+import type { CollaborationManager } from '../collaboration/CollaborationManager'
 
 export interface ISessionManager {
   // ---------------------------------------------------------------------------
@@ -104,6 +105,8 @@ export interface ISessionManager {
   setSessionConnection(sessionId: string, connectionSlug: string): Promise<void>
   updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string): Promise<void>
   setSessionCollaboration?(sessionId: string, collaboration: SessionCollaboration | null): Promise<void>
+  /** Shared coordinator used by RPC handlers and agent-facing collaboration tools. */
+  getCollaborationManager?(): CollaborationManager
 
   // ---------------------------------------------------------------------------
   // Messaging
