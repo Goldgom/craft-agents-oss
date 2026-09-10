@@ -82,15 +82,15 @@ function ScriptMonitorPage({ automations }: { automations: import('../automation
         <h2 className="flex items-center gap-2 text-base font-semibold"><Code2 className="size-4" />{t('sidebar.scriptMonitor')}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{t('sidebar.scriptMonitorDescription')}</p>
       </div>
-      {workspace?.rootPath && <EditPopover trigger={<Button><Code2 className="size-4" />Add monitor</Button>} {...getEditConfig('script-monitor-config', workspace.rootPath)} />}
+      {workspace?.rootPath && <EditPopover trigger={<Button><Code2 className="size-4" />{t('automations.scriptMonitor.addMonitor')}</Button>} {...getEditConfig('script-monitor-config', workspace.rootPath)} />}
     </div>
-    {monitors.length === 0 ? <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">No script monitors configured.</div> : <div className="divide-y divide-foreground/10 border-y border-foreground/10">
+    {monitors.length === 0 ? <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">{t('automations.scriptMonitor.empty')}</div> : <div className="divide-y divide-foreground/10 border-y border-foreground/10">
       {monitors.map(monitor => <div key={monitor.id} className="flex items-start gap-3 py-4">
         <AutomationAvatar event={monitor.event} size="sm" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium">{monitor.name}</div>
           <div className="mt-0.5 text-xs text-muted-foreground">{monitor.summary}</div>
-          <div className="mt-2 flex gap-3 text-xs text-muted-foreground"><span>{monitor.enabled ? 'Active' : 'Disabled'}</span><span>{monitor.intervalMs ? `${monitor.intervalMs / 1000}s interval` : 'No interval'}</span></div>
+          <div className="mt-2 flex gap-3 text-xs text-muted-foreground"><span>{monitor.enabled ? t('automations.statusActive') : t('automations.statusDisabled')}</span><span>{monitor.intervalMs ? t('automations.scriptMonitor.interval', { seconds: monitor.intervalMs / 1000 }) : t('automations.scriptMonitor.noInterval')}</span></div>
         </div>
       </div>)}
     </div>}
