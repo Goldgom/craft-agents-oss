@@ -16,7 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, WalletCards } from 'lucide-react'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, WalletCards, ShieldCheck } from 'lucide-react'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
@@ -307,7 +307,9 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
         break
       }
       case 'pi_compat':
-        parts.push(connection.baseUrl?.toLowerCase().includes('manifest.build')
+        parts.push(connection.oauthProvider === 'tokennest'
+          ? 'TokenNest'
+          : connection.baseUrl?.toLowerCase().includes('manifest.build')
           ? 'Manifest'
           : 'Craft Agents Backend Compatible')
         break
@@ -634,7 +636,8 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
                   ...llmConnections.map((conn) => ({
                     value: conn.slug,
                     label: conn.name,
-                    description: conn.providerType === 'anthropic' ? 'Anthropic' :
+                    description: conn.oauthProvider === 'tokennest' ? 'TokenNest' :
+                                 conn.providerType === 'anthropic' ? 'Anthropic' :
                                  conn.providerType === 'pi' ? 'Craft Agents Backend' :
                                  conn.providerType || 'Unknown',
                   })),
@@ -720,6 +723,7 @@ export default function AiSettingsPage() {
   const [rtkGain, setRtkGain] = useState<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>(null)
   const [showApiBalances, setShowApiBalances] = useState(true)
   const [apiBalances, setApiBalances] = useState<ApiBalance[]>([])
+  const [tokenNestSigningIn, setTokenNestSigningIn] = useState(false)
 
   // Validation state per connection
   const [validationStates, setValidationStates] = useState<Record<string, {
@@ -792,6 +796,40 @@ export default function AiSettingsPage() {
     () => new Set(llmConnections.map(c => c.slug)),
     [llmConnections],
   )
+
+  const tokenNestConnection = useMemo(
+    () => llmConnections.find(connection => connection.oauthProvider === 'tokennest'),
+    [llmConnections],
+  )
+
+  const handleTokenNestSignIn = useCallback(async () => {
+    if (!window.electronAPI || tokenNestSigningIn) return
+    let slug = tokenNestConnection?.slug ?? 'tokennest'
+    if (!tokenNestConnection && existingSlugs.has(slug)) {
+      let suffix = 2
+      while (existingSlugs.has(`tokennest-${suffix}`)) suffix += 1
+      slug = `tokennest-${suffix}`
+    }
+    setTokenNestSigningIn(true)
+    try {
+      const result = await window.electronAPI.startTokenNestOAuth(slug)
+      if (!result.success) {
+        toast.error(t('settings.ai.tokenNestSignInFailed'), { description: result.error })
+        return
+      }
+      await refreshLlmConnections()
+      if (showApiBalances) {
+        setApiBalances(await window.electronAPI.getLlmConnectionBalances())
+      }
+      toast.success(t('settings.ai.tokenNestReady'))
+    } catch (error) {
+      toast.error(t('settings.ai.tokenNestSignInFailed'), {
+        description: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      setTokenNestSigningIn(false)
+    }
+  }, [existingSlugs, refreshLlmConnections, showApiBalances, t, tokenNestConnection, tokenNestSigningIn])
 
   // OnboardingWizard hook for editing API connection
   const apiSetupOnboarding = useOnboarding({
@@ -876,6 +914,10 @@ export default function AiSettingsPage() {
   }, [renamingConnection, renameValue, refreshLlmConnections])
 
   const handleReauthenticateConnection = useCallback((connection: LlmConnectionWithStatus) => {
+    if (connection.oauthProvider === 'tokennest') {
+      void handleTokenNestSignIn()
+      return
+    }
     openApiSetup(connection.slug)
     apiSetupOnboarding.reset()
 
@@ -885,7 +927,7 @@ export default function AiSettingsPage() {
                    : 'claude_oauth'
       apiSetupOnboarding.handleStartOAuth(method, connection.slug)
     }
-  }, [apiSetupOnboarding, openApiSetup])
+  }, [apiSetupOnboarding, handleTokenNestSignIn, openApiSetup])
 
   const handleEditConnection = useCallback(async (connection: LlmConnectionWithStatus) => {
     // Fetch stored API key (best-effort — if IPC not available yet, skip pre-fill)
@@ -1159,7 +1201,8 @@ export default function AiSettingsPage() {
                     options={llmConnections.map((conn) => ({
                       value: conn.slug,
                       label: conn.name,
-                      description: conn.providerType === 'anthropic' ? 'Anthropic API' :
+                      description: conn.oauthProvider === 'tokennest' ? 'TokenNest' :
+                                   conn.providerType === 'anthropic' ? 'Anthropic API' :
                                    conn.providerType === 'pi' ? 'Craft Agents Backend' :
                                    conn.providerType === 'pi_compat' ? (conn.baseUrl?.toLowerCase().includes('manifest.build') ? 'Manifest' : 'Craft Agents Backend Compatible') :
                                    conn.providerType || 'Unknown',
@@ -1207,6 +1250,27 @@ export default function AiSettingsPage() {
 
               {/* Connections Management */}
               <SettingsSection title={t("settings.ai.connections")} description={t("settings.ai.connectionsDesc")}>
+                <div className="mb-3 flex items-center gap-3 rounded-xl border border-border/60 bg-background/60 p-4 shadow-minimal">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.05]">
+                    <ShieldCheck className="size-4 text-foreground/70" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium">TokenNest</div>
+                    <div className="text-xs text-muted-foreground">{t('settings.ai.tokenNestDescription')}</div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={handleTokenNestSignIn}
+                    disabled={tokenNestSigningIn}
+                    className="shrink-0 bg-background text-foreground shadow-minimal hover:bg-foreground/5"
+                  >
+                    {tokenNestSigningIn
+                      ? t('settings.ai.tokenNestWaiting')
+                      : tokenNestConnection
+                        ? t('settings.ai.tokenNestReconnect')
+                        : t('settings.ai.tokenNestSignIn')}
+                  </Button>
+                </div>
                 <SettingsCard>
                   {llmConnections.length === 0 ? (
                     <div className="px-4 py-6 text-center text-sm text-muted-foreground">

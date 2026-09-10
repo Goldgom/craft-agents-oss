@@ -237,6 +237,10 @@ describe('isValidProviderAuthCombination', () => {
     it('should accept none auth (for local models like Ollama)', () => {
       expect(isValidProviderAuthCombination('pi_compat', 'none')).toBe(true);
     });
+
+    it('should accept oauth auth for compatible gateways such as TokenNest', () => {
+      expect(isValidProviderAuthCombination('pi_compat', 'oauth')).toBe(true);
+    });
   });
 
 });

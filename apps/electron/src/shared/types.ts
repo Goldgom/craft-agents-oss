@@ -519,6 +519,9 @@ export interface ElectronAPI {
   getChatGptAuthStatus(connectionSlug: string): Promise<{ authenticated: boolean; expiresAt?: number; hasRefreshToken?: boolean }>
   chatGptLogout(connectionSlug: string): Promise<{ success: boolean }>
 
+  // TokenNest OAuth (PKCE through the user's system browser)
+  startTokenNestOAuth(connectionSlug?: string): Promise<{ success: boolean; error?: string }>
+
   // GitHub Copilot OAuth
   startCopilotOAuth(connectionSlug: string): Promise<{ success: boolean; error?: string }>
   cancelCopilotOAuth(): Promise<{ success: boolean }>

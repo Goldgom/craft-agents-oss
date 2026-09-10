@@ -345,6 +345,11 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.chatgpt.GET_AUTH_STATUS,
   RPC_CHANNELS.chatgpt.LOGOUT,
 
+  // TokenNest — public-client OAuth exchange and credentials live on workspace server
+  RPC_CHANNELS.tokennest.START_OAUTH,
+  RPC_CHANNELS.tokennest.COMPLETE_OAUTH,
+  RPC_CHANNELS.tokennest.CANCEL_OAUTH,
+
   // copilot — OAuth via capability passthrough
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,

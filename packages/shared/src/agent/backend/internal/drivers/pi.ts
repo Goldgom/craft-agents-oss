@@ -225,6 +225,7 @@ export const piDriver: ProviderDriver = {
       node: resolvedPaths.nodeRuntimePath,
     },
     piAuthProvider: providerOptions?.piAuthProvider || context.connection?.piAuthProvider,
+    oauthProvider: context.connection?.oauthProvider,
     baseUrl: context.connection?.baseUrl,
     customEndpoint: context.connection?.customEndpoint,
     customModels: context.connection?.models?.map(m => {

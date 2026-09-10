@@ -493,6 +493,57 @@ client.onConnectionStateChanged((state) => {
   }
 }
 
+// ── performTokenNestOAuth ────────────────────────────────────────────────
+// Public native-client flow: local 127.0.0.1 callback + server-owned PKCE
+// verifier/token exchange. The IP literal matches TokenNest's RFC 8252 rules.
+;(api as any).startTokenNestOAuth = async (
+  connectionSlug = 'tokennest',
+): Promise<{ success: boolean; error?: string }> => {
+  let callbackServer: Awaited<ReturnType<typeof createCallbackServer>> | null = null
+  let flowId: string | undefined
+  let state: string | undefined
+
+  try {
+    callbackServer = await createCallbackServer({
+      appType: 'electron',
+      host: '127.0.0.1',
+      callbackPaths: ['/callback'],
+    })
+    const callbackUrl = `${callbackServer.url}/callback`
+    const startResult = await client.invoke('tokennest:startOAuth', { connectionSlug, callbackUrl })
+    flowId = startResult.flowId
+    state = startResult.state
+    await shell.openExternal(startResult.authUrl)
+
+    const callback = await callbackServer.promise
+    if (!callback.query.state || callback.query.state !== state) {
+      await client.invoke('tokennest:cancelOAuth', { flowId, state })
+      return { success: false, error: 'TokenNest OAuth state mismatch' }
+    }
+    if (callback.query.error) {
+      const error = callback.query.error_description || callback.query.error
+      await client.invoke('tokennest:cancelOAuth', { flowId, state })
+      return { success: false, error }
+    }
+    if (!callback.query.code) {
+      await client.invoke('tokennest:cancelOAuth', { flowId, state })
+      return { success: false, error: 'No authorization code received' }
+    }
+    return await client.invoke('tokennest:completeOAuth', {
+      flowId,
+      state,
+      code: callback.query.code,
+    })
+  } catch (err) {
+    if (flowId && state) {
+      client.invoke('tokennest:cancelOAuth', { flowId, state }).catch(() => {})
+    }
+    return { success: false, error: err instanceof Error ? err.message : 'TokenNest OAuth failed' }
+  } finally {
+    callbackServer?.close()
+  }
+}
+
 // App lifecycle — direct IPC (not WS RPC) since it restarts the server itself
 ;(api as ElectronAPI).relaunchApp = () => ipcRenderer.invoke('app:relaunch')
 ;(api as ElectronAPI).removeWorkspace = (workspaceId: string) => isClientOnly

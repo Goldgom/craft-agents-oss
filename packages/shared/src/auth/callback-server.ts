@@ -24,12 +24,10 @@ export interface CallbackServer {
  * Attempt to bind an HTTP server to the given port.
  * Resolves on success, rejects on error (e.g. EADDRINUSE).
  */
-function tryBind(server: Server, port: number): Promise<void> {
+function tryBind(server: Server, port: number, host: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    // Use 'localhost' consistently for both the bind address and the URL
-    // that callers construct (avoids subtle mismatches between 127.0.0.1 and localhost).
-    server.listen(port, 'localhost', () => {
+    server.listen(port, host, () => {
       server.removeListener('error', reject);
       resolve();
     });
@@ -44,6 +42,8 @@ export interface CreateCallbackServerOptions {
   port?: number;
   /** URL paths to accept as callbacks. Default: ['/callback', '/oauth/callback']. */
   callbackPaths?: string[];
+  /** Loopback host to bind and advertise. Defaults to localhost. */
+  host?: 'localhost' | '127.0.0.1';
 }
 
 /**
@@ -58,6 +58,7 @@ export async function createCallbackServer(options?: CreateCallbackServerOptions
   const appType = options?.appType ?? 'terminal';
   const deeplinkUrl = options?.deeplinkUrl;
   const allowedPaths = new Set(options?.callbackPaths ?? ['/callback', '/oauth/callback']);
+  const host = options?.host ?? 'localhost';
 
   let server: Server | null = null;
   let boundPort: number | null = null;
@@ -146,7 +147,7 @@ export async function createCallbackServer(options?: CreateCallbackServerOptions
     const candidate = createHttpServer(requestHandler);
 
     try {
-      await tryBind(candidate, port);
+      await tryBind(candidate, port, host);
       // Bind succeeded — wire up the error handler for runtime errors
       // and propagate them to the callback promise.
       server = candidate;
@@ -174,7 +175,7 @@ export async function createCallbackServer(options?: CreateCallbackServerOptions
     throw new Error(`No available port found in range ${START_PORT}-${START_PORT + MAX_PORT_ATTEMPTS - 1}`);
   }
 
-  const callbackUrl = `http://localhost:${boundPort}`;
+  const callbackUrl = `http://${host}:${boundPort}`;
 
   return {
     promise: callbackPromise,

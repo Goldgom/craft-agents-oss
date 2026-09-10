@@ -144,6 +144,9 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.chatgpt.CANCEL_OAUTH,
   RPC_CHANNELS.chatgpt.GET_AUTH_STATUS,
   RPC_CHANNELS.chatgpt.LOGOUT,
+  RPC_CHANNELS.tokennest.START_OAUTH,
+  RPC_CHANNELS.tokennest.COMPLETE_OAUTH,
+  RPC_CHANNELS.tokennest.CANCEL_OAUTH,
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
   RPC_CHANNELS.copilot.GET_AUTH_STATUS,
@@ -565,8 +568,14 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     const balances = await Promise.all(getLlmConnections().filter(supportsApiBalance).map(async connection => {
       const cached = balanceCache.get(connection.slug)
       if (cached && cached.expiresAt > now) return cached.value
-      const apiKey = await credentialManager.getLlmApiKey(connection.slug)
-      const value = apiKey ? await fetchApiBalance(connection, apiKey) : null
+      let credential: string | undefined
+      if (connection.oauthProvider === 'tokennest') {
+        const { getValidTokenNestCredentials } = await import('@craft-agent/shared/auth')
+        credential = (await getValidTokenNestCredentials(connection.slug, credentialManager))?.accessToken
+      } else {
+        credential = (await credentialManager.getLlmApiKey(connection.slug)) ?? undefined
+      }
+      const value = credential ? await fetchApiBalance(connection, credential) : null
       balanceCache.set(connection.slug, { value, expiresAt: Date.now() + BALANCE_CACHE_TTL_MS })
       return value
     }))
@@ -769,6 +778,134 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       deps.platform.logger?.error(`Failed to refresh models for ${slug}: ${msg}`)
       return { success: false, error: msg }
     }
+  })
+
+  // ============================================================
+  // TokenNest OAuth (OpenAI-compatible API via public-client PKCE)
+  // ============================================================
+
+  interface PendingTokenNestFlow {
+    flowId: string
+    state: string
+    codeVerifier: string
+    redirectUri: string
+    connectionSlug: string
+    ownerClientId: string
+    createdAt: number
+  }
+  const pendingTokenNestFlows = new Map<string, PendingTokenNestFlow>()
+  const TOKENNEST_FLOW_TTL_MS = 5 * 60 * 1000
+
+  const cleanupExpiredTokenNestFlows = () => {
+    const now = Date.now()
+    for (const [state, flow] of pendingTokenNestFlows) {
+      if (now - flow.createdAt > TOKENNEST_FLOW_TTL_MS) pendingTokenNestFlows.delete(state)
+    }
+  }
+
+  server.handle(RPC_CHANNELS.tokennest.START_OAUTH, async (ctx, args: {
+    connectionSlug?: string
+    callbackUrl: string
+  }): Promise<{ authUrl: string; state: string; flowId: string }> => {
+    cleanupExpiredTokenNestFlows()
+    const { prepareTokenNestOAuth } = await import('@craft-agent/shared/auth')
+    const prepared = prepareTokenNestOAuth(args.callbackUrl)
+    const flowId = randomUUID()
+    pendingTokenNestFlows.set(prepared.state, {
+      flowId,
+      state: prepared.state,
+      codeVerifier: prepared.codeVerifier,
+      redirectUri: prepared.redirectUri,
+      connectionSlug: args.connectionSlug?.trim() || 'tokennest',
+      ownerClientId: ctx.clientId,
+      createdAt: Date.now(),
+    })
+    deps.platform.logger?.info(`[TokenNest OAuth] Flow started (flow=${flowId})`)
+    return { authUrl: prepared.authUrl, state: prepared.state, flowId }
+  })
+
+  server.handle(RPC_CHANNELS.tokennest.COMPLETE_OAUTH, async (ctx, args: {
+    flowId: string
+    code: string
+    state: string
+  }): Promise<{ success: boolean; error?: string }> => {
+    const flow = pendingTokenNestFlows.get(args.state)
+    if (!flow) throw new Error('Unknown or expired TokenNest OAuth flow')
+    if (flow.flowId !== args.flowId) throw new Error('Flow ID mismatch')
+    if (flow.ownerClientId !== ctx.clientId) throw new Error('OAuth flow owned by different client')
+    if (Date.now() - flow.createdAt > TOKENNEST_FLOW_TTL_MS) {
+      pendingTokenNestFlows.delete(args.state)
+      throw new Error('TokenNest OAuth flow expired')
+    }
+
+    try {
+      const { exchangeTokenNestTokens, revokeTokenNestToken, TOKENNEST_OAUTH_CONFIG } = await import('@craft-agent/shared/auth')
+      const credentialManager = getCredentialManager()
+      const tokens = await exchangeTokenNestTokens(args.code, flow.codeVerifier, flow.redirectUri)
+      const discovered = await listCustomModels({
+        baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
+        apiKey: tokens.accessToken,
+        api: 'openai-completions',
+      })
+      if (!discovered.models.length) {
+        await revokeTokenNestToken(tokens.accessToken).catch(() => {})
+        throw new Error(discovered.error || 'TokenNest returned no available models')
+      }
+
+      const models = discovered.models.map(model => model.id)
+      const existing = getLlmConnection(flow.connectionSlug)
+      const connection: LlmConnection = {
+        ...(existing ?? {
+          slug: flow.connectionSlug,
+          name: 'TokenNest',
+          createdAt: Date.now(),
+        }),
+        providerType: 'pi_compat',
+        authType: 'oauth',
+        oauthProvider: 'tokennest',
+        piAuthProvider: 'openai',
+        baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
+        customEndpoint: { api: 'openai-completions' },
+        models,
+        defaultModel: existing?.defaultModel && models.includes(existing.defaultModel)
+          ? existing.defaultModel
+          : models[0],
+        modelSelectionMode: 'automaticallySyncedFromProvider',
+      }
+
+      await credentialManager.setLlmOAuth(flow.connectionSlug, tokens)
+      const persisted = existing
+        ? updateLlmConnection(flow.connectionSlug, connection)
+        : addLlmConnection(connection)
+      if (!persisted) {
+        await credentialManager.deleteLlmCredentials(flow.connectionSlug).catch(() => {})
+        await revokeTokenNestToken(tokens.accessToken).catch(() => {})
+        throw new Error('Failed to save the TokenNest connection')
+      }
+      if (!getDefaultLlmConnection()) setDefaultLlmConnection(flow.connectionSlug)
+      balanceCache.delete(flow.connectionSlug)
+      pendingTokenNestFlows.delete(args.state)
+      await sessionManager.reinitializeAuth(flow.connectionSlug)
+      deps.platform.logger?.info(`[TokenNest OAuth] Connection ready: ${flow.connectionSlug}`)
+      return { success: true }
+    } catch (error) {
+      pendingTokenNestFlows.delete(args.state)
+      deps.platform.logger?.error('[TokenNest OAuth] Completion failed:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'TokenNest OAuth failed' }
+    }
+  })
+
+  server.handle(RPC_CHANNELS.tokennest.CANCEL_OAUTH, async (ctx, args?: {
+    flowId?: string
+    state?: string
+  }): Promise<{ success: boolean }> => {
+    if (args?.state) {
+      const flow = pendingTokenNestFlows.get(args.state)
+      if (flow && flow.ownerClientId === ctx.clientId && (!args.flowId || flow.flowId === args.flowId)) {
+        pendingTokenNestFlows.delete(args.state)
+      }
+    }
+    return { success: true }
   })
 
   // ============================================================

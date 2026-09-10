@@ -2809,6 +2809,7 @@ export function updateLlmConnection(slug: string, updates: Partial<Omit<LlmConne
     providerType: updates.providerType ?? existing.providerType,
     type: updates.type ?? existing.type, // Legacy field
     authType: updates.authType ?? existing.authType,
+    oauthProvider: updates.oauthProvider !== undefined ? updates.oauthProvider : existing.oauthProvider,
     createdAt: updates.createdAt ?? existing.createdAt,
     // Optional fields from updates or existing
     baseUrl: updates.baseUrl !== undefined ? updates.baseUrl : existing.baseUrl,

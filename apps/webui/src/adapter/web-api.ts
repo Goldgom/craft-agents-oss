@@ -336,6 +336,11 @@ export function createWebApi(options: WebApiOptions): {
         error: i18n.t('errors.chatGptOAuthNotAvailable'),
       }
     },
+    // TokenNest native-app OAuth currently requires an IP loopback callback.
+    startTokenNestOAuth: async () => ({
+      success: false,
+      error: 'TokenNest sign-in is currently available in the desktop app.',
+    }),
   }
 
   const api = { ...baseApi, ...webOverrides, ...oauthOverrides } as ElectronAPI

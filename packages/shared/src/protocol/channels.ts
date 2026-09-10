@@ -251,6 +251,11 @@ export const RPC_CHANNELS = {
     GET_AUTH_STATUS: 'chatgpt:getAuthStatus',
     LOGOUT: 'chatgpt:logout',
   },
+  tokennest: {
+    START_OAUTH: 'tokennest:startOAuth',
+    COMPLETE_OAUTH: 'tokennest:completeOAuth',
+    CANCEL_OAUTH: 'tokennest:cancelOAuth',
+  },
   copilot: {
     START_OAUTH: 'copilot:startOAuth',
     CANCEL_OAUTH: 'copilot:cancelOAuth',

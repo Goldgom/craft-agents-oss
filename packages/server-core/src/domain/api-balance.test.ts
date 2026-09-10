@@ -54,6 +54,21 @@ describe('API balance providers', () => {
 
   test('does not enable quota lookup for OAuth or unknown providers', () => {
     expect(supportsApiBalance(connection({ authType: 'oauth' }))).toBe(false)
+    expect(supportsApiBalance(connection({ authType: 'oauth', oauthProvider: 'tokennest' }))).toBe(true)
     expect(supportsApiBalance(connection({ piAuthProvider: 'anthropic' }))).toBe(false)
+  })
+
+  test('reads TokenNest OAuth balance in USD', async () => {
+    let endpoint = ''
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      endpoint = String(input)
+      return new Response(JSON.stringify({ quota: 2500000, amount_usd: 5 }))
+    }) as typeof fetch
+
+    await expect(fetchApiBalance(connection({ authType: 'oauth', oauthProvider: 'tokennest' }), 'oauth-token')).resolves.toMatchObject({
+      remaining: 5,
+      currency: 'USD',
+    })
+    expect(endpoint).toBe('https://openai.goldgom.top/api/oauth2/balance')
   })
 })

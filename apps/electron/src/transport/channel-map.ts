@@ -152,6 +152,9 @@ export const CHANNEL_MAP = {
   getChatGptAuthStatus: invoke(RPC_CHANNELS.chatgpt.GET_AUTH_STATUS),
   chatGptLogout: invoke(RPC_CHANNELS.chatgpt.LOGOUT),
 
+  // TokenNest OAuth (desktop preload supplies the loopback callback URL)
+  startTokenNestOAuth: invoke(RPC_CHANNELS.tokennest.START_OAUTH),
+
   // GitHub Copilot OAuth
   startCopilotOAuth: invoke(RPC_CHANNELS.copilot.START_OAUTH),
   cancelCopilotOAuth: invoke(RPC_CHANNELS.copilot.CANCEL_OAUTH),

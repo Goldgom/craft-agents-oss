@@ -1,5 +1,6 @@
 import type { LlmConnection } from '@craft-agent/shared/config'
 import type { LlmConnectionBalance } from '@craft-agent/shared/protocol'
+import { TOKENNEST_OAUTH_CONFIG } from '@craft-agent/shared/auth'
 
 export type { LlmConnectionBalance } from '@craft-agent/shared/protocol'
 
@@ -47,6 +48,7 @@ function openRouterBalanceUrl(baseUrl: string): string {
 }
 
 function providerKey(connection: LlmConnection): string | null {
+  if (connection.oauthProvider === 'tokennest') return 'tokennest'
   const provider = connection.piAuthProvider?.toLowerCase()
   if (provider === 'openrouter' || provider === 'deepseek' || provider === 'moonshotai' || provider === 'moonshotai-cn' || provider === 'siliconflow') {
     return provider
@@ -68,6 +70,19 @@ function providerKey(connection: LlmConnection): string | null {
 }
 
 const ADAPTERS: Record<string, BalanceAdapter> = {
+  tokennest: {
+    endpoint: () => TOKENNEST_OAUTH_CONFIG.balanceUrl,
+    parse: (payload, connectionSlug, updatedAt) => {
+      const data = asRecord(payload)
+      const remaining = asNumber(data?.amount_usd)
+      return remaining === undefined ? null : {
+        connectionSlug,
+        remaining,
+        currency: 'USD',
+        updatedAt,
+      }
+    },
+  },
   openrouter: {
     endpoint: connection => openRouterBalanceUrl(connection.baseUrl ?? 'https://openrouter.ai/api/v1'),
     parse: (payload, connectionSlug, updatedAt) => {
@@ -126,7 +141,7 @@ const ADAPTERS: Record<string, BalanceAdapter> = {
 }
 
 export function supportsApiBalance(connection: LlmConnection): boolean {
-  return connection.authType !== 'oauth' && !!providerKey(connection)
+  return (connection.authType !== 'oauth' || connection.oauthProvider === 'tokennest') && !!providerKey(connection)
 }
 
 export async function fetchApiBalance(connection: LlmConnection, apiKey: string): Promise<LlmConnectionBalance | null> {

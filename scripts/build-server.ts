@@ -30,7 +30,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 import { parseArgs } from 'util';
-import { dirname, join } from 'path';
+import { basename, dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 import {
   existsSync,
@@ -306,28 +306,59 @@ async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Recursively resolve and copy a package and its entire dependency tree.
- * Reads each package's package.json to discover transitive deps.
+ * Resolve a dependency exactly as Node would from a package directory. This is
+ * important with Bun's hoisted linker: packages can still have nested copies
+ * when versions conflict (for example ajv-formats -> ajv@8 alongside a
+ * top-level ajv@6).
+ */
+function resolveDependencyPackage(
+  dep: string,
+  fromDir: string,
+  srcModules: string,
+): string | undefined {
+  const projectRoot = dirname(srcModules);
+  // Start with the importing package directory, then walk ancestors. When an
+  // ancestor is itself a node_modules directory, dependencies are direct
+  // children of it (e.g. ajv-formats/node_modules/ajv -> fast-uri).
+  let current = fromDir;
+
+  while (true) {
+    const candidate = basename(current) === 'node_modules'
+      ? join(current, dep)
+      : join(current, 'node_modules', dep);
+    if (existsSync(candidate)) return candidate;
+
+    if (current === projectRoot) return undefined;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+/**
+ * Recursively copy a package and its entire dependency tree, preserving the
+ * source node_modules layout so duplicate package versions remain resolvable.
  */
 function copyDependencyTree(
   dep: string,
+  fromDir: string,
   srcModules: string,
   destModules: string,
   visited: Set<string>,
 ): void {
-  if (visited.has(dep)) return;
-  visited.add(dep);
+  const src = resolveDependencyPackage(dep, fromDir, srcModules);
+  if (!src || visited.has(src)) return;
+  visited.add(src);
 
-  const src = join(srcModules, dep);
-  if (!existsSync(src)) return;
+  const sourceRelativePath = relative(srcModules, src);
+  if (sourceRelativePath.startsWith('..')) return;
 
   // Ensure scope directory exists
   if (dep.startsWith('@')) {
-    const scope = dep.split('/')[0]!;
-    mkdirSync(join(destModules, scope), { recursive: true });
+    mkdirSync(dirname(join(destModules, sourceRelativePath)), { recursive: true });
   }
 
-  const dest = join(destModules, dep);
+  const dest = join(destModules, sourceRelativePath);
   mkdirSync(dirname(dest), { recursive: true });
   cpSync(src, dest, { recursive: true, dereference: true });
 
@@ -337,7 +368,7 @@ function copyDependencyTree(
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
       for (const childDep of Object.keys(pkg.dependencies || {})) {
-        copyDependencyTree(childDep, srcModules, destModules, visited);
+        copyDependencyTree(childDep, src, srcModules, destModules, visited);
       }
     } catch {
       // Skip if package.json is malformed
@@ -427,7 +458,7 @@ function copyProductionDeps(config: ServerBuildConfig): void {
 
   // Copy each discovered package and its full transitive dependency tree
   for (const dep of allImports) {
-    copyDependencyTree(dep, srcModules, destModules, copied);
+    copyDependencyTree(dep, rootDir, srcModules, destModules, copied);
   }
   console.log(`  Source imports + declared deps: ${copied.size} packages`);
 
@@ -451,8 +482,8 @@ function copyProductionDeps(config: ServerBuildConfig): void {
   ];
 
   for (const dep of PLATFORM_DEPS) {
-    if (copied.has(dep)) continue;
     const src = join(srcModules, dep);
+    if (copied.has(src)) continue;
     if (!existsSync(src)) {
       console.log(`  Skipping ${dep} (not installed for current platform)`);
       continue;

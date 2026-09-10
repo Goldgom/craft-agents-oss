@@ -96,6 +96,9 @@ export type LlmAuthType =
  */
 export type ModelSelectionMode = 'automaticallySyncedFromProvider' | 'userDefined3Tier';
 
+/** OAuth issuer owned by an LLM connection (separate from the Pi API provider). */
+export type LlmOAuthProvider = 'tokennest';
+
 /** Per-model prompt behavior overrides. Stored on the owning LLM connection. */
 export interface ModelPromptSettings {
   /** Use a compact system prompt intended for smaller/lightweight models. */
@@ -170,6 +173,9 @@ export interface LlmConnection {
 
   /** Authentication mechanism */
   authType: LlmAuthType;
+
+  /** Provider-specific refresh/revocation behavior for third-party LLM OAuth. */
+  oauthProvider?: LlmOAuthProvider;
 
   /** Override available models (for custom endpoints that don't support model listing) */
   models?: Array<ModelDefinition | string>;
@@ -761,7 +767,7 @@ export function isValidProviderAuthCombination(
   const validCombinations: Record<LlmProviderType, LlmAuthType[]> = {
     anthropic: ['api_key', 'oauth'],
     pi: ['api_key', 'oauth', 'iam_credentials', 'environment', 'none'],
-    pi_compat: ['api_key_with_endpoint', 'none'],
+    pi_compat: ['api_key_with_endpoint', 'oauth', 'none'],
   };
 
   return validCombinations[providerType]?.includes(authType) ?? false;

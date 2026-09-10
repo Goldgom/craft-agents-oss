@@ -510,14 +510,14 @@ export class PiAgent extends BaseAgent {
     // Resolve credentials before spawning so we can derive AWS env vars
     // from the same fetch that produces piAuth (single source of truth).
 
-    // For Copilot OAuth: preemptively refresh the short-lived Copilot token
-    // before fetching credentials, so getPiAuth() picks up a fresh token.
+    // For short-lived OAuth credentials, preemptively refresh before fetching
+    // credentials so getPiAuth() picks up a fresh token.
     // refreshAndPushTokens guards this.subprocess internally — safe to call pre-spawn.
-    if (this.config.authType === 'oauth' && runtime.piAuthProvider === 'github-copilot') {
+    if (this.config.authType === 'oauth' && (runtime.piAuthProvider === 'github-copilot' || runtime.oauthProvider === 'tokennest')) {
       const slug = this.config.connectionSlug || 'pi';
       const stored = await getCredentialManager().getLlmOAuth(slug);
       if (stored?.refreshToken && (!stored.expiresAt || stored.expiresAt < Date.now() + 5 * 60_000)) {
-        this.debug('Copilot token expired or expiring soon — refreshing before session start');
+        this.debug('OAuth token expired or expiring soon — refreshing before session start');
         await this.refreshAndPushTokens();
       }
     }
@@ -883,7 +883,11 @@ export class PiAgent extends BaseAgent {
       }
 
       try {
-        if (piAuthProvider === 'github-copilot') {
+        if (getBackendRuntime(this.config).oauthProvider === 'tokennest') {
+          const { getValidTokenNestCredentials } = await import('../auth/tokennest-oauth.ts');
+          const newTokens = await getValidTokenNestCredentials(slug, credentialManager, true);
+          if (!newTokens) throw new Error('TokenNest refresh credentials are unavailable');
+        } else if (piAuthProvider === 'github-copilot') {
           // Copilot: refresh the short-lived Copilot token using the GitHub access token
           const { refreshGitHubCopilotToken } = await import('../auth/github-copilot.ts');
           const newCreds = await refreshGitHubCopilotToken(stored.refreshToken);
