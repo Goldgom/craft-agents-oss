@@ -40,9 +40,17 @@ export default defineConfig({
     emptyDirBeforeWrite: true,
     sourcemap: true,  // Source maps generated for debugging. Not uploaded to Sentry (see CLAUDE.md).
     rollupOptions: {
+      // UI modules are declarative components. Treating unused re-exports as
+      // side-effect free lets Rollup prune optional editors and previewers from
+      // the package barrel instead of loading them during app startup.
+      treeshake: {
+        moduleSideEffects: (id) => !id.replaceAll('\\', '/').includes('/packages/ui/src/'),
+      },
       input: {
         main: resolve(__dirname, 'src/renderer/index.html'),
-        playground: resolve(__dirname, 'src/renderer/playground.html'),
+        // The design-system playground is served directly by Vite in development.
+        // Bundling it as a production entry makes Rollup promote its large demo-only
+        // dependency graph into shared chunks that the main window then preloads.
         'browser-toolbar': resolve(__dirname, 'src/renderer/browser-toolbar.html'),
         'browser-empty-state': resolve(__dirname, 'src/renderer/browser-empty-state.html'),
       }

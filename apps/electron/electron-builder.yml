@@ -193,6 +193,10 @@ win:
       to: app/node_modules/@vscode/ripgrep
     - from: vendor/bun/bun.exe
       to: vendor/bun/bun.exe
+    # Complete PortableGit runtime. The main process prefers its bin/bash.exe
+    # unless the user has explicitly selected a custom Git Bash path.
+    - from: vendor/git-bash
+      to: app/vendor/git-bash
     - from: resources/bin/win32-x64
       to: app/resources/bin/win32-x64
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).

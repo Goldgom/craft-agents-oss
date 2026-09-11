@@ -69,7 +69,6 @@ import {
   ShikiThemeProvider,
   PlatformProvider,
   ImagePreviewOverlay,
-  PDFPreviewOverlay,
   CodePreviewOverlay,
   DocumentFormattedMarkdownOverlay,
   JSONPreviewOverlay,
@@ -86,6 +85,12 @@ import { getFileManagerName } from '@/lib/platform'
 import { rendererLog } from '@/lib/logger'
 import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
+
+// PDF previews are opened on demand. Loading the renderer lazily keeps pdf.js
+// and its worker off the startup path.
+const PDFPreviewOverlay = React.lazy(() =>
+  import('@craft-agent/ui/overlay/PDFPreviewOverlay').then(module => ({ default: module.PDFPreviewOverlay }))
+)
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'server-picker' | 'ready'
 
@@ -2184,13 +2189,15 @@ export default function App() {
 
           {/* File preview overlay — rendered by the link interceptor when a previewable file is clicked */}
           {linkInterceptor.previewState && (
-            <FilePreviewRenderer
-              state={linkInterceptor.previewState}
-              onClose={linkInterceptor.closePreview}
-              loadDataUrl={linkInterceptor.readFileDataUrl}
-              loadPdfData={linkInterceptor.readFileBinary}
-              isDark={isDark}
-            />
+            <React.Suspense fallback={null}>
+              <FilePreviewRenderer
+                state={linkInterceptor.previewState}
+                onClose={linkInterceptor.closePreview}
+                loadDataUrl={linkInterceptor.readFileDataUrl}
+                loadPdfData={linkInterceptor.readFileBinary}
+                isDark={isDark}
+              />
+            </React.Suspense>
           )}
         </NavigationProvider>
         </TooltipProvider>

@@ -8,6 +8,7 @@ import {
   copyPiAgentServer,
   copySessionServer,
   verifyMcpServersExist,
+  downloadGitBash,
   downloadUv,
   type Arch,
   type BuildConfig,
@@ -52,6 +53,10 @@ async function main(): Promise<void> {
   // Document tools rely on uv. Provision the platform binary during every
   // build so development and release bundles do not silently depend on PATH.
   await downloadUv(buildConfig);
+
+  // Windows packages include an official PortableGit runtime so Bash and Git
+  // work on a clean machine without a separate system installation.
+  await downloadGitBash(buildConfig);
 
   if (existsSync(srcDir)) {
     cpSync(srcDir, destDir, { recursive: true, force: true });

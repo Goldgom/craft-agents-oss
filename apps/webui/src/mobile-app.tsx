@@ -41,21 +41,22 @@ function isAndroidApp() {
     && Boolean(window.CraftAgentAndroid)
 }
 
-/** Keep the shared renderer sized to the usable Android WebView viewport. */
+/** Keep the shared renderer sized to the currently visible browser viewport. */
 export function useMobileAppViewport() {
   useEffect(() => {
-    if (!isAndroidApp()) return
-
     const root = document.documentElement
     const body = document.body
-    root.dataset.mobileApp = 'android'
-    body.dataset.mobileApp = 'android'
+    const android = isAndroidApp()
+    if (android) {
+      root.dataset.mobileApp = 'android'
+      body.dataset.mobileApp = 'android'
+    }
 
     const updateViewport = () => {
       const viewport = window.visualViewport
       const height = Math.round(viewport?.height ?? window.innerHeight)
       root.style.setProperty('--app-viewport-height', `${height}px`)
-      root.classList.toggle('keyboard-open', height < window.innerHeight - 120)
+      root.classList.toggle('keyboard-open', android && height < window.innerHeight - 120)
     }
 
     updateViewport()
@@ -69,8 +70,10 @@ export function useMobileAppViewport() {
       window.visualViewport?.removeEventListener('scroll', updateViewport)
       root.style.removeProperty('--app-viewport-height')
       root.classList.remove('keyboard-open')
-      delete root.dataset.mobileApp
-      delete body.dataset.mobileApp
+      if (android) {
+        delete root.dataset.mobileApp
+        delete body.dataset.mobileApp
+      }
     }
   }, [])
 }
@@ -118,14 +121,30 @@ export function MobileControls() {
   const android = isAndroidApp()
 
   useEffect(() => {
-    if (!navigationOpen) return
+    if (!android || (!navigationOpen && !workspaceOpen)) return
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setNavigationOpen(false)
+    const root = document.documentElement
+    const closeOverlays = () => {
+      setNavigationOpen(false)
+      setWorkspaceOpen(false)
     }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeOverlays()
+    }
+    const handleAndroidBack = (event: Event) => {
+      event.preventDefault()
+      closeOverlays()
+    }
+
+    root.classList.add('mobile-overlay-open')
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [navigationOpen])
+    window.addEventListener('craft-agent-android-back', handleAndroidBack)
+    return () => {
+      root.classList.remove('mobile-overlay-open')
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('craft-agent-android-back', handleAndroidBack)
+    }
+  }, [android, navigationOpen, workspaceOpen])
 
   useEffect(() => {
     if (!android) return
@@ -259,35 +278,15 @@ export function MobileControls() {
       <div className="mobile-controls__pill" role="toolbar" aria-label="快捷操作">
         <button
           type="button"
-          className="mobile-controls__quick-trigger"
-          aria-label="打开历史会话"
-          title="历史会话"
-          onClick={() => navigateTo(routes.view.allSessions())}
-        >
-          <History aria-hidden="true" />
-          <span>历史</span>
-        </button>
-        <button
-          type="button"
-          className="mobile-controls__quick-trigger"
-          aria-label="刷新页面"
-          title="刷新页面"
-          onClick={() => {
-            closeNavigation()
-            window.CraftAgentAndroid?.reload()
-          }}
-        >
-          <RefreshCw aria-hidden="true" />
-          <span>刷新</span>
-        </button>
-        <button
-          type="button"
           className="mobile-controls__quick-trigger mobile-controls__menu-trigger"
           aria-label={navigationOpen ? '关闭应用菜单' : '打开应用菜单'}
           title="菜单"
           aria-expanded={navigationOpen}
           aria-controls="mobile-controls-panel"
-          onClick={() => setNavigationOpen(value => !value)}
+          onClick={() => {
+            setWorkspaceOpen(false)
+            setNavigationOpen(value => !value)
+          }}
         >
           {navigationOpen ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
           <span>菜单</span>
@@ -320,6 +319,16 @@ export function MobileControls() {
           ))}
 
           <div className="mobile-controls__separator" />
+          <button
+            type="button"
+            onClick={() => {
+              closeNavigation()
+              window.CraftAgentAndroid?.reload()
+            }}
+          >
+            <RefreshCw aria-hidden="true" />
+            <span>刷新页面</span>
+          </button>
           <button
             type="button"
             onClick={() => {

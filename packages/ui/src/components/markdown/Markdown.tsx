@@ -9,13 +9,11 @@ import { cn } from '../../lib/utils'
 import { CodeBlock, InlineCode } from './CodeBlock'
 import { MarkdownDiffBlock } from './MarkdownDiffBlock'
 import { MarkdownJsonBlock } from './MarkdownJsonBlock'
-import { MarkdownMermaidBlock } from './MarkdownMermaidBlock'
 import { MarkdownDatatableBlock } from './MarkdownDatatableBlock'
 import { MarkdownSpreadsheetBlock } from './MarkdownSpreadsheetBlock'
 import { MarkdownHtmlBlock } from './MarkdownHtmlBlock'
 import { MarkdownImageBlock } from './MarkdownImageBlock'
 import { MarkdownLatexBlock } from './MarkdownLatexBlock'
-import { MarkdownPdfBlock } from './MarkdownPdfBlock'
 import { MarkdownDocBlock } from './MarkdownDocBlock'
 import { preprocessLinks } from './linkify'
 import { resolveMarkdownLinkTarget } from './link-target'
@@ -25,6 +23,15 @@ import { useCollapsibleMarkdown } from './CollapsibleMarkdownContext'
 import { wrapWithSafeProxy } from './safe-components'
 import { MARKDOWN_MATH_OPTIONS } from './math-options'
 import { markdownUrlTransform } from './url-transform'
+
+// These previewers pull in pdf.js and ELK, respectively. Most messages never
+// contain either block type, so keep them off the initial renderer path.
+const LazyMarkdownMermaidBlock = React.lazy(() =>
+  import('./MarkdownMermaidBlock').then(module => ({ default: module.MarkdownMermaidBlock }))
+)
+const LazyMarkdownPdfBlock = React.lazy(() =>
+  import('./MarkdownPdfBlock').then(module => ({ default: module.MarkdownPdfBlock }))
+)
 
 /**
  * Names of preview-block code-fence types that recursive `Markdown` callers
@@ -296,7 +303,14 @@ function createComponents(
           }
           // PDF preview blocks → inline first page with expand to full viewer
           if (match?.[1] === 'pdf-preview' && isPreviewEnabled('pdf-preview')) {
-            return wrapBlock('pdf-preview', code, <MarkdownPdfBlock code={code} className="my-2" />, props.node?.position)
+            return wrapBlock(
+              'pdf-preview',
+              code,
+              <React.Suspense fallback={<CodeBlock code={code} language="pdf-preview" mode="full" className="my-2" />}>
+                <LazyMarkdownPdfBlock code={code} className="my-2" />
+              </React.Suspense>,
+              props.node?.position,
+            )
           }
           // Image preview blocks → inline image with expand to full viewer
           if (match?.[1] === 'image-preview' && isPreviewEnabled('image-preview')) {
@@ -328,7 +342,9 @@ function createComponents(
             return wrapBlock(
               'mermaid',
               code,
-              <MarkdownMermaidBlock code={code} className="my-2" showExpandButton={!isFirstBlock} />,
+              <React.Suspense fallback={<CodeBlock code={code} language="mermaid" mode="full" className="my-2" />}>
+                <LazyMarkdownMermaidBlock code={code} className="my-2" showExpandButton={!isFirstBlock} />
+              </React.Suspense>,
               props.node?.position,
             )
           }
@@ -434,7 +450,14 @@ function createComponents(
         }
         // PDF preview blocks → inline first page with expand to full viewer
         if (match?.[1] === 'pdf-preview' && isPreviewEnabled('pdf-preview')) {
-          return wrapBlock('pdf-preview', code, <MarkdownPdfBlock code={code} className="my-2" />, props.node?.position)
+          return wrapBlock(
+            'pdf-preview',
+            code,
+            <React.Suspense fallback={<CodeBlock code={code} language="pdf-preview" mode="full" className="my-2" />}>
+              <LazyMarkdownPdfBlock code={code} className="my-2" />
+            </React.Suspense>,
+            props.node?.position,
+          )
         }
         // Image preview blocks → inline image with expand to full viewer
         if (match?.[1] === 'image-preview' && isPreviewEnabled('image-preview')) {
@@ -462,7 +485,9 @@ function createComponents(
           return wrapBlock(
             'mermaid',
             code,
-            <MarkdownMermaidBlock code={code} className="my-2" showExpandButton={!isFirstBlock} />,
+            <React.Suspense fallback={<CodeBlock code={code} language="mermaid" mode="full" className="my-2" />}>
+              <LazyMarkdownMermaidBlock code={code} className="my-2" showExpandButton={!isFirstBlock} />
+            </React.Suspense>,
             props.node?.position,
           )
         }

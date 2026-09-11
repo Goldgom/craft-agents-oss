@@ -38,6 +38,39 @@
 html, body, #root {
   overflow: hidden;
   max-width: 100%;
+  height: var(--app-viewport-height, 100%);
+}
+
+/* Tailwind's h-screen uses 100vh, which can extend behind mobile browser
+   chrome and the on-screen keyboard. The JS viewport variable uses
+   VisualViewport where available and innerHeight everywhere else. */
+.h-screen {
+  height: var(--app-viewport-height, 100vh);
+}
+
+/* In standalone iOS/PWA mode viewport-fit=cover exposes the notch area. Keep
+   the browser TopBar clear of every cutout edge and include the top inset in
+   the space reserved by the shared renderer. Android has no TopBar. */
+html:not([data-mobile-app="android"]) {
+  --topbar-height: calc(48px + env(safe-area-inset-top, 0px));
+}
+
+html:not([data-mobile-app="android"]) .titlebar-drag-region {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+@media (max-width: 768px) {
+  html:not([data-mobile-app="android"]) {
+    --topbar-height: calc(56px + env(safe-area-inset-top, 0px));
+  }
+
+  /* The shared compact navigator normally owns the safe-area inset. WebUI's
+     visible TopBar owns it instead, so avoid applying the same inset twice. */
+  html:not([data-mobile-app="android"]) [data-panel-role="navigator"] {
+    padding-top: 0;
+  }
 }
 
 /*
@@ -564,6 +597,11 @@ html.keyboard-open .mobile-workspace-controls {
   display: none;
 }
 
+html.mobile-overlay-open body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* Android pages are edge-to-edge. Keep common list/content surfaces readable
    without bringing back the desktop window chrome or excessive outer margins. */
 html[data-mobile-app="android"] [data-panel-role="content"] {
@@ -596,8 +634,8 @@ html[data-mobile-app="android"] [data-mobile-session-view="all-sessions"] {
    it cannot be covered by a list header or a chat title action. */
 html[data-mobile-app="android"] .mobile-controls {
   top: calc(env(safe-area-inset-top, 0px) + 10px);
-  right: auto;
-  left: calc(env(safe-area-inset-left, 0px) + 10px);
+  right: calc(env(safe-area-inset-right, 0px) + 10px);
+  left: auto;
   z-index: var(--z-modal, 200);
 }
 
@@ -758,7 +796,7 @@ html[data-mobile-app="android"] .mobile-controls__separator {
 
 html[data-mobile-app="android"] [data-mobile-panel-header] {
   padding-left: calc(env(safe-area-inset-left, 0px) + 64px) !important;
-  padding-right: 8px !important;
+  padding-right: calc(env(safe-area-inset-right, 0px) + 64px) !important;
 }
 
 /* The global Android menu replaces the compact panel back button. */

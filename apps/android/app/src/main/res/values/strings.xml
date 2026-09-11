@@ -10,8 +10,8 @@
     <string name="server_url_hint">WebSocket URL</string>
     <string name="server_token_hint">Server token (optional)</string>
     <string name="save_and_connect">Save and connect</string>
-    <string name="configure_server">Configure</string>
-    <string name="reload">Reload</string>
     <string name="server_url_invalid">Enter a valid ws:// or wss:// WebSocket URL.</string>
     <string name="webview_error">Unable to load the server. Check the URL and connection.</string>
+    <string name="file_picker_unavailable">No compatible file picker is available on this device.</string>
+    <string name="external_link_unavailable">No app is available to open this link.</string>
 </resources>

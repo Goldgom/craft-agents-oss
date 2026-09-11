@@ -507,6 +507,24 @@ if (-not $InstallerPath) {
     exit 1
 }
 
+# Verify the unpacked application really contains a working Git Bash runtime.
+# Checking the source vendor directory alone would not catch an electron-builder
+# path/filter regression.
+$PackagedGitBash = "$ElectronDir\release\win-unpacked\resources\app\vendor\git-bash\bin\bash.exe"
+$PackagedGit = "$ElectronDir\release\win-unpacked\resources\app\vendor\git-bash\cmd\git.exe"
+$PackagedGitLicense = "$ElectronDir\release\win-unpacked\resources\app\vendor\git-bash\LICENSE.txt"
+foreach ($RequiredPath in @($PackagedGitBash, $PackagedGit, $PackagedGitLicense)) {
+    if (-not (Test-Path -LiteralPath $RequiredPath -PathType Leaf)) {
+        throw "Packaged Git Bash verification failed: missing $RequiredPath"
+    }
+}
+
+$PackagedGitVersion = & $PackagedGit --version
+if ($LASTEXITCODE -ne 0 -or $PackagedGitVersion -ne "git version 2.55.0.windows.3") {
+    throw "Packaged Git Bash verification failed: expected Git 2.55.0.windows.3, got '$PackagedGitVersion'"
+}
+Write-Host "Bundled Git Bash verified: $PackagedGitVersion" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "=== Build Complete ===" -ForegroundColor Green
 Write-Host "Installer: $($InstallerPath.FullName)"

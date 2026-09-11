@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { isGitBashExecutablePath, isUsableGitBashPath, validateGitBashPath } from '@craft-agent/server-core/services'
+import { getBundledGitBashPath, isGitBashExecutablePath, isUsableGitBashPath, validateGitBashPath } from '@craft-agent/server-core/services'
 
 let tempDir: string
 
@@ -15,6 +15,11 @@ afterEach(() => {
 })
 
 describe('git-bash helpers', () => {
+  it('resolves the bundled PortableGit bash from the application resources root', () => {
+    expect(getBundledGitBashPath(tempDir)).toBe(join(tempDir, 'vendor', 'git-bash', 'bin', 'bash.exe'))
+    expect(getBundledGitBashPath('   ')).toBeUndefined()
+  })
+
   it('recognizes bash.exe paths with different separators', () => {
     expect(isGitBashExecutablePath('C:\\Program Files\\Git\\bin\\bash.exe')).toBe(true)
     expect(isGitBashExecutablePath('/tmp/git/bin/bash.exe')).toBe(true)

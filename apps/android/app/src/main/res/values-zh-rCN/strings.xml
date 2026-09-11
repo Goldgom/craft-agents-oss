@@ -10,8 +10,8 @@
     <string name="server_url_hint">WebSocket 地址</string>
     <string name="server_token_hint">服务器令牌（可选）</string>
     <string name="save_and_connect">保存并连接</string>
-    <string name="configure_server">配置</string>
-    <string name="reload">刷新</string>
     <string name="server_url_invalid">请输入有效的 ws:// 或 wss:// WebSocket 地址。</string>
     <string name="webview_error">无法加载服务，请检查地址和网络连接。</string>
+    <string name="file_picker_unavailable">此设备上没有可用的文件选择器。</string>
+    <string name="external_link_unavailable">没有可打开此链接的应用。</string>
 </resources>

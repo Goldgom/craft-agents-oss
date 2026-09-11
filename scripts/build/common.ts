@@ -44,6 +44,19 @@ export const BUN_VERSION = 'bun-v1.3.9';
 export const UV_VERSION = '0.10.6';
 
 /**
+ * Git for Windows version bundled with Windows desktop builds.
+ *
+ * We use the official PortableGit distribution rather than copying a Git
+ * installation from the build machine. This keeps release builds reproducible
+ * and gives the agent a complete Bash environment without requiring users to
+ * install or configure Git separately.
+ */
+export const GIT_FOR_WINDOWS_VERSION = '2.55.0.windows.3';
+
+/** Directory name used for the extracted PortableGit runtime. */
+export const BUNDLED_GIT_BASH_DIR = 'git-bash';
+
+/**
  * Get platform key for resources/bin folder naming.
  */
 export function getPlatformKey(platform: Platform, arch: Arch): string {
@@ -88,6 +101,37 @@ export function getUvDownloadName(platform: Platform, arch: Arch): string {
   if (platform === 'win32' && arch === 'x64') return 'uv-x86_64-pc-windows-msvc.zip';
 
   throw new Error(`Unsupported uv target: ${platform}-${arch}`);
+}
+
+/**
+ * Get the official PortableGit release asset name for a Windows architecture.
+ */
+export function getGitForWindowsDownloadName(arch: Arch): string {
+  if (arch !== 'x64') {
+    throw new Error(`Bundled Git Bash is not available for Windows ${arch}`);
+  }
+
+  const match = GIT_FOR_WINDOWS_VERSION.match(/^(.+)\.windows\.(\d+)$/);
+  if (!match) {
+    throw new Error(`Invalid Git for Windows version: ${GIT_FOR_WINDOWS_VERSION}`);
+  }
+
+  // The first Windows build uses the upstream version as-is; subsequent
+  // Windows servicing releases append their build number to asset filenames.
+  const assetVersion = match[2] === '1' ? match[1] : `${match[1]}.${match[2]}`;
+  return `PortableGit-${assetVersion}-64-bit.7z.exe`;
+}
+
+function hasExpectedGitForWindowsVersion(gitPath: string): boolean {
+  if (!existsSync(gitPath)) return false;
+
+  try {
+    const result = Bun.spawnSync([gitPath, '--version']);
+    return result.exitCode === 0
+      && result.stdout.toString().trim() === `git version ${GIT_FOR_WINDOWS_VERSION}`;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -297,6 +341,106 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
     }
 
     console.log(`  uv installed to ${targetPath} ✓`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+interface GitHubReleaseAsset {
+  name: string;
+  browser_download_url: string;
+  digest?: string | null;
+}
+
+interface GitHubRelease {
+  assets?: GitHubReleaseAsset[];
+}
+
+/**
+ * Download, verify, and extract the official PortableGit runtime used by the
+ * Windows desktop app. The extracted tree contains bin/bash.exe plus Git and
+ * the standard Unix command-line tools expected by agent Bash sessions.
+ *
+ * The GitHub asset digest is checked before the self-extracting archive is
+ * executed. Offline release builds can pre-seed vendor/git-bash; a complete
+ * pre-seeded tree is left untouched.
+ */
+export async function downloadGitBash(config: BuildConfig): Promise<void> {
+  const { platform, arch, electronDir } = config;
+  if (platform !== 'win32') return;
+
+  const targetDir = join(electronDir, 'vendor', BUNDLED_GIT_BASH_DIR);
+  const bashPath = join(targetDir, 'bin', 'bash.exe');
+  const gitPath = join(targetDir, 'cmd', 'git.exe');
+  const licensePath = join(targetDir, 'LICENSE.txt');
+
+  if (
+    existsSync(bashPath)
+    && existsSync(licensePath)
+    && hasExpectedGitForWindowsVersion(gitPath)
+  ) {
+    console.log(`Git Bash already present at ${bashPath}`);
+    return;
+  }
+
+  if (process.platform !== 'win32') {
+    throw new Error('Bundled Git Bash can only be provisioned on a Windows build host');
+  }
+
+  const assetName = getGitForWindowsDownloadName(arch);
+  const releaseTag = `v${GIT_FOR_WINDOWS_VERSION}`;
+  const tempDir = join(electronDir, '.git-bash-download-temp');
+  const archivePath = join(tempDir, assetName);
+  const metadataPath = join(tempDir, 'release.json');
+  const extractDir = join(tempDir, 'extract');
+
+  rmSync(tempDir, { recursive: true, force: true });
+  mkdirSync(extractDir, { recursive: true });
+
+  try {
+    const metadataUrl = githubUrl(
+      `https://api.github.com/repos/git-for-windows/git/releases/tags/${releaseTag}`,
+    );
+    console.log(`Downloading Git for Windows ${GIT_FOR_WINDOWS_VERSION} metadata...`);
+    await $`curl -fsSL --retry 3 --retry-delay 2 -H "Accept: application/vnd.github+json" -H "User-Agent: Craft-Agents-Build" -o ${metadataPath} ${metadataUrl}`;
+
+    const release = JSON.parse(await Bun.file(metadataPath).text()) as GitHubRelease;
+    const asset = release.assets?.find((candidate) => candidate.name === assetName);
+    if (!asset) {
+      throw new Error(`PortableGit release asset not found: ${assetName}`);
+    }
+
+    const digestMatch = asset.digest?.match(/^sha256:([a-fA-F0-9]{64})$/);
+    if (!digestMatch) {
+      throw new Error(`GitHub did not provide a SHA-256 digest for ${assetName}`);
+    }
+
+    const assetUrl = githubUrl(asset.browser_download_url);
+    console.log(`  Downloading ${assetUrl}...`);
+    await $`curl -fsSL --retry 3 --retry-delay 2 -o ${archivePath} ${assetUrl}`;
+
+    console.log('  Verifying checksum...');
+    if (!await verifySha256(archivePath, digestMatch[1])) {
+      throw new Error('PortableGit checksum verification failed');
+    }
+    console.log('  Checksum verified ✓');
+
+    console.log('  Extracting PortableGit...');
+    await $`${archivePath} -y ${`-o${extractDir}`}`.quiet();
+
+    const extractedBash = join(extractDir, 'bin', 'bash.exe');
+    const extractedGit = join(extractDir, 'cmd', 'git.exe');
+    const extractedLicense = join(extractDir, 'LICENSE.txt');
+    if (!existsSync(extractedBash) || !existsSync(extractedGit) || !existsSync(extractedLicense)) {
+      throw new Error('PortableGit archive is incomplete: bash.exe, git.exe, or LICENSE.txt is missing');
+    }
+    if (!hasExpectedGitForWindowsVersion(extractedGit)) {
+      throw new Error(`PortableGit did not contain Git ${GIT_FOR_WINDOWS_VERSION}`);
+    }
+
+    rmSync(targetDir, { recursive: true, force: true });
+    cpSync(extractDir, targetDir, { recursive: true });
+    console.log(`  Git Bash installed to ${targetDir} ✓`);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

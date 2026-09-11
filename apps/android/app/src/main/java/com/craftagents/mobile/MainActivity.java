@@ -2,9 +2,12 @@ package com.craftagents.mobile;
 
 import android.app.Activity;
 import android.annotation.SuppressLint;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
@@ -18,6 +21,7 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -32,6 +36,8 @@ import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import java.io.IOException;
 import java.util.EnumMap;
@@ -49,6 +55,9 @@ public final class MainActivity extends Activity {
     private static final String REMOTE_SERVER_URL_KEY = "remote_server_url";
     private static final String REMOTE_SERVER_TOKEN_KEY = "remote_server_token";
     private static final String DEFAULT_LOCAL_SERVER_URL = "ws://127.0.0.1:9100";
+    private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
+    private static final String ANDROID_BACK_SCRIPT =
+            "(function(){return !window.dispatchEvent(new CustomEvent('craft-agent-android-back',{cancelable:true}));})()";
 
     private enum ServerMode {
         LOCAL("local"),
@@ -86,6 +95,9 @@ public final class MainActivity extends Activity {
     private final ExecutorService serverExecutor = Executors.newSingleThreadExecutor();
     private ServerMode activeMode;
     private boolean showingServerConfiguration;
+    private boolean backDispatchPending;
+    private ValueCallback<Uri[]> pendingFileChooser;
+    private OnBackInvokedCallback backInvokedCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -94,6 +106,7 @@ public final class MainActivity extends Activity {
         localAgentServer = new LocalAgentServer(this);
         migrateLegacyServerProfile();
         buildUi();
+        registerBackHandler();
 
         ServerMode savedMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
         if (savedMode == null) {
@@ -140,7 +153,10 @@ public final class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
+        // Android's Storage Access Framework returns content:// URIs for file
+        // attachments. Keep direct file:// access disabled while allowing
+        // those user-selected, permission-scoped content URIs.
+        settings.setAllowContentAccess(true);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
@@ -149,11 +165,37 @@ public final class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
         view.addJavascriptInterface(new AndroidBridge(), "CraftAgentAndroid");
-        view.setWebChromeClient(new WebChromeClient());
+        view.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(
+                    WebView webView,
+                    ValueCallback<Uri[]> filePathCallback,
+                    FileChooserParams fileChooserParams
+            ) {
+                if (pendingFileChooser != null) {
+                    pendingFileChooser.onReceiveValue(null);
+                }
+                pendingFileChooser = filePathCallback;
+
+                try {
+                    Intent picker = fileChooserParams.createIntent();
+                    picker.addCategory(Intent.CATEGORY_OPENABLE);
+                    startActivityForResult(picker, FILE_CHOOSER_REQUEST_CODE);
+                    return true;
+                } catch (ActivityNotFoundException | SecurityException error) {
+                    pendingFileChooser.onReceiveValue(null);
+                    pendingFileChooser = null;
+                    Toast.makeText(MainActivity.this, R.string.file_picker_unavailable, Toast.LENGTH_LONG).show();
+                    return true;
+                }
+            }
+        });
         view.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView webView, WebResourceRequest request) {
-                return false;
+                if (!request.isForMainFrame() || isBundledWebUri(request.getUrl())) return false;
+                openExternalUri(request.getUrl());
+                return true;
             }
 
             @Override
@@ -167,6 +209,7 @@ public final class MainActivity extends Activity {
 
     private void showServerConfiguration(boolean allowCancel) {
         showingServerConfiguration = true;
+        showSystemBars();
 
         ServerMode initialMode = activeMode;
         if (initialMode == null) {
@@ -184,6 +227,7 @@ public final class MainActivity extends Activity {
         page.setOrientation(LinearLayout.VERTICAL);
         page.setGravity(Gravity.CENTER_HORIZONTAL);
         page.setPadding(dp(24), dp(40), dp(24), dp(32));
+        applyServerPageInsets(page);
         scrollView.addView(page, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -406,6 +450,56 @@ public final class MainActivity extends Activity {
         enableImmersiveMode();
     }
 
+    /** Keep the native configuration screen clear of cutouts and system bars. */
+    private void applyServerPageInsets(View page) {
+        final int horizontalPadding = dp(24);
+        final int topPadding = dp(40);
+        final int bottomPadding = dp(32);
+        page.setOnApplyWindowInsetsListener((view, windowInsets) -> {
+            int left;
+            int top;
+            int right;
+            int bottom;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets insets = windowInsets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                left = insets.left;
+                top = insets.top;
+                right = insets.right;
+                bottom = insets.bottom;
+            } else {
+                left = windowInsets.getSystemWindowInsetLeft();
+                top = windowInsets.getSystemWindowInsetTop();
+                right = windowInsets.getSystemWindowInsetRight();
+                bottom = windowInsets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(
+                    horizontalPadding + left,
+                    topPadding + top,
+                    horizontalPadding + right,
+                    bottomPadding + bottom);
+            return windowInsets;
+        });
+        page.post(page::requestApplyInsets);
+    }
+
+    private boolean isBundledWebUri(Uri uri) {
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        if ("about".equalsIgnoreCase(scheme)) return true;
+        return "http".equalsIgnoreCase(scheme)
+                && ("127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host));
+    }
+
+    private void openExternalUri(Uri uri) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+            startActivity(intent);
+        } catch (ActivityNotFoundException | SecurityException error) {
+            Toast.makeText(this, R.string.external_link_unavailable, Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void replaceContent(View view) {
         ViewGroup parent = (ViewGroup) view.getParent();
         if (parent != null) parent.removeView(view);
@@ -436,12 +530,42 @@ public final class MainActivity extends Activity {
         return value;
     }
 
+    private void registerBackHandler() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            backInvokedCallback = this::handleBackPressed;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    backInvokedCallback);
+        }
+    }
+
+    private void handleBackPressed() {
+        if (showingServerConfiguration && activeMode != null) {
+            showWebView();
+            return;
+        }
+
+        if (showingServerConfiguration || backDispatchPending) return;
+
+        // Give Android-only React overlays the first chance to consume Back.
+        // If nothing handles it, continue through WebView/browser history.
+        backDispatchPending = true;
+        webView.evaluateJavascript(ANDROID_BACK_SCRIPT, consumed -> {
+            backDispatchPending = false;
+            if ("true".equals(consumed)) return;
+            navigateWebViewBackOrFinish();
+        });
+    }
+
     @Override
     @SuppressLint("GestureBackNavigation")
     public void onBackPressed() {
-        if (showingServerConfiguration && activeMode != null) {
-            showWebView();
-        } else if (!showingServerConfiguration && webView.canGoBack()) {
+        handleBackPressed();
+    }
+
+    @SuppressLint("GestureBackNavigation")
+    private void navigateWebViewBackOrFinish() {
+        if (webView.canGoBack()) {
             webView.goBack();
         } else {
             super.onBackPressed();
@@ -449,7 +573,28 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+            ValueCallback<Uri[]> callback = pendingFileChooser;
+            pendingFileChooser = null;
+            if (callback != null) {
+                callback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+            }
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
     protected void onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback);
+            backInvokedCallback = null;
+        }
+        if (pendingFileChooser != null) {
+            pendingFileChooser.onReceiveValue(null);
+            pendingFileChooser = null;
+        }
         serverExecutor.shutdownNow();
         if (localAgentServer != null) localAgentServer.stop();
         if (webView != null) {
@@ -463,7 +608,11 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        enableImmersiveMode();
+        if (showingServerConfiguration) {
+            showSystemBars();
+        } else {
+            enableImmersiveMode();
+        }
     }
 
     @Override
@@ -479,6 +628,7 @@ public final class MainActivity extends Activity {
     private void enableImmersiveMode() {
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
             WindowInsetsController controller = window.getInsetsController();
             if (controller != null) {
                 controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
@@ -493,6 +643,19 @@ public final class MainActivity extends Activity {
                             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                             | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                             | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        }
+    }
+
+    private void showSystemBars() {
+        Window window = getWindow();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(true);
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+            }
+        } else {
+            window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
         }
     }
 

@@ -110,7 +110,7 @@ import { getPiModelsForAuthProvider, getAllPiModels } from '@craft-agent/shared/
 import { initNotificationService, initBadgeIcon, initInstanceBadge, updateBadgeCount } from './notifications'
 import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook, setBeforeUpdateInstallHook, setInstallQuitFailedHook } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
-import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
+import { getBundledGitBashPath, validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
 
 // Initialize electron-log for renderer process support
 log.initialize()
@@ -158,6 +158,21 @@ if (isDebugMode) {
   const bunBinary = join(resourcesBase, 'vendor', 'bun', process.platform === 'win32' ? 'bun.exe' : 'bun')
   if (existsSync(bunBinary)) {
     process.env.CRAFT_BUN = bunBinary
+  }
+
+  // A packaged Windows build is self-contained: establish the bundled Bash
+  // path before any agent subprocess can be created. A persisted custom path
+  // may override this later during startup hydration.
+  if (process.platform === 'win32') {
+    const bundledGitBashPath = getBundledGitBashPath(resourcesBase)
+    if (bundledGitBashPath && existsSync(bundledGitBashPath)) {
+      process.env.CLAUDE_CODE_GIT_BASH_PATH = bundledGitBashPath
+      const bundledGitRoot = join(resourcesBase, 'vendor', 'git-bash')
+      const bundledGitPathEntries = [join(bundledGitRoot, 'cmd'), join(bundledGitRoot, 'bin')]
+      process.env.PATH = [...bundledGitPathEntries, process.env.PATH ?? '']
+        .filter(Boolean)
+        .join(delimiter)
+    }
   }
 
   process.env.CRAFT_SCRIPTS = scriptsDir
@@ -895,8 +910,17 @@ app.whenReady().then(async () => {
             process.env.CLAUDE_CODE_GIT_BASH_PATH = validation.path
           } else {
             clearGitBashPath()
-            delete process.env.CLAUDE_CODE_GIT_BASH_PATH
             mainLog.warn(`Cleared invalid persisted Git Bash path: ${gitBashPath}`)
+          }
+        }
+
+        // With no valid custom override, use PortableGit from the application
+        // resources. This path is intentionally not persisted because the
+        // installation directory may change during an update or reinstall.
+        if (!process.env.CLAUDE_CODE_GIT_BASH_PATH) {
+          const bundledPath = getBundledGitBashPath()
+          if (bundledPath && (await validateGitBashPath(bundledPath)).valid) {
+            process.env.CLAUDE_CODE_GIT_BASH_PATH = bundledPath
           }
         }
       }

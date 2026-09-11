@@ -5,7 +5,7 @@ import { execSync } from 'child_process'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { getGitBashPath, setGitBashPath, clearGitBashPath } from '@craft-agent/shared/config'
 import { classifyExternalUrl, formatBlockedUrlError } from '@craft-agent/shared/utils/url-safety'
-import { isUsableGitBashPath, validateGitBashPath } from '@craft-agent/server-core/services'
+import { getBundledGitBashPath, isUsableGitBashPath, validateGitBashPath } from '@craft-agent/server-core/services'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from './handler-deps'
@@ -141,6 +141,12 @@ export function registerSystemCoreHandlers(server: RpcServer, deps: HandlerDeps)
         return { found: true, path: persistedPath, platform }
       }
       clearGitBashPath()
+    }
+
+    const bundledPath = getBundledGitBashPath()
+    if (bundledPath && await isUsableGitBashPath(bundledPath)) {
+      process.env.CLAUDE_CODE_GIT_BASH_PATH = bundledPath
+      return { found: true, path: bundledPath, platform }
     }
 
     for (const bashPath of commonPaths) {

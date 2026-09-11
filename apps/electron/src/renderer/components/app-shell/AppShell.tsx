@@ -44,7 +44,7 @@ import { TopBar } from "./TopBar"
 import { SquarePenRounded } from "../icons/SquarePenRounded"
 import { McpIcon } from "../icons/McpIcon"
 import { cn } from "@/lib/utils"
-import { isMac } from "@/lib/platform"
+import { isAndroidEmbedded, isMac, isWebUI } from "@/lib/platform"
 import { Button } from "@/components/ui/button"
 import { HeaderIconButton } from "@/components/ui/HeaderIconButton"
 import { resolveInheritedFilterParams, type FilterMode } from "./inherited-filter-params"
@@ -567,7 +567,15 @@ function AppShellContent({
   const shellRef = useRef<HTMLDivElement>(null)
   const shellWidth = useContainerWidth(shellRef)
   const MOBILE_THRESHOLD = 768
-  const isAutoCompact = shellWidth > 0 && shellWidth < MOBILE_THRESHOLD
+  const isShortTouchViewport = isWebUI
+    && typeof window !== 'undefined'
+    && window.matchMedia('(pointer: coarse) and (max-height: 600px)').matches
+  // Android must stay in the single-panel navigation model in landscape too;
+  // a phone's landscape width can exceed the CSS breakpoint even though there
+  // is not enough height or physical space for the desktop three-panel UI.
+  const isAutoCompact = isAndroidEmbedded()
+    || isShortTouchViewport
+    || (shellWidth > 0 && shellWidth <= MOBILE_THRESHOLD)
 
   const effectiveSidebarAndNavigatorHidden = isSidebarAndNavigatorHidden || isAutoCompact
 
