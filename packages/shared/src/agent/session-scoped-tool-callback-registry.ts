@@ -153,7 +153,7 @@ export interface SessionScopedToolCallbacks {
     sessionId: string;
     card: Record<string, unknown>;
   }) => Promise<MessagingSendResult>;
-  /** Create a Craft Agents Task (board card + task.yaml + orchestrator session) without running it. */
+  /** Create a TokenBird Task (board card + task.yaml + orchestrator session) without running it. */
   createTaskFn?: (
     input: import('@craft-agent/session-tools-core').CreateTaskInput
   ) => Promise<import('@craft-agent/session-tools-core').CreateTaskResult>;

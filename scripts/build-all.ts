@@ -84,7 +84,7 @@ async function buildHeadless(target: 'linux-headless' | 'win-headless' | 'mac-he
   const destination = join(dist, target);
   mkdirSync(destination, { recursive: true });
   cpSync(output, join(destination, 'server'), { recursive: true });
-  const archive = readdirSync(staging).find((file) => file.startsWith(`craft-server-`) && file.includes(`-${platform}-x64`) && file.endsWith('.tar.gz'));
+  const archive = readdirSync(staging).find((file) => file.startsWith(`tokenbird-server-`) && file.includes(`-${platform}-x64`) && file.endsWith('.tar.gz'));
   if (archive) cpSync(join(staging, archive), join(destination, archive));
 }
 

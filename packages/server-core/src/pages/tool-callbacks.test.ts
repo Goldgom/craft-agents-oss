@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { buildPagesToolCallbacks } from './tool-callbacks'
 
 // Pin dev-mode runtime resolution: write_page_data spawns the real Bun runtime
-// via resolveScriptRuntime; under a packaged Craft Agents host (agent Bash
+// via resolveScriptRuntime; under a packaged TokenBird host (agent Bash
 // sessions inherit CRAFT_IS_PACKAGED=true) it would flip into packaged-mode
 // hardening and block the PATH fallback this suite relies on.
 const SAVED_IS_PACKAGED = process.env.CRAFT_IS_PACKAGED

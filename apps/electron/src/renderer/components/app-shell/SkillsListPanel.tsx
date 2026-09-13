@@ -101,7 +101,7 @@ export function SkillsListPanel({
           <SkillMenu
             skillSlug={skill.slug}
             skillName={skill.metadata.name}
-            onOpenInNewWindow={() => window.electronAPI.openUrl(`craftagents://skills/skill/${skill.slug}?window=focused`)}
+            onOpenInNewWindow={() => window.electronAPI.openUrl(`tokenbird://skills/skill/${skill.slug}?window=focused`)}
             onShowInFinder={async () => {
               if (!canRevealLocally) return
               try {

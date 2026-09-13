@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import {
   resolveSlugForMethod,
+  resolveTokenNestSlug,
   apiSetupMethodToConnectionSetup,
   BASE_SLUG_FOR_METHOD,
 } from '../useOnboarding'
@@ -40,6 +41,16 @@ describe('resolveSlugForMethod', () => {
       const slug = resolveSlugForMethod(method, null, new Set())
       expect(slug).toBe(BASE_SLUG_FOR_METHOD[method])
     }
+  })
+})
+
+describe('resolveTokenNestSlug', () => {
+  it('returns the default slug when it is available', () => {
+    expect(resolveTokenNestSlug(new Set())).toBe('tokennest')
+  })
+
+  it('returns the next available TokenNest slug', () => {
+    expect(resolveTokenNestSlug(new Set(['tokennest', 'tokennest-2']))).toBe('tokennest-3')
   })
 })
 

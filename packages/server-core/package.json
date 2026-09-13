@@ -2,7 +2,7 @@
   "name": "@craft-agent/server-core",
   "version": "1.1.0-community.1",
   "license": "Apache-2.0",
-  "description": "Reusable headless server infrastructure for Craft Agent",
+  "description": "Reusable headless server infrastructure for TokenBird",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

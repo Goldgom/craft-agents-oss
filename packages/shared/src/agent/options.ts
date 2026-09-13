@@ -234,7 +234,7 @@ export function isAndroidRuntime(): boolean {
  * The raw SDK failure is the cryptic "binary does not match this system's libc".
  */
 export const ANDROID_CLAUDE_UNSUPPORTED_MESSAGE =
-    'Claude Code cannot run locally on Android. The bundled Claude binary is built for glibc Linux, but Android uses bionic libc and has no glibc dynamic loader. Use a remote Craft Agent server to run the agent on this device.';
+    'Claude Code cannot run locally on Android. The bundled Claude binary is built for glibc Linux, but Android uses bionic libc and has no glibc dynamic loader. Use a remote TokenBird server to run the agent on this device.';
 
 export function getDefaultOptions(envOverrides?: Record<string, string>): Partial<Options> {
     // Android cannot execute the native Claude binary (glibc vs bionic); fail

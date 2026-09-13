@@ -14,7 +14,7 @@ interface ReauthScreenProps {
 /**
  * ReauthScreen - Simple re-login screen for expired sessions
  *
- * Shown when the user has existing workspaces/config but the Craft token
+ * Shown when the user has existing workspaces/config but the TokenNest session
  * is missing or expired. Much simpler than full onboarding - just re-authenticate.
  */
 export function ReauthScreen({ onLogin, onReset }: ReauthScreenProps) {

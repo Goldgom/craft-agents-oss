@@ -2,7 +2,7 @@
   "name": "@craft-agent/shared",
   "version": "1.1.0-community.1",
   "license": "Apache-2.0",
-  "description": "Shared business logic for Craft Agents - agent, auth, config, credentials, MCP integration",
+  "description": "Shared business logic for TokenBird - agent, auth, config, credentials, MCP integration",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

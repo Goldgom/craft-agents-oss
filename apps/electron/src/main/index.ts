@@ -210,9 +210,9 @@ registerPiModelResolver((piAuthProvider) =>
   piAuthProvider ? getPiModelsForAuthProvider(piAuthProvider) : getAllPiModels()
 )
 
-// Custom URL scheme for deeplinks (e.g., craftagents://auth-complete)
-// Supports multi-instance dev: CRAFT_DEEPLINK_SCHEME env var (craftagents1, craftagents2, etc.)
-const DEEPLINK_SCHEME = process.env.CRAFT_DEEPLINK_SCHEME || 'craftagents'
+// Custom URL scheme for deeplinks (e.g., tokenbird://auth-complete)
+// Supports multi-instance dev: CRAFT_DEEPLINK_SCHEME env var (tokenbird1, tokenbird2, etc.)
+const DEEPLINK_SCHEME = process.env.CRAFT_DEEPLINK_SCHEME || 'tokenbird'
 
 let windowManager: WindowManager | null = null
 
@@ -509,10 +509,10 @@ ipcMain.handle('data:importFromLocalFile', async (_event, filePath: string) => {
 })
 
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
-// Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Craft Agents [1]")
-app.setName(process.env.CRAFT_APP_NAME || 'Craft Agents')
+// Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "TokenBird [1]")
+app.setName(process.env.CRAFT_APP_NAME || 'TokenBird')
 
-// Register as default protocol client for craftagents:// URLs
+// Register as default protocol client for tokenbird:// URLs
 // This must be done before app.whenReady() on some platforms
 if (process.defaultApp) {
   // Development mode: need to pass the app path
@@ -1511,7 +1511,7 @@ app.whenReady().then(async () => {
         type: 'error',
         title: 'Update failed',
         message: 'The update could not be installed.',
-        detail: 'Craft Agents will restart now. The update will be retried on the next launch.',
+        detail: 'TokenBird will restart now. The update will be retried on the next launch.',
       })
       app.relaunch()
       app.exit(0)
@@ -1549,7 +1549,7 @@ app.whenReady().then(async () => {
       try {
         dialog.showMessageBoxSync({
           type: 'error',
-          title: 'Craft Agents failed to start / Craft Agents 启动失败',
+          title: 'TokenBird failed to start / TokenBird 启动失败',
           message: 'App initialization failed / 应用初始化失败',
           detail,
         })

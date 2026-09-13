@@ -1,7 +1,7 @@
 /**
  * Remote server profiles (远程服务器配置).
  *
- * A client-local registry of remote Craft Agent servers the user can connect
+ * A client-local registry of remote TokenBird servers the user can connect
  * to. Fully isolated from the remote servers' own data — each profile is just
  * a URL + bearer token + display name stored in the client's config dir.
  *

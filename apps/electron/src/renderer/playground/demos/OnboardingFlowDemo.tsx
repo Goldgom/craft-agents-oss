@@ -16,10 +16,10 @@ import { CompletionStep } from '@/components/onboarding/CompletionStep'
 import type { ApiSetupMethod } from '@/components/onboarding/APISetupStep'
 import type { CredentialStatus } from '@/components/onboarding/CredentialsStep'
 
-type DemoStep = 'welcome' | 'provider-select' | 'credentials' | 'local-model' | 'complete'
+type DemoStep = 'welcome' | 'provider-select' | 'other-provider-select' | 'credentials' | 'local-model' | 'complete'
 
 /** Map ProviderChoice → ApiSetupMethod for the credentials step */
-const CHOICE_TO_METHOD: Record<Exclude<ProviderChoice, 'local'>, ApiSetupMethod> = {
+const CHOICE_TO_METHOD: Record<Exclude<ProviderChoice, 'local' | 'tokennest' | 'other'>, ApiSetupMethod> = {
   claude: 'claude_oauth',
   chatgpt: 'pi_chatgpt_oauth',
   copilot: 'pi_copilot_oauth',
@@ -44,7 +44,15 @@ export function OnboardingFlowDemo() {
     setLocalStatus('idle')
     setErrorMessage(undefined)
 
-    if (choice === 'local') {
+    if (choice === 'tokennest') {
+      setCredStatus('validating')
+      setTimeout(() => {
+        setCredStatus('success')
+        setStep('complete')
+      }, 1000)
+    } else if (choice === 'other') {
+      setStep('other-provider-select')
+    } else if (choice === 'local') {
       setMethod(null)
       setStep('local-model')
     } else {
@@ -58,9 +66,12 @@ export function OnboardingFlowDemo() {
       case 'provider-select':
         setStep('welcome')
         break
+      case 'other-provider-select':
+        setStep('provider-select')
+        break
       case 'credentials':
       case 'local-model':
-        setStep('provider-select')
+        setStep('other-provider-select')
         setCredStatus('idle')
         setLocalStatus('idle')
         setErrorMessage(undefined)
@@ -112,7 +123,8 @@ export function OnboardingFlowDemo() {
   const activeStepLabel = step === 'local-model' ? 'Local Model' : 'Credentials'
   const STEP_ORDER: { key: DemoStep; label: string }[] = [
     { key: 'welcome', label: 'Welcome' },
-    { key: 'provider-select', label: 'Provider' },
+    { key: 'provider-select', label: 'TokenNest' },
+    { key: 'other-provider-select', label: 'Other' },
     { key: step === 'local-model' ? 'local-model' : 'credentials', label: activeStepLabel },
     { key: 'complete', label: 'Done' },
   ]
@@ -159,7 +171,11 @@ export function OnboardingFlowDemo() {
         )}
 
         {step === 'provider-select' && (
-          <ProviderSelectStep onSelect={handleProviderSelect} onSkip={handleSkip} />
+          <ProviderSelectStep onSelect={handleProviderSelect} onSkip={handleSkip} status={credStatus} />
+        )}
+
+        {step === 'other-provider-select' && (
+          <ProviderSelectStep variant="other" onSelect={handleProviderSelect} onBack={handleBack} />
         )}
 
         {step === 'credentials' && method && (

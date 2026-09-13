@@ -99,7 +99,7 @@ export function createWebApi(options: WebApiOptions): {
         if (result.reason === 'dangerous') {
           toast.error(`Blocked unsafe URL (${result.detail})`)
         } else if (result.reason === 'internal-deeplink') {
-          console.warn('[openUrl] craftagents:// deep links require the desktop app')
+          console.warn('[openUrl] tokenbird:// deep links require the desktop app')
         } else {
           console.warn('[openUrl] Malformed URL:', url)
         }

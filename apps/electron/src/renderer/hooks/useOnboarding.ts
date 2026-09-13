@@ -120,6 +120,14 @@ export function resolveSlugForMethod(
   return `${base}-${i}`
 }
 
+export function resolveTokenNestSlug(existingSlugs: Set<string>): string {
+  if (!existingSlugs.has('tokennest')) return 'tokennest'
+
+  let suffix = 2
+  while (existingSlugs.has(`tokennest-${suffix}`)) suffix++
+  return `tokennest-${suffix}`
+}
+
 // Map ApiSetupMethod to LlmConnectionSetup for the new unified connection system
 function isLoopbackEndpoint(baseUrl?: string): boolean {
   if (!baseUrl?.trim()) return false
@@ -318,6 +326,10 @@ export function useOnboarding({
         // Handled by handleSelectProvider (card click navigates directly)
         break
 
+      case 'other-provider-select':
+        // Handled by handleSelectProvider (card click navigates directly)
+        break
+
       case 'welcome':
         // On Windows, check if Git Bash is needed
         if (state.gitBashStatus?.platform === 'win32' && !state.gitBashStatus?.found) {
@@ -365,11 +377,14 @@ export function useOnboarding({
           onDismiss()
         }
         break
-      case 'credentials':
+      case 'other-provider-select':
         setState(s => ({ ...s, step: 'provider-select', credentialStatus: 'idle', errorMessage: undefined }))
         break
+      case 'credentials':
+        setState(s => ({ ...s, step: 'other-provider-select', credentialStatus: 'idle', errorMessage: undefined }))
+        break
       case 'local-model':
-        setState(s => ({ ...s, step: 'provider-select', credentialStatus: 'idle', errorMessage: undefined }))
+        setState(s => ({ ...s, step: 'other-provider-select', credentialStatus: 'idle', errorMessage: undefined }))
         break
     }
   }, [state.step, state.gitBashStatus, initialStep, onDismiss])
@@ -633,9 +648,43 @@ export function useOnboarding({
     }
   }, [state.apiSetupMethod, saveAndValidateConnection, editingSlug, existingSlugs])
 
+  const startTokenNestOAuth = useCallback(async () => {
+    const connectionSlug = resolveTokenNestSlug(existingSlugs)
+    setState(s => ({ ...s, credentialStatus: 'validating', errorMessage: undefined }))
+    try {
+      const result = await window.electronAPI.startTokenNestOAuth(connectionSlug)
+      if (!result.success) {
+        setState(s => ({
+          ...s,
+          credentialStatus: 'error',
+          errorMessage: result.error || 'TokenNest sign-in failed',
+        }))
+        return
+      }
+      onConfigSaved?.()
+      setState(s => ({ ...s, credentialStatus: 'success', completionStatus: 'complete', step: 'complete' }))
+    } catch (error) {
+      setState(s => ({
+        ...s,
+        credentialStatus: 'error',
+        errorMessage: error instanceof Error ? error.message : 'TokenNest sign-in failed',
+      }))
+    }
+  }, [existingSlugs, onConfigSaved])
+
   // Map ProviderChoice → ApiSetupMethod and navigate to the right step
   const handleSelectProvider = useCallback((choice: ProviderChoice) => {
-    const CHOICE_TO_METHOD: Record<Exclude<ProviderChoice, 'local'>, ApiSetupMethod> = {
+    if (choice === 'tokennest') {
+      void startTokenNestOAuth()
+      return
+    }
+
+    if (choice === 'other') {
+      setState(s => ({ ...s, step: 'other-provider-select', credentialStatus: 'idle', errorMessage: undefined }))
+      return
+    }
+
+    const CHOICE_TO_METHOD: Record<Exclude<ProviderChoice, 'local' | 'tokennest' | 'other'>, ApiSetupMethod> = {
       claude: 'claude_oauth',
       chatgpt: 'pi_chatgpt_oauth',
       copilot: 'pi_copilot_oauth',
@@ -662,7 +711,7 @@ export function useOnboarding({
       // Defer to next tick so state is updated before handleStartOAuth reads it
       setTimeout(() => handleStartOAuth(method), 0)
     }
-  }, [handleStartOAuth])
+  }, [handleStartOAuth, startTokenNestOAuth])
 
   // Submit authorization code (second step of OAuth flow)
   const handleSubmitAuthCode = useCallback(async (code: string) => {

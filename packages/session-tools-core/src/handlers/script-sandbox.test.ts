@@ -8,7 +8,7 @@ import { handleScriptSandbox } from './script-sandbox.ts';
 describe('script_sandbox', () => {
 // Pin dev-mode runtime resolution for the duration of this suite. These tests
 // assert dev behavior (PATH fallback allowed); when the suite itself runs
-// under a packaged Craft Agents host (agent Bash sessions inherit
+// under a packaged TokenBird host (agent Bash sessions inherit
 // CRAFT_IS_PACKAGED=true), resolveScriptRuntime would otherwise flip into
 // packaged-mode hardening and change the outcomes.
 const SAVED_IS_PACKAGED = process.env.CRAFT_IS_PACKAGED;

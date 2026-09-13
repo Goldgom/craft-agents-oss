@@ -11,7 +11,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.craftagents.mobile"
+        applicationId = "top.goldgom.tokenbird"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

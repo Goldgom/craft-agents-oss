@@ -98,3 +98,7 @@ This policy may be updated from time to time. The current version will always be
 ---
 
 *This trademark policy is inspired by similar policies from Mozilla, WordPress, and the Apache Software Foundation.*
+
+## TokenBird Fork Branding
+
+The TokenBird (词元鸟) branch uses its own product name, wordmark, bundle identifier, and package artifact names. References to Craft in this policy are retained only to document upstream trademark obligations.

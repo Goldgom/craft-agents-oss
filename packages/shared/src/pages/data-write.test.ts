@@ -14,7 +14,7 @@ import type { PageDataSnapshot } from '@craft-agent/core';
 
 // Pin dev-mode runtime resolution: this suite spawns the real Bun runtime via
 // resolveScriptRuntime and must assert dev behavior (PATH fallback allowed)
-// even when the suite runs under a packaged Craft Agents host (agent Bash
+// even when the suite runs under a packaged TokenBird host (agent Bash
 // sessions inherit CRAFT_IS_PACKAGED=true).
 const SAVED_IS_PACKAGED = process.env.CRAFT_IS_PACKAGED;
 beforeAll(() => {

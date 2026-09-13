@@ -13,6 +13,7 @@ export type OnboardingStep =
   | 'welcome'
   | 'git-bash'
   | 'provider-select'
+  | 'other-provider-select'
   | 'local-model'
   | 'credentials'
   | 'complete'
@@ -82,7 +83,7 @@ interface OnboardingWizardProps {
 /**
  * OnboardingWizard - Full-screen onboarding flow container
  *
- * Manages the step-by-step flow for setting up Craft Agent:
+ * Manages the step-by-step flow for setting up TokenBird:
  * 1. Welcome
  * 2. Provider Select (Claude / ChatGPT / Copilot / API Key / Local)
  * 3. Credentials (API Key or OAuth) or Local Model
@@ -146,6 +147,17 @@ export function OnboardingWizard({
           <ProviderSelectStep
             onSelect={onSelectProvider!}
             onSkip={onSkipSetup}
+            status={state.credentialStatus}
+            errorMessage={state.errorMessage}
+          />
+        )
+
+      case 'other-provider-select':
+        return (
+          <ProviderSelectStep
+            variant="other"
+            onSelect={onSelectProvider!}
+            onBack={onBack}
           />
         )
 

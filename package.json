@@ -1,8 +1,8 @@
 {
-  "name": "craft-agent",
+  "name": "tokenbird",
   "version": "1.1.0-community.1",
   "license": "Apache-2.0",
-  "description": "Claude Code-like agent for Craft documents",
+  "description": "TokenBird AI agent workspace, deeply integrated with TokenNest",
   "type": "module",
   "private": true,
   "trustedDependencies": [

@@ -164,7 +164,7 @@ function extractToStaging(
     entries = unzipSync(new Uint8Array(raw));
   } catch (err) {
     throw new Error(
-      `Failed to read archive (${err instanceof Error ? err.message : 'invalid zip'}). Not a valid Craft Agent backup?`,
+      `Failed to read archive (${err instanceof Error ? err.message : 'invalid zip'}). Not a valid TokenBird backup?`,
     );
   }
 
@@ -187,7 +187,7 @@ function extractToStaging(
 }
 
 /**
- * Import a Craft Agent data backup into the current machine.
+ * Import a TokenBird data backup into the current machine.
  */
 export async function importAllData(
   options: ImportAllDataOptions,
@@ -210,7 +210,7 @@ export async function importAllData(
     // ---- Manifest -----------------------------------------------------------
     const manifestPath = join(staging, 'manifest.json');
     if (!existsSync(manifestPath)) {
-      throw new Error('Archive is not a Craft Agent backup (manifest.json missing).');
+      throw new Error('Archive is not a TokenBird backup (manifest.json missing).');
     }
     const manifest = readJsonFileSync<ExportManifest>(manifestPath);
     if (manifest.format !== EXPORT_FORMAT) {

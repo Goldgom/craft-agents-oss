@@ -36,7 +36,7 @@ function tryBind(server: Server, port: number, host: string): Promise<void> {
 
 export interface CreateCallbackServerOptions {
   appType?: AppType;
-  /** Deep link URL to redirect to after successful auth (e.g., craftagents://auth-complete) */
+  /** Deep link URL to redirect to after successful auth (e.g., tokenbird://auth-complete) */
   deeplinkUrl?: string;
   /** Fixed port to bind to. If set, only that port is tried (no range scanning). */
   port?: number;

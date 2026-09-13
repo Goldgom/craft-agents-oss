@@ -232,7 +232,7 @@ describe('isSafeExternalUrl', () => {
     expect(isSafeExternalUrl('http://example.com')).toBe(true)
     expect(isSafeExternalUrl('file:///etc/passwd')).toBe(false)
     expect(isSafeExternalUrl('javascript:alert(1)')).toBe(false)
-    expect(isSafeExternalUrl('craftagents://action/new-chat')).toBe(false)
+    expect(isSafeExternalUrl('tokenbird://action/new-chat')).toBe(false)
     expect(isSafeExternalUrl('not a url')).toBe(false)
   })
 })

@@ -666,7 +666,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   server.handle(RPC_CHANNELS.settings.EXPORT_ALL_DATA, async (ctx) => {
     const stamp = new Date().toISOString().slice(0, 10)
     const dialogResult = await requestClientSaveFileDialog(server, ctx.clientId, {
-      title: 'Export Craft Agent data',
+      title: 'Export TokenBird data',
       defaultPath: `craft-agent-backup-${stamp}.zip`,
       filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
     })
@@ -703,9 +703,9 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   // settings onto this machine (cross-platform path remapping included).
   server.handle(RPC_CHANNELS.settings.IMPORT_ALL_DATA, async (ctx) => {
     const dialogResult = await requestClientOpenFileDialog(server, ctx.clientId, {
-      title: 'Import Craft Agent data',
+      title: 'Import TokenBird data',
       properties: ['openFile'],
-      filters: [{ name: 'Craft Agent backup', extensions: ['zip'] }],
+      filters: [{ name: 'TokenBird backup', extensions: ['zip'] }],
     })
     if (dialogResult.canceled || !dialogResult.filePaths[0]) {
       return { canceled: true }

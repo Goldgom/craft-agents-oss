@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "craft-agent-android"
+rootProject.name = "tokenbird-android"
 include(":app")

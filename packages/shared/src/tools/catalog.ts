@@ -20,10 +20,10 @@ const CORE_TOOLS: readonly BuiltinToolCatalogEntry[] = [
   { name: 'Agent', description: 'Delegate a bounded task to a specialized subagent.', category: 'core' },
   { name: 'WebSearch', description: 'Search the web using the active model provider.', category: 'core' },
   { name: 'WebFetch', description: 'Fetch and extract content from a web page.', category: 'core' },
-  { name: 'mcp__craft-agents-docs__SearchCraftAgents', description: 'Search the built-in Craft Agent feature documentation.', category: 'session' },
+  { name: 'mcp__craft-agents-docs__SearchCraftAgents', description: 'Search the built-in TokenBird feature documentation.', category: 'session' },
 ];
 
-/** Return the built-in tools that Craft Agent can expose to a workspace session. */
+/** Return the built-in tools that TokenBird can expose to a workspace session. */
 export function getBuiltinToolCatalog(): BuiltinToolCatalogEntry[] {
   const sessionTools = getSessionToolDefs({
     includeDeveloperFeedback: FEATURE_FLAGS.developerFeedback,

@@ -36,7 +36,7 @@ describe('handleDeepLink routing', () => {
     }
 
     await handleDeepLink(
-      'craftagents://workspace/ws-target/allSessions',
+      'tokenbird://workspace/ws-target/allSessions',
       windowManager,
       sink,
       (wcId) => wcId === 22 ? 'client-target' : undefined,
@@ -64,7 +64,7 @@ describe('handleDeepLink routing', () => {
     }
 
     await handleDeepLink(
-      'craftagents://workspace/ws-target/allSessions',
+      'tokenbird://workspace/ws-target/allSessions',
       windowManager,
       sink,
       undefined,
@@ -91,7 +91,7 @@ describe('handleDeepLink routing', () => {
     }
 
     await handleDeepLink(
-      'craftagents://workspace/ws-target/allSessions',
+      'tokenbird://workspace/ws-target/allSessions',
       windowManager,
       sink,
       () => undefined,

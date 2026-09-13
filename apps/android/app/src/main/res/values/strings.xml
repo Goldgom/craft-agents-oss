@@ -1,12 +1,12 @@
 <resources>
-    <string name="app_name">Craft Agent</string>
+    <string name="app_name">TokenBird</string>
     <string name="server_home_title">Choose a server</string>
-    <string name="server_home_description">Connect to a Craft Agent server. Model settings are managed after connecting.</string>
+    <string name="server_home_description">Connect to a TokenBird server. Model settings are managed after connecting.</string>
     <string name="local_server">Local server</string>
-    <string name="local_server_description">Start the built-in Craft Agent server on this device.</string>
+    <string name="local_server_description">Start the built-in TokenBird server on this device.</string>
     <string name="starting_local_server">Starting local server…</string>
     <string name="remote_server">Remote server</string>
-    <string name="remote_server_description">A Craft Agent server reached over the internet. Use wss:// in production.</string>
+    <string name="remote_server_description">A TokenBird server reached over the internet. Use wss:// in production.</string>
     <string name="server_url_hint">WebSocket URL</string>
     <string name="server_token_hint">Server token (optional)</string>
     <string name="save_and_connect">Save and connect</string>

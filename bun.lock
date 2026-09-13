@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "craft-agent",
+      "name": "tokenbird",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.258",
         "@anthropic-ai/sdk": "^0.100.0",
@@ -131,7 +131,7 @@
       },
     },
     "apps/electron": {
-      "name": "@craft-agent/electron",
+      "name": "@tokenbird/electron",
       "version": "1.1.0-community.1",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
@@ -647,8 +647,6 @@
     "@craft-agent/cli": ["@craft-agent/cli@workspace:apps/cli"],
 
     "@craft-agent/core": ["@craft-agent/core@workspace:packages/core"],
-
-    "@craft-agent/electron": ["@craft-agent/electron@workspace:apps/electron"],
 
     "@craft-agent/messaging-gateway": ["@craft-agent/messaging-gateway@workspace:packages/messaging-gateway"],
 
@@ -1519,6 +1517,8 @@
     "@tiptap/starter-kit": ["@tiptap/starter-kit@3.20.0", "http://registry.npm.taobao.org/@tiptap/starter-kit/-/starter-kit-3.20.0.tgz", { "dependencies": { "@tiptap/core": "^3.20.0", "@tiptap/extension-blockquote": "^3.20.0", "@tiptap/extension-bold": "^3.20.0", "@tiptap/extension-bullet-list": "^3.20.0", "@tiptap/extension-code": "^3.20.0", "@tiptap/extension-code-block": "^3.20.0", "@tiptap/extension-document": "^3.20.0", "@tiptap/extension-dropcursor": "^3.20.0", "@tiptap/extension-gapcursor": "^3.20.0", "@tiptap/extension-hard-break": "^3.20.0", "@tiptap/extension-heading": "^3.20.0", "@tiptap/extension-horizontal-rule": "^3.20.0", "@tiptap/extension-italic": "^3.20.0", "@tiptap/extension-link": "^3.20.0", "@tiptap/extension-list": "^3.20.0", "@tiptap/extension-list-item": "^3.20.0", "@tiptap/extension-list-keymap": "^3.20.0", "@tiptap/extension-ordered-list": "^3.20.0", "@tiptap/extension-paragraph": "^3.20.0", "@tiptap/extension-strike": "^3.20.0", "@tiptap/extension-text": "^3.20.0", "@tiptap/extension-underline": "^3.20.0", "@tiptap/extensions": "^3.20.0", "@tiptap/pm": "^3.20.0" } }, "sha512-W4+1re35pDNY/7rpXVg+OKo/Fa4Gfrn08Bq3E3fzlJw6gjE3tYU8dY9x9vC2rK9pd9NOp7Af11qCFDaWpohXkw=="],
 
     "@tiptap/suggestion": ["@tiptap/suggestion@3.20.0", "http://registry.npm.taobao.org/@tiptap/suggestion/-/suggestion-3.20.0.tgz", { "peerDependencies": { "@tiptap/core": "^3.20.0", "@tiptap/pm": "^3.20.0" } }, "sha512-OA9Fe+1Q/Ex0ivTcpRcVFiLnNsVdIBmiEoctt/gu4H2ayCYmZ906veioXNdc1m/3MtVVUIuEnvwwsrOZXlfDEw=="],
+
+    "@tokenbird/electron": ["@tokenbird/electron@workspace:apps/electron"],
 
     "@tokenizer/token": ["@tokenizer/token@0.3.0", "http://registry.npm.taobao.org/@tokenizer/token/-/token-0.3.0.tgz", {}, "sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A=="],
 

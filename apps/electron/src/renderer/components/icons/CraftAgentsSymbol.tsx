@@ -3,22 +3,18 @@ interface CraftAgentsSymbolProps {
 }
 
 /**
- * Craft Agents "E" symbol - the small pixel art icon
- * Uses accent color from theme (currentColor from className)
+ * TokenBird symbol. The legacy component name is kept for import compatibility.
  */
 export function CraftAgentsSymbol({ className }: CraftAgentsSymbolProps) {
   return (
     <svg
-      viewBox="452 368 115 129"
+      viewBox="0 0 24 24"
       className={className}
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <path
-        d="M474.78218,393.8 L474.78218,368 L566.666667,368 L566.666667,393.8 L474.78218,393.8 Z M521.101,419.6 L521.102306,445.4 L452,445.4 L452,393.8 L566.666667,393.8 L566.666667,419.6 L521.101,419.6 Z M474.78218,497 L474.775667,471.2 L452,471.2 L452,445.4 L566.666667,445.4 L566.666667,497 L474.78218,497 Z"
-        fill="currentColor"
-        fillRule="nonzero"
-      />
+      <path d="M16 7h.01M3.4 18H12a8 8 0 0 0 8-8V7l-3.3 2.2A6 6 0 0 1 7 12H4a4 4 0 0 0 4 4h1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 18v3m5-3 1.5 3M19 5l2 1-2 1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

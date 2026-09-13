@@ -402,7 +402,7 @@ export async function downloadGitBash(config: BuildConfig): Promise<void> {
       `https://api.github.com/repos/git-for-windows/git/releases/tags/${releaseTag}`,
     );
     console.log(`Downloading Git for Windows ${GIT_FOR_WINDOWS_VERSION} metadata...`);
-    await $`curl -fsSL --retry 3 --retry-delay 2 -H "Accept: application/vnd.github+json" -H "User-Agent: Craft-Agents-Build" -o ${metadataPath} ${metadataUrl}`;
+    await $`curl -fsSL --retry 3 --retry-delay 2 -H "Accept: application/vnd.github+json" -H "User-Agent: TokenBird-Build" -o ${metadataPath} ${metadataUrl}`;
 
     const release = JSON.parse(await Bun.file(metadataPath).text()) as GitHubRelease;
     const asset = release.assets?.find((candidate) => candidate.name === assetName);
@@ -918,10 +918,10 @@ export async function loadEnvFile(config: BuildConfig): Promise<void> {
 export function getArtifactName(platform: Platform, arch: Arch): string {
   switch (platform) {
     case 'darwin':
-      return `Craft-Agents-${arch}.dmg`;
+      return `TokenBird-${arch}.dmg`;
     case 'win32':
-      return `Craft-Agents-${arch}.exe`;
+      return `TokenBird-${arch}.exe`;
     case 'linux':
-      return `Craft-Agents-${arch}.AppImage`;
+      return `TokenBird-${arch}.AppImage`;
   }
 }

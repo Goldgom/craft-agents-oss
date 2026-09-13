@@ -56,7 +56,7 @@ export const AGENT_EVENTS: AgentEvent[] = [
 // Action Definitions
 // ============================================================================
 
-/** A prompt action - sends a prompt to Craft Agent */
+/** A prompt action - sends a prompt to TokenBird */
 export interface PromptAction {
   type: 'prompt';
   prompt: string;
@@ -358,7 +358,7 @@ export interface AutomationResult {
   event: string;
   matched: number;
   results: ActionExecutionResult[];
-  /** Prompts that should be executed by Craft Agent (with metadata) */
+  /** Prompts that should be executed by TokenBird (with metadata) */
   pendingPrompts: PendingPrompt[];
 }
 

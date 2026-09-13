@@ -63,7 +63,7 @@ __pycache__/
 # Lock files from other package managers
 pnpm-lock.yaml
 
-# Craft Agent local data (sessions, credentials, config)
+# TokenBird local data (sessions, credentials, config)
 .craft-agent/
 
 # SSH keys and secrets

@@ -2,7 +2,7 @@
  * Remote server management (远程服务器管理).
  *
  * GUI-only handlers (run on the local embedded server) that manage the
- * client's registry of remote Craft Agent servers:
+ * client's registry of remote TokenBird servers:
  *   - profile CRUD (URL + token + display name, stored locally)
  *   - connection testing
  *   - listing remote workspaces and creating workspaces ON the remote server

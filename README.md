@@ -1,6 +1,8 @@
-# Craft Agents
+# TokenBird（词元鸟）
 
-Craft Agents 是一个开源的 Agent 工作平台。它把大模型、工具、资料和长期会话放在同一个工作区中，让你可以用自然语言完成研究、写作、编程、资料整理和自动化操作。
+TokenBird（中文名：词元鸟）是一个与 TokenNest 深度绑定的开源 Agent 工作平台。首次启动可直接登录 TokenNest，自动同步可用模型与账户余额；也可以在“其他选项”中连接 Codex、Claude、GitHub Copilot、API Key 或本地模型。
+
+它把大模型、工具、资料和长期会话放在同一个工作区中，让你可以用自然语言完成研究、写作、编程、资料整理和自动化操作。
 
 项目以 **Claude Code 式的 Agent 体验** 为基础，同时集成 Claude Agent SDK 与 Pi SDK。你可以在桌面应用中管理多个会话，也可以把 Agent 部署到远程服务器，通过 Web、命令行或消息平台使用。
 
@@ -19,6 +21,7 @@ Craft Agents 是一个开源的 Agent 工作平台。它把大模型、工具、
 
 可按连接或工作区选择模型，并在不同任务之间切换：
 
+- TokenNest（首选，OAuth 安全登录并自动同步模型与余额）。
 - Anthropic Claude（API Key，或 Claude Max/Pro OAuth）。
 - OpenAI / ChatGPT（含 Codex OAuth）。
 - Google AI Studio（Gemini）。
@@ -86,13 +89,13 @@ Agent 可以通过统一的来源（Sources）访问外部服务：
 macOS / Linux：
 
 ```bash
-curl -fsSL https://thecraftagents.com/install-app.sh | bash
+curl -fsSL https://openai.goldgom.top/tokenbird/install-app.sh | bash
 ```
 
 Windows PowerShell：
 
 ```powershell
-irm https://thecraftagents.com/install-app.ps1 | iex
+irm https://openai.goldgom.top/tokenbird/install-app.ps1 | iex
 ```
 
 启动后，选择一个模型连接，创建工作区即可开始对话。来源和技能均为可选配置。
@@ -189,4 +192,4 @@ packages/
 
 欢迎提交 Issue、改进代码和补充文档。请先阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)。
 
-Craft Agents 以 Apache License 2.0 发布，详见 [`LICENSE`](LICENSE)。
+TokenBird 以 Apache License 2.0 发布，详见 [`LICENSE`](LICENSE)。

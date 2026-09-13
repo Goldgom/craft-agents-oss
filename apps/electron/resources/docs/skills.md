@@ -1,6 +1,6 @@
 # Skills Configuration Guide
 
-This guide explains how to create and configure skills in Craft Agent.
+This guide explains how to create and configure skills in TokenBird.
 
 > **CLI-first workflow (recommended):** Use `craft-agent skill ...` commands instead of editing `SKILL.md` files directly.
 > - `craft-agent skill --help`
@@ -10,7 +10,7 @@ This guide explains how to create and configure skills in Craft Agent.
 
 Skills are specialized instructions that extend Claude's capabilities for specific tasks. They use **the exact same SKILL.md format as the Claude Code SDK** - making skills fully compatible between systems.
 
-Craft Agents also ships built-in authoring skills for common AI-generated configuration: `automation-authoring`, `agent-authoring`, `skill-authoring`, `source-authoring`, and `workspace-configuration`. They appear in the Skills page with a **Built-in** badge and can be invoked with `@` mentions. Built-in skills are read-only; a global, workspace, or project skill with the same slug overrides the built-in definition.
+TokenBird also ships built-in authoring skills for common AI-generated configuration: `automation-authoring`, `agent-authoring`, `skill-authoring`, `source-authoring`, and `workspace-configuration`. They appear in the Skills page with a **Built-in** badge and can be invoked with `@` mentions. Built-in skills are read-only; a global, workspace, or project skill with the same slug overrides the built-in definition.
 
 **Key points:**
 - Skills are invoked via slash commands (e.g., `/commit`, `/review-pr`)
@@ -20,13 +20,13 @@ Craft Agents also ships built-in authoring skills for common AI-generated config
 
 ## Same Format as Claude Code SDK
 
-Craft Agent uses **the identical SKILL.md format** as the Claude Code SDK. This means:
+TokenBird uses **the identical SKILL.md format** as the Claude Code SDK. This means:
 
-1. **Format compatibility**: Any skill written for Claude Code works in Craft Agent
+1. **Format compatibility**: Any skill written for Claude Code works in TokenBird
 2. **Same frontmatter fields**: `name`, `description`, `globs`, `alwaysAllow`, `requiredSources`
 3. **Same content structure**: Markdown body with instructions for Claude
 
-**What Craft Agent adds:**
+**What TokenBird adds:**
 - **Visual icons**: Display custom icons in the UI for each skill
 - **Workspace organization**: Skills are scoped to workspaces
 - **UI management**: Browse, edit, and validate skills through the interface

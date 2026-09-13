@@ -183,7 +183,7 @@ $apk = $apkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $apk) { throw "Gradle completed but no $variant APK was found." }
 $outputDir = Join-Path $projectRoot "dist\android"
 New-Item -ItemType Directory -Force $outputDir | Out-Null
-$outputName = if ($Release -and $apk.EndsWith("-unsigned.apk")) { "craft-agent-$variant-unsigned.apk" } else { "craft-agent-$variant.apk" }
+$outputName = if ($Release -and $apk.EndsWith("-unsigned.apk")) { "tokenbird-$variant-unsigned.apk" } else { "tokenbird-$variant.apk" }
 $outputApk = Join-Path $outputDir $outputName
 Copy-Item $apk $outputApk -Force
 Write-Output "APK: $outputApk"

@@ -425,7 +425,7 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
 
   modelRefreshService.startAll()
 
-  platform.logger.info(`Craft Agent server listening on ${wsServer.protocol}://${rpcHost}:${wsServer.port}`)
+  platform.logger.info(`TokenBird server listening on ${wsServer.protocol}://${rpcHost}:${wsServer.port}`)
 
   let stopped = false
   const stop = async (): Promise<void> => {

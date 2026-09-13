@@ -168,7 +168,7 @@ export interface ToolIconMapping {
   iconDataUrl: string
   commands: string[]
   description?: string
-  /** Whether this mapping ships with Craft Agent or was added by the user. */
+  /** Whether this mapping ships with TokenBird or was added by the user. */
   origin?: 'builtin' | 'custom'
 }
 
@@ -490,7 +490,7 @@ export interface ElectronAPI {
   onMenuToggleFocusMode(callback: () => void): () => void
   onMenuToggleSidebar(callback: () => void): () => void
 
-  // Deep link navigation listener (for external craftagents:// URLs)
+  // Deep link navigation listener (for external tokenbird:// URLs)
   onDeepLinkNavigate(callback: (nav: DeepLinkNavigation) => void): () => void
 
   // Auth

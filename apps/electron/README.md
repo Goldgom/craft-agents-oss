@@ -1,6 +1,6 @@
-# Craft Agents Community Edition — Electron App
+# TokenBird Community Edition — Electron App
 
-The desktop client for Craft Agents Community Edition, built with Electron + React. It provides the multi-session inbox, workspace settings, automations, Messaging configuration, and chat interface for connecting to configured Agent backends and models.
+The desktop client for TokenBird Community Edition, built with Electron + React. It provides the multi-session inbox, workspace settings, automations, Messaging configuration, and chat interface for connecting to configured Agent backends and models.
 
 ## Quick Start
 
@@ -240,14 +240,14 @@ navigate(routes.sidebar.flagged())        // Show flagged
 
 ### Deep Links
 
-External apps can navigate using `craftagents://` URLs:
+External apps can navigate using `tokenbird://` URLs:
 
 ```
-craftagents://settings
-craftagents://allSessions/session/session123
-craftagents://sources/source/github
-craftagents://action/new-chat
-craftagents://workspace/{id}/allSessions/session/abc123
+tokenbird://settings
+tokenbird://allSessions/session/session123
+tokenbird://sources/source/github
+tokenbird://action/new-chat
+tokenbird://workspace/{id}/allSessions/session/abc123
 ```
 
 See `CLAUDE.md` for complete route reference.

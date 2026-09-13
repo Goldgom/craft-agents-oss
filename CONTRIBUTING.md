@@ -1,6 +1,6 @@
-# Contributing to Craft Agents
+# Contributing to TokenBird
 
-Thank you for your interest in contributing to Craft Agents! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to TokenBird! This document provides guidelines and instructions for contributing.
 
 ## Getting Started
 

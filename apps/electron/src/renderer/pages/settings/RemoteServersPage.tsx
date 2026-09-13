@@ -1,7 +1,7 @@
 /**
  * RemoteServersPage — 远程服务器管理
  *
- * Manages the client's registry of remote Craft Agent servers:
+ * Manages the client's registry of remote TokenBird servers:
  *   - add/edit/delete server profiles (URL + token + name)
  *   - test connectivity
  *   - switch the application directly to a configured remote server

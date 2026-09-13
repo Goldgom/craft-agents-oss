@@ -1,14 +1,11 @@
 /**
- * Centralized branding assets for Craft Agent
+ * Centralized branding assets for TokenBird
  * Used by OAuth callback pages
  */
 
 export const CRAFT_LOGO = [
-  '  ████████ █████████    ██████   ██████████ ██████████',
-  '██████████ ██████████ ██████████ █████████  ██████████',
-  '██████     ██████████ ██████████ ████████   ██████████',
-  '██████████ ████████   ██████████ ███████      ██████  ',
-  '  ████████ ████  ████ ████  ████ █████        ██████  ',
+  'TokenBird',
+  '词元鸟',
 ] as const;
 
 /** Logo as a single string for HTML templates */

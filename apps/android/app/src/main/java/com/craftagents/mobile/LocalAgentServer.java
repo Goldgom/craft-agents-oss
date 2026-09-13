@@ -19,7 +19,7 @@ import java.security.SecureRandom;
 import java.util.Map;
 
 /**
- * Owns the Bun-powered Craft Agent backend bundled in the APK.
+ * Owns the Bun-powered TokenBird backend bundled in the APK.
  *
  * Android only ships the aarch64 Bun runtime. Gradle places it in the
  * extracted native library directory, while the JavaScript bundle and its

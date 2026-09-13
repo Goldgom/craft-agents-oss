@@ -1,6 +1,6 @@
-# Craft Agents 编译指南（Build Guide）
+# TokenBird 编译指南（Build Guide）
 
-本文档介绍如何编译 Craft Agents 的各端产物：**Windows / macOS / Linux 客户端** 与 **服务器端**。
+本文档介绍如何编译 TokenBird 的各端产物：**Windows / macOS / Linux 客户端** 与 **服务器端**。
 除特别注明外，命令均从仓库根目录执行。
 
 ## 全量编译与统一产物目录
@@ -92,8 +92,8 @@ bun run dist:win
 
 ```
 apps/electron/release/
-├── Craft-Agents-x64.exe          # NSIS 安装包
-└── Craft-Agents-x64.msi          # MSI 安装包（适合企业部署）
+├── TokenBird-x64.exe          # NSIS 安装包
+└── TokenBird-x64.msi          # MSI 安装包（适合企业部署）
 ```
 
 - 配置位于 `apps/electron/electron-builder.yml` 的 `win:` / `nsis:` 段。
@@ -127,8 +127,8 @@ bash scripts/build-dmg.sh x64       # Intel
 
 ```
 apps/electron/release/
-├── Craft-Agents-arm64.dmg
-└── Craft-Agents-arm64.zip
+├── TokenBird-arm64.dmg
+└── TokenBird-arm64.zip
 ```
 
 ### 签名与公证（发布必需）
@@ -190,7 +190,7 @@ electron-builder 生成 AppImage。因此不需要先手动执行 `bun run elect
 
 ```
 apps/electron/release/
-└── Craft-Agents-x64.AppImage
+└── TokenBird-x64.AppImage
 ```
 
 - 构建必须在 Linux 环境执行。Windows 原生 PowerShell 不能直接生成 Linux AppImage；
@@ -260,13 +260,13 @@ bun run server:build:darwin-x64
 
 ```
 dist/server/                                # 服务器完整目录（含 bin/craft-server、vendor/bun、resources）
-craft-server-<version>-linux-x64.tar.gz     # 压缩产物（与 dist/server 同级）
+tokenbird-server-<version>-linux-x64.tar.gz     # 压缩产物（与 dist/server 同级）
 ```
 
 部署到目标机后：
 
 ```bash
-tar -xzf craft-server-<version>-linux-x64.tar.gz -C /opt/craft-server
+tar -xzf tokenbird-server-<version>-linux-x64.tar.gz -C /opt/craft-server
 cd /opt/craft-server && bash install.sh     # 会生成 systemd 服务 craft-server
 # 或直接前台运行：
 ./bin/craft-server
@@ -353,14 +353,14 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 
 | 目标             | 命令                                                                               | 产物                                                               |
 | ---------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Windows 客户端   | `cd apps/electron && bun run dist:win`                                           | `apps/electron/release/Craft-Agents-x64.exe`                     |
-| macOS 客户端     | `cd apps/electron && bash scripts/build-dmg.sh <arm64\|x64>`                      | `apps/electron/release/Craft-Agents-<arch>.dmg/.zip`             |
-| Linux 客户端     | `bash apps/electron/scripts/build-linux.sh x64`                                  | `apps/electron/release/Craft-Agents-x64.AppImage`                |
-| 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `craft-server-<ver>-<platform>-<arch>.tar.gz` |
+| Windows 客户端   | `cd apps/electron && bun run dist:win`                                           | `apps/electron/release/TokenBird-x64.exe`                     |
+| macOS 客户端     | `cd apps/electron && bash scripts/build-dmg.sh <arm64\|x64>`                      | `apps/electron/release/TokenBird-<arch>.dmg/.zip`             |
+| Linux 客户端     | `bash apps/electron/scripts/build-linux.sh x64`                                  | `apps/electron/release/TokenBird-x64.AppImage`                |
+| 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `tokenbird-server-<ver>-<platform>-<arch>.tar.gz` |
 | 服务器（Docker） | `docker buildx build -f Dockerfile.server -t craft-agent-server .`               | 容器镜像                                                           |
 
 版本号取自 `apps/electron/package.json`（当前 `1.1.0-community.1`），产物命名统一为
-`Craft-Agents-<arch>.<ext>` / `craft-server-<version>-<platform>-<arch>.tar.gz`。
+`TokenBird-<arch>.<ext>` / `tokenbird-server-<version>-<platform>-<arch>.tar.gz`。
 
 ---
 
@@ -371,7 +371,7 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 2. **macOS 签名**：未签名的 DMG 在用户机器上会被 Gatekeeper 拦截，正式分发必须配置
    Apple Developer ID 并完成公证。
 3. **自动更新**：`electron-builder.yml` 的 `publish.url` 指向
-   `https://thecraftagents.com/electron/latest`，electron-updater 依据生成的
+   `https://openai.goldgom.top/tokenbird/electron/latest`，electron-updater 依据生成的
    `latest.yml` / `latest-mac.yml` 检查更新；自建分发时需把 `release/` 下的清单文件一起上传。
 4. **跨系统数据迁移**：编译好的客户端内置“数据导出/导入”功能
    （设置 → App → 数据），导出为 ZIP 后可在任意平台导入，路径会自动重映射。

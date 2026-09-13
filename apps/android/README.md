@@ -1,6 +1,6 @@
-# Craft Agents Community Edition — Android
+# TokenBird Community Edition — Android
 
-This is the Android client for Craft Agents Community Edition. It starts a loopback-only HTTP service inside the APK and bundles the `apps/webui` frontend as local assets, so the APK does not depend on the remote server hosting HTML, JavaScript, CSS, or fonts. Agent RPC, sessions, automations, models, and messaging continue to run on the configured server over WebSocket/RPC.
+This is the Android client for TokenBird Community Edition. It starts a loopback-only HTTP service inside the APK and bundles the `apps/webui` frontend as local assets, so the APK does not depend on the remote server hosting HTML, JavaScript, CSS, or fonts. Agent RPC, sessions, automations, models, and messaging continue to run on the configured server over WebSocket/RPC.
 
 ## Build
 
@@ -23,13 +23,13 @@ bun run android:build
 bun run android:build -- -ServerUrl "wss://your-agent-server.example:50003"
 ```
 
-The signed debug APK is written to `dist/android/craft-agent-debug.apk`. Build an unsigned release variant with:
+The signed debug APK is written to `dist/android/tokenbird-debug.apk`. Build an unsigned release variant with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File apps/android/build.ps1 -Release -ServerUrl "wss://your-agent-server.example:50003"
 ```
 
-Release output is `dist/android/craft-agent-release-unsigned.apk`. Configure a private Android signing key in your release pipeline before distributing it.
+Release output is `dist/android/tokenbird-release-unsigned.apk`. Configure a private Android signing key in your release pipeline before distributing it.
 
 The app starts a localhost-only HTTP server inside the APK and loads the bundled frontend from it. In **Local server** mode, the APK also extracts and starts the bundled ARM64 Bun backend automatically, waits for it on `127.0.0.1:9100`, and connects the frontend with a generated per-launch token. The selected profile and optional bearer token are stored locally and can be changed later with **Configure**.
 

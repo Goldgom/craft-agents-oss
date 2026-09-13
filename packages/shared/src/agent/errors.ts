@@ -175,7 +175,7 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
   },
   model_no_tool_support: {
     title: 'Model Does Not Support Tools',
-    message: 'The selected model does not support tool/function calling, which is required for Craft Agent. Please choose a model with tool support (e.g., Claude, GPT-4, Gemini).',
+    message: 'The selected model does not support tool/function calling, which is required for TokenBird. Please choose a model with tool support (e.g., Claude, GPT-4, Gemini).',
     actions: [
       { key: 's', label: 'Change model', command: '/settings', action: 'settings' },
     ],
@@ -233,7 +233,7 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
     message:
       'The Claude Agent SDK binary expected on disk is not present. ' +
       'This usually means the app bundle is incomplete (interrupted download, partial update, ' +
-      'or a security tool removed it). Reinstalling Craft Agents typically fixes this.',
+      'or a security tool removed it). Reinstalling TokenBird typically fixes this.',
     actions: [
       { key: 'r', label: 'Retry', action: 'retry' },
     ],
@@ -255,7 +255,7 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
   android_claude_unsupported: {
     title: 'Claude Code is not supported on Android',
     message:
-      'Claude Code cannot run locally on this device. Reason: the Claude binary bundled with the SDK is built for glibc Linux, but Android uses bionic libc, and Anthropic publishes no Android build. Use an OpenAI/Pi model on-device, or connect a remote Craft Agent server to run Claude.',
+      'Claude Code cannot run locally on this device. Reason: the Claude binary bundled with the SDK is built for glibc Linux, but Android uses bionic libc, and Anthropic publishes no Android build. Use an OpenAI/Pi model on-device, or connect a remote TokenBird server to run Claude.',
     actions: [
       { key: 's', label: 'Open settings', command: '/settings', action: 'settings' },
     ],
@@ -492,7 +492,7 @@ export function parseError(
       return {
         code,
         ...definition,
-        message: `Model "${modelMatch[1]}" does not support tool/function calling, which is required for Craft Agent. Please choose a different model with tool support in Settings.`,
+        message: `Model "${modelMatch[1]}" does not support tool/function calling, which is required for TokenBird. Please choose a different model with tool support in Settings.`,
         originalError: errorMessage,
         providerInfo,
       };
