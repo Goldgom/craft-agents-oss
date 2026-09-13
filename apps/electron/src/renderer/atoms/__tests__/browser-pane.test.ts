@@ -7,6 +7,7 @@ import {
   removeBrowserInstanceAtom,
   setBrowserInstancesAtom,
   updateBrowserInstanceAtom,
+  removedBrowserInstanceIdsAtom,
 } from '../browser-pane'
 
 function makeInstance(id: string, overrides?: Partial<BrowserInstanceInfo>): BrowserInstanceInfo {
@@ -55,6 +56,18 @@ describe('browser pane atoms', () => {
     store.set(setBrowserInstancesAtom, [makeInstance('browser-2')])
 
     expect(store.get(browserInstancesAtom).map((i) => i.id)).toEqual(['browser-2'])
+  })
+
+  it('bounds removed-instance tombstones', () => {
+    const store = createStore()
+    for (let i = 0; i < 1_000; i++) {
+      store.set(removeBrowserInstanceAtom, `browser-${i}`)
+    }
+
+    const removed = store.get(removedBrowserInstanceIdsAtom)
+    expect(removed.size).toBe(512)
+    expect(removed.has('browser-0')).toBe(false)
+    expect(removed.has('browser-999')).toBe(true)
   })
 
   describe('filterInstancesForWorkspace', () => {

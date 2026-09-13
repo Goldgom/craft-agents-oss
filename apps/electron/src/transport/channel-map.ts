@@ -488,8 +488,12 @@ export const CHANNEL_MAP = {
 
   // Session collaboration
   createCollaboration: invoke(RPC_CHANNELS.collaborations.CREATE),
+  getCollaboration: invoke(RPC_CHANNELS.collaborations.GET),
   listCollaborations: invoke(RPC_CHANNELS.collaborations.LIST),
   listCollaborationCandidates: invoke(RPC_CHANNELS.collaborations.LIST_CANDIDATES),
+  getCollaborationFile: invoke(RPC_CHANNELS.collaborations.GET_FILE),
+  retryCollaborationDelivery: invoke(RPC_CHANNELS.collaborations.RETRY_DELIVERY),
+  endCollaboration: invoke(RPC_CHANNELS.collaborations.END),
   onCollaborationChanged: listener(RPC_CHANNELS.collaborations.EVENT),
 
   // Resources (cross-workspace export/import)

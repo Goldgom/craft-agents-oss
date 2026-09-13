@@ -20,7 +20,7 @@ import { isLocalOnly, RPC_CHANNELS } from '@craft-agent/shared/protocol'
 // ---------------------------------------------------------------------------
 
 interface ListenerEntry {
-  callback: (...args: any[]) => void
+  routedCallback: (...args: any[]) => void
   unsub: () => void
 }
 
@@ -148,15 +148,19 @@ export class RoutedClient implements RpcClient {
       return this.localClient.on(channel, callback)
     }
 
-    // REMOTE_ELIGIBLE — subscribe on workspaceClient and track for re-subscription
-    const unsub = this.workspaceClient.on(channel, callback)
+    // REMOTE_ELIGIBLE events originate with the remote server's workspace ID,
+    // while renderer state is keyed by the local remote-workspace stub ID.
+    // Translate the payload centrally so every resource hook (pages, projects,
+    // labels, statuses, sources, etc.) observes the same identity.
+    const routedCallback = (...args: any[]) => callback(...this.translateRemoteEventArgs(args))
+    const unsub = this.workspaceClient.on(channel, routedCallback)
 
     let set = this.remoteListeners.get(channel)
     if (!set) {
       set = new Set()
       this.remoteListeners.set(channel, set)
     }
-    const entry: ListenerEntry = { callback, unsub }
+    const entry: ListenerEntry = { routedCallback, unsub }
     set.add(entry)
 
     return () => {
@@ -232,7 +236,7 @@ export class RoutedClient implements RpcClient {
     for (const [channel, entries] of this.remoteListeners) {
       for (const entry of entries) {
         const oldUnsub = entry.unsub
-        entry.unsub = newClient.on(channel, entry.callback)
+        entry.unsub = newClient.on(channel, entry.routedCallback)
         oldUnsub()
       }
     }
@@ -251,16 +255,19 @@ export class RoutedClient implements RpcClient {
     // stale recovery logic to refresh sessions that changed while no client
     // was watching this workspace.
     if (newClient !== this.localClient) {
-      // `let` + optional-chaining: onConnectionStateChanged can fire its
-      // callback synchronously when the new client is already connected, which
-      // would put `unsub` in the TDZ if declared `const`.
+      // onConnectionStateChanged immediately emits the current state. Record
+      // that synchronous path so the one-shot listener is still removed after
+      // its unsubscribe function becomes available.
+      let connectedSynchronously = false
       let unsub: (() => void) | undefined
       unsub = newClient.onConnectionStateChanged((state) => {
         if (state.status === 'connected') {
-          unsub?.()
+          if (unsub) unsub()
+          else connectedSynchronously = true
           newClient.emitReconnected(true)
         }
       })
+      if (connectedSynchronously) unsub()
     }
   }
 
@@ -272,5 +279,26 @@ export class RoutedClient implements RpcClient {
         try { cb(snapshot) } catch { /* listener errors must not break transport */ }
       }
     })
+  }
+
+  /** Translate the common workspace-id event shapes without deep cloning payloads. */
+  private translateRemoteEventArgs(args: any[]): any[] {
+    const mapping = this.workspaceIdMapping
+    if (!mapping) return args
+
+    let changed = false
+    const translated = args.map((arg) => {
+      if (arg === mapping.remoteId) {
+        changed = true
+        return mapping.localId
+      }
+      if (arg && typeof arg === 'object' && !Array.isArray(arg)
+        && 'workspaceId' in arg && arg.workspaceId === mapping.remoteId) {
+        changed = true
+        return { ...arg, workspaceId: mapping.localId }
+      }
+      return arg
+    })
+    return changed ? translated : args
   }
 }

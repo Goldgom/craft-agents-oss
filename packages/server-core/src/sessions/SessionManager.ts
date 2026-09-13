@@ -7,7 +7,7 @@ import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-c
 import { createScopedLogger, CONSOLE_LOGGER, type PlatformServices, type Logger } from '@craft-agent/server-core/runtime'
 import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
 import {
@@ -106,7 +106,7 @@ import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { validateArchiveTarget } from './archive-guards'
-import { CollaborationConflictError, CollaborationManager } from '../collaboration/CollaborationManager'
+import { CollaborationConflictError, CollaborationManager, MAX_COLLABORATION_FILE_BYTES } from '../collaboration/CollaborationManager'
 import type { CollaborationChangeResult, CollaborationGroup } from '@craft-agent/shared/protocol'
 
 // Import from server-core domain utilities
@@ -735,6 +735,8 @@ interface ManagedSession {
   isProcessing: boolean
   /** Set when user requests stop - allows event loop to drain before clearing isProcessing */
   stopRequested?: boolean
+  /** Fallback cleanup timer armed while an interrupted generator drains. */
+  stopCleanupTimer?: ReturnType<typeof setTimeout>
   lastMessageAt: number
   /** Last time this session's live Agent/MCP runtime was used (runtime-only). */
   runtimeLastUsedAt?: number
@@ -878,6 +880,8 @@ interface ManagedSession {
   backgroundTaskRegistry: Map<string, RunningBackgroundTask>
   // Whether messages have been loaded from disk (for lazy loading)
   messagesLoaded: boolean
+  /** Monotonic runtime-only guard for safe transcript eviction. */
+  transcriptAccessVersion?: number
   // Pending auth request tracking (for unified auth flow)
   pendingAuthRequestId?: string
   pendingAuthRequest?: AuthRequest
@@ -1197,6 +1201,9 @@ export class SessionManager implements ISessionManager {
     if (!workspace) throw new Error(`Workspace ${workspaceId} not found`)
     return workspace.rootPath
   })
+  /** A busy runtime cannot be torn down when collaboration role metadata changes.
+   * Rebuild it on the next idle send path so its system prompt matches the role. */
+  private readonly pendingCollaborationRuntimeRefresh = new Set<string>()
   // Delta batching for performance - reduces IPC events from 50+/sec to ~20/sec
   private pendingDeltas: Map<string, PendingDelta> = new Map()
   private deltaFlushTimers: Map<string, NodeJS.Timeout> = new Map()
@@ -1225,6 +1232,8 @@ export class SessionManager implements ISessionManager {
   }> = new Map()
   // Promise deduplication for lazy-loading messages (prevents race conditions)
   private messageLoadingPromises: Map<string, Promise<void>> = new Map()
+  /** Transport clients currently rendering each transcript. */
+  private transcriptViewers: Map<string, Set<string>> = new Map()
   /**
    * Track which session the user is actively viewing (per workspace).
    * Map of workspaceId -> sessionId. Used to determine if a session should be
@@ -1562,6 +1571,12 @@ export class SessionManager implements ISessionManager {
   onClientDisconnected(clientId: string): void {
     for (const [sid, pinned] of this.browserHostByCanvas) {
       if (pinned === clientId) this.browserHostByCanvas.delete(sid)
+    }
+    for (const [sessionId, viewers] of this.transcriptViewers) {
+      viewers.delete(clientId)
+      if (viewers.size > 0) continue
+      this.transcriptViewers.delete(sessionId)
+      void this.releaseSessionMessages(sessionId)
     }
   }
 
@@ -2323,6 +2338,7 @@ export class SessionManager implements ISessionManager {
     if (!managed.messagesLoaded) {
       this.hydrateMessagesForColdPersist(managed)
     }
+    managed.transcriptAccessVersion = (managed.transcriptAccessVersion ?? 0) + 1
     this.enqueuePersist(managed)
   }
 
@@ -2783,6 +2799,7 @@ export class SessionManager implements ISessionManager {
    * to load messages simultaneously.
    */
   private async ensureMessagesLoaded(managed: ManagedSession): Promise<void> {
+    managed.transcriptAccessVersion = (managed.transcriptAccessVersion ?? 0) + 1
     if (managed.messagesLoaded) return
 
     // Deduplicate concurrent loads - return existing promise if already loading
@@ -3497,6 +3514,9 @@ export class SessionManager implements ISessionManager {
       if (!this.isWarmRuntimeEvictable(managed)) continue
       sessionLog.info(`Evicting idle runtime for session ${managed.id} (warm runtime limit ${limit})`)
       await this.disposeManagedAgentRuntime(managed, 'warm runtime LRU limit')
+      // Defer until the caller's current completion path has synchronously
+      // enqueued its final persistence snapshot.
+      setImmediate(() => { void this.releaseSessionMessages(managed.id) })
     }
   }
 
@@ -3708,6 +3728,13 @@ export class SessionManager implements ISessionManager {
     // wait for the full teardown and recreate from persisted session state.
     if (managed.runtimeTeardown) {
       await managed.runtimeTeardown
+    }
+
+    if (this.pendingCollaborationRuntimeRefresh.has(managed.id)
+      && managed.agent
+      && !managed.agent.isProcessing()) {
+      await this.disposeManagedAgentRuntime(managed, 'collaboration role changed')
+      this.pendingCollaborationRuntimeRefresh.delete(managed.id)
     }
 
     // Refresh runtime config in-place when the connection has drifted since
@@ -4945,7 +4972,63 @@ export class SessionManager implements ISessionManager {
           this.broadcastCollaborationChanged(result.group)
           return result.group
         },
+        putCollaborationFileFn: async (path: string, name?: string, contentType?: string) => {
+          const collaboration = managed.collaboration
+          if (!collaboration) throw new Error('This session is not a member of a collaboration')
+          const extraDirs = getWorkspaceAllowedDirs(managed.workspace.id)
+          const safePath = await validateFilePath(path, extraDirs)
+          const fileStat = await stat(safePath)
+          if (!fileStat.isFile() || fileStat.size < 1 || fileStat.size > MAX_COLLABORATION_FILE_BYTES) {
+            throw new Error(`Shared file must be a regular file between 1 byte and ${MAX_COLLABORATION_FILE_BYTES} bytes`)
+          }
+          const data = await readFile(safePath)
+          const sharedName = name?.trim() || basename(safePath)
+          const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) => {
+            const actor = group.members.find(member => member.id === collaboration.memberId)
+            if (!actor || actor.sessionId !== managed.id) {
+              throw new Error('Collaboration membership is stale or invalid')
+            }
+            return this.collaborationManager.putFile(
+              group.id,
+              actor.id,
+              sharedName,
+              data.toString('base64'),
+              contentType,
+              operationId,
+              group.revision,
+            )
+          })
+          this.broadcastCollaborationChanged(result.group)
+          const file = Object.values(result.group.files).find(candidate => candidate.name === sharedName)
+          return { groupId: result.group.id, revision: result.group.revision, file }
+        },
+        getCollaborationFileFn: async (fileId: string) => {
+          const collaboration = managed.collaboration
+          if (!collaboration) throw new Error('This session is not a member of a collaboration')
+          const group = await this.collaborationManager.open(
+            collaboration.groupId,
+            collaboration.coordinatorWorkspaceId,
+          )
+          const actor = group.members.find(member => member.id === collaboration.memberId)
+          if (!actor || actor.sessionId !== managed.id) {
+            throw new Error('Collaboration membership is stale or invalid')
+          }
+          const result = await this.collaborationManager.getFile(group.id, fileId)
+          const destinationDir = join(managed.workspace.rootPath, '.craft-agent', 'collaboration-files', group.id)
+          await mkdir(destinationDir, { recursive: true })
+          const destinationPath = join(destinationDir, basename(result.file.name))
+          await writeFile(destinationPath, Buffer.from(result.dataBase64, 'base64'))
+          return { file: result.file, path: destinationPath }
+        },
         sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => {
+          // Collaboration request/report events are the durable outbox. They
+          // currently persist text only, so accepting direct attachments here
+          // would make a retry silently deliver an incomplete message. Shared
+          // files have their own durable storage and integrity metadata.
+          if (managed.collaboration && attachments?.length) {
+            throw new Error('Collaboration messages do not support direct attachments. Publish the file with collaboration_file, then reference the shared file in the message.')
+          }
+
           // Build FileAttachment[] from paths (same pattern as spawn_session)
           let fileAttachments: FileAttachment[] | undefined
           if (attachments?.length) {
@@ -4968,9 +5051,11 @@ export class SessionManager implements ISessionManager {
           }
 
           let deliveredMessage = message
+          let collaborationDelivery: { groupId: string; operationId: string; attempt?: number } | undefined
           const collaboration = managed.collaboration
           if (collaboration) {
             const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) => {
+              collaborationDelivery = { groupId: group.id, operationId }
               const actor = group.members.find(member => member.id === collaboration.memberId)
               if (!actor || actor.sessionId !== managed.id) {
                 throw new Error('Collaboration membership is stale or invalid')
@@ -5007,6 +5092,17 @@ export class SessionManager implements ISessionManager {
               '',
               message,
             ].join('\n')
+            const claimed = await this.collaborationManager.claimDelivery(
+              collaborationDelivery!.groupId,
+              collaborationDelivery!.operationId,
+            )
+            if (!claimed.claimed) {
+              return {
+                delivery: claimed.status === 'queued' ? ('queued' as const) : ('delivered' as const),
+                targetBusy: claimed.status === 'queued',
+              }
+            }
+            collaborationDelivery!.attempt = claimed.attempt
           }
 
           // Capture the target's busy state BEFORE delivery so the sender gets a
@@ -5015,13 +5111,36 @@ export class SessionManager implements ISessionManager {
           // target starts processing immediately. sendMessage throws for an
           // unknown session — that rejection propagates to the handler's catch.
           const targetBusy = this.sessions.get(sessionId)?.isProcessing === true
-          await this.sendMessage(
-            sessionId,
-            deliveredMessage,
-            fileAttachments,
-            undefined,
-            { collaborationDispatch: true },
-          )
+          try {
+            await this.sendMessage(
+              sessionId,
+              deliveredMessage,
+              fileAttachments,
+              undefined,
+              { collaborationDispatch: true },
+            )
+            if (collaborationDelivery) {
+              const deliveryGroup = await this.collaborationManager.completeDelivery(
+                collaborationDelivery.groupId,
+                collaborationDelivery.operationId,
+                collaborationDelivery.attempt!,
+                targetBusy ? 'queued' : 'delivered',
+              )
+              this.broadcastCollaborationChanged(deliveryGroup)
+            }
+          } catch (error) {
+            if (collaborationDelivery) {
+              const deliveryGroup = await this.collaborationManager.completeDelivery(
+                collaborationDelivery.groupId,
+                collaborationDelivery.operationId,
+                collaborationDelivery.attempt!,
+                'failed',
+                error instanceof Error ? error.message : String(error),
+              )
+              this.broadcastCollaborationChanged(deliveryGroup)
+            }
+            throw error
+          }
           return {
             delivery: targetBusy ? ('queued' as const) : ('delivered' as const),
             targetBusy,
@@ -5327,7 +5446,7 @@ export class SessionManager implements ISessionManager {
     }
 
     // Only allow changing connection before first message (session hasn't started)
-    if (managed.messages && managed.messages.length > 0) {
+    if (Math.max(managed.messageCount ?? 0, managed.messages.length) > 0) {
       sessionLog.warn(`setSessionConnection: cannot change connection after session has started (${sessionId})`)
       throw new Error('Cannot change connection after session has started')
     }
@@ -5718,6 +5837,12 @@ export class SessionManager implements ISessionManager {
   getSessionFinalText(sessionId: string): string | undefined {
     const managed = this.sessions.get(sessionId)
     if (!managed) return undefined
+    if (!managed.messagesLoaded) {
+      const stored = loadStoredSession(managed.workspace.rootPath, managed.id)
+      const messages = (stored?.messages ?? []).map(storedToMessage)
+      const id = this.getLastFinalAssistantMessageId(messages)
+      return id ? messages.find(message => message.id === id)?.content : undefined
+    }
     const id = this.getLastFinalAssistantMessageId(managed.messages)
     if (!id) return undefined
     return managed.messages.find(m => m.id === id)?.content
@@ -5750,6 +5875,65 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * Track transcript visibility per transport client and release the full
+   * message array when no renderer needs it. Metadata remains resident, so a
+   * later getSession() transparently lazy-loads the transcript again.
+   */
+  async setSessionMessagesVisible(sessionId: string, clientId: string, visible: boolean): Promise<boolean> {
+    if (!this.sessions.has(sessionId)) return false
+    if (visible) {
+      let viewers = this.transcriptViewers.get(sessionId)
+      if (!viewers) {
+        viewers = new Set()
+        this.transcriptViewers.set(sessionId, viewers)
+      }
+      viewers.add(clientId)
+      return false
+    }
+
+    const viewers = this.transcriptViewers.get(sessionId)
+    viewers?.delete(clientId)
+    if (viewers && viewers.size > 0) return false
+    this.transcriptViewers.delete(sessionId)
+    return this.releaseSessionMessages(sessionId)
+  }
+
+  private canReleaseSessionMessages(managed: ManagedSession): boolean {
+    if (!managed.messagesLoaded || this.transcriptViewers.has(managed.id)) return false
+    if (managed.isProcessing || managed.agent || managed.mcpPool || managed.poolServer || managed.runtimeTeardown) return false
+    if (managed.messageQueue.length > 0 || managed.isAsyncOperationOngoing) return false
+    if (managed.pendingAuthRequest || managed.autoRetryTimer || managed.autoRetryPending) return false
+    if (this.messageLoadingPromises.has(managed.id)) return false
+    if (this.agentCreationLocks.has(managed.id) || this.agentRefreshLocks.has(managed.id)) return false
+    if (this.pendingDeltas.has(managed.id) || this.deltaFlushTimers.has(managed.id)) return false
+    return !Array.from(managed.backgroundTaskRegistry.values()).some(task => task.status === 'running')
+  }
+
+  private async releaseSessionMessages(sessionId: string): Promise<boolean> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed || !this.canReleaseSessionMessages(managed)) return false
+
+    const accessVersion = managed.transcriptAccessVersion ?? 0
+    try {
+      await this.flushSession(sessionId)
+    } catch (error) {
+      sessionLog.warn(`Failed to flush transcript before releasing ${sessionId}:`, error)
+      return false
+    }
+
+    // Re-check after the await: a send, view, mutation, or runtime creation may
+    // have touched the transcript while persistence was draining.
+    if ((managed.transcriptAccessVersion ?? 0) !== accessVersion
+      || !this.canReleaseSessionMessages(managed)) return false
+
+    managed.messages = []
+    managed.messagesLoaded = false
+    managed.transcriptAccessVersion = accessVersion + 1
+    sessionLog.debug(`Released idle transcript for session ${sessionId}`)
+    return true
+  }
+
+  /**
    * Check if a session is currently being viewed by the user
    */
   private isSessionBeingViewed(sessionId: string, workspaceId: string): boolean {
@@ -5772,8 +5956,10 @@ export class SessionManager implements ISessionManager {
     const updates: { lastReadMessageId?: string; hasUnread?: boolean } = {}
 
     // Update lastReadMessageId for legacy/manual unread functionality
-    if (managed.messages.length > 0) {
-      const lastFinalId = this.getLastFinalAssistantMessageId(managed.messages)
+    if (managed.messages.length > 0 || managed.lastFinalMessageId) {
+      const lastFinalId = managed.messagesLoaded
+        ? this.getLastFinalAssistantMessageId(managed.messages) ?? managed.lastFinalMessageId
+        : managed.lastFinalMessageId
       if (lastFinalId && managed.lastReadMessageId !== lastFinalId) {
         managed.lastReadMessageId = lastFinalId
         updates.lastReadMessageId = lastFinalId
@@ -6002,7 +6188,7 @@ export class SessionManager implements ISessionManager {
       // Check if we can also update sdkCwd (safe if no SDK interaction yet)
       // Conditions: no messages sent AND no agent created yet (no SDK session)
       const shouldUpdateSdkCwd =
-        managed.messages.length === 0 &&
+        Math.max(managed.messageCount ?? 0, managed.messages.length) === 0 &&
         !managed.sdkSessionId &&
         !managed.agent
 
@@ -6312,6 +6498,9 @@ export class SessionManager implements ISessionManager {
       this.deltaFlushTimers.delete(sessionId)
     }
     this.pendingDeltas.delete(sessionId)
+    this.pendingCollaborationRuntimeRefresh.delete(sessionId)
+    this.pendingMcpReloadSessionIds.delete(sessionId)
+    this.transcriptViewers.delete(sessionId)
     this.clearAdminRememberApprovalsForSession(sessionId)
     this.clearPendingPermissionRequestsForSession(sessionId)
 
@@ -6330,8 +6519,16 @@ export class SessionManager implements ISessionManager {
     this.remoteBpms.delete(sessionId)
     this.browserHostByCanvas.delete(sessionId)
 
+    // Runtime construction/refresh can outlive the caller that started it.
+    // Wait for those operations before disposal so they cannot attach a new
+    // Agent/MCP runtime to a session after it has been removed from the map.
+    await this.agentCreationLocks.get(sessionId)?.catch(() => undefined)
+    await this.agentRefreshLocks.get(sessionId)?.catch(() => undefined)
+
     // Fully await the single runtime teardown path before deleting files.
     await this.disposeManagedAgentRuntime(managed, 'session deleted')
+    this.agentRefreshLocks.delete(sessionId)
+    this.agentCreationLocks.delete(sessionId)
 
     // Cancel any pending source-activation auto-retry timer (craft-agents-oss#804).
     if (managed.autoRetryTimer) {
@@ -6339,6 +6536,17 @@ export class SessionManager implements ISessionManager {
       managed.autoRetryTimer = undefined
     }
     managed.autoRetryPending = undefined
+    if (managed.stopCleanupTimer) {
+      clearTimeout(managed.stopCleanupTimer)
+      managed.stopCleanupTimer = undefined
+    }
+
+    for (const [workspaceId, viewedSessionId] of this.activeViewingSession) {
+      if (viewedSessionId === sessionId) this.activeViewingSession.delete(workspaceId)
+    }
+    for (const [taskId, indexedSessionId] of this.taskOutputIndex) {
+      if (indexedSessionId === sessionId) this.taskOutputIndex.delete(taskId)
+    }
 
     this.sessions.delete(sessionId)
 
@@ -7064,7 +7272,9 @@ export class SessionManager implements ISessionManager {
 
     // Safety timeout: if event loop doesn't complete within 5 seconds, force cleanup
     // This handles cases where the generator gets stuck
-    setTimeout(() => {
+    if (managed.stopCleanupTimer) clearTimeout(managed.stopCleanupTimer)
+    managed.stopCleanupTimer = setTimeout(() => {
+      managed.stopCleanupTimer = undefined
       if (managed.stopRequested && managed.isProcessing) {
         sessionLog.warn('Generator did not complete after stop request, forcing cleanup')
         this.onProcessingStopped(sessionId, 'timeout')
@@ -7214,6 +7424,10 @@ export class SessionManager implements ISessionManager {
     // 1. Cleanup state
     this.setProcessing(managed, false)
     managed.stopRequested = false  // Reset for next turn
+    if (managed.stopCleanupTimer) {
+      clearTimeout(managed.stopCleanupTimer)
+      managed.stopCleanupTimer = undefined
+    }
 
     // 1b. Orphan backstop: with the default per-turn subprocess model, any
     // background sub-agent still marked `running` dies when this turn's
@@ -7345,6 +7559,9 @@ export class SessionManager implements ISessionManager {
 
     // 6. Always persist
     this.persistSession(managed)
+    if (managed.messageQueue.length === 0 && !this.transcriptViewers.has(sessionId)) {
+      void this.releaseSessionMessages(sessionId)
+    }
   }
 
   /**
@@ -7952,6 +8169,14 @@ export class SessionManager implements ISessionManager {
     this.setMetadataWriteGuard(managed)
     this.persistSession(managed)
     await this.flushSession(managed.id)
+    if (managed.agent) {
+      if (managed.agent.isProcessing()) {
+        this.pendingCollaborationRuntimeRefresh.add(managed.id)
+      } else {
+        await this.disposeManagedAgentRuntime(managed, 'collaboration role changed')
+        this.pendingCollaborationRuntimeRefresh.delete(managed.id)
+      }
+    }
     this.sendEvent({ type: 'session_metadata_changed', sessionId, changes: { collaboration: collaboration ?? undefined } }, managed.workspace.id)
   }
 
@@ -9743,11 +9968,31 @@ export class SessionManager implements ISessionManager {
     this.deltaFlushTimers.clear()
     this.pendingDeltas.clear()
 
+    for (const managed of this.sessions.values()) {
+      if (managed.stopCleanupTimer) {
+        clearTimeout(managed.stopCleanupTimer)
+        managed.stopCleanupTimer = undefined
+      }
+      if (managed.autoRetryTimer) {
+        clearTimeout(managed.autoRetryTimer)
+        managed.autoRetryTimer = undefined
+      }
+      managed.autoRetryPending = undefined
+    }
+
     // Clear pending credential resolvers (they won't be resolved, but prevents memory leak)
     this.pendingCredentialResolvers.clear()
     this.pendingPermissionRequests.clear()
     this.adminRememberApprovals.clear()
     this.pendingMcpReloadSessionIds.clear()
+    this.pendingCollaborationRuntimeRefresh.clear()
+
+    // A startup/refresh already in flight may attach resources after cleanup
+    // starts. Drain those operations before walking the final runtime set.
+    await Promise.allSettled([
+      ...this.agentCreationLocks.values(),
+      ...this.agentRefreshLocks.values(),
+    ])
 
     // Shutdown must close every retained warm runtime as well as file
     // watchers. Awaiting all teardowns prevents MCP child processes from
@@ -9760,6 +10005,27 @@ export class SessionManager implements ISessionManager {
     for (const sessionId of this.sessions.keys()) {
       unregisterSessionScopedToolCallbacks(sessionId)
     }
+    await this.collaborationManager.cleanup()
+
+    // Release all manager-owned indexes and callbacks. The process may keep
+    // this manager reachable briefly during shutdown, so relying on GC of the
+    // manager itself leaves complete transcripts and callback closures alive.
+    this.sessions.clear()
+    this.messageLoadingPromises.clear()
+    this.activeViewingSession.clear()
+    this.transcriptViewers.clear()
+    this.taskOutputIndex.clear()
+    this.agentRefreshLocks.clear()
+    this.agentCreationLocks.clear()
+    this.sessionCompletionListeners.clear()
+    this.remoteBpms.clear()
+    this.browserHostByCanvas.clear()
+    this.automationBinder = undefined
+    this.messagingToolBridge = null
+    this.browserPaneManager = null
+    this.enqueuePageThumbnailFn = undefined
+    this.rpcServer = null
+    this.eventSink = null
 
     sessionLog.info('Cleanup complete')
   }

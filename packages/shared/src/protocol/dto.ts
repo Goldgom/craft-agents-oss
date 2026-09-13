@@ -294,7 +294,7 @@ export interface CollaborationEvent {
   id: string
   /** Stable client supplied id makes retries idempotent. */
   operationId: string
-  type: 'request' | 'report' | 'board' | 'file'
+  type: 'request' | 'report' | 'board' | 'file' | 'lifecycle'
   fromMemberId: string
   toMemberId?: string
   text?: string
@@ -302,6 +302,13 @@ export interface CollaborationEvent {
   boardItemId?: string
   /** Snapshot written by this board event. */
   boardValue?: unknown
+  /** Durable outbox state for request/report delivery. */
+  delivery?: {
+    status: 'pending' | 'delivering' | 'delivered' | 'queued' | 'failed' | 'relay-required'
+    attempts: number
+    updatedAt: number
+    lastError?: string
+  }
   createdAt: number
   revision: number
 }
@@ -311,13 +318,18 @@ export interface CollaborationGroup {
   version: 1
   /** Monotonic revision for all mutable group state. */
   revision: number
+  status: 'active' | 'ended'
   primaryMemberId: string
   members: CollaborationMember[]
   board: Record<string, CollaborationBoardItem>
   files: Record<string, CollaborationFile>
   events: CollaborationEvent[]
+  /** SHA-256(operationId) -> committed revision. A bounded recent window is kept independently of event history. */
+  appliedOperations: Record<string, number>
   createdAt: number
   updatedAt: number
+  endedAt?: number
+  endedBy?: string
 }
 
 export interface CollaborationChangeResult {
@@ -595,6 +607,7 @@ export type SessionCommand =
   | { type: 'markRead' }
   | { type: 'markUnread' }
   | { type: 'setActiveViewing'; workspaceId: string }
+  | { type: 'setMessagesVisible'; visible: boolean }
   | { type: 'setPermissionMode'; mode: PermissionMode }
   | { type: 'setThinkingLevel'; level: ThinkingLevel }
   | { type: 'updateWorkingDirectory'; dir: string }

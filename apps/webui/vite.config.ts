@@ -25,6 +25,12 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
+      // WebUI reuses the same declarative UI package as Electron. Apply the
+      // same side-effect policy so package-barrel re-exports do not retain
+      // optional editors and previewers in the initial remote-client bundle.
+      treeshake: {
+        moduleSideEffects: (id) => !id.replaceAll('\\', '/').includes('/packages/ui/src/'),
+      },
       input: {
         main: resolve(__dirname, 'src/index.html'),
         login: resolve(__dirname, 'src/login.html'),

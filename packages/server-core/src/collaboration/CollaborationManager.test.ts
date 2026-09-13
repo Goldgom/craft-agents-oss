@@ -9,11 +9,12 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, {
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'craft-collaboration-'))
-  roots.push(root)
-  const manager = new CollaborationManager(id => id === 'main' ? root : `${root}-${id}`)
+  const otherRoot = `${root}-other`
+  roots.push(root, otherRoot)
+  const manager = new CollaborationManager(id => id === 'main' ? root : otherRoot)
   const group = await manager.create(
     { sessionId: 'main-session', workspaceId: 'main' },
-    [{ sessionId: 'worker-a', workspaceId: 'main' }, { sessionId: 'worker-b', workspaceId: 'other', serverUrl: 'wss://worker.example' }],
+    [{ sessionId: 'worker-a', workspaceId: 'main' }, { sessionId: 'worker-b', workspaceId: 'other' }],
   )
   return { manager, group }
 }
@@ -48,5 +49,62 @@ describe('CollaborationManager', () => {
     const received = await manager.getFile(group.id, file.id)
     expect(Buffer.from(received.dataBase64, 'base64').toString()).toBe('hello')
     expect(received.file.sha256).toHaveLength(64)
+  })
+
+  it('indexes a coordinator-owned group in every local member workspace', async () => {
+    const { manager, group } = await fixture()
+    const fromPrimary = await manager.list('main')
+    const fromSecondary = await manager.list('other')
+    expect(fromPrimary.map(item => item.id)).toEqual([group.id])
+    expect(fromSecondary.map(item => item.id)).toEqual([group.id])
+  })
+
+  it('tracks failed delivery attempts and permits a durable retry', async () => {
+    const { manager, group } = await fixture()
+    await manager.request(group.id, 'primary', 'secondary_1', 'inspect the API', 'delivery-1', 0)
+    const firstClaim = await manager.claimDelivery(group.id, 'delivery-1')
+    expect(firstClaim).toMatchObject({ claimed: true, status: 'delivering' })
+    const failed = await manager.completeDelivery(group.id, 'delivery-1', firstClaim.attempt!, 'failed', 'temporary failure')
+    expect(failed.events.at(-1)?.delivery).toMatchObject({ status: 'failed', attempts: 1 })
+
+    const retryClaim = await manager.claimDelivery(group.id, 'delivery-1')
+    expect(retryClaim).toMatchObject({ claimed: true, status: 'delivering' })
+    const stale = await manager.completeDelivery(group.id, 'delivery-1', firstClaim.attempt!, 'delivered')
+    expect(stale.events.at(-1)?.delivery).toMatchObject({ status: 'delivering', attempts: 2 })
+    const delivered = await manager.completeDelivery(group.id, 'delivery-1', retryClaim.attempt!, 'delivered')
+    expect(delivered.events.at(-1)?.delivery).toMatchObject({ status: 'delivered', attempts: 2 })
+    await expect(manager.claimDelivery(group.id, 'delivery-1')).resolves.toMatchObject({ claimed: false, status: 'delivered' })
+  })
+
+  it('ends a collaboration and rejects later board mutations', async () => {
+    const { manager, group } = await fixture()
+    const ended = await manager.end(group.id, 'primary', 'end-1', 0)
+    expect(ended.group).toMatchObject({ status: 'ended', endedBy: 'primary' })
+    await expect(
+      manager.updateBoard(group.id, 'primary', 'late', true, 'late-1', ended.group.revision),
+    ).rejects.toThrow('Collaboration has ended')
+    await expect(manager.claimDelivery(group.id, 'missing-delivery')).rejects.toThrow('Collaboration has ended')
+  })
+
+  it('keeps operation idempotency after the bounded event history is trimmed', async () => {
+    const { manager, group } = await fixture()
+    let revision = group.revision
+    for (let index = 0; index <= 500; index += 1) {
+      const result = await manager.updateBoard(group.id, 'primary', 'counter', index, `operation-${index}`, revision)
+      revision = result.group.revision
+    }
+    const retry = await manager.updateBoard(group.id, 'primary', 'counter', 0, 'operation-0', 0)
+    expect(retry.applied).toBe(false)
+    expect(retry.group.board.counter?.value).toBe(500)
+    expect(retry.group.events).toHaveLength(500)
+  })
+
+  it('rejects unsafe identifiers and malformed durable payloads', async () => {
+    const { manager, group } = await fixture()
+    await expect(manager.open('../outside', 'main')).rejects.toThrow('Invalid collaboration group id')
+    await expect(manager.updateBoard(group.id, 'primary', '__proto__', true, 'board-unsafe', 0))
+      .rejects.toThrow('Reserved board item id')
+    await expect(manager.putFile(group.id, 'primary', 'test.txt', 'not base64!', 'text/plain', 'file-invalid', 0))
+      .rejects.toThrow('valid base64')
   })
 })

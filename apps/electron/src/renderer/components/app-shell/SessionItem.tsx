@@ -157,7 +157,7 @@ export function SessionItem({
           onSendToWorkspace={ctx.onSendToWorkspace ? () => ctx.onSendToWorkspace!([item.id]) : undefined}
           hasTransferTargets={canSendToWorkspace}
           onDelete={() => ctx.onDelete(item.id)}
-          onConfigureCollaboration={() => setCollaborationOpen(true)}
+          onConfigureCollaboration={item.collaboration ? undefined : () => setCollaborationOpen(true)}
           projects={ctx.projects}
           onSetProjectId={ctx.onSetProjectId ? (pid) => ctx.onSetProjectId!(item.id, pid) : undefined}
         />
@@ -185,7 +185,7 @@ export function SessionItem({
           onOpenInNewWindow={() => ctx.onOpenInNewWindow(item)}
           onSendToWorkspace={ctx.onSendToWorkspace ? () => ctx.onSendToWorkspace!([item.id]) : undefined}
           onDelete={() => ctx.onDelete(item.id)}
-          onConfigureCollaboration={() => setCollaborationOpen(true)}
+          onConfigureCollaboration={item.collaboration ? undefined : () => setCollaborationOpen(true)}
         />
       )}
       icon={

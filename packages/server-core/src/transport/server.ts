@@ -99,6 +99,12 @@ export interface WsRpcServerOptions {
   serverVersion?: string
   /** Maximum concurrent clients. 0 = unlimited. Default: 50 */
   maxClients?: number
+  /**
+   * Resolve a workspace alias (for example a name or legacy remote profile
+   * value) to the canonical ID used by workspace-scoped push targets.
+   * Results are cached because this runs on the event-routing hot path.
+   */
+  resolveWorkspaceId?: (workspaceId: string) => string | null | undefined
   /** Called when a client completes handshake. */
   onClientConnected?: (info: { clientId: string; webContentsId: number | null; workspaceId: string | null; capabilities: string[] }) => void
   /** Called when a client disconnects. */
@@ -114,6 +120,7 @@ export interface WsRpcServerOptions {
 }
 
 const transportLog = createLogger('ws-rpc-server')
+const WORKSPACE_ALIAS_CACHE_MAX_SIZE = 256
 
 // ---------------------------------------------------------------------------
 // WsRpcServer
@@ -126,7 +133,12 @@ export class WsRpcServer implements RpcServer {
   private clients = new Map<string, ClientConnection>()
   private handlers = new Map<string, HandlerFn>()
   private pendingInvokes = new Map<string, PendingInvoke>()
+  private activeHandlerTimeouts = new Set<{
+    timer: ReturnType<typeof setTimeout>
+    reject: (reason: Error) => void
+  }>()
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private closing = false
   private _port = 0
   private _protocol: 'ws' | 'wss' = 'ws'
 
@@ -142,9 +154,12 @@ export class WsRpcServer implements RpcServer {
   private readonly tlsOptions: WsRpcTlsOptions | null
   private readonly serverVersion: string
   private readonly maxClients: number
+  private readonly resolveWorkspaceId: ((workspaceId: string) => string | null | undefined) | null
   private readonly onClientConnected: WsRpcServerOptions['onClientConnected']
   private readonly onClientDisconnected: WsRpcServerOptions['onClientDisconnected']
   private readonly httpHandler: WsRpcServerOptions['httpHandler']
+  /** Canonical workspace identity cache keeps event routing allocation-free. */
+  private workspaceIdAliases = new Map<string, string>()
 
   constructor(opts?: WsRpcServerOptions) {
     this.host = opts?.host ?? '127.0.0.1'
@@ -156,6 +171,7 @@ export class WsRpcServer implements RpcServer {
     this.serverVersion = opts?.serverVersion ?? ''
     this.tlsOptions = opts?.tls ?? null
     this.maxClients = opts?.maxClients ?? 50
+    this.resolveWorkspaceId = opts?.resolveWorkspaceId ?? null
     this.onClientConnected = opts?.onClientConnected
     this.onClientDisconnected = opts?.onClientDisconnected
     this.httpHandler = opts?.httpHandler
@@ -208,9 +224,12 @@ export class WsRpcServer implements RpcServer {
 
   findClientsWithCapability(capability: string, opts?: { workspaceId?: string }): string[] {
     const results: string[] = []
+    const workspaceId = opts?.workspaceId === undefined
+      ? undefined
+      : this.normalizeWorkspaceId(opts.workspaceId)
     for (const [clientId, client] of this.clients) {
       if (!client.capabilities.has(capability)) continue
-      if (opts?.workspaceId !== undefined && client.workspaceId !== opts.workspaceId) continue
+      if (workspaceId !== undefined && client.workspaceId !== workspaceId) continue
       results.push(clientId)
     }
     return results
@@ -257,7 +276,13 @@ export class WsRpcServer implements RpcServer {
         args,
         serverId: this.serverId,
       }
-      this.safeSend(client.ws, serializeEnvelope(envelope))
+      if (!this.safeSend(client.ws, serializeEnvelope(envelope))) {
+        clearTimeout(timeout)
+        this.pendingInvokes.delete(id)
+        const err = new Error(`Client disconnected before request could be sent: ${clientId}`)
+        ;(err as any).code = 'CLIENT_DISCONNECTED'
+        reject(err)
+      }
     })
   }
 
@@ -266,6 +291,7 @@ export class WsRpcServer implements RpcServer {
   // -------------------------------------------------------------------------
 
   async listen(): Promise<void> {
+    this.closing = false
     return new Promise((resolve, reject) => {
       if (this.tlsOptions) {
         // TLS mode: create HTTPS server, attach WebSocketServer to it.
@@ -339,6 +365,7 @@ export class WsRpcServer implements RpcServer {
   }
 
   close(): void {
+    this.closing = true
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
@@ -351,8 +378,20 @@ export class WsRpcServer implements RpcServer {
       pending.reject(err)
       this.pendingInvokes.delete(id)
     }
-    for (const client of this.clients.values()) {
-      client.ws.terminate()
+    // Settle in-flight request dispatches immediately. Merely clearing these
+    // timers would leave a never-resolving handler's Promise.race (and its
+    // request/client closure) retained forever after server shutdown.
+    for (const timeout of this.activeHandlerTimeouts) {
+      clearTimeout(timeout.timer)
+      const err = new Error('Server shutting down')
+      ;(err as any).code = 'CLIENT_DISCONNECTED'
+      timeout.reject(err)
+    }
+    this.activeHandlerTimeouts.clear()
+    // WebSocketServer also tracks sockets that have not completed handshake;
+    // terminate those too so auth/handshake closures cannot survive shutdown.
+    for (const ws of this.wss?.clients ?? []) {
+      ws.terminate()
     }
     this.clients.clear()
     // Clean up disconnected client timers
@@ -360,6 +399,8 @@ export class WsRpcServer implements RpcServer {
       clearTimeout(entry.timer)
     }
     this.disconnectedClients.clear()
+    this.workspaceIdAliases.clear()
+    this.handlers.clear()
     this.wss?.close()
     this.wss = null
     this.httpServer?.close()
@@ -373,6 +414,10 @@ export class WsRpcServer implements RpcServer {
   // -------------------------------------------------------------------------
 
   private onConnection(ws: WebSocket, upgradeRequestCookie: string | null): void {
+    if (this.closing) {
+      ws.terminate()
+      return
+    }
     // Reject if at capacity
     if (this.maxClients > 0 && this.clients.size >= this.maxClients) {
       transportLog.warn('Connection rejected: at capacity', {
@@ -392,6 +437,13 @@ export class WsRpcServer implements RpcServer {
         ws.close(4001, 'Handshake timeout')
       }
     }, 5_000)
+
+    ws.once('close', () => {
+      if (handshakeTimeout) {
+        clearTimeout(handshakeTimeout)
+        handshakeTimeout = null
+      }
+    })
 
     ws.on('message', async (raw) => {
       let envelope: MessageEnvelope
@@ -452,6 +504,16 @@ export class WsRpcServer implements RpcServer {
           }
         }
 
+        // Authentication callbacks may resolve after close() has already
+        // terminated this socket. Never register that stale connection.
+        if (this.closing || ws.readyState !== ws.OPEN) return
+
+        // Store one canonical workspace identity for both RPC clients and
+        // push targets. Without this, requests can resolve a workspace alias
+        // successfully while every workspace-scoped event is silently
+        // filtered out (the next full app load then appears to "fix" it).
+        const requestedWorkspaceId = this.normalizeWorkspaceId(envelope.workspaceId)
+
         // ── Reconnect attempt ──
         if (envelope.reconnectClientId && envelope.lastSeq != null) {
           const entry = this.disconnectedClients.get(envelope.reconnectClientId)
@@ -460,7 +522,7 @@ export class WsRpcServer implements RpcServer {
 
             // Identity must match (workspace + webContentsId)
             const identityMatch =
-              prevClient.workspaceId === (envelope.workspaceId ?? null) &&
+              prevClient.workspaceId === requestedWorkspaceId &&
               prevClient.webContentsId === (envelope.webContentsId ?? null)
 
             if (identityMatch) {
@@ -565,7 +627,7 @@ export class WsRpcServer implements RpcServer {
         const client: ClientConnection = {
           id: clientId,
           ws,
-          workspaceId: envelope.workspaceId ?? null,
+          workspaceId: requestedWorkspaceId,
           webContentsId: envelope.webContentsId ?? null,
           capabilities: new Set(envelope.clientCapabilities ?? []),
           missedPongs: 0,
@@ -671,13 +733,23 @@ export class WsRpcServer implements RpcServer {
       webContentsId: client.webContentsId,
     }
 
+    let rejectHandlerTimeout!: (reason: Error) => void
+    const handlerTimeoutPromise = new Promise<never>((_, reject) => {
+      rejectHandlerTimeout = reject
+    })
+    const handlerTimeout = {
+      timer: setTimeout(
+        () => rejectHandlerTimeout(new Error(`Handler timeout: ${channel} (${WsRpcServer.HANDLER_TIMEOUT_MS}ms)`)),
+        WsRpcServer.HANDLER_TIMEOUT_MS,
+      ),
+      reject: rejectHandlerTimeout,
+    }
+    this.activeHandlerTimeouts.add(handlerTimeout)
+
     try {
       const result = await Promise.race([
-        handler(ctx, ...(args ?? [])),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Handler timeout: ${channel} (${WsRpcServer.HANDLER_TIMEOUT_MS}ms)`)),
-            WsRpcServer.HANDLER_TIMEOUT_MS),
-        ),
+        Promise.resolve().then(() => handler(ctx, ...(args ?? []))),
+        handlerTimeoutPromise,
       ])
       const response: MessageEnvelope = {
         id,
@@ -691,6 +763,9 @@ export class WsRpcServer implements RpcServer {
       const rawCode = (err as { code?: unknown } | null)?.code
       const code: ErrorCode = isErrorCode(rawCode) ? rawCode : 'HANDLER_ERROR'
       this.sendResponseError(client.ws, id, channel, code, message)
+    } finally {
+      clearTimeout(handlerTimeout.timer)
+      this.activeHandlerTimeouts.delete(handlerTimeout)
     }
   }
 
@@ -729,7 +804,17 @@ export class WsRpcServer implements RpcServer {
       transportLog.info('Client disconnected', { clientId: client.id })
       this.clients.delete(client.id)
 
+      // close() terminates sockets itself. Do not create reconnect-retention
+      // timers from the resulting asynchronous close events.
+      if (this.closing) {
+        this.rejectPendingInvokesForClient(client.id)
+        this.onClientDisconnected?.(client.id)
+        return
+      }
+
       // Retain buffer for potential reconnect
+      const previous = this.disconnectedClients.get(client.id)
+      if (previous) clearTimeout(previous.timer)
       const timer = setTimeout(() => {
         this.disconnectedClients.delete(client.id)
       }, DISCONNECTED_CLIENT_TTL_MS)
@@ -816,7 +901,7 @@ export class WsRpcServer implements RpcServer {
         return target.exclude ? client.id !== target.exclude : true
       case 'workspace':
         if (target.exclude && client.id === target.exclude) return false
-        return client.workspaceId === target.workspaceId
+        return client.workspaceId === this.normalizeWorkspaceId(target.workspaceId)
       case 'client':
         return client.id === target.clientId
       default:
@@ -828,7 +913,45 @@ export class WsRpcServer implements RpcServer {
   updateClientWorkspace(clientId: string, workspaceId: string): void {
     const client = this.clients.get(clientId)
     if (client) {
-      client.workspaceId = workspaceId
+      client.workspaceId = this.normalizeWorkspaceId(workspaceId)
+    }
+  }
+
+  private normalizeWorkspaceId(workspaceId: string | null | undefined): string | null {
+    if (!workspaceId) return null
+
+    const cached = this.workspaceIdAliases.get(workspaceId)
+    if (cached) {
+      // Refresh recency without allowing one-off aliases to grow the cache.
+      this.workspaceIdAliases.delete(workspaceId)
+      this.workspaceIdAliases.set(workspaceId, cached)
+      return cached
+    }
+
+    let canonical = workspaceId
+    if (this.resolveWorkspaceId) {
+      try {
+        canonical = this.resolveWorkspaceId(workspaceId) || workspaceId
+      } catch (error) {
+        transportLog.warn('Workspace ID resolver failed; retaining supplied identity', {
+          workspaceId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    this.cacheWorkspaceAlias(workspaceId, canonical)
+    this.cacheWorkspaceAlias(canonical, canonical)
+    return canonical
+  }
+
+  private cacheWorkspaceAlias(alias: string, canonical: string): void {
+    this.workspaceIdAliases.delete(alias)
+    this.workspaceIdAliases.set(alias, canonical)
+    while (this.workspaceIdAliases.size > WORKSPACE_ALIAS_CACHE_MAX_SIZE) {
+      const oldest = this.workspaceIdAliases.keys().next().value
+      if (oldest === undefined) break
+      this.workspaceIdAliases.delete(oldest)
     }
   }
 
@@ -891,9 +1014,14 @@ export class WsRpcServer implements RpcServer {
     }
   }
 
-  private safeSend(ws: WebSocket, data: string): void {
-    if (ws.readyState === ws.OPEN) {
+  private safeSend(ws: WebSocket, data: string): boolean {
+    if (ws.readyState !== ws.OPEN) return false
+    try {
       ws.send(data)
+      return true
+    } catch {
+      // The socket can close between the readyState check and send().
+      return false
     }
   }
 }

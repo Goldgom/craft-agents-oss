@@ -11,6 +11,7 @@ import {
   refreshSessionsMetadataAtom,
   initializeSessionsAtom,
   replaceLoadedSessionAtom,
+  releaseSessionMessagesAtom,
 } from '../sessions'
 
 function msg(id: string, role: Message['role'] = 'user'): Message {
@@ -123,6 +124,56 @@ describe('session message loading atoms', () => {
     expect(calls).toEqual([sessionId, sessionId])
     expect(secondResult?.messages.map((message) => message.id)).toEqual(['m1', 'm2'])
     expect(store.get(loadedSessionsAtom).has(sessionId)).toBe(true)
+  })
+
+  it('releases an idle transcript but preserves its lazy-load metadata', async () => {
+    const store = createStore()
+    const sessionId = 'session-1'
+    store.set(replaceLoadedSessionAtom, makeSession({
+      id: sessionId,
+      messages: [msg('m1'), msg('m2', 'assistant')],
+    }))
+
+    expect(await store.set(releaseSessionMessagesAtom, sessionId)).toBe(true)
+    expect(store.get(sessionAtomFamily(sessionId))?.messages).toEqual([])
+    expect(store.get(sessionAtomFamily(sessionId))?.messageCount).toBe(2)
+    expect(store.get(sessionAtomFamily(sessionId))?.lastFinalMessageId).toBe('m2')
+    expect(store.get(loadedSessionsAtom).has(sessionId)).toBe(false)
+  })
+
+  it('does not release a processing transcript', async () => {
+    const store = createStore()
+    const sessionId = 'session-1'
+    store.set(replaceLoadedSessionAtom, makeSession({
+      id: sessionId,
+      isProcessing: true,
+      messages: [msg('m1')],
+    }))
+
+    expect(await store.set(releaseSessionMessagesAtom, sessionId)).toBe(false)
+    expect(store.get(sessionAtomFamily(sessionId))?.messages).toHaveLength(1)
+    expect(store.get(loadedSessionsAtom).has(sessionId)).toBe(true)
+  })
+
+  it('releases after an in-flight lazy load finishes when the session stayed hidden', async () => {
+    const store = createStore()
+    const sessionId = 'session-1'
+    let resolveLoad!: (session: Session) => void
+    globalThis.window = {
+      electronAPI: {
+        getSessionMessages: () => new Promise<Session>(resolve => { resolveLoad = resolve }),
+      },
+    } as unknown as typeof window
+    store.set(sessionAtomFamily(sessionId), makeSession({ id: sessionId, messages: [] }))
+
+    const load = store.set(ensureSessionMessagesLoadedAtom, sessionId)
+    const release = store.set(releaseSessionMessagesAtom, sessionId)
+    resolveLoad(makeSession({ id: sessionId, messages: [msg('m1')] }))
+
+    await load
+    expect(await release).toBe(true)
+    expect(store.get(sessionAtomFamily(sessionId))?.messages).toEqual([])
+    expect(store.get(loadedSessionsAtom).has(sessionId)).toBe(false)
   })
 })
 
