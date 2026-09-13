@@ -5,7 +5,7 @@ description: Configure API, MCP, and local-folder sources with the minimum acces
 
 # Source authoring
 
-Use this skill for creating or changing a source. Read `~/.craft-agent/docs/sources.md` before editing source configuration.
+Use this skill for creating or changing a source. Read `~/.tokenbird/docs/sources.md` before editing source configuration.
 
 First choose the source type that matches the integration: API for a direct HTTP service, MCP for a tool server, or Local Folder for an explicitly scoped directory. Preserve credentials and never place secret values into guide files, prompts, or logs.
 

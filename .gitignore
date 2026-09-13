@@ -64,7 +64,7 @@ __pycache__/
 pnpm-lock.yaml
 
 # TokenBird local data (sessions, credentials, config)
-.craft-agent/
+.tokenbird/
 
 # SSH keys and secrets
 *.pem

@@ -10,8 +10,8 @@ TokenBird uses a 6-color theme system with support for both app-level defaults a
 
 1. **App default**: Selected in Settings → Appearance → Default Theme
 2. **Workspace override**: Per-workspace theme in Settings → Appearance → Workspace Themes
-3. **Preset themes**: `~/.craft-agent/themes/{name}.json` - Complete theme packages
-4. **Theme overrides**: `~/.craft-agent/theme.json` - Override specific colors (app-level)
+3. **Preset themes**: `~/.tokenbird/themes/{name}.json` - Complete theme packages
+4. **Theme overrides**: `~/.tokenbird/theme.json` - Override specific colors (app-level)
 
 Workspaces without a custom theme inherit the app default. All settings are optional - the app has sensible built-in defaults.
 
@@ -27,7 +27,7 @@ Each workspace can have its own color theme that overrides the app default. Conf
 Workspace theme preferences are stored in the workspace config:
 
 ```
-~/.craft-agent/workspaces/{id}/config.json
+~/.tokenbird/workspaces/{id}/config.json
 ```
 
 ```json
@@ -66,7 +66,7 @@ Any valid CSS color format is supported:
 
 ## Theme Override File
 
-Create `~/.craft-agent/theme.json` to override specific colors:
+Create `~/.tokenbird/theme.json` to override specific colors:
 
 ```json
 {
@@ -89,7 +89,7 @@ This allows partial dark mode customization - only override what needs to differ
 
 ## Preset Themes
 
-Preset themes are complete theme packages stored at `~/.craft-agent/themes/`. Each preset is a JSON file with theme colors and metadata.
+Preset themes are complete theme packages stored at `~/.tokenbird/themes/`. Each preset is a JSON file with theme colors and metadata.
 
 ### Preset Theme Schema
 
@@ -131,7 +131,7 @@ Preset themes are complete theme packages stored at `~/.craft-agent/themes/`. Ea
 ### Installing Preset Themes
 
 1. Download or create a theme JSON file
-2. Save it to `~/.craft-agent/themes/{name}.json`
+2. Save it to `~/.tokenbird/themes/{name}.json`
 3. Select the theme in Settings → Appearance
 
 ## Scenic Mode
@@ -183,7 +183,7 @@ restyle the whole window. Manage them in Settings → Appearance → Theme Packs
 ### Storage Location
 
 ```
-~/.craft-agent/theme-packs/<pack-id>/
+~/.tokenbird/theme-packs/<pack-id>/
 ├── theme-pack.json     # manifest (see schema below)
 ├── background.png      # optional: 背景图片
 ├── chat.png            # optional: 聊天框贴图
@@ -192,7 +192,7 @@ restyle the whole window. Manage them in Settings → Appearance → Theme Packs
 ```
 
 The writable location can be overridden by the host application with
-`CRAFT_THEME_PACKS_DIR`. Built-in packs are read from the application's
+`TOKENBIRD_THEME_PACKS_DIR`. Built-in packs are read from the application's
 `resources/theme-packs/` directory and cannot be deleted from the UI. During
 development, the repository-level `themes/<pack-id>/` directory is used as the
 same built-in source. The Electron asset copy step packages that directory
@@ -385,7 +385,7 @@ Theme changes are applied immediately - no restart needed. Edit theme.json and t
 
 ## Creating a Theme
 
-1. Create `~/.craft-agent/theme.json` for overrides or `~/.craft-agent/themes/{name}.json` for a preset
+1. Create `~/.tokenbird/theme.json` for overrides or `~/.tokenbird/themes/{name}.json` for a preset
 2. Add only the colors you want to customize
 3. Optionally add `dark` overrides for dark mode
 
@@ -399,7 +399,7 @@ Theme changes are applied immediately - no restart needed. Edit theme.json and t
 
 **Theme not applying:**
 - Verify JSON syntax is valid
-- Check file is in correct location (`~/.craft-agent/theme.json` for overrides, `~/.craft-agent/themes/` for presets)
+- Check file is in correct location (`~/.tokenbird/theme.json` for overrides, `~/.tokenbird/themes/` for presets)
 - Ensure color values are valid CSS colors
 
 **Colors look wrong in dark mode:**

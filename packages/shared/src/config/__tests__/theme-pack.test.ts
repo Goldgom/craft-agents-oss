@@ -104,9 +104,9 @@ describe('convertDshSkinToManifest', () => {
 
 describe('importThemePackFromFolder + loadThemePack (DSH layout)', () => {
   it('imports a dsh skin folder into the theme packs dir and re-reads it', () => {
-    const originalConfigDir = process.env.CRAFT_CONFIG_DIR;
+    const originalConfigDir = process.env.TOKENBIRD_CONFIG_DIR;
     const tempConfig = mkdtempSync(join(tmpdir(), 'craft-config-'));
-    process.env.CRAFT_CONFIG_DIR = tempConfig;
+    process.env.TOKENBIRD_CONFIG_DIR = tempConfig;
     const skinDir = makeDshSkinDir();
     try {
       const pack = importThemePackFromFolder(skinDir);
@@ -132,8 +132,8 @@ describe('importThemePackFromFolder + loadThemePack (DSH layout)', () => {
       expect(resolveThemePackAssetPath('maid-atelier', '../outside.txt')).toBeNull();
       expect(resolveThemePackAssetPath('maid-atelier', 'assets/../../skin.json')).toBeNull();
     } finally {
-      if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR;
-      else process.env.CRAFT_CONFIG_DIR = originalConfigDir;
+      if (originalConfigDir === undefined) delete process.env.TOKENBIRD_CONFIG_DIR;
+      else process.env.TOKENBIRD_CONFIG_DIR = originalConfigDir;
       rmSync(tempConfig, { recursive: true, force: true });
       rmSync(skinDir, { recursive: true, force: true });
     }

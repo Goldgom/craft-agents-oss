@@ -1077,7 +1077,7 @@
   "settings.appearance.title": "Erscheinungsbild",
   "settings.appearance.toolHeader": "Werkzeug",
   "settings.appearance.toolIcons": "Werkzeugsymbole",
-  "settings.appearance.toolIconsDesc": "Symbole neben CLI-Befehlen in der Chat-Aktivität. Gespeichert unter ~/.craft-agent/tool-icons/.",
+  "settings.appearance.toolIconsDesc": "Symbole neben CLI-Befehlen in der Chat-Aktivität. Gespeichert unter ~/.tokenbird/tool-icons/.",
   "settings.appearance.useDefault": "Standard verwenden",
   "settings.appearance.useDefaultWithTheme": "Standard verwenden ({{theme}})",
   "settings.appearance.usingBundledFallback": "mitgeliefertes Fallback wird verwendet",
@@ -1431,7 +1431,7 @@
   "settings.permissions.noCustomPermissions": "Keine benutzerdefinierten Berechtigungen konfiguriert.",
   "settings.permissions.noCustomPermissionsDesc": "Erstellen Sie eine permissions.json-Datei in Ihrem Workspace, um benutzerdefinierte Regeln hinzuzufügen.",
   "settings.permissions.noDefaultPermissions": "Keine Standardberechtigungen gefunden.",
-  "settings.permissions.noDefaultPermissionsDesc": "Standardberechtigungen sollten unter ~/.craft-agent/permissions/default.json liegen",
+  "settings.permissions.noDefaultPermissionsDesc": "Standardberechtigungen sollten unter ~/.tokenbird/permissions/default.json liegen",
   "settings.permissions.title": "Berechtigungen",
   "settings.permissions.workspaceCustomizations": "Workspace-Anpassungen",
   "settings.permissions.workspaceCustomizationsDesc": "Workspace-weite Muster, die die obigen App-Standards erweitern.",
@@ -2156,5 +2156,5 @@
   "workspace.selectWorkspaceDesc": "Workspace auf diesem Server wählen oder neuen erstellen.",
   "workspace.selectWorkspacePlaceholder": "Workspace auswählen...",
   "workspace.serverAuthToken": "Server-Authentifizierungstoken",
-  "workspace.underDefaultFolder": "im .craft-agent-Ordner"
+  "workspace.underDefaultFolder": "im .tokenbird-Ordner"
 }

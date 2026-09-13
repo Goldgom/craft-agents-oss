@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const originalCwd = process.cwd();
-const originalConfigDir = process.env.CRAFT_CONFIG_DIR;
+const originalConfigDir = process.env.TOKENBIRD_CONFIG_DIR;
 
 /**
  * rmSync with brief retries. On Windows, freshly-written files can be
@@ -30,8 +30,8 @@ function rmSyncWithRetry(dir: string): void {
 
 afterEach(() => {
   process.chdir(originalCwd);
-  if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR;
-  else process.env.CRAFT_CONFIG_DIR = originalConfigDir;
+  if (originalConfigDir === undefined) delete process.env.TOKENBIRD_CONFIG_DIR;
+  else process.env.TOKENBIRD_CONFIG_DIR = originalConfigDir;
 });
 
 describe('ensureDefaultPermissions migration', () => {
@@ -77,7 +77,7 @@ describe('ensureDefaultPermissions migration', () => {
       }, null, 2)
     );
 
-    process.env.CRAFT_CONFIG_DIR = tempConfig;
+    process.env.TOKENBIRD_CONFIG_DIR = tempConfig;
     process.chdir(tempRoot);
 
     const mod = await import(`../permissions-config.ts?case=${Date.now()}`);

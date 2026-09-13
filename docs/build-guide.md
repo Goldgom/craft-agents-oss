@@ -293,7 +293,7 @@ docker run --rm -p 9100:9100 \
   -e CRAFT_RPC_TLS_CERT=/certs/cert.pem \
   -e CRAFT_RPC_TLS_KEY=/certs/key.pem \
   -v /path/to/certs:/certs:ro \
-  -v ~/.craft-agent:/home/craftagents/.craft-agent \
+  -v ~/.tokenbird:/home/craftagents/.tokenbird \
   craft-agent-server
 ```
 

@@ -24,7 +24,7 @@
  * audit log.
  *
  * Every decision — lease issued, action executed/rejected/cancelled — is
- * appended to a durable JSONL audit log (~/.craft-agent/logs/page-actions.jsonl),
+ * appended to a durable JSONL audit log (~/.tokenbird/logs/page-actions.jsonl),
  * with caller-supplied objects redacted by key name.
  */
 

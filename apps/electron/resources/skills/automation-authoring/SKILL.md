@@ -5,7 +5,7 @@ description: Create or update event-driven automations, cron schedules, and back
 
 # Automation authoring
 
-Use this skill when the user wants work to begin after an application event, on a schedule, or after a monitor detects a signal. Read `~/.craft-agent/docs/automations.md` before changing configuration.
+Use this skill when the user wants work to begin after an application event, on a schedule, or after a monitor detects a signal. Read `~/.tokenbird/docs/automations.md` before changing configuration.
 
 ## Choose the trigger
 

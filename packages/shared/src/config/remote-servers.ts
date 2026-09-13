@@ -82,7 +82,7 @@ export interface RemoteServerProfileInfo {
 export function getRemoteServersPath(): string {
   // Read the override dynamically so tests and embedded clients can isolate
   // their local profile registry even if config modules were loaded earlier.
-  return join(process.env.CRAFT_CONFIG_DIR || CONFIG_DIR, 'remote-servers.json');
+  return join(process.env.TOKENBIRD_CONFIG_DIR || CONFIG_DIR, 'remote-servers.json');
 }
 
 /** Load all profiles (raw, including tokens — main process only). */

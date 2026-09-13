@@ -49,7 +49,7 @@ import {
 export interface ImportAllDataOptions {
   /** Absolute path of the backup .zip produced by exportAllData. */
   sourcePath: string;
-  /** Target config dir (defaults to ~/.craft-agent). Test seam. */
+  /** Target config dir (defaults to ~/.tokenbird). Test seam. */
   configDir?: string;
   /** Base dir where workspace app data is restored (default: default workspaces dir). */
   workspacesBaseDir?: string;

@@ -3,7 +3,7 @@
 set -e
 
 VERSIONS_URL="https://openai.goldgom.top/tokenbird/electron"
-DOWNLOAD_DIR="$HOME/.craft-agent/downloads"
+DOWNLOAD_DIR="$HOME/.tokenbird/downloads"
 
 # Colors for output
 RED='\033[0;31m'
@@ -315,7 +315,7 @@ else
     appimage_path="$installer_path"
 
     # New paths
-    APP_DIR="$HOME/.craft-agent/app"
+    APP_DIR="$HOME/.tokenbird/app"
     WRAPPER_PATH="$INSTALL_DIR/tokenbird"
     APPIMAGE_INSTALL_PATH="$APP_DIR/TokenBird-x64.AppImage"
 
@@ -344,7 +344,7 @@ else
 #!/bin/bash
 # TokenBird launcher - handles Linux-specific AppImage issues
 
-APPIMAGE_PATH="$HOME/.craft-agent/app/TokenBird-x64.AppImage"
+APPIMAGE_PATH="$HOME/.tokenbird/app/TokenBird-x64.AppImage"
 ELECTRON_CACHE="$HOME/.config/@craft-agent"
 ELECTRON_CACHE_ALT="$HOME/.cache/@craft-agent"
 

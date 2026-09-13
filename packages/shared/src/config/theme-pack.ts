@@ -3,7 +3,7 @@
  *
  * A theme pack bundles artwork (background image, chat texture, sidebar
  * texture) with a JSON manifest describing basic style settings. Packs live
- * in `~/.craft-agent/theme-packs/<pack-id>/`.
+ * in `~/.tokenbird/theme-packs/<pack-id>/`.
  *
  * Format (native):
  * ```
@@ -210,10 +210,10 @@ const MANIFEST_FILENAMES = ['theme-pack.json', 'skin.json'] as const;
 
 /** Root directory where theme packs are installed. */
 export function getThemePacksDir(): string {
-  // Read env dynamically so tests can isolate via CRAFT_CONFIG_DIR.
-  // CRAFT_THEME_PACKS_DIR lets a desktop/web shell explicitly choose the
+  // Read env dynamically so tests can isolate via TOKENBIRD_CONFIG_DIR.
+  // TOKENBIRD_THEME_PACKS_DIR lets a desktop/web shell explicitly choose the
   // writable pack location without changing the rest of the config root.
-  return process.env.CRAFT_THEME_PACKS_DIR || join(process.env.CRAFT_CONFIG_DIR || CONFIG_DIR, 'theme-packs');
+  return process.env.TOKENBIRD_THEME_PACKS_DIR || join(process.env.TOKENBIRD_CONFIG_DIR || CONFIG_DIR, 'theme-packs');
 }
 
 /** Read-only theme packs bundled by the Electron build. */

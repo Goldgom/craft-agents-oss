@@ -35,7 +35,7 @@ TokenBird uses **the identical SKILL.md format** as the Claude Code SDK. This me
 
 When a skill is invoked (e.g., `/commit`):
 
-1. **Workspace skill checked first** - If `~/.craft-agent/workspaces/{id}/skills/commit/SKILL.md` exists, it's used
+1. **Workspace skill checked first** - If `~/.tokenbird/workspaces/{id}/skills/commit/SKILL.md` exists, it's used
 2. **SDK skill as fallback** - If no workspace skill exists, the built-in SDK skill is used
 
 This allows you to:
@@ -47,7 +47,7 @@ This allows you to:
 
 Skills are stored as folders:
 ```
-~/.craft-agent/workspaces/{workspaceId}/skills/{slug}/
+~/.tokenbird/workspaces/{workspaceId}/skills/{slug}/
 ├── SKILL.md          # Required: Skill definition (same format as Claude Code SDK)
 ├── icon.svg          # Recommended: Skill icon for UI display
 ├── icon.png          # Alternative: PNG icon
@@ -133,7 +133,7 @@ requiredSources:
 ### 1. Create the skill directory
 
 ```bash
-mkdir -p ~/.craft-agent/workspaces/{ws}/skills/my-skill
+mkdir -p ~/.tokenbird/workspaces/{ws}/skills/my-skill
 ```
 
 ### 2. Write SKILL.md
@@ -298,7 +298,7 @@ session — no manual toggle needed.
 
 To customize a built-in SDK skill like `/commit`:
 
-1. Create `~/.craft-agent/workspaces/{ws}/skills/commit/SKILL.md`
+1. Create `~/.tokenbird/workspaces/{ws}/skills/commit/SKILL.md`
 2. Write your custom instructions
 3. Add an icon
 4. Run `skill_validate({ skillSlug: "commit" })`

@@ -58,7 +58,7 @@ const WORKSPACE_DIRS = [
 export interface ExportAllDataOptions {
   /** Absolute path of the output .zip file (parent must exist). */
   destPath: string;
-  /** Override config dir (defaults to ~/.craft-agent). Test seam. */
+  /** Override config dir (defaults to ~/.tokenbird). Test seam. */
   configDir?: string;
   /** Include credentials.enc. It is OS-encrypted and usually useless elsewhere. */
   includeCredentials?: boolean;

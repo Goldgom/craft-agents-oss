@@ -1,7 +1,7 @@
 /**
  * Tests for remote server profile storage (remote-servers.json).
  *
- * CONFIG_DIR is captured at module load from CRAFT_CONFIG_DIR, so each test
+ * CONFIG_DIR is captured at module load from TOKENBIRD_CONFIG_DIR, so each test
  * points the env at a fresh temp dir and re-imports the module.
  */
 
@@ -12,24 +12,24 @@ import { join } from 'node:path';
 
 type RemoteServersModule = typeof import('../remote-servers.ts');
 
-// CONFIG_DIR is captured at module load from CRAFT_CONFIG_DIR. Import the
+// CONFIG_DIR is captured at module load from TOKENBIRD_CONFIG_DIR. Import the
 // module ONCE against a single temp dir and share it for the whole file —
 // bun caches modules, so re-importing after swapping env would still point at
 // the first (deleted) temp dir.
 let tempDir = '';
 let mod: RemoteServersModule;
-const originalConfigDir = process.env.CRAFT_CONFIG_DIR;
+const originalConfigDir = process.env.TOKENBIRD_CONFIG_DIR;
 
 beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'remote-servers-'));
-  process.env.CRAFT_CONFIG_DIR = tempDir;
+  process.env.TOKENBIRD_CONFIG_DIR = tempDir;
   mod = await import('../remote-servers.ts');
 });
 
 afterAll(() => {
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
-  if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR;
-  else process.env.CRAFT_CONFIG_DIR = originalConfigDir;
+  if (originalConfigDir === undefined) delete process.env.TOKENBIRD_CONFIG_DIR;
+  else process.env.TOKENBIRD_CONFIG_DIR = originalConfigDir;
 });
 
 describe('normalizeServerUrl', () => {

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { permissionsConfigCache } from '../permissions-config.ts'
 
-const originalConfigDir = process.env.CRAFT_CONFIG_DIR
+const originalConfigDir = process.env.TOKENBIRD_CONFIG_DIR
 const originalCliFlag = process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI
 
 function writeDefaultPermissions(configDir: string) {
@@ -37,8 +37,8 @@ beforeEach(() => {
 afterEach(() => {
   permissionsConfigCache.clear()
 
-  if (originalConfigDir === undefined) delete process.env.CRAFT_CONFIG_DIR
-  else process.env.CRAFT_CONFIG_DIR = originalConfigDir
+  if (originalConfigDir === undefined) delete process.env.TOKENBIRD_CONFIG_DIR
+  else process.env.TOKENBIRD_CONFIG_DIR = originalConfigDir
 
   if (originalCliFlag === undefined) delete process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI
   else process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI = originalCliFlag
@@ -48,7 +48,7 @@ describe('permissions config craft-agents-cli feature flag', () => {
   it('skips compiling craft-agent bash allowlist patterns when feature is disabled', () => {
     const tempConfigDir = mkdtempSync(join(tmpdir(), 'craft-permissions-'))
     try {
-      process.env.CRAFT_CONFIG_DIR = tempConfigDir
+      process.env.TOKENBIRD_CONFIG_DIR = tempConfigDir
       process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI = '0'
       writeDefaultPermissions(tempConfigDir)
 
@@ -68,7 +68,7 @@ describe('permissions config craft-agents-cli feature flag', () => {
   it('compiles craft-agent bash allowlist patterns when feature is enabled', () => {
     const tempConfigDir = mkdtempSync(join(tmpdir(), 'craft-permissions-'))
     try {
-      process.env.CRAFT_CONFIG_DIR = tempConfigDir
+      process.env.TOKENBIRD_CONFIG_DIR = tempConfigDir
       process.env.CRAFT_FEATURE_CRAFT_AGENTS_CLI = '1'
       writeDefaultPermissions(tempConfigDir)
 

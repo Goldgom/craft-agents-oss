@@ -70,7 +70,7 @@ function runMigration(configDir: string) {
   ], {
     env: {
       ...process.env,
-      CRAFT_CONFIG_DIR: configDir,
+      TOKENBIRD_CONFIG_DIR: configDir,
     },
     stdout: 'pipe',
     stderr: 'pipe',

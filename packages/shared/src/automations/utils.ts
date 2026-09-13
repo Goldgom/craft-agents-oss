@@ -336,7 +336,7 @@ export interface ScriptEnvOptions {
  * Unlike buildEnvFromPayload (prompt actions), process.env is NOT spread —
  * a script's env is exactly:
  * - every CRAFT_* var from process.env (runtime hints like CRAFT_BUN/CRAFT_UV,
- *   user-defined CRAFT_* secrets, CRAFT_CONFIG_DIR, ...)
+ *   user-defined CRAFT_* secrets, TOKENBIRD_CONFIG_DIR, ...)
  * - CRAFT_* event context (same base as webhooks; no shell sanitization —
  *   values are argv/env payloads, never interpreted by a shell)
  * - CRAFT_WORKSPACE_PATH and, for page refreshes, CRAFT_PAGE_SLUG /

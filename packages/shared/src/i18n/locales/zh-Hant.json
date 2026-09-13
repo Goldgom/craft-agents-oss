@@ -1077,7 +1077,7 @@
   "settings.appearance.title": "外觀",
   "settings.appearance.toolHeader": "工具",
   "settings.appearance.toolIcons": "工具圖示",
-  "settings.appearance.toolIconsDesc": "聊天活動中命令列命令旁顯示的圖示。儲存在 ~/.craft-agent/tool-icons/。",
+  "settings.appearance.toolIconsDesc": "聊天活動中命令列命令旁顯示的圖示。儲存在 ~/.tokenbird/tool-icons/。",
   "settings.appearance.useDefault": "使用預設",
   "settings.appearance.useDefaultWithTheme": "使用預設 ({{theme}})",
   "settings.appearance.usingBundledFallback": "使用內建備選",
@@ -1431,7 +1431,7 @@
   "settings.permissions.noCustomPermissions": "未配置自定義許可權。",
   "settings.permissions.noCustomPermissionsDesc": "在 工作區 中建立 permissions.json 檔案以新增自定義規則。",
   "settings.permissions.noDefaultPermissions": "未找到預設許可權。",
-  "settings.permissions.noDefaultPermissionsDesc": "預設許可權應位於 ~/.craft-agent/permissions/default.json",
+  "settings.permissions.noDefaultPermissionsDesc": "預設許可權應位於 ~/.tokenbird/permissions/default.json",
   "settings.permissions.title": "許可權",
   "settings.permissions.workspaceCustomizations": "工作區 自定義",
   "settings.permissions.workspaceCustomizationsDesc": "工作區 級別的模式，擴充套件上述應用預設值。",
@@ -2156,5 +2156,5 @@
   "workspace.selectWorkspaceDesc": "選擇此伺服器上的工作區或建立新的。",
   "workspace.selectWorkspacePlaceholder": "選擇工作區...",
   "workspace.serverAuthToken": "伺服器認證令牌",
-  "workspace.underDefaultFolder": ".craft-agent 資料夾下"
+  "workspace.underDefaultFolder": ".tokenbird 資料夾下"
 }

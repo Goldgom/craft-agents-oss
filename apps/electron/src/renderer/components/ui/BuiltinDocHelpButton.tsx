@@ -25,7 +25,7 @@ export function BuiltinDocHelpButton({
   const showHelp = async () => {
     setLoading(true)
     try {
-      const markdown = await window.electronAPI.readFile(`~/.craft-agent/docs/${docFile}`)
+      const markdown = await window.electronAPI.readFile(`~/.tokenbird/docs/${docFile}`)
       setContent(markdown)
       setOpen(true)
     } catch {

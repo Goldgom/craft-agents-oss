@@ -1077,7 +1077,7 @@
   "settings.appearance.title": "Megjelenés",
   "settings.appearance.toolHeader": "Eszköz",
   "settings.appearance.toolIcons": "Eszközikonok",
-  "settings.appearance.toolIconsDesc": "A CLI parancsok mellett megjelenő ikonok a csevegési tevékenységben. Tárolás helye: ~/.craft-agent/tool-icons/.",
+  "settings.appearance.toolIconsDesc": "A CLI parancsok mellett megjelenő ikonok a csevegési tevékenységben. Tárolás helye: ~/.tokenbird/tool-icons/.",
   "settings.appearance.useDefault": "Alapértelmezett használata",
   "settings.appearance.useDefaultWithTheme": "Alapértelmezett használata ({{theme}})",
   "settings.appearance.usingBundledFallback": "csomagolt tartalék használata",
@@ -1431,7 +1431,7 @@
   "settings.permissions.noCustomPermissions": "Nincsenek beállított egyéni engedélyek.",
   "settings.permissions.noCustomPermissionsDesc": "Hozz létre egy permissions.json fájlt a munkaterületen egyéni szabályok hozzáadásához.",
   "settings.permissions.noDefaultPermissions": "Nem találhatók alapértelmezett engedélyek.",
-  "settings.permissions.noDefaultPermissionsDesc": "Az alapértelmezett engedélyeknek itt kell lenniük: ~/.craft-agent/permissions/default.json",
+  "settings.permissions.noDefaultPermissionsDesc": "Az alapértelmezett engedélyeknek itt kell lenniük: ~/.tokenbird/permissions/default.json",
   "settings.permissions.title": "Engedélyek",
   "settings.permissions.workspaceCustomizations": "Munkaterület-testreszabások",
   "settings.permissions.workspaceCustomizationsDesc": "Munkaterület-szintű minták, amelyek kiterjesztik a fenti alkalmazás-alapértelmezéseket.",
@@ -2156,5 +2156,5 @@
   "workspace.selectWorkspaceDesc": "Válassz egy munkaterületet ezen a szerveren, vagy hozz létre újat.",
   "workspace.selectWorkspacePlaceholder": "Válassz munkaterületet...",
   "workspace.serverAuthToken": "Szerver hitelesítési token",
-  "workspace.underDefaultFolder": "a .craft-agent mappában"
+  "workspace.underDefaultFolder": "a .tokenbird mappában"
 }

@@ -1077,7 +1077,7 @@
   "settings.appearance.title": "Внешний вид",
   "settings.appearance.toolHeader": "Инструмент",
   "settings.appearance.toolIcons": "Значки инструментов",
-  "settings.appearance.toolIconsDesc": "Значки, отображаемые рядом с командами CLI в чате. Хранится в ~/.craft-agent/tool-icons/..",
+  "settings.appearance.toolIconsDesc": "Значки, отображаемые рядом с командами CLI в чате. Хранится в ~/.tokenbird/tool-icons/..",
   "settings.appearance.useDefault": "Использовать по умолчанию",
   "settings.appearance.useDefaultWithTheme": "Использовать значение по умолчанию ({{theme}})",
   "settings.appearance.usingBundledFallback": "использование встроенного резервного варианта",
@@ -1431,7 +1431,7 @@
   "settings.permissions.noCustomPermissions": "Пользовательские разрешения не настроены.",
   "settings.permissions.noCustomPermissionsDesc": "Создайте файл Permissions.json в своем рабочем пространстве, чтобы добавить собственные правила.",
   "settings.permissions.noDefaultPermissions": "Разрешения по умолчанию не найдены.",
-  "settings.permissions.noDefaultPermissionsDesc": "Разрешения по умолчанию должны быть по адресу ~/.craft-agent/permissions/default.json.",
+  "settings.permissions.noDefaultPermissionsDesc": "Разрешения по умолчанию должны быть по адресу ~/.tokenbird/permissions/default.json.",
   "settings.permissions.title": "Разрешения",
   "settings.permissions.workspaceCustomizations": "Настройки рабочего пространства",
   "settings.permissions.workspaceCustomizationsDesc": "Шаблоны уровня рабочей области, расширяющие параметры приложения по умолчанию, описанные выше.",
@@ -2156,5 +2156,5 @@
   "workspace.selectWorkspaceDesc": "Выберите рабочее пространство на этом сервере или создайте новое.",
   "workspace.selectWorkspacePlaceholder": "Выберите рабочее место...",
   "workspace.serverAuthToken": "Токен аутентификации сервера",
-  "workspace.underDefaultFolder": "в папке .craft-agent"
+  "workspace.underDefaultFolder": "в папке .tokenbird"
 }

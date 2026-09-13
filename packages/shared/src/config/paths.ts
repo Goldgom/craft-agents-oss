@@ -1,19 +1,27 @@
 /**
  * Centralized path configuration for TokenBird.
  *
- * Supports multi-instance development via CRAFT_CONFIG_DIR environment variable.
- * When running from a numbered folder (e.g., craft-tui-agent-1), the detect-instance.sh
- * script sets CRAFT_CONFIG_DIR to ~/.craft-agent-1, allowing multiple instances to run
+ * Supports multi-instance development via TOKENBIRD_CONFIG_DIR environment variable.
+ * When running from a numbered folder, the development launcher sets
+ * TOKENBIRD_CONFIG_DIR to ~/.tokenbird-1, allowing multiple instances to run
  * simultaneously with separate configurations.
  *
- * Default (non-numbered folders): ~/.craft-agent/
- * Instance 1 (-1 suffix): ~/.craft-agent-1/
- * Instance 2 (-2 suffix): ~/.craft-agent-2/
+ * Default (non-numbered folders): ~/.tokenbird/
+ * Instance 1 (-1 suffix): ~/.tokenbird-1/
+ * Instance 2 (-2 suffix): ~/.tokenbird-2/
  */
 
 import { homedir } from 'os';
 import { join } from 'path';
 
-// Allow override via environment variable for multi-instance dev
-// Falls back to default ~/.craft-agent/ for production and non-numbered dev folders
-export const CONFIG_DIR = process.env.CRAFT_CONFIG_DIR || join(homedir(), '.craft-agent');
+/** TokenBird-owned data must never fall back to Craft Agents' legacy directory. */
+export const CONFIG_DIR_ENV = 'TOKENBIRD_CONFIG_DIR';
+export const CONFIG_DIR_NAME = '.tokenbird';
+
+/** Resolve dynamically for tests and development launchers that set the env at runtime. */
+export function getConfigDir(): string {
+  return process.env[CONFIG_DIR_ENV] || join(homedir(), CONFIG_DIR_NAME);
+}
+
+// Most consumers capture the directory once at module load.
+export const CONFIG_DIR = getConfigDir();

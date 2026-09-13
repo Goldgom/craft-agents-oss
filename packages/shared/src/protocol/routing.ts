@@ -92,7 +92,7 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.theme.BROADCAST_WORKSPACE_THEME,
   RPC_CHANNELS.theme.WORKSPACE_THEME_CHANGED,
 
-  // theme packs — local install dir (~/.craft-agent/theme-packs) + native folder dialog
+  // theme packs — local install dir (~/.tokenbird/theme-packs) + native folder dialog
   RPC_CHANNELS.theme.GET_PACKS,
   RPC_CHANNELS.theme.GET_PACKS_DIR,
   RPC_CHANNELS.theme.GET_PACK,

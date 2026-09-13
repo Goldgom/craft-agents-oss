@@ -186,7 +186,7 @@ export class CollaborationManager {
     return member
   }
   private identity(member: Pick<CollaborationMember, 'sessionId' | 'workspaceId' | 'serverUrl'>): string { return `${member.serverUrl ?? 'local'}:${member.workspaceId}:${member.sessionId}` }
-  private directory(workspaceId: string): string { return join(this.rootForWorkspace(workspaceId), '.craft-agent', 'collaborations') }
+  private directory(workspaceId: string): string { return join(this.rootForWorkspace(workspaceId), '.tokenbird', 'collaborations') }
   private path(groupId: string, workspaceId: string): string { return join(this.directory(workspaceId), `${groupId}.json`) }
   private filesDirectory(group: CollaborationGroup): string { return join(this.directory(group.members.find(member => member.id === group.primaryMemberId)!.workspaceId), group.id, 'files') }
   private safeFileId(name: string): string { return createHash('sha256').update(name).digest('hex') }

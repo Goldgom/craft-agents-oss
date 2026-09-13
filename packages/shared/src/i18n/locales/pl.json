@@ -1077,7 +1077,7 @@
   "settings.appearance.title": "Wygląd",
   "settings.appearance.toolHeader": "Narzędzie",
   "settings.appearance.toolIcons": "Ikony narzędzi",
-  "settings.appearance.toolIconsDesc": "Ikony wyświetlane obok poleceń CLI w aktywności czatu. Przechowywane w ~/.craft-agent/tool-icons/.",
+  "settings.appearance.toolIconsDesc": "Ikony wyświetlane obok poleceń CLI w aktywności czatu. Przechowywane w ~/.tokenbird/tool-icons/.",
   "settings.appearance.useDefault": "Użyj domyślnego",
   "settings.appearance.useDefaultWithTheme": "Użyj domyślnego ({{theme}})",
   "settings.appearance.usingBundledFallback": "używa dołączonego zamiennika",
@@ -1431,7 +1431,7 @@
   "settings.permissions.noCustomPermissions": "Brak skonfigurowanych niestandardowych uprawnień.",
   "settings.permissions.noCustomPermissionsDesc": "Utwórz plik permissions.json w swoim Workspace, aby dodać niestandardowe reguły.",
   "settings.permissions.noDefaultPermissions": "Nie znaleziono domyślnych uprawnień.",
-  "settings.permissions.noDefaultPermissionsDesc": "Domyślne uprawnienia powinny znajdować się w ~/.craft-agent/permissions/default.json",
+  "settings.permissions.noDefaultPermissionsDesc": "Domyślne uprawnienia powinny znajdować się w ~/.tokenbird/permissions/default.json",
   "settings.permissions.title": "Uprawnienia",
   "settings.permissions.workspaceCustomizations": "Dostosowania Workspace",
   "settings.permissions.workspaceCustomizationsDesc": "Wzorce na poziomie Workspace rozszerzające domyślne ustawienia aplikacji powyżej.",
@@ -2156,5 +2156,5 @@
   "workspace.selectWorkspaceDesc": "Wybierz Workspace na tym serwerze lub utwórz nowy.",
   "workspace.selectWorkspacePlaceholder": "Wybierz Workspace...",
   "workspace.serverAuthToken": "Token uwierzytelniający serwera",
-  "workspace.underDefaultFolder": "w folderze .craft-agent"
+  "workspace.underDefaultFolder": "w folderze .tokenbird"
 }

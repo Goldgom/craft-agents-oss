@@ -5,7 +5,7 @@ description: Create reusable SKILL.md instruction sets that activate for a focus
 
 # Skill authoring
 
-Use this skill when creating or editing a workspace Skill. Read `~/.craft-agent/docs/skills.md` first.
+Use this skill when creating or editing a workspace Skill. Read `~/.tokenbird/docs/skills.md` first.
 
 Create `skills/<slug>/SKILL.md` with YAML frontmatter containing a concise `name` and a discriminating `description`. Use a lowercase-hyphenated folder name. The description should say what the skill does and when it applies, not list every possible task.
 

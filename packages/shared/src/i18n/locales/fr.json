@@ -1077,7 +1077,7 @@
   "settings.appearance.title": "Apparence",
   "settings.appearance.toolHeader": "Outil",
   "settings.appearance.toolIcons": "Icônes d'outils",
-  "settings.appearance.toolIconsDesc": "Icônes affichées à côté des commandes CLI dans l'activité de chat. Stocké dans ~/.craft-agent/tool-icons/.",
+  "settings.appearance.toolIconsDesc": "Icônes affichées à côté des commandes CLI dans l'activité de chat. Stocké dans ~/.tokenbird/tool-icons/.",
   "settings.appearance.useDefault": "Utiliser par défaut",
   "settings.appearance.useDefaultWithTheme": "Utiliser la valeur par défaut ({{theme}})",
   "settings.appearance.usingBundledFallback": "utiliser la solution de secours groupée",
@@ -1431,7 +1431,7 @@
   "settings.permissions.noCustomPermissions": "Aucune autorisation personnalisée configurée.",
   "settings.permissions.noCustomPermissionsDesc": "Créez un fichier permissions.json dans votre espace de travail pour ajouter des règles personnalisées.",
   "settings.permissions.noDefaultPermissions": "Aucune autorisation par défaut trouvée.",
-  "settings.permissions.noDefaultPermissionsDesc": "Les autorisations par défaut doivent être sur ~/.craft-agent/permissions/default.json",
+  "settings.permissions.noDefaultPermissionsDesc": "Les autorisations par défaut doivent être sur ~/.tokenbird/permissions/default.json",
   "settings.permissions.title": "Autorisations",
   "settings.permissions.workspaceCustomizations": "Personnalisations de l'espace de travail",
   "settings.permissions.workspaceCustomizationsDesc": "Modèles au niveau de l’espace de travail qui étendent les valeurs par défaut de l’application ci-dessus.",
@@ -2156,5 +2156,5 @@
   "workspace.selectWorkspaceDesc": "Choisissez un espace de travail sur ce serveur ou créez-en un nouveau.",
   "workspace.selectWorkspacePlaceholder": "Sélectionnez un espace de travail...",
   "workspace.serverAuthToken": "Jeton d'authentification du serveur",
-  "workspace.underDefaultFolder": "dans le dossier .craft-agent"
+  "workspace.underDefaultFolder": "dans le dossier .tokenbird"
 }
