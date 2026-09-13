@@ -9,7 +9,7 @@
  *
  * Deliberately excluded:
  *   - Project source files inside workspace roots (only app data is exported)
- *   - Bundled/cached assets (docs, themes, logs, release-notes, ...)
+ *   - Bundled/cached assets (docs, themes, logs, ...)
  *   - credentials.enc (OS-encrypted; cannot be decrypted on another machine)
  *     unless `includeCredentials` is set explicitly.
  */

@@ -415,10 +415,6 @@ export const RPC_CHANNELS = {
     DRAW: 'badge:draw',
     DRAW_WINDOWS: 'badge:draw-windows',
   },
-  releaseNotes: {
-    GET: 'releaseNotes:get',
-    GET_LATEST_VERSION: 'releaseNotes:getLatestVersion',
-  },
   git: {
     GET_BRANCH: 'git:getBranch',
   },

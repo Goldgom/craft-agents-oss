@@ -471,10 +471,6 @@ export interface ElectronAPI {
   onUpdateAvailable(callback: (info: UpdateInfo) => void): () => void
   onUpdateDownloadProgress(callback: (progress: number) => void): () => void
 
-  // Release notes
-  getReleaseNotes(): Promise<string>
-  getLatestReleaseVersion(): Promise<string | undefined>
-
   // System warnings (startup checks)
   getSystemWarnings(): Promise<{ vcredistMissing: boolean; downloadUrl?: string }>
 

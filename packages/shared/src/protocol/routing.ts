@@ -113,10 +113,6 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.update.AVAILABLE,
   RPC_CHANNELS.update.DOWNLOAD_PROGRESS,
 
-  // releaseNotes — local app info
-  RPC_CHANNELS.releaseNotes.GET,
-  RPC_CHANNELS.releaseNotes.GET_LATEST_VERSION,
-
   // badge — local dock badge
   RPC_CHANNELS.badge.REFRESH,
   RPC_CHANNELS.badge.SET_ICON,

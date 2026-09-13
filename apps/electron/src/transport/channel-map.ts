@@ -111,10 +111,6 @@ export const CHANNEL_MAP = {
   onUpdateAvailable: listener(RPC_CHANNELS.update.AVAILABLE),
   onUpdateDownloadProgress: listener(RPC_CHANNELS.update.DOWNLOAD_PROGRESS),
 
-  // Release notes
-  getReleaseNotes: invoke(RPC_CHANNELS.releaseNotes.GET),
-  getLatestReleaseVersion: invoke(RPC_CHANNELS.releaseNotes.GET_LATEST_VERSION),
-
   // Shell operations
   openUrl: invoke(RPC_CHANNELS.shell.OPEN_URL),
   openFile: invoke(RPC_CHANNELS.shell.OPEN_FILE),

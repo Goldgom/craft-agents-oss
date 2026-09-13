@@ -17,7 +17,6 @@ This folder contains assets that are bundled with the Electron app and synced to
 | `themes/` | `~/.tokenbird/themes/` | Always overwrite on launch |
 | `permissions/` | `~/.tokenbird/permissions/` | Always overwrite on launch |
 | `tool-icons/` | `~/.tokenbird/tool-icons/` | Always overwrite on launch |
-| `release-notes/` | `~/.tokenbird/release-notes/` | Always overwrite on launch |
 | `config-defaults.json` | `~/.tokenbird/config-defaults.json` | Always overwrite on launch |
 
 ## Why Sync on Every Launch?
@@ -49,11 +48,3 @@ The files in this folder are the **source of truth** for bundled defaults:
 - Edit files in `themes/` to update bundled themes
 
 There is no TypeScript fallback - if the bundled JSON file is missing, the app will fail with a clear error.
-
-## Release Notes Authoring
-
-**Never create `{version}.md` files in feature commits.** Versioned files in `release-notes/` are owned by the release skill — it consolidates pending entries into `{version}.md` at release-prep time and resets the scratch file.
-
-For PRs that add user-visible behavior, append a bullet to the relevant section in [`release-notes/next.md`](release-notes/next.md). Match the tone and depth of recent versioned files (e.g. `0.9.0.md`): bold short title — detailed paragraph — issue reference — commit hash.
-
-**Why this exists:** during v0.9.0 prep, two feature commits had pre-emptively written `0.8.14.md` and `0.8.15.md` (guessing patch releases), but the changes ended up rolled into a minor. Both files had to be deleted and folded back in — without that cleanup, they would have surfaced as ghost versions in the in-app release-notes panel.
