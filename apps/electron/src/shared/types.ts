@@ -876,8 +876,12 @@ export interface ElectronAPI {
 
   // Session collaboration
   createCollaboration(primarySessionId: string, secondarySessions: Array<{ sessionId: string; workspaceId: string; serverUrl?: string; name?: string }>): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>
+  getCollaboration(groupId: string, coordinatorWorkspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>
   listCollaborations(workspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationGroup[]>
   listCollaborationCandidates(): Promise<Session[]>
+  getCollaborationFile(groupId: string, coordinatorWorkspaceId: string, fileId: string): Promise<{ file: import('@craft-agent/shared/protocol').CollaborationFile; dataBase64: string }>
+  retryCollaborationDelivery(groupId: string, coordinatorWorkspaceId: string, operationId: string): Promise<{ group: import('@craft-agent/shared/protocol').CollaborationGroup; delivery: string }>
+  endCollaboration(groupId: string, coordinatorWorkspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>
   onCollaborationChanged(callback: (event: { groupId: string; revision: number }) => void): () => void
 
   // Language

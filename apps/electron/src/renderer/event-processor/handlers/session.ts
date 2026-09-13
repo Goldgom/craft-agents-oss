@@ -761,9 +761,8 @@ export function handleSessionStatusChanged(
 }
 
 /**
- * Handle session_metadata_changed - merge programmatic metadata changes (taskNodeCount,
- * kanbanColumn, and the taskDraft→taskSlug promotion on orchestrator adoption) that don't
- * propagate via the header-signature file watch.
+ * Handle session_metadata_changed - merge programmatic task/collaboration
+ * metadata changes that don't propagate via the header-signature file watch.
  */
 export function handleSessionMetadataChanged(
   state: SessionState,

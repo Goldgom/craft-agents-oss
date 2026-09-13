@@ -89,7 +89,17 @@ import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/s
 import { createApplicationMenu } from './menu'
 import { WindowManager } from './window-manager'
 import { loadWindowState, saveWindowState } from './window-state'
-import { getWorkspaces, getWorkspaceByNameOrId, loadStoredConfig, addWorkspace, saveConfig, getStartupServerLocation, setStartupServerLocation } from '@craft-agent/shared/config'
+import {
+  getWorkspaces,
+  getWorkspaceByNameOrId,
+  loadStoredConfig,
+  addWorkspace,
+  saveConfig,
+  getStartupServerLocation,
+  setStartupServerLocation,
+  requestWorkspaceSelectionOnNextLaunch,
+  consumeWorkspaceSelectionOnNextLaunch,
+} from '@craft-agent/shared/config'
 import { loadRemoteServerProfiles, getRemoteServerProfile, upsertRemoteServerProfile, deleteRemoteServerProfile, markRemoteServerConnected, toProfileInfo, type RemoteServerProfile, type RemoteServerSftpInput } from '@craft-agent/shared/config/remote-servers'
 import { getDefaultWorkspacesDir } from '@craft-agent/shared/workspaces'
 import { initializeDocs } from '@craft-agent/shared/docs'
@@ -325,6 +335,7 @@ async function relaunchWithServer(target: string): Promise<void> {
     process.env.CRAFT_SERVER_PROFILE_NAME = profile.name
   }
 
+  requestWorkspaceSelectionOnNextLaunch()
   mainLog.info(`[server-switch] Relaunching with target=${target}`)
 
   if (!app.isPackaged) {
@@ -614,13 +625,14 @@ if (!gotTheLock) {
 async function createInitialWindows(): Promise<void> {
   if (!windowManager) return
 
-  // Thin clients do not own the local workspace registry.  Starting with a
-  // locally-created/default workspace here would pass an id unknown to the
-  // selected remote server after a server-mode switch.  Let the renderer
-  // resolve the remote server's first workspace (or create the default one).
-  if (process.env.CRAFT_SERVER_URL) {
+  const selectWorkspaceFirst = consumeWorkspaceSelectionOnNextLaunch()
+
+  // Thin clients do not own the local workspace registry, and switching
+  // server locations must never carry a workspace selection across the
+  // boundary. Open without an id so the renderer shows WorkspacePicker.
+  if (process.env.CRAFT_SERVER_URL || selectWorkspaceFirst) {
     windowManager.createWindow({ workspaceId: '' })
-    mainLog.info('Created thin-client window without a workspace; resolving remote workspace in renderer')
+    mainLog.info('Created initial window without a workspace; waiting for explicit workspace selection')
     return
   }
 

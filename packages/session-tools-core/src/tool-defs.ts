@@ -53,6 +53,7 @@ import {
 import { handleArchiveSession } from './handlers/archive-session.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
 import { handleCollaborationBoard } from './handlers/collaboration-board.ts';
+import { handleCollaborationFile } from './handlers/collaboration-file.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel, handleSendMessagingMedia, handleSendMessagingTemplateCard } from './handlers/messaging.ts';
 import { handleExportResources } from './handlers/export-resources.ts';
 import { handleImportResources } from './handlers/import-resources.ts';
@@ -323,16 +324,30 @@ export const SendAgentMessageSchema = z.object({
   })).optional().describe('Files to include with the message'),
 });
 
+export const CollaborationBoardReadSchema = z.object({
+  action: z.literal('get').describe('Read the members, current shared board, files, and activity history'),
+});
+
+export const CollaborationBoardUpdateSchema = z.object({
+  action: z.literal('set').describe('Create or replace one shared-board item'),
+  itemId: z.string().max(128).describe('Stable key such as goal.current, status.secondary_1, or worklog.secondary_1.latest'),
+  value: z.unknown().describe('JSON-compatible goal, status, work record, decision, or other shared data'),
+});
+
+/** Combined schema retained for handler consumers; registry permissions use the
+ * split read/write schemas below so safe mode can read without granting writes. */
 export const CollaborationBoardSchema = z.discriminatedUnion('action', [
-  z.object({
-    action: z.literal('get').describe('Read the members, current shared board, files, and activity history'),
-  }),
-  z.object({
-    action: z.literal('set').describe('Create or replace one shared-board item'),
-    itemId: z.string().describe('Stable key such as goal.current, status.secondary_1, or worklog.secondary_1.latest'),
-    value: z.unknown().describe('JSON-compatible goal, status, work record, decision, or other shared data'),
-  }),
+  CollaborationBoardReadSchema,
+  CollaborationBoardUpdateSchema,
 ]);
+
+export const CollaborationFileSchema = z.object({
+  action: z.enum(['put', 'get']).describe('Publish a local file or retrieve a shared file'),
+  path: z.string().optional().describe('Absolute local path; required for action=put'),
+  name: z.string().optional().describe('Shared display name for action=put; defaults to the local file name'),
+  contentType: z.string().optional().describe('Optional MIME type for action=put'),
+  fileId: z.string().optional().describe('Shared file ID; required for action=get'),
+});
 
 export const ListMessagingChannelsSchema = z.object({
   sessionId: z.string().optional().describe('Session ID to list bindings for. Defaults to current session.'),
@@ -703,16 +718,26 @@ Never guess or claim "the app restarted" — report exactly what this tool retur
 
   send_agent_message: `Send a message to another session. The message is delivered with your session ID so the target can reply back.
 
+In a collaboration, direct attachments are not supported because request/report retries are text-only. Publish files with collaboration_file first, then mention the shared file in the message.
+
 Use this to coordinate with spawned sessions, send follow-up instructions, or relay information between sessions.
 Use list_sessions to find session IDs, or use the sessionId returned by spawn_session.
 
 The target session receives your message with a sender envelope containing your session ID, so it can use send_agent_message to reply.`,
 
-  collaboration_board: `Read or update the durable shared data board for the current collaboration.
+  collaboration_board: `Read the durable shared data board for the current collaboration.
 
 Use action=get before coordinating so you see the current goal, member list, work records, and recent request/report history.
+The server derives your member identity and serializes revisions; do not put secrets on the shared board.`,
+
+  update_collaboration_board: `Create or replace an item on the durable shared data board for the current collaboration.
+
 Use action=set to publish structured JSON under a stable item ID. Recommended keys are goal.current, status.<memberId>, worklog.<memberId>.latest, and decision.<topic>.
 The server derives your member identity and serializes revisions; do not put secrets on the shared board.`,
+
+  collaboration_file: `Publish or retrieve a durable shared file for the current collaboration.
+
+Use action=put with an absolute local path to publish a file. Use collaboration_board action=get to discover file IDs, then action=get here to materialize a shared file inside the current workspace.`,
 
   list_messaging_channels: `List messaging channels (Telegram, WhatsApp, Lark, WeCom) bound to a session.
 Shows which external chat apps are connected and can send/receive messages.`,
@@ -832,7 +857,9 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'list_background_tasks', description: TOOL_DESCRIPTIONS.list_background_tasks, inputSchema: ListBackgroundTasksSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListBackgroundTasks },
   // Inter-session messaging
   { name: 'send_agent_message', description: TOOL_DESCRIPTIONS.send_agent_message, inputSchema: SendAgentMessageSchema, executionMode: 'registry', safeMode: 'block', handler: handleSendAgentMessage },
-  { name: 'collaboration_board', description: TOOL_DESCRIPTIONS.collaboration_board, inputSchema: CollaborationBoardSchema, executionMode: 'registry', safeMode: 'block', handler: handleCollaborationBoard },
+  { name: 'collaboration_board', description: TOOL_DESCRIPTIONS.collaboration_board, inputSchema: CollaborationBoardReadSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleCollaborationBoard },
+  { name: 'update_collaboration_board', description: TOOL_DESCRIPTIONS.update_collaboration_board, inputSchema: CollaborationBoardUpdateSchema, executionMode: 'registry', safeMode: 'block', handler: handleCollaborationBoard },
+  { name: 'collaboration_file', description: TOOL_DESCRIPTIONS.collaboration_file, inputSchema: CollaborationFileSchema, executionMode: 'registry', safeMode: 'block', handler: handleCollaborationFile },
   // Messaging gateway tools
   { name: 'list_messaging_channels', description: TOOL_DESCRIPTIONS.list_messaging_channels, inputSchema: ListMessagingChannelsSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListMessagingChannels },
   { name: 'unbind_messaging_channel', description: TOOL_DESCRIPTIONS.unbind_messaging_channel, inputSchema: UnbindMessagingChannelSchema, executionMode: 'registry', safeMode: 'block', handler: handleUnbindMessagingChannel },

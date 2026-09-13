@@ -512,6 +512,14 @@ export class WsRpcClient implements RpcClient {
       },
       nextRetryInMs: undefined,
     })
+
+    // A destroyed client is terminal. Release application callbacks eagerly;
+    // the closing WebSocket may remain reachable until its close event drains.
+    this.listeners.clear()
+    this.capabilityHandlers.clear()
+    this.connectionStateListeners.clear()
+    this.anyEventListeners.clear()
+    this.serverChannels = null
   }
 
   get isConnected(): boolean {

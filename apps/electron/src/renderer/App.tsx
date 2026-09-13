@@ -49,6 +49,7 @@ import {
   sessionIdsAtom,
   loadedSessionsAtom,
   forceSessionMessagesReloadAtom,
+  releaseSessionMessagesAtom,
   backgroundTasksAtomFamily,
   extractSessionMeta,
   windowWorkspaceIdAtom,
@@ -1103,6 +1104,13 @@ export default function App() {
                 finishedAt: Date.now(),
               })
             }
+          }
+
+          // Completed background sessions have no mounted ChatPage cleanup to
+          // release the transcript. Keep only metadata until they are opened.
+          if (!updatedSession.isProcessing
+            && !store.get(visibleSessionIdsAtom).has(sessionId)) {
+            void store.set(releaseSessionMessagesAtom, sessionId)
           }
         }
 

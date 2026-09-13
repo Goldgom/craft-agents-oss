@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { ArrowLeft, ChevronRight, Circle, ClipboardList, File, RefreshCw, Users } from 'lucide-react'
+import { ArrowLeft, ChevronRight, Circle, ClipboardList, Download, File, RefreshCw, RotateCcw, Square, Users } from 'lucide-react'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -27,6 +27,7 @@ export default function CollaborationManagementPage() {
   const [sessions, setSessions] = React.useState<SessionLike[]>([])
   const [selectedGroupId, setSelectedGroupId] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [pendingAction, setPendingAction] = React.useState<string | null>(null)
 
   const refresh = React.useCallback(async () => {
     if (!activeWorkspaceId) {
@@ -68,6 +69,59 @@ export default function CollaborationManagementPage() {
       setSelectedGroupId(null)
     }
   }, [groups, selectedGroupId])
+
+  const endCollaboration = React.useCallback(async (group: CollaborationGroup) => {
+    if (!window.confirm(t('settings.collaborations.endConfirm'))) return
+    const primary = group.members.find(member => member.id === group.primaryMemberId)
+    if (!primary) return
+    setPendingAction('end')
+    try {
+      const ended = await window.electronAPI.endCollaboration(group.id, primary.workspaceId)
+      setGroups(current => current.map(item => item.id === ended.id ? ended : item))
+    } catch (error) {
+      console.error('Failed to end collaboration:', error)
+      toast.error(t('settings.collaborations.endFailed'))
+    } finally {
+      setPendingAction(null)
+    }
+  }, [t])
+
+  const retryDelivery = React.useCallback(async (group: CollaborationGroup, operationId: string) => {
+    const primary = group.members.find(member => member.id === group.primaryMemberId)
+    if (!primary) return
+    setPendingAction(operationId)
+    try {
+      const result = await window.electronAPI.retryCollaborationDelivery(group.id, primary.workspaceId, operationId)
+      setGroups(current => current.map(item => item.id === result.group.id ? result.group : item))
+    } catch (error) {
+      console.error('Failed to retry collaboration delivery:', error)
+      toast.error(t('settings.collaborations.retryFailed'))
+      await refresh()
+    } finally {
+      setPendingAction(null)
+    }
+  }, [refresh, t])
+
+  const downloadFile = React.useCallback(async (group: CollaborationGroup, fileId: string) => {
+    const primary = group.members.find(member => member.id === group.primaryMemberId)
+    if (!primary) return
+    setPendingAction(fileId)
+    try {
+      const result = await window.electronAPI.getCollaborationFile(group.id, primary.workspaceId, fileId)
+      const bytes = Uint8Array.from(atob(result.dataBase64), character => character.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: result.file.contentType ?? 'application/octet-stream' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = result.file.name
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to download collaboration file:', error)
+      toast.error(t('settings.collaborations.downloadFailed'))
+    } finally {
+      setPendingAction(null)
+    }
+  }, [t])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -159,9 +213,26 @@ export default function CollaborationManagementPage() {
                     })}
                   </p>
                 </div>
-                <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-xs text-emerald-600">
-                  {t('settings.collaborations.active')}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={groupStatusClass(selectedGroup.status)}>
+                    {selectedGroup.status === 'ended'
+                      ? t('settings.collaborations.ended')
+                      : t('settings.collaborations.active')}
+                  </span>
+                  {selectedGroup.status !== 'ended'
+                    && selectedGroup.members.find(member => member.id === selectedGroup.primaryMemberId)?.workspaceId === activeWorkspaceId
+                    && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pendingAction === 'end'}
+                      onClick={() => void endCollaboration(selectedGroup)}
+                    >
+                      <Square className="mr-1 size-3.5" />
+                      {t('settings.collaborations.end')}
+                    </Button>
+                  )}
+                </div>
               </div>
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
                 {selectedGroup.members.map(member => {
@@ -200,10 +271,84 @@ export default function CollaborationManagementPage() {
                 </span>
                 <span>{t('settings.collaborations.events', { count: selectedGroup.events.length })}</span>
               </div>
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <section className="rounded-md border border-foreground/10 p-3">
+                  <h3 className="mb-2 text-sm font-medium">
+                    {t('settings.collaborations.boardItems', { count: Object.keys(selectedGroup.board).length })}
+                  </h3>
+                  <div className="space-y-2">
+                    {Object.values(selectedGroup.board).map(item => (
+                      <div key={item.id} className="rounded bg-foreground/[0.03] p-2">
+                        <div className="text-xs font-medium">{item.id}</div>
+                        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                          {JSON.stringify(item.value, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                <section className="rounded-md border border-foreground/10 p-3">
+                  <h3 className="mb-2 text-sm font-medium">
+                    {t('settings.collaborations.files', { count: Object.keys(selectedGroup.files).length })}
+                  </h3>
+                  <div className="space-y-2">
+                    {Object.values(selectedGroup.files).map(file => (
+                      <button
+                        key={file.id}
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded bg-foreground/[0.03] p-2 text-left text-xs hover:bg-foreground/[0.06]"
+                        disabled={pendingAction === file.id}
+                        onClick={() => void downloadFile(selectedGroup, file.id)}
+                      >
+                        <Download className="size-3.5 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                        <span className="text-muted-foreground">{Math.ceil(file.size / 1024)} KB</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+              <section className="mt-4 rounded-md border border-foreground/10 p-3">
+                <h3 className="mb-2 text-sm font-medium">
+                  {t('settings.collaborations.events', { count: selectedGroup.events.length })}
+                </h3>
+                <div className="max-h-80 space-y-2 overflow-auto">
+                  {[...selectedGroup.events].reverse().map(event => (
+                    <div key={event.id} className="rounded bg-foreground/[0.03] p-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{event.type}</span>
+                        <span className="text-muted-foreground">#{event.revision}</span>
+                        {event.delivery && (
+                          <span className="ml-auto text-muted-foreground">{event.delivery.status}</span>
+                        )}
+                        {selectedGroup.status === 'active' && event.delivery?.status === 'failed' && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={pendingAction === event.operationId}
+                            onClick={() => void retryDelivery(selectedGroup, event.operationId)}
+                          >
+                            <RotateCcw className="mr-1 size-3.5" />
+                            {t('common.retry')}
+                          </Button>
+                        )}
+                      </div>
+                      {event.text && <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{event.text}</p>}
+                      {event.delivery?.lastError && <p className="mt-1 text-destructive">{event.delivery.lastError}</p>}
+                    </div>
+                  ))}
+                </div>
+              </section>
             </section>
           )}
         </div>
       </ScrollArea>
     </div>
   )
+}
+
+function groupStatusClass(status: CollaborationGroup['status']): string {
+  return status === 'ended'
+    ? 'rounded-full bg-foreground/5 px-2 py-1 text-xs text-muted-foreground'
+    : 'rounded-full bg-emerald-500/10 px-2 py-1 text-xs text-emerald-600'
 }

@@ -4,7 +4,7 @@ import { uptime as osUptime } from 'node:os'
 import { join, basename } from 'node:path'
 import { lockHolderMatchesLock, parseTasklistImageName, type LockIdentity } from './lock-identity.ts'
 import { OAuthFlowStore } from '@craft-agent/shared/auth'
-import { ensureConfigDir, loadStoredConfig, saveConfig } from '@craft-agent/shared/config'
+import { ensureConfigDir, getWorkspaceByNameOrId, loadStoredConfig, saveConfig } from '@craft-agent/shared/config'
 import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import { setBundledAssetsRoot } from '@craft-agent/shared/utils'
 import { WsRpcServer, type WsRpcTlsOptions } from '../transport/server'
@@ -379,6 +379,7 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
     validateSessionCookie: options.validateSessionCookie,
     serverId: options.serverId ?? 'headless',
     serverVersion: options.serverVersion,
+    resolveWorkspaceId: (workspaceId) => getWorkspaceByNameOrId(workspaceId)?.id ?? workspaceId,
     tls: options.tls,
     httpHandler: options.httpHandler,
     onClientConnected: options.onClientConnected,

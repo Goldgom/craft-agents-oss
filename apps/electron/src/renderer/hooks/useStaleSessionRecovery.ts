@@ -51,6 +51,16 @@ export function useStaleSessionRecovery({
       const now = Date.now()
       const allMeta = store.get(sessionMetaMapAtom)
 
+      // Activity can be recorded just before a session is deleted. Prune IDs
+      // that no longer exist; iterating only current metadata would otherwise
+      // retain those tombstones for the lifetime of the renderer.
+      for (const sessionId of lastEventTimestamps.current.keys()) {
+        if (!allMeta.has(sessionId)) lastEventTimestamps.current.delete(sessionId)
+      }
+      for (const sessionId of refreshingSessionIds.current) {
+        if (!allMeta.has(sessionId)) refreshingSessionIds.current.delete(sessionId)
+      }
+
       for (const [sessionId, meta] of allMeta) {
         if (!meta.isProcessing) {
           // Not processing — clean up tracking

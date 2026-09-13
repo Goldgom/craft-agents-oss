@@ -445,6 +445,12 @@ export interface SessionToolContext {
   /** Write one item to the collaboration shared board. */
   updateCollaborationBoard?(itemId: string, value: unknown): Promise<unknown>;
 
+  /** Publish a local file into durable collaboration storage. */
+  putCollaborationFile?(path: string, name?: string, contentType?: string): Promise<unknown>;
+
+  /** Materialize a shared file inside the invoking session's workspace. */
+  getCollaborationFile?(fileId: string): Promise<unknown>;
+
   /**
    * Activate a source in the running session: add to enabledSourceSlugs,
    * build its MCP/API servers, apply to the agent.

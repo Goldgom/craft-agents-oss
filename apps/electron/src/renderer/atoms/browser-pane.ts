@@ -59,6 +59,7 @@ export const activeBrowserInstanceIdAtom = atom<string | null>(null)
 
 /** Tombstones for instances removed from renderer state (guards against late out-of-order updates) */
 export const removedBrowserInstanceIdsAtom = atom<Set<string>>(new Set<string>())
+const MAX_REMOVED_BROWSER_INSTANCE_IDS = 512
 
 /** Derived: currently active browser instance info */
 export const activeBrowserInstanceAtom = atom<BrowserInstanceInfo | null>((get) => {
@@ -91,7 +92,13 @@ export const removeBrowserInstanceAtom = atom(
     set(browserInstancesMapAtom, map)
 
     const removedIds = new Set(get(removedBrowserInstanceIdsAtom))
+    removedIds.delete(id)
     removedIds.add(id)
+    while (removedIds.size > MAX_REMOVED_BROWSER_INSTANCE_IDS) {
+      const oldestId = removedIds.values().next().value
+      if (oldestId === undefined) break
+      removedIds.delete(oldestId)
+    }
     set(removedBrowserInstanceIdsAtom, removedIds)
   }
 )

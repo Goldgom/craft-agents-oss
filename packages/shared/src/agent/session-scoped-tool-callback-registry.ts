@@ -126,6 +126,10 @@ export interface SessionScopedToolCallbacks {
   getCollaborationFn?: () => Promise<unknown>;
   /** Update one shared-board item as the invoking collaboration member. */
   updateCollaborationBoardFn?: (itemId: string, value: unknown) => Promise<unknown>;
+  /** Publish a local file into the invoking session's collaboration. */
+  putCollaborationFileFn?: (path: string, name?: string, contentType?: string) => Promise<unknown>;
+  /** Materialize a shared collaboration file in the invoking workspace. */
+  getCollaborationFileFn?: (fileId: string) => Promise<unknown>;
   /**
    * Activate a source in the running session (source_test auto-enable flow).
    * Wired by SessionManager to the per-session onSourceActivationRequest callback

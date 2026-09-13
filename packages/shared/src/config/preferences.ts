@@ -83,6 +83,11 @@ export interface UserPreferences {
    * Read by the Electron main process before server bootstrap.
    */
   startupServerLocation?: string;
+  /**
+   * Internal one-shot flag used when switching server locations. The next
+   * initial window consumes it and opens without a selected workspace.
+   */
+  selectWorkspaceOnNextLaunch?: boolean;
   // When the preferences were last updated
   updatedAt?: number;
 }
@@ -154,6 +159,26 @@ export function setStartupServerLocation(location: string): void {
   const current = loadPreferences();
   if (current.startupServerLocation === location) return;
   savePreferences({ ...current, startupServerLocation: location });
+}
+
+/** Request that the next initial window opens on the workspace picker. */
+export function requestWorkspaceSelectionOnNextLaunch(): void {
+  const current = loadPreferences();
+  if (current.selectWorkspaceOnNextLaunch) return;
+  savePreferences({ ...current, selectWorkspaceOnNextLaunch: true });
+}
+
+/**
+ * Consume the one-shot workspace picker request. Removing the field instead
+ * of setting it to false keeps the persisted preferences backward-compatible.
+ */
+export function consumeWorkspaceSelectionOnNextLaunch(): boolean {
+  const current = loadPreferences();
+  if (!current.selectWorkspaceOnNextLaunch) return false;
+
+  const { selectWorkspaceOnNextLaunch: _consumed, ...remaining } = current;
+  savePreferences(remaining);
+  return true;
 }
 
 /**

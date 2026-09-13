@@ -75,6 +75,8 @@ export const RPC_CHANNELS = {
     UPDATE_BOARD: 'collaborations:updateBoard',
     PUT_FILE: 'collaborations:putFile',
     GET_FILE: 'collaborations:getFile',
+    RETRY_DELIVERY: 'collaborations:retryDelivery',
+    END: 'collaborations:end',
     EVENT: 'collaborations:event',
   },
   transfer: {

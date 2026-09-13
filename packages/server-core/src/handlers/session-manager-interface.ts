@@ -72,6 +72,7 @@ export interface ISessionManager {
   markAllSessionsRead(workspaceId: string): Promise<void>
   setActiveViewingSession(sessionId: string | null, workspaceId: string): void
   clearActiveViewingSession(workspaceId: string): void
+  setSessionMessagesVisible(sessionId: string, clientId: string, visible: boolean): Promise<boolean>
 
   // ---------------------------------------------------------------------------
   // Session configuration

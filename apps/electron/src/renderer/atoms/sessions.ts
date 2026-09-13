@@ -12,6 +12,7 @@ import { atom } from 'jotai'
 import type { Getter, Setter } from 'jotai/vanilla'
 import { atomFamily } from 'jotai-family'
 import type { Session, Message } from '../../shared/types'
+import { visibleSessionIdsAtom } from './panel-stack'
 
 /**
  * Session metadata for list display (lightweight, no messages)
@@ -91,6 +92,8 @@ export interface SessionMeta {
   taskNodeCount?: number
   /** Tasks Conductor: a generate-time draft orchestrator, hidden from the board until adopted by createTask. */
   taskDraft?: boolean
+  /** Active collaboration membership, used to prevent overlapping groups in the UI. */
+  collaboration?: Session['collaboration']
 }
 
 /**
@@ -691,6 +694,34 @@ export const forceSessionMessagesReloadAtom = atom(
   async (get, set, sessionId: string): Promise<Session | null> => {
     return loadSessionMessages(get, set, sessionId, { force: true })
   }
+)
+
+/**
+ * Drop an inactive transcript while retaining the lightweight session shell.
+ * The next ChatPage mount lazy-loads messages again from the main process.
+ */
+export const releaseSessionMessagesAtom = atom(
+  null,
+  async (get, set, sessionId: string): Promise<boolean> => {
+    const loading = sessionLoadingPromises.get(sessionId)
+    if (loading) await loading.catch(() => undefined)
+    if (get(visibleSessionIdsAtom).has(sessionId)) return false
+    const loadedSessions = get(loadedSessionsAtom)
+    const session = get(sessionAtomFamily(sessionId))
+    if (!loadedSessions.has(sessionId) || !session || session.isProcessing) return false
+
+    const lastFinalMessageId = findLastFinalMessageId(session.messages) ?? session.lastFinalMessageId
+    set(sessionAtomFamily(sessionId), {
+      ...session,
+      messages: [],
+      messageCount: Math.max(session.messageCount ?? 0, session.messages.length),
+      lastFinalMessageId,
+    })
+    const nextLoadedSessions = new Set(loadedSessions)
+    nextLoadedSessions.delete(sessionId)
+    set(loadedSessionsAtom, nextLoadedSessions)
+    return true
+  },
 )
 
 /**

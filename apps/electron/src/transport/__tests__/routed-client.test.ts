@@ -101,7 +101,29 @@ describe('RoutedClient', () => {
       const cb = mock(() => {})
       routed.on(REMOTE_CHANNEL, cb)
 
-      expect(workspace.on).toHaveBeenCalledWith(REMOTE_CHANNEL, cb)
+      expect(workspace.on).toHaveBeenCalledWith(REMOTE_CHANNEL, expect.any(Function))
+    })
+
+    it('maps remote workspace IDs back to renderer-local IDs in events', () => {
+      const local = stubClient()
+      const workspace = stubClient()
+      const routed = new RoutedClient(local, workspace)
+      routed.setWorkspaceMapping('local-stub', 'remote-real')
+
+      const cb = mock(() => {})
+      routed.on(RPC_CHANNELS.pages.CHANGED, cb)
+
+      const registered = (workspace as any)._listeners
+        .get(RPC_CHANNELS.pages.CHANGED) as Set<(...args: any[]) => void>
+      expect(registered.size).toBe(1)
+      const emit = [...registered][0]!
+
+      const pages = [{ config: { slug: 'new-page' } }]
+      emit('remote-real', pages)
+      emit({ workspaceId: 'remote-real', revision: 2 })
+
+      expect(cb).toHaveBeenNthCalledWith(1, 'local-stub', pages)
+      expect(cb).toHaveBeenNthCalledWith(2, { workspaceId: 'local-stub', revision: 2 })
     })
   })
 
@@ -163,13 +185,14 @@ describe('RoutedClient', () => {
       // Subscribe a listener before switch
       const cb = mock(() => {})
       routed.on(REMOTE_CHANNEL, cb)
-      expect(workspace.on).toHaveBeenCalledWith(REMOTE_CHANNEL, cb)
+      expect(workspace.on).toHaveBeenCalledWith(REMOTE_CHANNEL, expect.any(Function))
+      const routedCallback = (workspace.on as any).mock.calls[0]![1]
 
       // Trigger switch
       await routed.invoke(SWITCH_CHANNEL)
 
       // Listener should be re-subscribed on the new client
-      expect(newRemote.on).toHaveBeenCalledWith(REMOTE_CHANNEL, cb)
+      expect(newRemote.on).toHaveBeenCalledWith(REMOTE_CHANNEL, routedCallback)
     })
 
     it('re-registers capabilities on swap', async () => {
@@ -191,6 +214,34 @@ describe('RoutedClient', () => {
       await routed.invoke(SWITCH_CHANNEL)
 
       expect(newRemote.handleCapability).toHaveBeenCalledWith('test:capability', handler)
+    })
+
+    it('unsubscribes the synthetic reconnect listener when connected is emitted synchronously', async () => {
+      const local = stubClient({
+        invoke: mock(async () => ({
+          workspaceId: 'ws-2',
+          remoteServer: { url: 'wss://remote:9001', token: 'tok', remoteWorkspaceId: 'rw-1' },
+        })),
+      })
+      const workspace = stubClient()
+      const delegatedUnsub = mock(() => {})
+      const syntheticUnsub = mock(() => {})
+      let subscriptionCount = 0
+      const newRemote = stubClient({
+        onConnectionStateChanged: mock((cb: (state: TransportConnectionState) => void) => {
+          subscriptionCount++
+          cb({ mode: 'remote', status: 'connected', url: 'wss://remote', attempt: 0, updatedAt: Date.now() })
+          return subscriptionCount === 1 ? delegatedUnsub : syntheticUnsub
+        }),
+      })
+      const routed = new RoutedClient(local, workspace)
+      routed.setClientFactory(() => newRemote)
+
+      await routed.invoke(SWITCH_CHANNEL)
+
+      expect(subscriptionCount).toBe(2)
+      expect(syntheticUnsub).toHaveBeenCalledTimes(1)
+      expect(newRemote.emitReconnected).toHaveBeenCalledWith(true)
     })
   })
 

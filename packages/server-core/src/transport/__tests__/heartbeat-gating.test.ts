@@ -147,4 +147,19 @@ describe('client heartbeat gating', () => {
     expect(close.code).toBe(4000)
     client.destroy()
   })
+
+  it('releases callback registries when destroyed', () => {
+    const client = new WsRpcClient('ws://127.0.0.1:1', { autoReconnect: false })
+    client.on('test:event', () => {})
+    client.handleCapability('test:capability', () => undefined)
+    client.onConnectionStateChanged(() => {})
+    client.onAnyEvent(() => {})
+
+    client.destroy()
+
+    expect((client as any).listeners.size).toBe(0)
+    expect((client as any).capabilityHandlers.size).toBe(0)
+    expect((client as any).connectionStateListeners.size).toBe(0)
+    expect((client as any).anyEventListeners.size).toBe(0)
+  })
 })

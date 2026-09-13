@@ -25,7 +25,7 @@ import { isAbsolutePath } from '@/lib/drafts'
 import { navigate, routes } from '@/lib/navigate'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
-import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
+import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, releaseSessionMessagesAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { kanbanEditorTargetAtom } from '@/atoms/kanban'
 import { getSessionTitle } from '@/utils/session'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
@@ -104,6 +104,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // Fallback: ensure messages are loaded when session is viewed
   const ensureMessagesLoaded = useSetAtom(ensureSessionMessagesLoadedAtom)
   const forceMessagesReload = useSetAtom(forceSessionMessagesReloadAtom)
+  const releaseMessages = useSetAtom(releaseSessionMessagesAtom)
   const [messagesLoadError, setMessagesLoadError] = React.useState<string | null>(null)
   const [messagesRetrying, setMessagesRetrying] = React.useState(false)
   const autoForcedReloadSessionRef = React.useRef<string | null>(null)
@@ -152,6 +153,17 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       cancelled = true
     }
   }, [sessionId, ensureMessagesLoaded, forceMessagesReload, shouldForceInitialMessagesReload])
+
+  // Keep full transcripts only while a panel renders them. The server tracks
+  // visibility per transport client, so another window viewing the same
+  // session prevents premature main-process eviction.
+  React.useEffect(() => {
+    void window.electronAPI.sessionCommand(sessionId, { type: 'setMessagesVisible', visible: true }).catch(() => {})
+    return () => {
+      void releaseMessages(sessionId)
+      void window.electronAPI.sessionCommand(sessionId, { type: 'setMessagesVisible', visible: false }).catch(() => {})
+    }
+  }, [releaseMessages, sessionId])
 
   const handleRetryMessagesLoad = React.useCallback(async () => {
     setMessagesLoadError(null)
