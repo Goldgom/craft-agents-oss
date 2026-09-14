@@ -4,7 +4,9 @@ export * from './conversation-summary.ts';
 
 // Export PiAgent for direct use
 export { PiAgent, PiBackend } from './pi-agent.ts';
-export { CodexAgent } from './codex-agent.ts';
+export { CodexAgent, CodexCompatibilityAgent } from './codex-agent.ts';
+export { NativeCodexAgent, extractChatGptAccountId } from './native-codex-agent.ts';
+export { configureNativeCodexResourcesPath, resolveNativeCodexBinary } from '../codex/binary-resolver.ts';
 export * from './errors.ts';
 export * from './options.ts';
 
@@ -133,6 +135,7 @@ export {
 export {
   // Factory (createAgent is the preferred name, createBackend is kept for backward compat)
   createBackend,
+  createCodexBackend,
   createAgent,
   detectProvider,
   getAvailableProviders,

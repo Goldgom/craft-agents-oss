@@ -1000,7 +1000,7 @@
   "settings.ai.runtime.claudeCode": "Claude Code",
   "settings.ai.runtime.claudeCodeDesc": "Native Claude Agent SDK runtime for Anthropic connections.",
   "settings.ai.runtime.codex": "Codex",
-  "settings.ai.runtime.codexDesc": "Codex Responses compatibility runtime for OpenAI connections.",
+  "settings.ai.runtime.codexDesc": "Native Codex app-server when a tested local CLI is available; Pi Responses compatibility fallback otherwise.",
   "settings.ai.runtime.description": "Choose the agent loop and tool protocol used by this connection.",
   "settings.ai.runtime.pi": "Pi",
   "settings.ai.runtime.piDesc": "Provider-neutral Pi coding-agent runtime.",

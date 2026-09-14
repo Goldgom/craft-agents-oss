@@ -141,16 +141,28 @@ The `run` command is fully self-contained — it spawns a headless server, creat
 | `--model <id>` | `LLM_MODEL` | (provider default) | Model ID (e.g., `claude-sonnet-4-5-20250929`, `gpt-4o`, `gemini-2.0-flash`) |
 | `--api-key <key>` | `LLM_API_KEY` | (provider env) | API key — also checks provider-specific vars like `$OPENAI_API_KEY` |
 | `--base-url <url>` | `LLM_BASE_URL` | — | Custom endpoint for proxies, OpenRouter, or self-hosted models |
-| `--runtime <protocol>` | `LLM_AGENT_RUNTIME` | provider default | Agent runtime: `pi`, `codex`, or `claude-code` |
+| `--runtime <protocol>` | `LLM_AGENT_RUNTIME` | provider default | Agent runtime: `pi`, `codex`, or `claude-code`; Codex is native-first with compatibility fallback |
+| `--codex-login` | `CRAFT_CODEX_USE_LOGIN=1` | off | Reuse authentication created by `codex login`; requires `--provider openai --runtime codex` |
 
 ```bash
 # Multi-provider examples
 craft-cli run --provider openai --model gpt-4o "Summarize this repo"
 craft-cli run --provider openai --runtime codex "Inspect this repository"
+craft-cli run --provider openai --runtime codex --codex-login "Inspect this repository"
 craft-cli run --provider anthropic --runtime pi "Inspect this repository"
 GOOGLE_API_KEY=... craft-cli run --provider google --model gemini-2.0-flash "Hello"
 craft-cli run --provider anthropic --base-url https://openrouter.ai/api/v1 --api-key $OR_KEY "Hello"
 ```
+
+The `codex` runtime discovers the native CLI in this order: `CRAFT_CODEX_PATH`,
+`CODEX_PATH`, a packaged Codex resource, then `PATH`. The app-server protocol is
+experimental, so Craft Agents currently enables native mode only for the tested
+`codex-cli 0.154.x` protocol line. Set `CRAFT_CODEX_ALLOW_UNTESTED=1` only for
+explicit compatibility testing; an unavailable or untested CLI automatically
+uses the Pi Responses fallback for managed API-key/OAuth connections. The
+`--codex-login` mode fails fast instead, because a credential-less Pi fallback
+cannot reuse Codex CLI authentication. Run `codex login` under the same OS
+account that starts the Craft server before using this mode.
 
 Prompt can also be piped via stdin:
 ```bash

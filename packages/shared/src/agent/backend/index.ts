@@ -53,6 +53,7 @@ export { AbortReason } from './types.ts';
 // Factory
 export {
   createBackend,
+  createCodexBackend,
   createAgent,
   detectProvider,
   getAvailableProviders,

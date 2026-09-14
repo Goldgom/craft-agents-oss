@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import {
   detectProvider,
   createBackend,
+  createCodexBackend,
   createAgent,
   fetchBackendModels,
   getAvailableProviders,
@@ -31,7 +32,9 @@ import type { Workspace, LlmConnection } from '../../../config/storage.ts';
 import type { SessionConfig as Session } from '../../../sessions/storage.ts';
 import { ClaudeAgent } from '../../claude-agent.ts';
 import { PiAgent } from '../../pi-agent.ts';
-import { CodexAgent } from '../../codex-agent.ts';
+import { CodexCompatibilityAgent } from '../../codex-agent.ts';
+import { NativeCodexAgent } from '../../native-codex-agent.ts';
+import { resolveNativeCodexBinary } from '../../../codex/binary-resolver.ts';
 import { isValidProviderAuthCombination } from '../../../config/llm-connections.ts';
 
 // Test helpers
@@ -105,17 +108,41 @@ describe('createBackend / createAgent', () => {
   });
 
   describe('Explicit runtime protocol', () => {
-    it('creates the isolated Codex compatibility runtime', () => {
+    it('prefers native Codex and falls back to the isolated compatibility runtime', () => {
       const agent = createBackend(createTestConfig({ provider: 'pi', agentRuntime: 'codex' }));
+      const native = resolveNativeCodexBinary();
+      expect(agent).toBeInstanceOf(native ? NativeCodexAgent : CodexCompatibilityAgent);
+    });
 
-      expect(agent).toBeInstanceOf(CodexAgent);
+    it('falls back deterministically when no native binary is available', () => {
+      const agent = createCodexBackend(createTestConfig({ provider: 'pi', agentRuntime: 'codex' }), null);
+      expect(agent).toBeInstanceOf(CodexCompatibilityAgent);
+    });
+
+    it('does not route an existing codex login through the credential-less Pi fallback', () => {
+      expect(() => createCodexBackend(createTestConfig({
+        provider: 'pi',
+        agentRuntime: 'codex',
+        authType: 'none',
+      }), null)).toThrow('Native Codex is required when using an existing `codex login`');
+    });
+
+    it('keeps custom endpoints on the compatibility runtime', () => {
+      const agent = createCodexBackend(createTestConfig({
+        provider: 'pi',
+        agentRuntime: 'codex',
+        authType: 'api_key_with_endpoint',
+        runtime: { baseUrl: 'https://gateway.example.test/v1' },
+      }), { path: 'codex', source: 'PATH', version: '0.154.0', testedProtocol: true });
+      expect(agent).toBeInstanceOf(CodexCompatibilityAgent);
     });
 
     it('uses Pi when an Anthropic connection explicitly selects Pi', () => {
       const agent = createBackend(createTestConfig({ provider: 'pi', agentRuntime: 'pi' }));
 
       expect(agent).toBeInstanceOf(PiAgent);
-      expect(agent).not.toBeInstanceOf(CodexAgent);
+      expect(agent).not.toBeInstanceOf(CodexCompatibilityAgent);
+      expect(agent).not.toBeInstanceOf(NativeCodexAgent);
     });
 
     it('keeps the legacy Anthropic default on Claude Code', () => {
@@ -191,8 +218,8 @@ describe('connectionAuthTypeToBackendAuthType (legacy)', () => {
     expect(connectionAuthTypeToBackendAuthType('oauth')).toBe('oauth');
   });
 
-  it('should map none to undefined', () => {
-    expect(connectionAuthTypeToBackendAuthType('none')).toBeUndefined();
+  it('should preserve none for runtimes that use external authentication', () => {
+    expect(connectionAuthTypeToBackendAuthType('none')).toBe('none');
   });
 });
 
