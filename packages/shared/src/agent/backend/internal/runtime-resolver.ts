@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import type { BackendHostRuntimeContext } from '../types.ts';
 import { setPathToClaudeCodeExecutable, isAndroidRuntime, ANDROID_CLAUDE_UNSUPPORTED_MESSAGE } from '../../options.ts';
 
@@ -162,7 +162,7 @@ function resolveClaudeBinaryPath(hostRuntime: BackendHostRuntimeContext): string
 
 function resolveInterceptorBundlePath(hostRuntime: BackendHostRuntimeContext): string | undefined {
   if (hostRuntime.interceptorBundlePath && existsSync(hostRuntime.interceptorBundlePath)) {
-    return hostRuntime.interceptorBundlePath;
+    return preparePackagedBunEntry(hostRuntime.interceptorBundlePath, hostRuntime, 'interceptor');
   }
 
   // In dev / monorepo runs, prefer the TypeScript source so changes are
@@ -181,22 +181,30 @@ function resolveInterceptorBundlePath(hostRuntime: BackendHostRuntimeContext): s
   const bundlePath = resolveUpwards(hostRuntime.appRootPath, join('dist', 'interceptor.cjs'))
     ?? resolveUpwards(hostRuntime.appRootPath, join('apps', 'electron', 'dist', 'interceptor.cjs'));
 
-  // Bun can fail with EPERM while preloading files directly from Program Files,
-  // even though the Electron main process can read the same packaged asset.
-  // Stage immutable, content-addressed copies in the user's local data directory so
-  // MSI/legacy machine-wide installs work as reliably as per-user NSIS installs.
-  if (bundlePath && hostRuntime.isPackaged && process.platform === 'win32') {
-    return stageWindowsInterceptor(bundlePath);
-  }
-
-  return bundlePath;
+  return bundlePath ? preparePackagedBunEntry(bundlePath, hostRuntime, 'interceptor') : undefined;
 }
 
-function stageWindowsInterceptor(sourcePath: string): string {
+function preparePackagedBunEntry(
+  sourcePath: string,
+  hostRuntime: BackendHostRuntimeContext,
+  cacheStem: string,
+): string {
+  // Bun can fail with EPERM while loading scripts directly from Program Files,
+  // even though the Electron main process can read the same packaged asset.
+  // Stage every packaged Windows Bun entry, including explicit host overrides,
+  // so no runtime integration can accidentally bypass the user-local copy.
+  if (hostRuntime.isPackaged && process.platform === 'win32') {
+    return stageWindowsRuntimeFile(sourcePath, cacheStem);
+  }
+
+  return sourcePath;
+}
+
+function stageWindowsRuntimeFile(sourcePath: string, cacheStem: string): string {
   const source = readFileSync(sourcePath);
   const contentHash = createHash('sha256').update(source).digest('hex').slice(0, 16);
   const cacheDir = join(process.env.LOCALAPPDATA || tmpdir(), 'Craft Agents', 'runtime');
-  const cachedPath = join(cacheDir, `interceptor-${contentHash}.cjs`);
+  const cachedPath = join(cacheDir, `${cacheStem}-${contentHash}${extname(sourcePath)}`);
 
   if (existsSync(cachedPath)) return cachedPath;
 
@@ -221,10 +229,16 @@ function stageWindowsInterceptor(sourcePath: string): string {
 
 function resolveServerPath(hostRuntime: BackendHostRuntimeContext, serverName: string): string | undefined {
   if (hostRuntime.isPackaged) {
-    return firstExistingPath([
+    const packagedPath = firstExistingPath([
       join(hostRuntime.appRootPath, 'resources', serverName, 'index.js'),
       join(hostRuntime.appRootPath, 'dist', 'resources', serverName, 'index.js'),
     ]);
+    // The Pi server is launched directly by the bundled Bun executable. Like
+    // Bun's --require hook, its main script must not remain under Program Files.
+    if (packagedPath && serverName === 'pi-agent-server') {
+      return preparePackagedBunEntry(packagedPath, hostRuntime, serverName);
+    }
+    return packagedPath;
   }
   const builtPath = resolveUpwards(
     hostRuntime.appRootPath,
