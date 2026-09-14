@@ -997,7 +997,7 @@
   "settings.ai.runtime.claudeCode": "Claude Code",
   "settings.ai.runtime.claudeCodeDesc": "Anthropic 連線使用的原生 Claude Agent SDK 執行階段。",
   "settings.ai.runtime.codex": "Codex",
-  "settings.ai.runtime.codexDesc": "OpenAI 連線使用的 Codex Responses 相容執行階段。",
+  "settings.ai.runtime.codexDesc": "偵測到已驗證的本機 Codex CLI 時使用原生 app-server，否則回退到 Pi Responses 相容執行階段。",
   "settings.ai.runtime.description": "選擇此連線使用的 Agent 迴圈和工具協議。",
   "settings.ai.runtime.pi": "Pi",
   "settings.ai.runtime.piDesc": "提供商無關的 Pi coding-agent 執行階段。",

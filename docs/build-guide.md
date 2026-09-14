@@ -288,7 +288,7 @@ bun run cli:build:linux-arm64
 
 - `bin/craft-cli`：连接现有远程服务器，或通过 `run` 自动启动内置服务器；
 - `bin/craft-server`：最小 headless WebSocket RPC 服务；
-- Pi/Codex compatibility 子进程、Claude Code 原生运行时以及必要 MCP/权限资源。
+- Pi/Codex compatibility 子进程、Codex app-server 原生优先运行时、Claude Code 原生运行时以及必要 MCP/权限资源。Codex CLI 未打包时由运行时发现；托管 API Key/OAuth 连接在 CLI 缺失或协议版本未经验证时回退到 Pi compatibility，显式复用 `codex login` 的无凭据模式则会直接报错。
 
 ```bash
 # 连接远程服务器

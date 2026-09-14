@@ -512,7 +512,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const runtime = connection ? resolveAgentRuntime(connection) : 'claude-code'
     const backendName = runtime === 'claude-code'
       ? 'Claude Code'
-      : runtime === 'codex' ? 'Codex compatibility runtime' : 'Craft Agents Backend'
+      : runtime === 'codex' ? 'Codex native-first runtime' : 'Craft Agents Backend'
     return getSystemPromptSources(
       undefined,
       undefined,

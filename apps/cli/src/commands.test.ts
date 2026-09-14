@@ -236,6 +236,11 @@ describe('parseArgs', () => {
     expect(args.agentRuntime).toBe('codex')
   })
 
+  it('parses explicit reuse of the local codex login', () => {
+    const args = parseArgs(['bun', 'index.ts', '--runtime', 'codex', '--provider', 'openai', '--codex-login', 'run', 'hello'])
+    expect(args.codexLogin).toBe(true)
+  })
+
   it('rejects an unknown agent runtime protocol', () => {
     expect(() => parseArgs(['bun', 'index.ts', '--runtime', 'unknown', 'run', 'hello'])).toThrow(
       'Expected pi, codex, or claude-code',
@@ -349,6 +354,34 @@ describe('getValidateSteps', () => {
 
     expect(result).toContain('requires a direct OpenAI provider connection')
     expect(calls).toEqual(['LLM_Connection:list'])
+  })
+
+  it('creates a credential-less native connection for an explicit codex login', async () => {
+    const calls: Array<{ channel: string; payload?: Record<string, unknown> }> = []
+    const client = {
+      invoke: async (channel: string, payload?: Record<string, unknown>) => {
+        calls.push({ channel, payload })
+        if (channel === 'LLM_Connection:list') return []
+        if (channel === 'settings:setupLlmConnection') return { success: true }
+        return undefined
+      },
+    }
+    const step = getValidateSteps().find((candidate) => candidate.name === 'LLM_Connection:list')!
+
+    await step.fn(client as never, {
+      provider: 'openai',
+      agentRuntime: 'codex',
+      codexLogin: true,
+    })
+
+    const save = calls.find((call) => call.channel === 'LLM_Connection:save')
+    expect(save?.payload).toMatchObject({
+      providerType: 'pi',
+      authType: 'none',
+      agentRuntime: 'codex',
+    })
+    const setup = calls.find((call) => call.channel === 'settings:setupLlmConnection')
+    expect(setup?.payload?.credential).toBeUndefined()
   })
 
   it('includes session lifecycle steps (create, read, delete)', () => {

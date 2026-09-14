@@ -39,6 +39,7 @@ export interface CliArgs {
   apiKey: string
   baseUrl: string
   agentRuntime: '' | 'pi' | 'codex' | 'claude-code'
+  codexLogin: boolean
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -65,6 +66,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let apiKey = ''
   let baseUrl = ''
   let agentRuntime = ''
+  let codexLogin = false
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -131,6 +133,9 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--runtime':
         agentRuntime = args[++i] ?? ''
         break
+      case '--codex-login':
+        codexLogin = true
+        break
       case '--help':
       case '-h':
         command = 'help'
@@ -159,11 +164,12 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!apiKey) apiKey = process.env.LLM_API_KEY ?? ''
   if (!baseUrl) baseUrl = process.env.LLM_BASE_URL ?? ''
   if (!agentRuntime) agentRuntime = process.env.LLM_AGENT_RUNTIME ?? ''
+  if (!codexLogin) codexLogin = process.env.CRAFT_CODEX_USE_LOGIN === '1'
   if (agentRuntime && !['pi', 'codex', 'claude-code'].includes(agentRuntime)) {
     throw new Error(`Invalid runtime "${agentRuntime}". Expected pi, codex, or claude-code.`)
   }
 
-  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl, agentRuntime: agentRuntime as CliArgs['agentRuntime'] }
+  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl, agentRuntime: agentRuntime as CliArgs['agentRuntime'], codexLogin }
 }
 
 // ---------------------------------------------------------------------------
@@ -591,7 +597,10 @@ async function setupLlmConnection(
   if (args.agentRuntime === 'claude-code' && (provider !== 'anthropic' || !!baseUrl)) {
     throw new Error('The claude-code runtime requires a direct Anthropic provider connection.')
   }
-  const key = resolveApiKey(provider, args.apiKey)
+  if (args.codexLogin && args.agentRuntime !== 'codex') {
+    throw new Error('--codex-login requires --runtime codex.')
+  }
+  const key = args.codexLogin ? '' : resolveApiKey(provider, args.apiKey)
   const connectionSlug = `${provider}-cli`
 
   let providerType: string
@@ -632,13 +641,16 @@ async function setupLlmConnection(
     delete setupPayload.credential // IAM credentials go through iamCredentials field
   } else {
     providerType = 'pi'
-    authType = 'api_key'
+    authType = args.codexLogin ? 'none' : 'api_key'
     setupPayload.piAuthProvider = provider
+    if (args.codexLogin) {
+      delete setupPayload.credential
+    }
   }
 
   await client.invoke('LLM_Connection:save', {
     slug: connectionSlug,
-    name: getProviderDisplayName(provider),
+    name: args.codexLogin ? 'OpenAI (Codex login)' : getProviderDisplayName(provider),
     providerType,
     authType,
     createdAt: Date.now(),
@@ -649,7 +661,7 @@ async function setupLlmConnection(
     throw new Error(`LLM connection setup failed: ${setupResult?.error ?? 'unknown error'}`)
   }
   await client.invoke('LLM_Connection:setDefault', connectionSlug)
-  process.stderr.write(`LLM connection configured: ${provider}${baseUrl ? ` (${baseUrl})` : ''}\n`)
+  process.stderr.write(`LLM connection configured: ${provider}${args.codexLogin ? ' (existing Codex login)' : baseUrl ? ` (${baseUrl})` : ''}\n`)
 
   return { connectionSlug }
 }
@@ -767,6 +779,7 @@ async function cmdValidate(args: CliArgs): Promise<void> {
       apiKey: args.apiKey,
       provider: args.provider,
       agentRuntime: args.agentRuntime,
+      codexLogin: args.codexLogin,
     })
     client.destroy()
     if (server) await server.stop()
@@ -853,6 +866,8 @@ export interface ValidateContext {
   provider?: string
   /** Agent runtime protocol selected for the validation connection */
   agentRuntime?: CliArgs['agentRuntime']
+  /** Reuse authentication created by `codex login` instead of storing an API key. */
+  codexLogin?: boolean
   workspaceId?: string
   workspaceRootPath?: string
   createdWorkspace?: boolean
@@ -1113,6 +1128,9 @@ export function getValidateSteps(): ValidateStep[] {
         if (agentRuntime === 'claude-code' && (requestedProvider !== 'anthropic' || !!ctx.baseUrl)) {
           return 'setup failed: the claude-code runtime requires a direct Anthropic provider connection'
         }
+        if (ctx.codexLogin && agentRuntime !== 'codex') {
+          return 'setup failed: --codex-login requires --runtime codex'
+        }
 
         // Custom endpoint: always create/update when --base-url is provided
         if (ctx.baseUrl) {
@@ -1186,17 +1204,19 @@ export function getValidateSteps(): ValidateStep[] {
         }
         // Auto-setup from env / flags for the requested provider.
         let key = ''
-        try {
-          key = resolveApiKey(provider, ctx.apiKey || '')
-        } catch (error) {
-          return `0 connections (${error instanceof Error ? error.message : 'missing API key'})`
+        if (!ctx.codexLogin) {
+          try {
+            key = resolveApiKey(provider, ctx.apiKey || '')
+          } catch (error) {
+            return `0 connections (${error instanceof Error ? error.message : 'missing API key'})`
+          }
         }
         const slug = `${provider}-cli`
         const providerType = provider === 'anthropic' ? 'anthropic' : 'pi'
-        const authType = 'api_key'
+        const authType = ctx.codexLogin ? 'none' : 'api_key'
         await client.invoke('LLM_Connection:save', {
           slug,
-          name: getProviderDisplayName(provider),
+          name: ctx.codexLogin ? 'OpenAI (Codex login)' : getProviderDisplayName(provider),
           providerType,
           authType,
           createdAt: Date.now(),
@@ -1204,7 +1224,7 @@ export function getValidateSteps(): ValidateStep[] {
         })
         const setupPayload = provider === 'anthropic'
           ? { slug, credential: key }
-          : { slug, credential: key, piAuthProvider: provider }
+          : { slug, ...(ctx.codexLogin ? {} : { credential: key }), piAuthProvider: provider }
         const result = await client.invoke('settings:setupLlmConnection', setupPayload) as { success: boolean; error?: string }
         if (!result?.success) return `setup failed: ${result?.error ?? 'unknown'}`
         await client.invoke('LLM_Connection:setDefault', slug)
@@ -1763,6 +1783,7 @@ export async function runValidation(
     apiKey?: string
     provider?: string
     agentRuntime?: CliArgs['agentRuntime']
+    codexLogin?: boolean
   },
 ): Promise<number> {
   const steps = getValidateSteps()
@@ -1773,6 +1794,7 @@ export async function runValidation(
     apiKey: validateOptions?.apiKey,
     provider: validateOptions?.provider,
     agentRuntime: validateOptions?.agentRuntime,
+    codexLogin: validateOptions?.codexLogin,
   }
   let passed = 0
   let failed = 0
@@ -1968,6 +1990,7 @@ LLM Configuration (for 'run' command):
   --api-key <key>        API key (or $LLM_API_KEY, or provider-specific e.g. $OPENAI_API_KEY)
   --base-url <url>       Custom API endpoint (or $LLM_BASE_URL)
   --runtime <protocol>   Agent runtime: pi, codex, or claude-code (or $LLM_AGENT_RUNTIME)
+  --codex-login          Reuse local \`codex login\` auth (requires --runtime codex; or $CRAFT_CODEX_USE_LOGIN=1)
 
 Commands:
   run <message>          Spawn server, send message, stream response, exit
@@ -1999,6 +2022,7 @@ Examples:
   craft-cli run --source craft-kb "Summarize today's daily note"
   craft-cli run --workspace-dir .github/agents --source craft-public "Read the doc"
   craft-cli run --provider openai --model gpt-4o "Summarize this repo"
+  craft-cli run --provider openai --runtime codex --codex-login "Inspect this server"
   OPENAI_API_KEY=sk-... craft-cli run --provider openai "Hello"
   GOOGLE_API_KEY=... craft-cli run --provider google --model gemini-2.0-flash "Hello"
   DEEPSEEK_API_KEY=sk-... craft-cli run --provider deepseek --model deepseek-v4-flash "Hello"

@@ -25,7 +25,9 @@ import type {
 } from './types.ts';
 import { ClaudeAgent } from '../claude-agent.ts';
 import { PiAgent } from '../pi-agent.ts';
-import { CodexAgent } from '../codex-agent.ts';
+import { CodexCompatibilityAgent } from '../codex-agent.ts';
+import { NativeCodexAgent } from '../native-codex-agent.ts';
+import { configureNativeCodexResourcesPath, resolveNativeCodexBinary } from '../../codex/binary-resolver.ts';
 import {
   getLlmConnection,
   getDefaultLlmConnection,
@@ -56,7 +58,7 @@ import type {
   ResolvedBackendConfig,
   StoredConnectionValidationResult,
 } from './internal/driver-types.ts';
-import { getDefaultProviderType } from './internal/driver-types.ts';
+import { getBackendRuntime, getDefaultProviderType } from './internal/driver-types.ts';
 import {
   resolveBackendHostTooling as resolveHostToolingPaths,
   resolveBackendRuntimePaths,
@@ -135,7 +137,7 @@ export function detectProvider(authType: string): AgentProvider {
  */
 export function createBackend(config: BackendConfig): AgentBackend {
   if (config.agentRuntime === 'codex') {
-    return new CodexAgent(config);
+    return createCodexBackend(config);
   }
 
   switch (config.provider) {
@@ -208,6 +210,8 @@ export function initializeBackendHostRuntime(args: {
 }): void {
   const { hostRuntime } = args;
 
+  configureNativeCodexResourcesPath(hostRuntime.resourcesPath);
+
   for (const provider of getAvailableProviders()) {
     const { driver, resolvedPaths } = resolveDriverRuntime(provider, hostRuntime);
     driver.initializeHostRuntime?.({ hostRuntime, resolvedPaths });
@@ -276,6 +280,23 @@ export function providerTypeToAgentProvider(providerType: LlmProviderType): Agen
   }
 }
 
+/** Native-first Codex selection, split out so fallback behavior is deterministic in tests. */
+export function createCodexBackend(
+  config: BackendConfig,
+  nativeBinary = resolveNativeCodexBinary(),
+): AgentBackend {
+  const runtime = getBackendRuntime(config);
+  const nativeCompatible = !runtime.baseUrl
+    && !runtime.customEndpoint
+    && ['api_key', 'api_key_with_endpoint', 'oauth', 'none', undefined].includes(config.authType);
+  if (config.authType === 'none' && (!nativeBinary || !nativeCompatible)) {
+    throw new Error('Native Codex is required when using an existing `codex login`; install a tested codex-cli, set CRAFT_CODEX_PATH, and do not configure a custom endpoint.');
+  }
+  return nativeBinary && nativeCompatible
+    ? new NativeCodexAgent(config, nativeBinary)
+    : new CodexCompatibilityAgent(config);
+}
+
 /** Map an explicit runtime protocol to the concrete backend implementation. */
 export function agentRuntimeToAgentProvider(runtime: AgentRuntimeProtocol): AgentProvider {
   return runtime === 'claude-code' ? 'anthropic' : 'pi';
@@ -317,12 +338,12 @@ export function connectionAuthTypeToBackendAuthType(
     case 'bearer_token':
     case 'iam_credentials':
     case 'service_account_file':
-      // Pass through auth types that the backend handles
-      return authType;
     case 'none':
     case 'environment':
-      // These auth types don't require explicit credential passing
-      return undefined;
+      // Preserve the configured mechanism even when it has no stored secret.
+      // Native Codex uses `none` to distinguish an existing `codex login`
+      // from a missing API key, and Pi already accepts these values directly.
+      return authType;
   }
 }
 
