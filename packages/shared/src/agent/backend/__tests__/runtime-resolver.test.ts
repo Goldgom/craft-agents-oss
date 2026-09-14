@@ -34,7 +34,14 @@ describe('resolveServerPath fallback', () => {
     };
 
     const paths = resolveBackendRuntimePaths(hostRuntime);
-    expect(paths.piServerPath).toBe(join(serverDir, 'index.js'));
+    if (process.platform === 'win32') {
+      expect(paths.piServerPath).not.toBe(join(serverDir, 'index.js'));
+      expect(paths.piServerPath).toContain(join('Craft Agents', 'runtime', 'pi-agent-server-'));
+      expect(readFileSync(paths.piServerPath!, 'utf8')).toBe('// stub');
+      rmSync(paths.piServerPath!, { force: true });
+    } else {
+      expect(paths.piServerPath).toBe(join(serverDir, 'index.js'));
+    }
   });
 
   it('prefers resources/ over dist/resources/ when both exist', () => {
@@ -55,7 +62,13 @@ describe('resolveServerPath fallback', () => {
     };
 
     const paths = resolveBackendRuntimePaths(hostRuntime);
-    expect(paths.piServerPath).toBe(join(primaryDir, 'index.js'));
+    if (process.platform === 'win32') {
+      expect(paths.piServerPath).not.toBe(join(primaryDir, 'index.js'));
+      expect(readFileSync(paths.piServerPath!, 'utf8')).toBe('// primary');
+      rmSync(paths.piServerPath!, { force: true });
+    } else {
+      expect(paths.piServerPath).toBe(join(primaryDir, 'index.js'));
+    }
   });
 
   it('falls back to the Pi TypeScript entrypoint when the dev build is missing', () => {
@@ -257,7 +270,7 @@ describe('resolveInterceptorBundlePath dev-mode source preference', () => {
     }
   });
 
-  it('honors explicit hostRuntime.interceptorBundlePath override regardless of mode', () => {
+  it('honors explicit hostRuntime.interceptorBundlePath override in dev mode', () => {
     const appRoot = join(tmpBase, 'override');
     mkdirSync(appRoot, { recursive: true });
     const overridePath = join(appRoot, 'custom-interceptor.cjs');
@@ -271,5 +284,29 @@ describe('resolveInterceptorBundlePath dev-mode source preference', () => {
     };
     const paths = resolveBackendRuntimePaths(hostRuntime);
     expect(paths.interceptorBundlePath).toBe(overridePath);
+  });
+
+  it('stages an explicit interceptor override for packaged Windows runtimes', () => {
+    const appRoot = join(tmpBase, 'packaged-override');
+    mkdirSync(appRoot, { recursive: true });
+    const overridePath = join(appRoot, 'custom-interceptor.cjs');
+    writeFileSync(overridePath, '// packaged custom\n');
+
+    const hostRuntime: BackendHostRuntimeContext = {
+      appRootPath: appRoot,
+      resourcesPath: appRoot,
+      isPackaged: true,
+      interceptorBundlePath: overridePath,
+    };
+    const paths = resolveBackendRuntimePaths(hostRuntime);
+
+    if (process.platform === 'win32') {
+      expect(paths.interceptorBundlePath).not.toBe(overridePath);
+      expect(paths.interceptorBundlePath).toContain(join('Craft Agents', 'runtime', 'interceptor-'));
+      expect(readFileSync(paths.interceptorBundlePath!, 'utf8')).toBe('// packaged custom\n');
+      rmSync(paths.interceptorBundlePath!, { force: true });
+    } else {
+      expect(paths.interceptorBundlePath).toBe(overridePath);
+    }
   });
 });
