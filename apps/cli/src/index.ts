@@ -38,6 +38,7 @@ export interface CliArgs {
   model: string
   apiKey: string
   baseUrl: string
+  agentRuntime: '' | 'pi' | 'codex' | 'claude-code'
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -63,6 +64,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let model = ''
   let apiKey = ''
   let baseUrl = ''
+  let agentRuntime = ''
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -126,6 +128,9 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--base-url':
         baseUrl = args[++i] ?? ''
         break
+      case '--runtime':
+        agentRuntime = args[++i] ?? ''
+        break
       case '--help':
       case '-h':
         command = 'help'
@@ -153,8 +158,12 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!model) model = process.env.LLM_MODEL ?? ''
   if (!apiKey) apiKey = process.env.LLM_API_KEY ?? ''
   if (!baseUrl) baseUrl = process.env.LLM_BASE_URL ?? ''
+  if (!agentRuntime) agentRuntime = process.env.LLM_AGENT_RUNTIME ?? ''
+  if (agentRuntime && !['pi', 'codex', 'claude-code'].includes(agentRuntime)) {
+    throw new Error(`Invalid runtime "${agentRuntime}". Expected pi, codex, or claude-code.`)
+  }
 
-  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl }
+  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl, agentRuntime: agentRuntime as CliArgs['agentRuntime'] }
 }
 
 // ---------------------------------------------------------------------------
@@ -567,8 +576,8 @@ export function resolveApiKey(provider: string, explicit: string): string {
   )
 }
 
-export function shouldSetupLlmConnection(existingConnectionCount: number, args: Pick<CliArgs, 'provider' | 'baseUrl'>): boolean {
-  return existingConnectionCount === 0 || !!args.baseUrl || args.provider !== 'anthropic'
+export function shouldSetupLlmConnection(existingConnectionCount: number, args: Pick<CliArgs, 'provider' | 'baseUrl' | 'agentRuntime'>): boolean {
+  return existingConnectionCount === 0 || !!args.baseUrl || !!args.agentRuntime || args.provider !== 'anthropic'
 }
 
 async function setupLlmConnection(
@@ -576,6 +585,12 @@ async function setupLlmConnection(
   args: CliArgs,
 ): Promise<{ connectionSlug: string }> {
   const { provider, baseUrl } = args
+  if (args.agentRuntime === 'codex' && (provider !== 'openai' || !!baseUrl)) {
+    throw new Error('The codex runtime requires a direct OpenAI provider connection.')
+  }
+  if (args.agentRuntime === 'claude-code' && (provider !== 'anthropic' || !!baseUrl)) {
+    throw new Error('The claude-code runtime requires a direct Anthropic provider connection.')
+  }
   const key = resolveApiKey(provider, args.apiKey)
   const connectionSlug = `${provider}-cli`
 
@@ -627,6 +642,7 @@ async function setupLlmConnection(
     providerType,
     authType,
     createdAt: Date.now(),
+    agentRuntime: args.agentRuntime || undefined,
   })
   const setupResult = await client.invoke('settings:setupLlmConnection', setupPayload) as { success: boolean; error?: string }
   if (!setupResult?.success) {
@@ -750,6 +766,7 @@ async function cmdValidate(args: CliArgs): Promise<void> {
       baseUrl: args.baseUrl,
       apiKey: args.apiKey,
       provider: args.provider,
+      agentRuntime: args.agentRuntime,
     })
     client.destroy()
     if (server) await server.stop()
@@ -834,6 +851,8 @@ export interface ValidateContext {
   apiKey?: string
   /** Provider hint (from --provider, default 'anthropic') */
   provider?: string
+  /** Agent runtime protocol selected for the validation connection */
+  agentRuntime?: CliArgs['agentRuntime']
   workspaceId?: string
   workspaceRootPath?: string
   createdWorkspace?: boolean
@@ -1085,10 +1104,19 @@ export function getValidateSteps(): ValidateStep[] {
       name: 'LLM_Connection:list',
       fn: async (client, ctx) => {
         const r = (await client.invoke('LLM_Connection:list')) as any[]
+        const agentRuntime = ctx.agentRuntime ?? ''
+        const requestedProvider = ctx.provider || 'anthropic'
+
+        if (agentRuntime === 'codex' && (requestedProvider !== 'openai' || !!ctx.baseUrl)) {
+          return 'setup failed: the codex runtime requires a direct OpenAI provider connection'
+        }
+        if (agentRuntime === 'claude-code' && (requestedProvider !== 'anthropic' || !!ctx.baseUrl)) {
+          return 'setup failed: the claude-code runtime requires a direct Anthropic provider connection'
+        }
 
         // Custom endpoint: always create/update when --base-url is provided
         if (ctx.baseUrl) {
-          const provider = ctx.provider || 'anthropic'
+          const provider = requestedProvider
           let key = ''
           try {
             key = resolveApiKey(provider, ctx.apiKey || '')
@@ -1103,6 +1131,7 @@ export function getValidateSteps(): ValidateStep[] {
             providerType: 'pi_compat',
             authType: 'api_key_with_endpoint',
             createdAt: Date.now(),
+            agentRuntime: agentRuntime || undefined,
           })
           const result = await client.invoke('settings:setupLlmConnection', {
             slug,
@@ -1133,6 +1162,7 @@ export function getValidateSteps(): ValidateStep[] {
             authType: 'iam_credentials',
             piAuthProvider: 'amazon-bedrock',
             createdAt: Date.now(),
+            agentRuntime: agentRuntime || undefined,
           })
           const result = await client.invoke('settings:setupLlmConnection', {
             slug,
@@ -1146,8 +1176,12 @@ export function getValidateSteps(): ValidateStep[] {
           return `${r?.length ?? 0} existing + Bedrock IAM (${region})`
         }
 
-        const provider = ctx.provider || 'anthropic'
-        if (!shouldSetupLlmConnection(r?.length ?? 0, { provider, baseUrl: ctx.baseUrl ?? '' })) {
+        const provider = requestedProvider
+        if (!shouldSetupLlmConnection(r?.length ?? 0, {
+          provider,
+          baseUrl: ctx.baseUrl ?? '',
+          agentRuntime,
+        })) {
           return `${r.length} connections`
         }
         // Auto-setup from env / flags for the requested provider.
@@ -1166,6 +1200,7 @@ export function getValidateSteps(): ValidateStep[] {
           providerType,
           authType,
           createdAt: Date.now(),
+          agentRuntime: agentRuntime || undefined,
         })
         const setupPayload = provider === 'anthropic'
           ? { slug, credential: key }
@@ -1723,7 +1758,12 @@ export async function runValidation(
   jsonMode: boolean,
   noSpinner?: boolean,
   workspaceDir?: string,
-  validateOptions?: { baseUrl?: string; apiKey?: string; provider?: string },
+  validateOptions?: {
+    baseUrl?: string
+    apiKey?: string
+    provider?: string
+    agentRuntime?: CliArgs['agentRuntime']
+  },
 ): Promise<number> {
   const steps = getValidateSteps()
   const total = steps.length
@@ -1732,6 +1772,7 @@ export async function runValidation(
     baseUrl: validateOptions?.baseUrl,
     apiKey: validateOptions?.apiKey,
     provider: validateOptions?.provider,
+    agentRuntime: validateOptions?.agentRuntime,
   }
   let passed = 0
   let failed = 0
@@ -1926,6 +1967,7 @@ LLM Configuration (for 'run' command):
   --model <id>           Model to use (or $LLM_MODEL)
   --api-key <key>        API key (or $LLM_API_KEY, or provider-specific e.g. $OPENAI_API_KEY)
   --base-url <url>       Custom API endpoint (or $LLM_BASE_URL)
+  --runtime <protocol>   Agent runtime: pi, codex, or claude-code (or $LLM_AGENT_RUNTIME)
 
 Commands:
   run <message>          Spawn server, send message, stream response, exit

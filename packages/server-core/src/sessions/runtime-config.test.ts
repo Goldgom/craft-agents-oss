@@ -20,6 +20,7 @@ function sig(connection: LlmConnection) {
   return buildBackendRuntimeSignature({
     connection,
     provider: 'pi',
+    agentRuntime: 'pi',
     authType: 'api_key',
     resolvedModel: 'gemma',
   })
@@ -56,6 +57,19 @@ describe('buildBackendRuntimeSignature', () => {
 
   it('ignores non-runtime metadata such as lastUsedAt', () => {
     expect(sig({ ...baseCompat, lastUsedAt: 1 })).toBe(sig({ ...baseCompat, lastUsedAt: 2 }))
+  })
+
+  it('changes when the agent runtime protocol changes', () => {
+    const pi = sig(baseCompat)
+    const codex = buildBackendRuntimeSignature({
+      connection: baseCompat,
+      provider: 'pi',
+      agentRuntime: 'codex',
+      authType: 'api_key',
+      resolvedModel: 'gemma',
+    })
+
+    expect(codex).not.toBe(pi)
   })
 })
 

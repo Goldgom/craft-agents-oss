@@ -23,6 +23,7 @@ import { useSetAtom } from 'jotai'
 import { fullscreenOverlayOpenAtom } from '@/atoms/overlay'
 import { motion, AnimatePresence } from 'motion/react'
 import type { LlmConnectionWithStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
+import type { AgentRuntimeProtocol } from '@craft-agent/shared/config'
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS } from '@craft-agent/shared/agent/thinking-levels'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import {
@@ -53,7 +54,7 @@ import { OnboardingWizard, type ApiSetupMethod } from '@/components/onboarding'
 import { RenameDialog } from '@/components/ui/rename-dialog'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { getModelShortName, type ModelDefinition } from '@config/models'
-import { getModelsForProviderType, resolveMidStreamBehavior, type CustomEndpointApi, type MidStreamBehavior } from '@config/llm-connections'
+import { getCompatibleAgentRuntimes, getModelsForProviderType, resolveAgentRuntime, resolveMidStreamBehavior, type CustomEndpointApi, type MidStreamBehavior } from '@config/llm-connections'
 import { toast } from 'sonner'
 
 /**
@@ -253,6 +254,7 @@ interface ConnectionRowProps {
   onReauthenticate: () => void
   onEdit: () => void
   onSetMidStreamBehavior: (behavior: MidStreamBehavior) => void
+  onSetAgentRuntime: (runtime: AgentRuntimeProtocol) => void
   validationState: ValidationState
   validationError?: string
   balance?: ApiBalance
@@ -260,7 +262,7 @@ interface ConnectionRowProps {
   isDuplicateAccount?: boolean
 }
 
-function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, onSetDefault, onValidate, onReauthenticate, onEdit, onSetMidStreamBehavior, validationState, validationError, balance, isDuplicateAccount }: ConnectionRowProps) {
+function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, onSetDefault, onValidate, onReauthenticate, onEdit, onSetMidStreamBehavior, onSetAgentRuntime, validationState, validationError, balance, isDuplicateAccount }: ConnectionRowProps) {
   const { t } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
   const [piBaseUrl, setPiBaseUrl] = useState<string | undefined>(undefined)
@@ -447,6 +449,20 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
               </DropdownMenuSub>
             )
           })()}
+          <DropdownMenuSub>
+            <StyledDropdownMenuSubTrigger>
+              <Settings2 className="h-3.5 w-3.5" />
+              <span>{t('settings.ai.runtime.title')}</span>
+            </StyledDropdownMenuSubTrigger>
+            <StyledDropdownMenuSubContent>
+              {getCompatibleAgentRuntimes(connection).map(runtime => (
+                <StyledDropdownMenuItem key={runtime} onClick={() => onSetAgentRuntime(runtime)}>
+                  <span className="flex-1">{t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}`)}</span>
+                  {resolveAgentRuntime(connection) === runtime && <Check className="h-3.5 w-3.5" />}
+                </StyledDropdownMenuItem>
+              ))}
+            </StyledDropdownMenuSubContent>
+          </DropdownMenuSub>
           <StyledDropdownMenuSeparator />
           <StyledDropdownMenuItem
             onClick={onDelete}
@@ -1054,6 +1070,29 @@ export default function AiSettingsPage() {
     }
   }, [refreshLlmConnections, t])
 
+  const handleSetAgentRuntime = useCallback(async (
+    connection: LlmConnectionWithStatus,
+    runtime: AgentRuntimeProtocol,
+  ) => {
+    if (!window.electronAPI) return
+    if (!getCompatibleAgentRuntimes(connection).includes(runtime)) return
+    if (resolveAgentRuntime(connection) === runtime) return
+    try {
+      const updated = { ...connection, agentRuntime: runtime }
+      const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = updated
+      const result = await window.electronAPI.saveLlmConnection(connectionData as import('../../../shared/types').LlmConnection)
+      if (result.success) {
+        await refreshLlmConnections()
+        toast.success(t('settings.ai.runtime.updated'))
+      } else {
+        toast.error(t('settings.ai.runtime.updateFailed'))
+      }
+    } catch (error) {
+      console.error('Failed to update agent runtime:', error)
+      toast.error(t('settings.ai.runtime.updateFailed'))
+    }
+  }, [refreshLlmConnections, t])
+
   const handleModelPromptSettingChange = useCallback(async (
     connection: LlmConnectionWithStatus,
     model: string,
@@ -1228,6 +1267,19 @@ export default function AiSettingsPage() {
                       description: t(descriptionKey),
                     }))}
                   />
+                  <SettingsMenuSelectRow
+                    label={t('settings.ai.runtime.title')}
+                    description={t('settings.ai.runtime.description')}
+                    value={defaultConnection ? resolveAgentRuntime(defaultConnection) : 'pi'}
+                    onValueChange={(value) => {
+                      if (defaultConnection) void handleSetAgentRuntime(defaultConnection, value as AgentRuntimeProtocol)
+                    }}
+                    options={(defaultConnection ? getCompatibleAgentRuntimes(defaultConnection) : ['pi']).map(runtime => ({
+                      value: runtime,
+                      label: t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}`),
+                      description: t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}Desc`),
+                    }))}
+                  />
                 </SettingsCard>
               </SettingsSection>
               )}
@@ -1295,6 +1347,7 @@ export default function AiSettingsPage() {
                         onReauthenticate={() => handleReauthenticateConnection(conn)}
                         onEdit={() => handleEditConnection(conn)}
                         onSetMidStreamBehavior={(behavior) => handleSetMidStreamBehavior(conn, behavior)}
+                        onSetAgentRuntime={(runtime) => handleSetAgentRuntime(conn, runtime)}
                         validationState={validationStates[conn.slug]?.state || 'idle'}
                         validationError={validationStates[conn.slug]?.error}
                         balance={apiBalances.find(balance => balance.connectionSlug === conn.slug)}

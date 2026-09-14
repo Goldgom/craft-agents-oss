@@ -31,6 +31,7 @@ import type { Workspace, LlmConnection } from '../../../config/storage.ts';
 import type { SessionConfig as Session } from '../../../sessions/storage.ts';
 import { ClaudeAgent } from '../../claude-agent.ts';
 import { PiAgent } from '../../pi-agent.ts';
+import { CodexAgent } from '../../codex-agent.ts';
 import { isValidProviderAuthCombination } from '../../../config/llm-connections.ts';
 
 // Test helpers
@@ -100,6 +101,27 @@ describe('createBackend / createAgent', () => {
       const agent = createBackend(config);
 
       expect(agent).toBeInstanceOf(PiAgent);
+    });
+  });
+
+  describe('Explicit runtime protocol', () => {
+    it('creates the isolated Codex compatibility runtime', () => {
+      const agent = createBackend(createTestConfig({ provider: 'pi', agentRuntime: 'codex' }));
+
+      expect(agent).toBeInstanceOf(CodexAgent);
+    });
+
+    it('uses Pi when an Anthropic connection explicitly selects Pi', () => {
+      const agent = createBackend(createTestConfig({ provider: 'pi', agentRuntime: 'pi' }));
+
+      expect(agent).toBeInstanceOf(PiAgent);
+      expect(agent).not.toBeInstanceOf(CodexAgent);
+    });
+
+    it('keeps the legacy Anthropic default on Claude Code', () => {
+      const agent = createBackend(createTestConfig({ provider: 'anthropic' }));
+
+      expect(agent).toBeInstanceOf(ClaudeAgent);
     });
   });
 

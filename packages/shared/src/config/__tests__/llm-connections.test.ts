@@ -11,6 +11,8 @@ import {
   fromBedrockNativeId,
   normalizeBedrockModelId,
   deriveBedrockRegionPrefix,
+  getCompatibleAgentRuntimes,
+  resolveAgentRuntime,
 } from '../llm-connections'
 import { ANTHROPIC_MODELS, getModelDisplayName, getModelContextWindow, getModelShortName, isClaudeModel, normalizeDeprecatedModelId } from '../models'
 
@@ -179,6 +181,35 @@ describe('isPiProvider', () => {
 
   it('returns false for anthropic', () => {
     expect(isPiProvider('anthropic')).toBe(false)
+  })
+})
+
+describe('agent runtime compatibility', () => {
+  it('offers Pi and Claude Code for direct Anthropic connections', () => {
+    expect(getCompatibleAgentRuntimes({ providerType: 'anthropic' })).toEqual([
+      'pi',
+      'claude-code',
+    ])
+  })
+
+  it('offers Codex only for OpenAI transports managed by Pi', () => {
+    expect(getCompatibleAgentRuntimes({ providerType: 'pi', piAuthProvider: 'openai' })).toEqual([
+      'pi',
+      'codex',
+    ])
+    expect(getCompatibleAgentRuntimes({ providerType: 'pi', piAuthProvider: 'openai-codex' })).toEqual([
+      'pi',
+      'codex',
+    ])
+    expect(getCompatibleAgentRuntimes({ providerType: 'pi', piAuthProvider: 'google' })).toEqual(['pi'])
+    expect(getCompatibleAgentRuntimes({ providerType: 'pi_compat', piAuthProvider: 'openai' })).toEqual(['pi'])
+  })
+
+  it('keeps legacy defaults and fails soft for incompatible persisted values', () => {
+    expect(resolveAgentRuntime({ providerType: 'anthropic' })).toBe('claude-code')
+    expect(resolveAgentRuntime({ providerType: 'pi', piAuthProvider: 'openai' })).toBe('pi')
+    expect(resolveAgentRuntime({ providerType: 'anthropic', agentRuntime: 'codex' })).toBe('claude-code')
+    expect(resolveAgentRuntime({ providerType: 'pi', piAuthProvider: 'google', agentRuntime: 'claude-code' })).toBe('pi')
   })
 })
 

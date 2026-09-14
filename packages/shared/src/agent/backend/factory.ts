@@ -25,6 +25,7 @@ import type {
 } from './types.ts';
 import { ClaudeAgent } from '../claude-agent.ts';
 import { PiAgent } from '../pi-agent.ts';
+import { CodexAgent } from '../codex-agent.ts';
 import {
   getLlmConnection,
   getDefaultLlmConnection,
@@ -34,9 +35,11 @@ import {
 import type { LlmConnectionType, CustomEndpointConfig } from '../../config/llm-connections.ts';
 // Import validation helpers for provider-auth combinations
 import {
+  resolveAgentRuntime,
   isValidProviderAuthCombination,
   getModelPromptSettings,
 } from '../../config/llm-connections.ts';
+import type { AgentRuntimeProtocol } from '../../config/llm-connections.ts';
 import { parseValidationError, type LlmValidationResult } from '../../config/llm-validation.ts';
 import type { ModelFetchResult } from '../../config/model-fetcher.ts';
 // Model resolution utilities
@@ -131,6 +134,10 @@ export function detectProvider(authType: string): AgentProvider {
  * ```
  */
 export function createBackend(config: BackendConfig): AgentBackend {
+  if (config.agentRuntime === 'codex') {
+    return new CodexAgent(config);
+  }
+
   switch (config.provider) {
     case 'anthropic':
       // ClaudeAgent implements AgentBackend directly
@@ -179,6 +186,7 @@ export function createBackendFromResolvedContext(args: {
   const config: ResolvedBackendConfig = {
     ...coreConfig,
     provider: context.provider,
+    agentRuntime: context.agentRuntime,
     providerType: context.connection?.providerType ?? getDefaultProviderType(context.provider),
     authType: context.authType || getDefaultAuthType(context.provider),
     model: context.resolvedModel,
@@ -266,6 +274,11 @@ export function providerTypeToAgentProvider(providerType: LlmProviderType): Agen
       const _exhaustive: never = providerType;
       return 'anthropic';
   }
+}
+
+/** Map an explicit runtime protocol to the concrete backend implementation. */
+export function agentRuntimeToAgentProvider(runtime: AgentRuntimeProtocol): AgentProvider {
+  return runtime === 'claude-code' ? 'anthropic' : 'pi';
 }
 
 /**
@@ -362,9 +375,8 @@ export function resolveBackendContext(args: {
     args.workspaceDefaultConnectionSlug
   );
 
-  const provider = connection
-    ? providerTypeToAgentProvider(connection.providerType || 'anthropic')
-    : 'anthropic';
+  const agentRuntime = connection ? resolveAgentRuntime(connection) : 'claude-code';
+  const provider = agentRuntimeToAgentProvider(agentRuntime);
 
   const authType = connection
     ? connectionAuthTypeToBackendAuthType(connection.authType)
@@ -375,6 +387,7 @@ export function resolveBackendContext(args: {
   return {
     connection,
     provider,
+    agentRuntime,
     authType,
     resolvedModel,
     capabilities: BACKEND_CAPABILITIES[provider],
@@ -506,11 +519,13 @@ export function createConfigFromConnection(
 ): BackendConfig {
   // Use new providerType if available, fall back to legacy type
   const providerType = connection.providerType || (connection.type ? connectionTypeToProvider(connection.type) as unknown as LlmProviderType : 'anthropic');
-  const provider = providerTypeToAgentProvider(providerType);
+  const agentRuntime = resolveAgentRuntime(connection);
+  const provider = agentRuntimeToAgentProvider(agentRuntime);
 
   return {
     ...baseConfig,
     provider,
+    agentRuntime,
     providerType,
     authType: connection.authType,
     connectionSlug: connection.slug,
@@ -549,16 +564,19 @@ export function createBackendFromConnection(
     );
   }
 
+  const agentRuntime = resolveAgentRuntime(connection);
+  const provider = agentRuntimeToAgentProvider(agentRuntime);
   const context: ResolvedBackendContext = {
     connection,
-    provider: providerTypeToAgentProvider(connection.providerType || 'anthropic'),
+    provider,
+    agentRuntime,
     authType: connectionAuthTypeToBackendAuthType(connection.authType),
     resolvedModel: resolveModelForProvider(
-      providerTypeToAgentProvider(connection.providerType || 'anthropic'),
+      provider,
       baseConfig.model,
       connection
     ),
-    capabilities: BACKEND_CAPABILITIES[providerTypeToAgentProvider(connection.providerType || 'anthropic')],
+    capabilities: BACKEND_CAPABILITIES[provider],
   };
 
   if (hostRuntime) {
@@ -732,6 +750,7 @@ export async function testBackendConnection(args: {
     const context: ResolvedBackendContext = {
       connection: syntheticConnection,
       provider: args.provider,
+      agentRuntime: args.provider === 'anthropic' ? 'claude-code' : 'pi',
       authType,
       resolvedModel: testModel,
       capabilities: BACKEND_CAPABILITIES[args.provider],

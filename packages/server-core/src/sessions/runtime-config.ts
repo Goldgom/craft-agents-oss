@@ -1,10 +1,11 @@
-import type { AgentProvider, LlmAuthType } from '@craft-agent/shared/agent/backend'
+import type { AgentProvider, AgentRuntimeProtocol, LlmAuthType } from '@craft-agent/shared/agent/backend'
 import { isCompatProvider, modelSupportsImages, type LlmConnection } from '@craft-agent/shared/config'
 import type { FileAttachment } from '@craft-agent/shared/protocol'
 
 export interface BackendRuntimeSignatureInput {
   connection: LlmConnection | null
   provider: AgentProvider
+  agentRuntime: AgentRuntimeProtocol
   authType?: LlmAuthType
   resolvedModel: string
 }
@@ -48,9 +49,10 @@ function normalizeCustomModels(connection: LlmConnection): Array<Record<string, 
  * fully reset on a runtime update.
  */
 export function buildRestartRequiredSignature(input: BackendRuntimeSignatureInput): string {
-  const { connection, provider, authType } = input
+  const { connection, provider, agentRuntime, authType } = input
   return JSON.stringify(definedObject({
     provider,
+    agentRuntime,
     authType,
     slug: connection?.slug,
     providerType: connection?.providerType,
@@ -63,7 +65,7 @@ export function buildRestartRequiredSignature(input: BackendRuntimeSignatureInpu
  * backend runtime. Metadata such as `lastUsedAt` is intentionally omitted.
  */
 export function buildBackendRuntimeSignature(input: BackendRuntimeSignatureInput): string {
-  const { connection, provider, authType, resolvedModel } = input
+  const { connection, provider, agentRuntime, authType, resolvedModel } = input
 
   const connectionShape = connection
     ? definedObject({
@@ -91,6 +93,7 @@ export function buildBackendRuntimeSignature(input: BackendRuntimeSignatureInput
 
   return JSON.stringify(definedObject({
     provider,
+    agentRuntime,
     authType,
     resolvedModel,
     connection: connectionShape,

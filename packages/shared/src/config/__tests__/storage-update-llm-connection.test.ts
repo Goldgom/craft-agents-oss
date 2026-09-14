@@ -116,6 +116,22 @@ describe('updateLlmConnection – customEndpoint', () => {
   })
 })
 
+describe('updateLlmConnection – agentRuntime', () => {
+  it('persists a selected runtime', () => {
+    const { runUpdate, readConnection } = setup([makeConnection()])
+
+    expect(runUpdate('custom-compat', { agentRuntime: 'pi' })).toBe(true)
+    expect(readConnection('custom-compat').agentRuntime).toBe('pi')
+  })
+
+  it('preserves the runtime across unrelated updates', () => {
+    const { runUpdate, readConnection } = setup([makeConnection({ agentRuntime: 'pi' })])
+
+    expect(runUpdate('custom-compat', { name: 'Renamed Endpoint' })).toBe(true)
+    expect(readConnection('custom-compat').agentRuntime).toBe('pi')
+  })
+})
+
 describe('updateLlmConnection – Anthropic OAuth identity (issue #838)', () => {
   const identity = {
     oauthAccountUuid: 'acct-uuid-123',

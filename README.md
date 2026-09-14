@@ -134,6 +134,14 @@ bun run apps/cli/src/index.ts sessions
 bun run apps/cli/src/index.ts send <会话ID> "列出待处理事项"
 ```
 
+小型服务器可直接构建精简的 CLI + Agent 发行版（不含 Web UI、消息渠道和
+文档转换工具链）：
+
+```bash
+bun run cli:build                 # 当前平台，输出 dist/cli
+bun run cli:build:linux-x64       # Linux x64 压缩包
+```
+
 执行 `bun run apps/cli/src/index.ts --help` 查看完整命令，包括工作区、来源、模型、输出格式、取消任务和服务器验证。
 
 ## 远程服务器

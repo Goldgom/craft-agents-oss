@@ -13,7 +13,9 @@ import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
 import type { ModelPromptSettings } from '../config/llm-connections.ts';
+import type { AgentRuntimeProtocol } from '../config/llm-connections.ts';
 import type { SystemPromptSource } from '../protocol/dto.ts';
+import { getAgentRuntimePrompt, inferAgentRuntimeFromBackendName } from './runtimes/index.ts';
 import {
   loadWorkspacePrompts,
   loadEnabledWorkspacePrompts,
@@ -356,10 +358,12 @@ export function getLightweightModelSystemPrompt(
   backendName: string = 'Craft Agent',
   includeCoAuthoredBy: boolean = true,
   agentPrompt?: string,
+  agentRuntime?: AgentRuntimeProtocol,
 ): string {
   const workspace = workspaceRootPath ? `\nWorkspace: \`${workspaceRootPath}\`` : '';
   const coAuthor = includeCoAuthoredBy ? '\n- Include co-authored attribution when appropriate.' : '';
   const agent = agentPrompt?.trim() ? `\n\n<agent_instructions>\n${agentPrompt.trim()}\n</agent_instructions>` : '';
+  const runtimePrompt = getAgentRuntimePrompt(agentRuntime ?? inferAgentRuntimeFromBackendName(backendName));
   return `You are Craft Agent, powered by ${backendName}. Help the user complete their request accurately and safely.${workspace}
 
 ## Essential rules
@@ -367,7 +371,9 @@ export function getLightweightModelSystemPrompt(
 - Use available tools directly; understand parameters first, inspect results, and recover from errors.
 - For file or command changes, make only requested modifications and verify the result.
 - Be concise; state what you did and any blockers.${coAuthor}
-${agent}`;
+${agent}
+
+${runtimePrompt}`;
 }
 
 /**
@@ -394,6 +400,7 @@ export function getSystemPrompt(
   projectContext?: ProjectPromptContext,
   agentPrompt?: string,
   modelPromptSettings?: ModelPromptSettings,
+  agentRuntime?: AgentRuntimeProtocol,
 ): string {
   // Use mini agent prompt for quick edits (pass workspace root for config paths)
   if (preset === 'mini') {
@@ -403,7 +410,7 @@ export function getSystemPrompt(
 
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference();
   if (modelPromptSettings?.lightweight) {
-    let prompt = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, agentPrompt);
+    let prompt = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, agentPrompt, agentRuntime);
     if (modelPromptSettings.mcpPromptEnhancement) prompt += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`;
     return prompt;
   }
@@ -430,7 +437,7 @@ export function getSystemPrompt(
   // Note: Date/time context is now added to user messages instead of system prompt
   // to enable prompt caching. The system prompt stays static and cacheable.
   // Safe Mode context is also in user messages for the same reason.
-  const basePrompt = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy);
+  const basePrompt = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, agentRuntime);
   const agentBlock = agentPrompt?.trim()
     ? `\n\n<agent_instructions>\n${agentPrompt.trim()}\n</agent_instructions>`
     : '';
@@ -615,7 +622,12 @@ function getCraftAgentEnvironmentMarker(): string {
  * @param backendName - Backend name for "powered by X" text (default: 'Claude Code')
  * @param includeCoAuthoredBy - Whether to include the Co-Authored-By git trailer instruction (default: true)
  */
-export function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string = 'Claude Code', includeCoAuthoredBy: boolean = true): string {
+export function getCraftAssistantPrompt(
+  workspaceRootPath?: string,
+  backendName: string = 'Claude Code',
+  includeCoAuthoredBy: boolean = true,
+  agentRuntime?: AgentRuntimeProtocol,
+): string {
   // Default to ${APP_ROOT}/workspaces/{id} if no path provided
   const workspacePath = workspaceRootPath || `${APP_ROOT}/workspaces/{id}`;
 
@@ -628,6 +640,7 @@ export function getCraftAssistantPrompt(workspaceRootPath?: string, backendName:
   // Environment marker for SDK JSONL detection
   const environmentMarker = getCraftAgentEnvironmentMarker();
   const promptSettings = getSystemPromptSettings();
+  const runtimePrompt = getAgentRuntimePrompt(agentRuntime ?? inferAgentRuntimeFromBackendName(backendName));
 
   const browserToolsSection = getBrowserToolEnabled() ? `
 ## Browser Tools
@@ -691,6 +704,8 @@ You are Craft Agent - an AI assistant that helps users connect and work across t
 - **Connect external sources** - MCP servers, REST APIs, local filesystems. Users can integrate Linear, GitHub, Craft, custom APIs, and more.
 - **Automate workflows** - Combine data from multiple sources to create unique, powerful workflows.
 - **Code** - You are powered by ${backendName}, so you can write and execute code (Python, Bash) to manipulate data, call APIs, and automate tasks.
+
+${runtimePrompt}
 
 **Product documentation:** The Craft Agents docs live at https://thecraftagents.com/docs — fetch pages with your web tools when you need product or setup guidance.
 
@@ -1382,16 +1397,20 @@ export function getSystemPromptSources(
   includeCoAuthoredBy?: boolean,
   projectContext?: ProjectPromptContext,
   modelPromptSettings?: ModelPromptSettings,
+  agentRuntime?: AgentRuntimeProtocol,
 ): SystemPromptSource[] {
   if (preset === 'mini') return [{ id: 'mini-system', source: 'builtin', title: 'Mini system prompt', content: getMiniAgentSystemPrompt(workspaceRootPath), enabled: true }]
   const preferences = pinnedPreferencesPrompt ?? formatPreferencesForPrompt()
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference()
   if (modelPromptSettings?.lightweight) {
-    let content = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy)
+    let content = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, undefined, agentRuntime)
     if (modelPromptSettings.mcpPromptEnhancement) content += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`
     return [{ id: 'lightweight-system', source: 'builtin', title: 'Lightweight system prompt', content, enabled: true }]
   }
-  const fullBuiltin = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy)
+  const resolvedRuntime = agentRuntime ?? inferAgentRuntimeFromBackendName(backendName)
+  const runtimePrompt = getAgentRuntimePrompt(resolvedRuntime)
+  const runtimeHeading = runtimePrompt.split('\n', 1)[0]!
+  const fullBuiltin = getCraftAssistantPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, resolvedRuntime)
   let coreBuiltin = fullBuiltin
   const sources: SystemPromptSource[] = []
   const capabilitySections: Array<[SystemPromptCapabilityId, string, string]> = [
@@ -1408,8 +1427,10 @@ export function getSystemPromptSources(
       coreBuiltin = removePromptSection(coreBuiltin, heading)
     }
   }
+  coreBuiltin = removePromptSection(coreBuiltin, runtimeHeading)
   coreBuiltin = removePromptSection(coreBuiltin, '## User supplemental instructions')
   sources.unshift({ id: 'craft-agent-system', source: 'builtin', title: 'Craft Agent core system prompt', content: coreBuiltin, enabled: true })
+  sources.splice(1, 0, { id: `runtime:${resolvedRuntime}`, source: 'builtin', title: `${resolvedRuntime} runtime prompt`, content: runtimePrompt, enabled: true })
   if (preferences.trim()) sources.push({ id: 'user-preferences', source: 'user', title: 'User preferences', content: preferences, enabled: true })
   const editable = getSystemPromptSettings().editableInstructions?.trim()
   if (editable) sources.push({ id: 'user-editable-instructions', source: 'user', title: 'User supplemental instructions', content: editable, enabled: true })

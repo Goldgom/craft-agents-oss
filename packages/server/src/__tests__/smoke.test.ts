@@ -10,6 +10,8 @@
 
 import { describe, it, expect, afterEach } from 'bun:test'
 import { join } from 'node:path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import type { Subprocess } from 'bun'
 import WebSocket from 'ws'
 
@@ -28,8 +30,12 @@ interface SpawnedServer {
 async function spawnTestServer(extraEnv?: Record<string, string>): Promise<SpawnedServer> {
   const token = crypto.randomUUID() + crypto.randomUUID() // 72 chars, well above 16 minimum
   const { CLAUDECODE: _, ...parentEnv } = process.env
+  // A force-killed server can leave the process lock behind on Windows. Give
+  // every smoke instance its own config root so one test cannot poison the
+  // next one (or collide with the user's real headless server).
+  const configDir = mkdtempSync(join(tmpdir(), 'craft-agent-server-smoke-'))
 
-  const proc = Bun.spawn(['bun', 'run', SERVER_ENTRY], {
+  const proc = Bun.spawn([process.execPath, SERVER_ENTRY], {
     env: {
       ...parentEnv,
       ...extraEnv,
@@ -37,10 +43,12 @@ async function spawnTestServer(extraEnv?: Record<string, string>): Promise<Spawn
       CRAFT_RPC_PORT: '0',
       CRAFT_RPC_HOST: '127.0.0.1',
       CRAFT_HEALTH_PORT: '0', // random port
+      CRAFT_CONFIG_DIR: configDir,
     },
     stdout: 'pipe',
     stderr: 'pipe',
   })
+  void proc.exited.then(() => rmSync(configDir, { recursive: true, force: true }))
 
   return new Promise<SpawnedServer>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -151,18 +159,21 @@ describe('headless server smoke test', () => {
   it('rejects short token at startup', async () => {
     const token = 'short'
     const { CLAUDECODE: _, ...parentEnv } = process.env
-    const proc = Bun.spawn(['bun', 'run', SERVER_ENTRY], {
+    const configDir = mkdtempSync(join(tmpdir(), 'craft-agent-server-smoke-'))
+    const proc = Bun.spawn([process.execPath, SERVER_ENTRY], {
       env: {
         ...parentEnv,
         CRAFT_SERVER_TOKEN: token,
         CRAFT_RPC_PORT: '0',
         CRAFT_RPC_HOST: '127.0.0.1',
+        CRAFT_CONFIG_DIR: configDir,
       },
       stdout: 'pipe',
       stderr: 'pipe',
     })
 
     const exitCode = await proc.exited
+    rmSync(configDir, { recursive: true, force: true })
     expect(exitCode).not.toBe(0)
   }, TEST_TIMEOUT)
 

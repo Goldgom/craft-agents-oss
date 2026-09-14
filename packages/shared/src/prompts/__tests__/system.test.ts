@@ -9,7 +9,7 @@ mock.module('../../config/preferences.ts', () => ({
   formatPreferencesForPrompt: () => '',
 }))
 
-import { getSystemPrompt, formatProjectContextForPrompt } from '../system'
+import { getSystemPrompt, getSystemPromptSources, formatProjectContextForPrompt } from '../system'
 import type { ProjectPromptContext } from '../../projects/types.ts'
 
 const GIT_CONVENTIONS_HEADING = '## Git Conventions'
@@ -35,6 +35,56 @@ describe('system prompt guidance', () => {
 
     expect(prompt).toContain('The subtask needs file/shell tools (for example, Read or Bash)')
     expect(prompt).not.toContain('The subtask needs tools (Read, Bash, Grep)')
+  })
+})
+
+describe('runtime-specific prompt documents', () => {
+  const runtimeHeadings = {
+    pi: '## Runtime protocol: Pi',
+    codex: '## Runtime protocol: Codex',
+    'claude-code': '## Runtime protocol: Claude Code',
+  } as const
+
+  for (const runtime of Object.keys(runtimeHeadings) as Array<keyof typeof runtimeHeadings>) {
+    it(`injects only the ${runtime} runtime document`, () => {
+      const prompt = getSystemPrompt(
+        undefined,
+        undefined,
+        '/tmp/workspace',
+        '/tmp/workspace',
+        undefined,
+        'Test Backend',
+        true,
+        undefined,
+        undefined,
+        undefined,
+        runtime,
+      )
+
+      expect(prompt).toContain(runtimeHeadings[runtime])
+      for (const [otherRuntime, heading] of Object.entries(runtimeHeadings)) {
+        if (otherRuntime !== runtime) expect(prompt).not.toContain(heading)
+      }
+    })
+  }
+
+  it('exposes the selected runtime as its own Prompt Overview source', () => {
+    const sources = getSystemPromptSources(
+      undefined,
+      undefined,
+      '/tmp/workspace',
+      '/tmp/workspace',
+      undefined,
+      'Codex compatibility runtime',
+      true,
+      undefined,
+      undefined,
+      'codex',
+    )
+
+    const runtimeSource = sources.find(source => source.id === 'runtime:codex')
+    expect(runtimeSource?.content).toContain(runtimeHeadings.codex)
+    expect(sources.find(source => source.id === 'craft-agent-system')?.content).not.toContain(runtimeHeadings.codex)
   })
 })
 

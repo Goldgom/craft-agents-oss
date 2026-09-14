@@ -6,6 +6,7 @@ describe('piDriver.buildRuntime custom endpoint models', () => {
     const runtime = piDriver.buildRuntime({
       context: {
         provider: 'pi',
+        agentRuntime: 'pi',
         authType: 'api_key',
         resolvedModel: 'vision-model',
         capabilities: { needsHttpPoolServer: false },

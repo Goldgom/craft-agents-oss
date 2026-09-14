@@ -3582,6 +3582,7 @@ export class SessionManager implements ISessionManager {
     const sigInput = {
       connection,
       provider: backendContext.provider,
+      agentRuntime: backendContext.agentRuntime,
       authType: backendContext.authType,
       resolvedModel: backendContext.resolvedModel,
     }
@@ -3752,6 +3753,7 @@ export class SessionManager implements ISessionManager {
     const sigInput = {
       connection,
       provider: backendContext.provider,
+      agentRuntime: backendContext.agentRuntime,
       authType: backendContext.authType,
       resolvedModel: backendContext.resolvedModel,
     }

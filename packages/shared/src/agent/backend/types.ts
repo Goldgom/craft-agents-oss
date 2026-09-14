@@ -30,8 +30,8 @@ export { AbortReason, type RecoveryMessage };
 import type { ModelProvider } from '../../config/models.ts';
 
 // Import LLM connection types for auth
-import type { LlmAuthType, LlmProviderType, ModelPromptSettings } from '../../config/llm-connections.ts';
-export type { LlmAuthType, LlmProviderType } from '../../config/llm-connections.ts';
+import type { AgentRuntimeProtocol, LlmAuthType, LlmProviderType, ModelPromptSettings } from '../../config/llm-connections.ts';
+export type { AgentRuntimeProtocol, LlmAuthType, LlmProviderType } from '../../config/llm-connections.ts';
 
 export interface BackendRuntimeUpdate {
   model: string;
@@ -176,6 +176,9 @@ export interface CoreBackendConfig {
 
   /** Initial model ID */
   model?: string;
+
+  /** Explicit agent loop / tool protocol selected for this connection. */
+  agentRuntime?: AgentRuntimeProtocol;
 
   /** Per-model prompt behavior resolved from the LLM connection. */
   modelPromptSettings?: ModelPromptSettings;

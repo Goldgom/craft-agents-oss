@@ -246,6 +246,7 @@ bun run scripts/build-server.ts --platform=win32 --arch=x64 --compress
 | `--arch`          | `x64` / `arm64`                | 目标架构（默认当前架构）    |
 | `--compress`      | 布尔                               | 构建完成后打包为`.tar.gz` |
 | `--skip-download` | 布尔                               | 复用已有 Bun/uv 二进制      |
+| `--minimal`       | 布尔                               | 构建 CLI + 基础 Agent/RPC 服务 |
 
 快捷命令（等价封装）：
 
@@ -271,6 +272,37 @@ cd /opt/craft-server && bash install.sh     # 会生成 systemd 服务 craft-ser
 # 或直接前台运行：
 ./bin/craft-server
 ```
+
+### 最小 CLI / Agent 服务器
+
+面向小型服务器配置、SSH 终端和远程运维场景，可构建不含 Web UI、消息渠道、
+文档转换脚本与 uv 工具链的最小发行版：
+
+```bash
+bun run cli:build
+bun run cli:build:linux-x64
+bun run cli:build:linux-arm64
+```
+
+产物位于 `dist/cli/`，包含：
+
+- `bin/craft-cli`：连接现有远程服务器，或通过 `run` 自动启动内置服务器；
+- `bin/craft-server`：最小 headless WebSocket RPC 服务；
+- Pi/Codex compatibility 子进程、Claude Code 原生运行时以及必要 MCP/权限资源。
+
+```bash
+# 连接远程服务器
+CRAFT_SERVER_URL=wss://server.example.com \
+CRAFT_SERVER_TOKEN=<token> \
+./dist/cli/bin/craft-cli ping
+
+# 在本机临时启动 Agent，完成服务器配置任务后退出
+ANTHROPIC_API_KEY=<key> \
+./dist/cli/bin/craft-cli run --workspace-dir /etc/nginx "检查并解释当前 Nginx 配置"
+```
+
+最小版有意不提供 Web UI、Telegram/WhatsApp/QQ 等消息渠道和 PDF/Office
+文档转换工具；需要这些功能时使用完整 `server:build` 产物。
 
 ### 方式 B：Docker 镜像（推荐，跨平台一致）
 
@@ -356,6 +388,7 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 | Windows 客户端   | `cd apps/electron && bun run dist:win`                                           | `apps/electron/release/Craft-Agents-x64.exe`                     |
 | macOS 客户端     | `cd apps/electron && bash scripts/build-dmg.sh <arm64\|x64>`                      | `apps/electron/release/Craft-Agents-<arch>.dmg/.zip`             |
 | Linux 客户端     | `bash apps/electron/scripts/build-linux.sh x64`                                  | `apps/electron/release/Craft-Agents-x64.AppImage`                |
+| 最小 CLI/Agent   | `bun run cli:build:<platform>-<arch>`                                             | `dist/cli/` + `craft-cli-<ver>-<platform>-<arch>.tar.gz`         |
 | 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `craft-server-<ver>-<platform>-<arch>.tar.gz` |
 | 服务器（Docker） | `docker buildx build -f Dockerfile.server -t craft-agent-server .`               | 容器镜像                                                           |
 

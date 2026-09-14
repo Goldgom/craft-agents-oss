@@ -30,6 +30,7 @@
 export type {
   AgentBackend,
   AgentProvider,
+  AgentRuntimeProtocol,
   CoreBackendConfig,
   BackendConfig,
   BackendHostRuntimeContext,
@@ -70,6 +71,7 @@ export {
   fetchBackendModels,
   validateStoredBackendConnection,
   providerTypeToAgentProvider,
+  agentRuntimeToAgentProvider,
   // Capabilities and utilities
   BACKEND_CAPABILITIES,
   resolveModelForProvider,
