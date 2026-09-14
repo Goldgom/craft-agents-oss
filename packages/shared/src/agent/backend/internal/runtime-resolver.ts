@@ -1,5 +1,14 @@
-import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { BackendHostRuntimeContext } from '../types.ts';
 import { setPathToClaudeCodeExecutable, isAndroidRuntime, ANDROID_CLAUDE_UNSUPPORTED_MESSAGE } from '../../options.ts';
@@ -169,8 +178,45 @@ function resolveInterceptorBundlePath(hostRuntime: BackendHostRuntimeContext): s
     if (source) return source;
   }
 
-  return resolveUpwards(hostRuntime.appRootPath, join('dist', 'interceptor.cjs'))
+  const bundlePath = resolveUpwards(hostRuntime.appRootPath, join('dist', 'interceptor.cjs'))
     ?? resolveUpwards(hostRuntime.appRootPath, join('apps', 'electron', 'dist', 'interceptor.cjs'));
+
+  // Bun can fail with EPERM while preloading files directly from Program Files,
+  // even though the Electron main process can read the same packaged asset.
+  // Stage immutable, content-addressed copies in the user's local data directory so
+  // MSI/legacy machine-wide installs work as reliably as per-user NSIS installs.
+  if (bundlePath && hostRuntime.isPackaged && process.platform === 'win32') {
+    return stageWindowsInterceptor(bundlePath);
+  }
+
+  return bundlePath;
+}
+
+function stageWindowsInterceptor(sourcePath: string): string {
+  const source = readFileSync(sourcePath);
+  const contentHash = createHash('sha256').update(source).digest('hex').slice(0, 16);
+  const cacheDir = join(process.env.LOCALAPPDATA || tmpdir(), 'Craft Agents', 'runtime');
+  const cachedPath = join(cacheDir, `interceptor-${contentHash}.cjs`);
+
+  if (existsSync(cachedPath)) return cachedPath;
+
+  mkdirSync(cacheDir, { recursive: true });
+  const temporaryPath = `${cachedPath}.${process.pid}.${Date.now()}.tmp`;
+
+  try {
+    writeFileSync(temporaryPath, source, { mode: 0o600 });
+    try {
+      renameSync(temporaryPath, cachedPath);
+    } catch (error) {
+      // Another app process may have populated the same content-addressed
+      // entry between our exists check and rename. Its copy is equivalent.
+      if (!existsSync(cachedPath)) throw error;
+    }
+  } finally {
+    try { rmSync(temporaryPath, { force: true }); } catch { /* best effort */ }
+  }
+
+  return cachedPath;
 }
 
 function resolveServerPath(hostRuntime: BackendHostRuntimeContext, serverName: string): string | undefined {

@@ -6,7 +6,7 @@
  * - Ripgrep path resolution with system rg fallback
  */
 import { describe, it, expect, afterEach } from 'bun:test';
-import { mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveBackendRuntimePaths } from '../internal/runtime-resolver.ts';
@@ -247,7 +247,14 @@ describe('resolveInterceptorBundlePath dev-mode source preference', () => {
       isPackaged: true,
     };
     const paths = resolveBackendRuntimePaths(hostRuntime);
-    expect(paths.interceptorBundlePath).toBe(bundlePath);
+    if (process.platform === 'win32') {
+      expect(paths.interceptorBundlePath).not.toBe(bundlePath);
+      expect(paths.interceptorBundlePath).toContain(join('Craft Agents', 'runtime', 'interceptor-'));
+      expect(readFileSync(paths.interceptorBundlePath!, 'utf8')).toBe('// bundle\n');
+      rmSync(paths.interceptorBundlePath!, { force: true });
+    } else {
+      expect(paths.interceptorBundlePath).toBe(bundlePath);
+    }
   });
 
   it('honors explicit hostRuntime.interceptorBundlePath override regardless of mode', () => {

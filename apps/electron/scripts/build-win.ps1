@@ -297,6 +297,9 @@ if ($env:MICROSOFT_OAUTH_CLIENT_ID) {
 }
 Push-Location $RootDir
 try {
+    # Use bunx rather than npx: this repo is bun-based, and on hosts where a
+    # stale npm (from another Node version) shadows the active one, `npx`
+    # crashes before the tool ever starts.
     & bunx esbuild @MainArgs
     if ($LASTEXITCODE -ne 0) { throw "Main process build failed" }
 } finally {
