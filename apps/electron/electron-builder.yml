@@ -11,9 +11,6 @@ electronVersion: "39.2.7"
 # time.
 npmRebuild: false
 
-# Hook to compile macOS 26+ Liquid Glass icon after packaging
-afterPack: scripts/afterPack.cjs
-
 directories:
   output: release
   buildResources: resources
@@ -91,10 +88,7 @@ asar: false
 mac:
   category: public.app-category.productivity
   icon: resources/icon.icns
-  # macOS 26+ Liquid Glass: Tell macOS to look for icon in Assets.car
-  # The value must match --app-icon used in actool (see afterPack.js)
   extendInfo:
-    CFBundleIconName: AppIcon
     # Required for macOS to list the app under Privacy & Security > Local Network
     # and prompt for permission. Without it the app is silently denied LAN access
     # and never appears in the privacy pane (craft-agents-oss#938).

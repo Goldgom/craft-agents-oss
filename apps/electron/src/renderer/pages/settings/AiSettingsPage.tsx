@@ -16,7 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, WalletCards, ShieldCheck } from 'lucide-react'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, WalletCards } from 'lucide-react'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/styled-dropdown'
 import { cn } from '@/lib/utils'
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
+import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
 
 import {
   SettingsSection,
@@ -1252,7 +1253,7 @@ export default function AiSettingsPage() {
               <SettingsSection title={t("settings.ai.connections")} description={t("settings.ai.connectionsDesc")}>
                 <div className="mb-3 flex items-center gap-3 rounded-xl border border-border/60 bg-background/60 p-4 shadow-minimal">
                   <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.05]">
-                    <ShieldCheck className="size-4 text-foreground/70" />
+                    <img src={tokenNestIcon} alt="" className="size-7 object-contain" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium">TokenNest</div>

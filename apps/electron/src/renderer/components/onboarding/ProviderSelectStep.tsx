@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
-import { Bird, Key, Monitor, Settings2 } from "lucide-react"
+import { Key, Monitor, Settings2 } from "lucide-react"
 import { Spinner } from "@craft-agent/ui"
 import { CraftAgentsSymbol } from "@/components/icons/CraftAgentsSymbol"
 import { BackButton, StepFormLayout } from "./primitives"
@@ -8,6 +8,7 @@ import { BackButton, StepFormLayout } from "./primitives"
 import claudeIcon from "@/assets/provider-icons/claude.svg"
 import openaiIcon from "@/assets/provider-icons/openai.svg"
 import copilotIcon from "@/assets/provider-icons/copilot.svg"
+import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
 
 /**
  * The high-level provider choice the user makes on first launch.
@@ -23,7 +24,7 @@ interface ProviderOption {
 }
 
 const PROVIDER_ICONS: Record<ProviderChoice, React.ReactNode> = {
-  tokennest: <Bird className="size-5" />,
+  tokennest: <img src={tokenNestIcon} alt="" className="size-7 object-contain" />,
   other: <Settings2 className="size-5" />,
   claude: <img src={claudeIcon} alt="" className="size-5 rounded-[3px]" />,
   chatgpt: <img src={openaiIcon} alt="" className="size-5 rounded-[3px]" />,

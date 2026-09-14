@@ -19,7 +19,7 @@ import type { LlmConnectionWithStatus } from '../../../shared/types'
 
 interface ConnectionIconProps {
   /** The connection to display an icon for */
-  connection: Pick<LlmConnectionWithStatus, 'name' | 'providerType' | 'baseUrl' | 'piAuthProvider'> & { type?: string; defaultModel?: string }
+  connection: Pick<LlmConnectionWithStatus, 'name' | 'providerType' | 'baseUrl' | 'piAuthProvider' | 'oauthProvider'> & { type?: string; defaultModel?: string }
   /** Size in pixels (default: 16) */
   size?: number
   /** Additional CSS classes */
@@ -32,7 +32,8 @@ export function ConnectionIcon({ connection, size = 16, className = '', showTool
   const providerIcon = getProviderIcon(
     connection.providerType || connection.type || '',
     connection.baseUrl,
-    connection.piAuthProvider
+    connection.piAuthProvider,
+    connection.oauthProvider,
   )
 
   const iconElement = providerIcon ? (

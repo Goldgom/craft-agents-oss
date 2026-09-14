@@ -1,9 +1,8 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { AlertCircle, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@craft-agent/ui"
-import { CraftAgentsSymbol } from "@/components/icons/CraftAgentsSymbol"
+import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
 import { StepFormLayout } from "./primitives"
 
 interface ReauthScreenProps {
@@ -43,7 +42,7 @@ export function ReauthScreen({ onLogin, onReset }: ReauthScreenProps) {
         <StepFormLayout
           iconElement={
             <div className="flex size-16 items-center justify-center rounded-full bg-info/10">
-              <AlertCircle className="size-8 text-info" />
+              <img src={tokenNestIcon} alt="" className="size-12 object-contain" />
             </div>
           }
           title={t("onboarding.reauth.title")}
@@ -73,7 +72,7 @@ export function ReauthScreen({ onLogin, onReset }: ReauthScreenProps) {
                   </>
                 ) : (
                   <>
-                    <RefreshCw className="mr-2 size-4" />
+                    <img src={tokenNestIcon} alt="" className="mr-2 size-5 object-contain" />
                     {t("onboarding.reauth.loginWithCraft")}
                   </>
                 )}

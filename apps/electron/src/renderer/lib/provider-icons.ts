@@ -19,6 +19,7 @@ import openaiIcon from '@/assets/provider-icons/openai.svg'
 import openrouterIcon from '@/assets/provider-icons/openrouter.svg'
 import piIcon from '@/assets/provider-icons/pi.svg'
 import vercelIcon from '@/assets/provider-icons/vercel.svg'
+import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
 
 import type { LlmProviderType } from '@craft-agent/shared/config/llm-connections'
 
@@ -39,6 +40,7 @@ export const providerIcons = {
   openai: openaiIcon,
   openrouter: openrouterIcon,
   pi: piIcon,
+  tokennest: tokenNestIcon,
   vercel: vercelIcon,
 } as const
 
@@ -164,8 +166,11 @@ const PI_AUTH_PROVIDER_DOMAINS: Record<string, string> = {
 export function getProviderIcon(
   providerType: LlmProviderType | string,
   baseUrl?: string | null,
-  piAuthProvider?: string | null
+  piAuthProvider?: string | null,
+  oauthProvider?: string | null,
 ): string | null {
+  if (oauthProvider === 'tokennest') return providerIcons.tokennest
+
   // For compatible providers, try to detect from URL first
   if (baseUrl && (providerType === 'openai_compat' || providerType === 'pi_compat')) {
     const detectedProvider = detectProviderFromUrl(baseUrl)
