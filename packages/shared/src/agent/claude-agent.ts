@@ -1271,7 +1271,7 @@ export class ClaudeAgent extends BaseAgent {
         systemPrompt: miniConfig.enabled
           ? this.getMiniSystemPrompt()
           : this.config.modelPromptSettings?.lightweight
-            ? `${getLightweightModelSystemPrompt(this.workspaceRootPath, 'Claude Code', this.pinnedIncludeCoAuthoredBy ?? undefined, this.config.agentPrompt)}${this.config.modelPromptSettings.mcpPromptEnhancement ? `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}` : ''}`
+            ? `${getLightweightModelSystemPrompt(this.workspaceRootPath, 'Claude Code', this.pinnedIncludeCoAuthoredBy ?? undefined, this.config.agentPrompt, this.config.agentRuntime)}${this.config.modelPromptSettings.mcpPromptEnhancement ? `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}` : ''}`
             : {
               type: 'preset' as const,
               preset: 'claude_code' as const,
@@ -1287,6 +1287,7 @@ export class ClaudeAgent extends BaseAgent {
                 this.pinnedProjectContext ?? undefined,
                 this.config.agentPrompt,
                 this.config.modelPromptSettings,
+                this.config.agentRuntime,
               ),
             },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.

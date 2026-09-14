@@ -9,6 +9,7 @@
  *   bun run scripts/build-server.ts
  *   bun run scripts/build-server.ts --platform=linux --arch=x64
  *   bun run scripts/build-server.ts --platform=linux --arch=arm64 --compress
+ *   bun run scripts/build-server.ts --minimal
  *
  * Options:
  *   --platform       Target platform: darwin, linux (default: current)
@@ -16,6 +17,7 @@
  *   --output         Output directory (default: dist/server)
  *   --compress       Create .tar.gz archive after assembly
  *   --skip-download  Skip Bun/uv downloads (use existing if present)
+ *   --minimal        Build the small CLI + agent server distribution
  *   --help           Show help
  */
 
@@ -74,6 +76,7 @@ interface ServerBuildConfig {
   outputDir: string;
   compress: boolean;
   skipDownload: boolean;
+  minimal: boolean;
   version: string;
 }
 
@@ -97,6 +100,8 @@ Options:
   --compress             Create .tar.gz after assembly
   --skip-download        Reuse existing Bun/uv binaries (pre-seed them for
                          offline builds; see docs/build-guide.md for paths)
+  --minimal              Build a small headless distribution containing the
+                         CLI, agent runtimes, and remote RPC server only
   --help                 Show this help message
 
 Environment variables:
@@ -114,6 +119,9 @@ Examples:
 
   # Build Linux ARM64 tarball
   bun run scripts/build-server.ts --platform=linux --arch=arm64 --compress
+
+  # Build the minimal CLI + local agent server bundle
+  bun run scripts/build-server.ts --minimal
 `);
 }
 
@@ -122,12 +130,15 @@ Examples:
 // ---------------------------------------------------------------------------
 
 function assembleResources(config: ServerBuildConfig): void {
-  const { electronDir, outputDir, platform, arch } = config;
+  const { electronDir, outputDir, platform, minimal } = config;
   const srcResources = join(electronDir, 'resources');
   const destResources = join(outputDir, 'resources');
 
-  console.log('  Copying docs, themes, permissions, tool-icons...');
-  for (const dir of ['docs', 'themes', 'permissions', 'tool-icons']) {
+  console.log(minimal
+    ? '  Copying essential permission and tool metadata...'
+    : '  Copying docs, themes, permissions, tool-icons...');
+  const resourceDirs = minimal ? ['permissions', 'tool-icons'] : ['docs', 'themes', 'permissions', 'tool-icons'];
+  for (const dir of resourceDirs) {
     const src = join(srcResources, dir);
     if (existsSync(src)) {
       cpSync(src, join(destResources, dir), { recursive: true });
@@ -140,35 +151,37 @@ function assembleResources(config: ServerBuildConfig): void {
     copyFileSync(configDefaults, join(destResources, 'config-defaults.json'));
   }
 
-  // Python scripts (skip tests/)
-  console.log('  Copying Python scripts...');
-  const scriptsDir = join(srcResources, 'scripts');
-  const destScripts = join(destResources, 'scripts');
-  mkdirSync(destScripts, { recursive: true });
-  if (existsSync(scriptsDir)) {
-    for (const entry of readdirSync(scriptsDir)) {
-      if (entry === 'tests') continue;
-      const src = join(scriptsDir, entry);
-      const stat = lstatSync(src);
-      if (stat.isFile()) {
-        copyFileSync(src, join(destScripts, entry));
+  // Python/doc utilities are intentionally excluded from the minimal build.
+  if (!minimal) {
+    console.log('  Copying Python scripts...');
+    const scriptsDir = join(srcResources, 'scripts');
+    const destScripts = join(destResources, 'scripts');
+    mkdirSync(destScripts, { recursive: true });
+    if (existsSync(scriptsDir)) {
+      for (const entry of readdirSync(scriptsDir)) {
+        if (entry === 'tests') continue;
+        const src = join(scriptsDir, entry);
+        const stat = lstatSync(src);
+        if (stat.isFile()) {
+          copyFileSync(src, join(destScripts, entry));
+        }
       }
     }
-  }
 
-  // Copy wrappers matching the target platform.
-  console.log('  Copying doc tool wrappers...');
-  const binDir = join(destResources, 'bin');
-  mkdirSync(binDir, { recursive: true });
-  const srcBin = join(srcResources, 'bin');
-  if (existsSync(srcBin)) {
-    for (const entry of readdirSync(srcBin)) {
-      const src = join(srcBin, entry);
-      const stat = lstatSync(src);
-      // POSIX builds do not need Windows command wrappers, and vice versa.
-      const isWindowsWrapper = entry.endsWith('.cmd');
-      if (stat.isFile() && (platform === 'win32' ? isWindowsWrapper : !isWindowsWrapper)) {
-        copyFileSync(src, join(binDir, entry));
+    // Copy wrappers matching the target platform.
+    console.log('  Copying doc tool wrappers...');
+    const binDir = join(destResources, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    const srcBin = join(srcResources, 'bin');
+    if (existsSync(srcBin)) {
+      for (const entry of readdirSync(srcBin)) {
+        const src = join(srcBin, entry);
+        const stat = lstatSync(src);
+        // POSIX builds do not need Windows command wrappers, and vice versa.
+        const isWindowsWrapper = entry.endsWith('.cmd');
+        if (stat.isFile() && (platform === 'win32' ? isWindowsWrapper : !isWindowsWrapper)) {
+          copyFileSync(src, join(binDir, entry));
+        }
       }
     }
   }
@@ -413,7 +426,7 @@ function scanImports(dir: string): Set<string> {
 }
 
 function copyProductionDeps(config: ServerBuildConfig): void {
-  const { rootDir, outputDir, platform, arch } = config;
+  const { rootDir, outputDir, platform, arch, minimal } = config;
   const srcModules = join(rootDir, 'node_modules');
   const destModules = join(outputDir, 'node_modules');
 
@@ -429,12 +442,24 @@ function copyProductionDeps(config: ServerBuildConfig): void {
   // messaging-whatsapp-worker is intentionally OMITTED: Baileys and its transitive deps
   // are bundled directly into packages/messaging-whatsapp-worker/dist/worker.cjs by
   // scripts/build-wa-worker.ts — pulling them into node_modules would duplicate the tree.
-  const SERVER_PACKAGES = ['server', 'server-core', 'shared', 'core', 'session-tools-core', 'session-mcp-server', 'messaging-gateway'];
+  const SERVER_PACKAGES = [
+    'server',
+    'server-core',
+    'shared',
+    'core',
+    'session-tools-core',
+    'session-mcp-server',
+    ...(minimal ? [] : ['messaging-gateway']),
+  ];
 
   const allImports = new Set<string>();
   for (const pkg of SERVER_PACKAGES) {
     const pkgSrc = join(rootDir, 'packages', pkg, 'src');
     const imports = scanImports(pkgSrc);
+    for (const imp of imports) allImports.add(imp);
+  }
+  if (minimal) {
+    const imports = scanImports(join(rootDir, 'apps', 'cli', 'src'));
     for (const imp of imports) allImports.add(imp);
   }
   console.log(`  Found ${allImports.size} external packages referenced in source`);
@@ -474,8 +499,8 @@ function copyProductionDeps(config: ServerBuildConfig): void {
     : `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`;
 
   const PLATFORM_DEPS = [
-    `@img/sharp-${platform === 'darwin' ? 'darwin' : 'linux'}-${arch}`,
-    `@img/sharp-libvips-${platform === 'darwin' ? 'darwin' : 'linux'}-${arch}`,
+    `@img/sharp-${platform}-${arch}`,
+    ...(platform === 'win32' ? [] : [`@img/sharp-libvips-${platform}-${arch}`]),
     '@img/colour',
     sdkPlatformPkg,
     '@vscode/ripgrep',
@@ -500,6 +525,38 @@ function copyProductionDeps(config: ServerBuildConfig): void {
   console.log(`  Total: ${copied.size} packages copied to node_modules`);
 }
 
+/** Copy only native/runtime packages that cannot be embedded in the minimal Bun bundles. */
+function copyMinimalRuntimeDeps(config: ServerBuildConfig): void {
+  const { rootDir, outputDir, platform, arch } = config;
+  const srcModules = join(rootDir, 'node_modules');
+  const destModules = join(outputDir, 'node_modules');
+  const copied = new Set<string>();
+  const sdkPlatformPkg = platform === 'win32'
+    ? `@anthropic-ai/claude-agent-sdk-win32-${arch}`
+    : `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`;
+  const runtimeDeps = [
+    'ajv',
+    'ajv-formats',
+    'esprima',
+    'ws',
+    '@img/colour',
+    `@img/sharp-${platform}-${arch}`,
+    ...(platform === 'win32' ? [] : [`@img/sharp-libvips-${platform}-${arch}`]),
+    sdkPlatformPkg,
+    '@vscode/ripgrep',
+  ];
+
+  for (const dep of runtimeDeps) {
+    const source = resolveDependencyPackage(dep, rootDir, srcModules);
+    if (!source) {
+      console.warn(`  Warning: minimal runtime dependency ${dep} is not installed for ${platform}-${arch}`);
+      continue;
+    }
+    copyDependencyTree(dep, rootDir, srcModules, destModules, copied);
+  }
+  console.log(`  Minimal runtime dependencies: ${copied.size} packages`);
+}
+
 function getDirSize(dir: string): number {
   let size = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -518,7 +575,7 @@ function getDirSize(dir: string): number {
 // ---------------------------------------------------------------------------
 
 function copyWorkspacePackages(config: ServerBuildConfig): void {
-  const { rootDir, outputDir } = config;
+  const { rootDir, outputDir, minimal } = config;
 
   // Messaging workers are included so their built bundles ship.
   // The worker is spawned as a Node subprocess against that file at runtime; see
@@ -530,9 +587,9 @@ function copyWorkspacePackages(config: ServerBuildConfig): void {
     'core',
     'session-tools-core',
     'session-mcp-server',
-    'messaging-gateway',
-    'messaging-whatsapp-worker',
-    'messaging-qqbot-worker',
+    ...(minimal
+      ? []
+      : ['messaging-gateway', 'messaging-whatsapp-worker', 'messaging-qqbot-worker']),
   ];
 
   for (const pkg of packages) {
@@ -567,6 +624,35 @@ function copyWorkspacePackages(config: ServerBuildConfig): void {
       cpSync(distDir, join(dest, 'dist'), { recursive: true });
     }
   }
+
+  if (minimal) {
+    const cliSource = join(rootDir, 'apps', 'cli');
+    const cliDest = join(outputDir, 'apps', 'cli');
+    mkdirSync(cliDest, { recursive: true });
+    copyFileSync(join(cliSource, 'package.json'), join(cliDest, 'package.json'));
+    copyFileSync(join(cliSource, 'tsconfig.json'), join(cliDest, 'tsconfig.json'));
+    cpSync(join(cliSource, 'src'), join(cliDest, 'src'), { recursive: true });
+  }
+}
+
+/** Build the CJS preload used by Pi/Codex subprocesses in packaged mode. */
+async function buildInterceptorForServer(config: ServerBuildConfig): Promise<void> {
+  const source = join(config.rootDir, 'packages', 'shared', 'src', 'unified-network-interceptor.ts');
+  const output = join(config.outputDir, 'dist', 'interceptor.cjs');
+  mkdirSync(dirname(output), { recursive: true });
+  await $`bun run esbuild ${source} --bundle --platform=node --format=cjs --outfile=${output}`.cwd(config.rootDir);
+  if (!existsSync(output) || lstatSync(output).size === 0) {
+    throw new Error(`Interceptor bundle was not created at ${output}`);
+  }
+  console.log(`  Interceptor bundle built (${(lstatSync(output).size / 1024).toFixed(0)} KB)`);
+}
+
+/** Bundle the minimal CLI/server entry graph so unrelated source modules and npm packages are omitted. */
+async function buildMinimalEntrypoints(config: ServerBuildConfig): Promise<void> {
+  const bundleDir = join(config.outputDir, 'bundle');
+  mkdirSync(bundleDir, { recursive: true });
+  await $`bun build ${join(config.rootDir, 'packages', 'server', 'src', 'index.ts')} --target=bun --outfile=${join(bundleDir, 'server.js')} --external markitdown-js --external @craft-agent/messaging-gateway --sourcemap=none`.cwd(config.rootDir);
+  await $`bun build ${join(config.rootDir, 'apps', 'cli', 'src', 'index.ts')} --target=bun --outfile=${join(bundleDir, 'cli.js')} --sourcemap=none`.cwd(config.rootDir);
 }
 
 // ---------------------------------------------------------------------------
@@ -578,10 +664,10 @@ function createRootConfig(config: ServerBuildConfig): void {
 
   // Root package.json with workspaces (Bun resolves @craft-agent/* through this)
   const rootPkg = {
-    name: 'tokenbird-server-dist',
+    name: config.minimal ? 'tokenbird-cli-dist' : 'tokenbird-server-dist',
     version,
     private: true,
-    workspaces: ['packages/*'],
+    workspaces: config.minimal ? ['packages/*', 'apps/*'] : ['packages/*'],
   };
   writeFileSync(join(outputDir, 'package.json'), JSON.stringify(rootPkg, null, 2) + '\n');
 
@@ -636,7 +722,7 @@ function createRootConfig(config: ServerBuildConfig): void {
 // ---------------------------------------------------------------------------
 
 function createEntryScripts(config: ServerBuildConfig): void {
-  const { outputDir, platform } = config;
+  const { outputDir, platform, minimal } = config;
   const binDir = join(outputDir, 'bin');
   mkdirSync(binDir, { recursive: true });
 
@@ -653,18 +739,36 @@ export CRAFT_BUNDLED_ASSETS_ROOT="$ROOT"
 export CRAFT_IS_PACKAGED=true
 export CRAFT_APP_ROOT="$ROOT"
 export CRAFT_RESOURCES_PATH="$ROOT/resources"
+${minimal ? 'export CRAFT_MINIMAL_SERVER=true\nexport CRAFT_DISABLE_MESSAGING=true' : ''}
 
 # CLI tools (doc tools use uv + Python scripts)
-export CRAFT_UV="$ROOT/resources/bin/uv"
-export CRAFT_SCRIPTS="$ROOT/resources/scripts"
+${minimal ? '' : 'export CRAFT_UV="$ROOT/resources/bin/uv"\nexport CRAFT_SCRIPTS="$ROOT/resources/scripts"'}
 
 # Prepend resource bin to PATH (makes doc tool wrappers available)
 export PATH="$ROOT/resources/bin:$ROOT/vendor/bun:$PATH"
 
 # Use bundled Bun runtime
-exec "$ROOT/vendor/bun/bun" run "$ROOT/packages/server/src/index.ts" "$@"
+exec "$ROOT/vendor/bun/bun" run "$ROOT/${minimal ? 'bundle/server.js' : 'packages/server/src/index.ts'}" "$@"
 `;
   writeFileSync(join(binDir, 'craft-server'), craftServer);
+
+  if (minimal) {
+    const craftCli = `#!/bin/sh
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(dirname "$SCRIPT_DIR")"
+export CRAFT_BUNDLED_ASSETS_ROOT="$ROOT"
+export CRAFT_IS_PACKAGED=true
+export CRAFT_APP_ROOT="$ROOT"
+export CRAFT_RESOURCES_PATH="$ROOT/resources"
+export CRAFT_MINIMAL_SERVER=true
+export CRAFT_DISABLE_MESSAGING=true
+export CRAFT_SERVER_ENTRY="$ROOT/bundle/server.js"
+export PATH="$ROOT/vendor/bun:$PATH"
+exec "$ROOT/vendor/bun/bun" run "$ROOT/bundle/cli.js" "$@"
+`;
+    writeFileSync(join(binDir, 'craft-cli'), craftCli);
+  }
 
   // start.sh — convenience entry
   const startSh = `#!/bin/sh
@@ -684,7 +788,7 @@ echo "=== TokenBird Server Setup ==="
 echo ""
 
 # Make binaries executable
-chmod +x "$DIR/bin/craft-server" "$DIR/start.sh"
+chmod +x "$DIR/bin/craft-server" "$DIR/start.sh"${minimal ? ' "$DIR/bin/craft-cli"' : ''}
 [ -f "$DIR/vendor/bun/bun" ] && chmod +x "$DIR/vendor/bun/bun"
 [ -f "$DIR/resources/bin/uv" ] && chmod +x "$DIR/resources/bin/uv"
 
@@ -775,15 +879,37 @@ echo ""
       'set "CRAFT_IS_PACKAGED=true"',
       'set "CRAFT_APP_ROOT=%DIR%"',
       'set "CRAFT_RESOURCES_PATH=%DIR%\\resources"',
-      'set "CRAFT_UV=%DIR%\\resources\\bin\\uv.exe"',
-      'set "CRAFT_SCRIPTS=%DIR%\\resources\\scripts"',
+      ...(minimal
+        ? ['set "CRAFT_MINIMAL_SERVER=true"', 'set "CRAFT_DISABLE_MESSAGING=true"']
+        : ['set "CRAFT_UV=%DIR%\\resources\\bin\\uv.exe"', 'set "CRAFT_SCRIPTS=%DIR%\\resources\\scripts"']),
       'set "PATH=%DIR%\\resources\\bin;%DIR%\\vendor\\bun;%PATH%"',
-      '"%DIR%\\vendor\\bun\\bun.exe" run "%DIR%\\packages\\server\\src\\index.ts" %*',
-      'endlocal',
+      `"%DIR%\\vendor\\bun\\bun.exe" run "%DIR%\\${minimal ? 'bundle\\server.js' : 'packages\\server\\src\\index.ts'}" %*`,
+      'set "CRAFT_EXIT_CODE=%ERRORLEVEL%"',
+      'endlocal & exit /b %CRAFT_EXIT_CODE%',
       '',
     ].join('\r\n');
     writeFileSync(join(binDir, 'craft-server.cmd'), windowsEntry);
     writeFileSync(join(outputDir, 'start.cmd'), '@echo off\r\ncall "%~dp0bin\\craft-server.cmd" %*\r\n');
+    if (minimal) {
+      const windowsCli = [
+        '@echo off',
+        'setlocal',
+        'set "DIR=%~dp0.."',
+        'set "CRAFT_BUNDLED_ASSETS_ROOT=%DIR%"',
+        'set "CRAFT_IS_PACKAGED=true"',
+        'set "CRAFT_APP_ROOT=%DIR%"',
+        'set "CRAFT_RESOURCES_PATH=%DIR%\\resources"',
+        'set "CRAFT_MINIMAL_SERVER=true"',
+        'set "CRAFT_DISABLE_MESSAGING=true"',
+        'set "CRAFT_SERVER_ENTRY=%DIR%\\bundle\\server.js"',
+        'set "PATH=%DIR%\\vendor\\bun;%PATH%"',
+        '"%DIR%\\vendor\\bun\\bun.exe" run "%DIR%\\bundle\\cli.js" %*',
+        'set "CRAFT_EXIT_CODE=%ERRORLEVEL%"',
+        'endlocal & exit /b %CRAFT_EXIT_CODE%',
+        '',
+      ].join('\r\n');
+      writeFileSync(join(binDir, 'craft-cli.cmd'), windowsCli);
+    }
   }
 
   // Make scripts executable at build time
@@ -791,6 +917,7 @@ echo ""
     join(binDir, 'craft-server'),
     join(outputDir, 'start.sh'),
     join(outputDir, 'install.sh'),
+    ...(minimal ? [join(binDir, 'craft-cli')] : []),
   ]) {
     chmodSync(script, 0o755);
   }
@@ -864,9 +991,10 @@ async function main(): Promise<void> {
     options: {
       platform: { type: 'string', default: process.platform },
       arch: { type: 'string', default: process.arch === 'arm64' ? 'arm64' : 'x64' },
-      output: { type: 'string', default: 'dist/server' },
+      output: { type: 'string' },
       compress: { type: 'boolean', default: false },
       'skip-download': { type: 'boolean', default: false },
+      minimal: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
     allowPositionals: true,
@@ -902,7 +1030,9 @@ async function main(): Promise<void> {
   const electronPkg = JSON.parse(readFileSync(join(electronDir, 'package.json'), 'utf-8'));
   const version: string = electronPkg.version;
 
-  const outputDir = join(rootDir, values.output!);
+  const minimal = values.minimal ?? false;
+  const outputArg = values.output ?? (minimal ? 'dist/cli' : 'dist/server');
+  const outputDir = join(rootDir, outputArg);
 
   const config: ServerBuildConfig = {
     platform,
@@ -912,10 +1042,11 @@ async function main(): Promise<void> {
     outputDir,
     compress: values.compress ?? false,
     skipDownload: values['skip-download'] ?? false,
+    minimal,
     version,
   };
 
-  console.log(`=== Building TokenBird Server ${version} for ${platform}-${arch} ===`);
+  console.log(`=== Building TokenBird ${minimal ? 'Minimal CLI' : 'Server'} ${version} for ${platform}-${arch} ===`);
   console.log(`  Output: ${outputDir}`);
 
   // Step 1: Clean
@@ -930,8 +1061,12 @@ async function main(): Promise<void> {
   await downloadBunForServer(config);
 
   // Step 3: Download uv
-  console.log(`\n[3/8] Downloading uv ${UV_VERSION}...`);
-  await downloadUvForServer(config);
+  if (minimal) {
+    console.log('\n[3/8] Skipping uv/document tooling for minimal build...');
+  } else {
+    console.log(`\n[3/8] Downloading uv ${UV_VERSION}...`);
+    await downloadUvForServer(config);
+  }
 
   // Step 4: Build MCP servers
   console.log('\n[4/8] Building MCP servers...');
@@ -945,14 +1080,18 @@ async function main(): Promise<void> {
     electronDir,
   };
   buildMcpServers(buildConfig);
+  await buildInterceptorForServer(config);
+  if (minimal) await buildMinimalEntrypoints(config);
 
   // Build the WhatsApp worker bundle. Must happen before copyWorkspacePackages
   // so dist/worker.cjs exists when we copy the messaging-whatsapp-worker package.
   // The bundle embeds Baileys + transitive deps; see scripts/build-wa-worker.ts.
-  console.log('  Building WhatsApp worker bundle...');
-  await $`bun run ${join(rootDir, 'scripts', 'build-wa-worker.ts')}`.cwd(rootDir);
-  console.log('  Building QQ Bot worker bundle...');
-  await $`bun run ${join(rootDir, 'scripts', 'build-qqbot-worker.ts')}`.cwd(rootDir);
+  if (!minimal) {
+    console.log('  Building WhatsApp worker bundle...');
+    await $`bun run ${join(rootDir, 'scripts', 'build-wa-worker.ts')}`.cwd(rootDir);
+    console.log('  Building QQ Bot worker bundle...');
+    await $`bun run ${join(rootDir, 'scripts', 'build-qqbot-worker.ts')}`.cwd(rootDir);
+  }
 
   // Step 5: Assemble resources
   console.log('\n[5/8] Assembling resources...');
@@ -960,17 +1099,18 @@ async function main(): Promise<void> {
 
   // Step 6: Copy production node_modules
   console.log('\n[6/8] Copying production dependencies...');
-  copyProductionDeps(config);
+  if (minimal) copyMinimalRuntimeDeps(config);
+  else copyProductionDeps(config);
 
   // Step 7: Copy workspace packages
   console.log('\n[7/8] Copying workspace packages...');
-  copyWorkspacePackages(config);
+  if (!minimal) copyWorkspacePackages(config);
   createRootConfig(config);
 
   // Step 8: Create entry scripts + Docker files
   console.log('\n[8/8] Creating entry scripts...');
   createEntryScripts(config);
-  createDockerFiles(config);
+  if (!minimal) createDockerFiles(config);
 
   // Calculate total size
   const totalSize = getDirSize(outputDir);
@@ -978,7 +1118,7 @@ async function main(): Promise<void> {
 
   // Compress if requested
   if (config.compress) {
-    const archiveName = `tokenbird-server-${version}-${platform}-${arch}.tar.gz`;
+    const archiveName = `tokenbird-${minimal ? 'cli' : 'server'}-${version}-${platform}-${arch}.tar.gz`;
     const archivePath = join(dirname(outputDir), archiveName);
     console.log(`\nCompressing to ${archiveName}...`);
     await $`tar -czf ${archivePath} -C ${outputDir} .`;
@@ -989,7 +1129,12 @@ async function main(): Promise<void> {
 
   console.log('\n  Build completed successfully!');
   console.log(`\nQuick start:`);
-  console.log(`  CRAFT_SERVER_TOKEN=<secret> ${outputDir}/start.sh`);
+  if (minimal) {
+    console.log(`  ${outputDir}/bin/craft-cli --help`);
+    console.log(`  ANTHROPIC_API_KEY=<key> ${outputDir}/bin/craft-cli run "Help configure this server"`);
+  } else {
+    console.log(`  CRAFT_SERVER_TOKEN=<secret> ${outputDir}/start.sh`);
+  }
 }
 
 main();

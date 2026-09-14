@@ -35,7 +35,7 @@ import type { WebuiHandler } from '@craft-agent/server-core/webui'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getWorkspaces } from '@craft-agent/shared/config'
 import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
-import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
+import type { MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
 
 // --generate-token: print a crypto-random token and exit
 if (process.argv.includes('--generate-token')) {
@@ -51,6 +51,14 @@ import type { HandlerDeps } from '@craft-agent/server-core/handlers'
 import type { ServerInstance } from '@craft-agent/server-core/bootstrap'
 
 process.env.CRAFT_IS_PACKAGED ??= 'false'
+const minimalServer = process.env.CRAFT_MINIMAL_SERVER === 'true' || process.env.CRAFT_MINIMAL_SERVER === '1'
+
+// Keep the small CLI/server distribution free of messaging transports and
+// their dependency trees. Dynamic loading means those packages are not needed
+// at all when CRAFT_MINIMAL_SERVER is enabled.
+const createMessagingBootstrap = minimalServer
+  ? null
+  : (await import('@craft-agent/messaging-gateway')).createMessagingBootstrap
 
 // Prevent unhandled rejections from crashing the server.
 // SDK subprocess abort can reject promises that propagate up unhandled;
@@ -114,7 +122,7 @@ if (tlsCertPath || tlsKeyPath) {
 
 // Web UI configuration
 const webuiDir = process.env.CRAFT_WEBUI_DIR || undefined
-const webuiEnabled = webuiDir && existsSync(webuiDir)
+const webuiEnabled = !minimalServer && webuiDir && existsSync(webuiDir)
 const webuiSecureCookies = parseOptionalBooleanEnv('CRAFT_WEBUI_SECURE_COOKIE', process.env.CRAFT_WEBUI_SECURE_COOKIE)
 const webuiWsUrl = parseOptionalWebSocketUrl('CRAFT_WEBUI_WS_URL', process.env.CRAFT_WEBUI_WS_URL)
 const serverToken = process.env.CRAFT_SERVER_TOKEN
@@ -240,24 +248,26 @@ const instance = await (async () => {
       createSessionManager: () => new SessionManager(),
       bindRpcServer: (sm, server) => sm.setRpcServer(server),
       createHandlerDeps: ({ sessionManager, platform, oauthFlowStore }) => {
-        messagingHandle = createMessagingBootstrap({
-          sessionManager,
-          credentialManager: getCredentialManager(),
-          getMessagingDir: (wsId: string) =>
-            join(CONFIG_DIR, 'workspaces', wsId, 'messaging'),
-          // Headless has no legacy messaging dir — workspaces start clean.
-          whatsapp: {
-            workerEntry: waWorkerEntry,
-            nodeBin: waNodeBin,
-            pairingMode: 'qr',
-          },
-          qqbot: { workerEntry: qqbotWorkerEntry, nodeBin: waNodeBin },
-        })
+        if (createMessagingBootstrap) {
+          messagingHandle = createMessagingBootstrap({
+            sessionManager,
+            credentialManager: getCredentialManager(),
+            getMessagingDir: (wsId: string) =>
+              join(CONFIG_DIR, 'workspaces', wsId, 'messaging'),
+            // Headless has no legacy messaging dir — workspaces start clean.
+            whatsapp: {
+              workerEntry: waWorkerEntry,
+              nodeBin: waNodeBin,
+              pairingMode: 'qr',
+            },
+            qqbot: { workerEntry: qqbotWorkerEntry, nodeBin: waNodeBin },
+          })
+        }
         return {
           sessionManager,
           platform,
           oauthFlowStore,
-          messagingRegistry: messagingHandle.registry,
+          messagingRegistry: messagingHandle?.registry,
         }
       },
       registerAllRpcHandlers: registerCoreRpcHandlers,
@@ -297,7 +307,7 @@ resolveServerInstance(instance)
 // ---------------------------------------------------------------------------
 // CRAFT_DISABLE_MESSAGING lets a dev/test server share a config dir with a live app
 // without both processes fighting over the same Telegram/WhatsApp connections (409s).
-const messagingDisabled = process.env.CRAFT_DISABLE_MESSAGING === 'true' || process.env.CRAFT_DISABLE_MESSAGING === '1'
+const messagingDisabled = minimalServer || process.env.CRAFT_DISABLE_MESSAGING === 'true' || process.env.CRAFT_DISABLE_MESSAGING === '1'
 if (messagingHandle !== null && !messagingDisabled) {
   const handle: MessagingBootstrapHandle = messagingHandle
   handle.setPublisher(instance.wsServer.push.bind(instance.wsServer))

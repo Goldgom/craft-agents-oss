@@ -230,6 +230,17 @@ describe('parseArgs', () => {
     const args = parseArgs(['bun', 'index.ts', '--provider', 'deepseek', 'run', 'hello'])
     expect(args.provider).toBe('deepseek')
   })
+
+  it('parses the agent runtime protocol', () => {
+    const args = parseArgs(['bun', 'index.ts', '--runtime', 'codex', '--provider', 'openai', 'run', 'hello'])
+    expect(args.agentRuntime).toBe('codex')
+  })
+
+  it('rejects an unknown agent runtime protocol', () => {
+    expect(() => parseArgs(['bun', 'index.ts', '--runtime', 'unknown', 'run', 'hello'])).toThrow(
+      'Expected pi, codex, or claude-code',
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -252,15 +263,19 @@ describe('resolveApiKey', () => {
 
 describe('shouldSetupLlmConnection', () => {
   it('forces setup for non-default providers even when connections already exist', () => {
-    expect(shouldSetupLlmConnection(2, { provider: 'deepseek', baseUrl: '' })).toBe(true)
+    expect(shouldSetupLlmConnection(2, { provider: 'deepseek', baseUrl: '', agentRuntime: '' })).toBe(true)
   })
 
   it('skips setup for the default anthropic provider when connections already exist', () => {
-    expect(shouldSetupLlmConnection(2, { provider: 'anthropic', baseUrl: '' })).toBe(false)
+    expect(shouldSetupLlmConnection(2, { provider: 'anthropic', baseUrl: '', agentRuntime: '' })).toBe(false)
   })
 
   it('forces setup for custom endpoints', () => {
-    expect(shouldSetupLlmConnection(2, { provider: 'anthropic', baseUrl: 'https://api.example.com' })).toBe(true)
+    expect(shouldSetupLlmConnection(2, { provider: 'anthropic', baseUrl: 'https://api.example.com', agentRuntime: '' })).toBe(true)
+  })
+
+  it('forces setup when an explicit runtime protocol is requested', () => {
+    expect(shouldSetupLlmConnection(2, { provider: 'anthropic', baseUrl: '', agentRuntime: 'pi' })).toBe(true)
   })
 })
 
@@ -291,6 +306,49 @@ describe('getValidateSteps', () => {
   it('has no duplicate step names', () => {
     const names = getValidateSteps().map((s) => s.name)
     expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('persists the selected runtime when validation creates a connection', async () => {
+    const calls: Array<{ channel: string; payload?: Record<string, unknown> }> = []
+    const client = {
+      invoke: async (channel: string, payload?: Record<string, unknown>) => {
+        calls.push({ channel, payload })
+        if (channel === 'LLM_Connection:list') return [{ slug: 'existing' }]
+        if (channel === 'settings:setupLlmConnection') return { success: true }
+        return undefined
+      },
+    }
+    const step = getValidateSteps().find((candidate) => candidate.name === 'LLM_Connection:list')!
+
+    await step.fn(client as never, {
+      provider: 'openai',
+      apiKey: 'test-key',
+      agentRuntime: 'codex',
+    })
+
+    const save = calls.find((call) => call.channel === 'LLM_Connection:save')
+    expect(save?.payload?.agentRuntime).toBe('codex')
+  })
+
+  it('rejects an incompatible validation runtime before mutating connections', async () => {
+    const calls: string[] = []
+    const client = {
+      invoke: async (channel: string) => {
+        calls.push(channel)
+        if (channel === 'LLM_Connection:list') return []
+        return undefined
+      },
+    }
+    const step = getValidateSteps().find((candidate) => candidate.name === 'LLM_Connection:list')!
+
+    const result = await step.fn(client as never, {
+      provider: 'anthropic',
+      apiKey: 'test-key',
+      agentRuntime: 'codex',
+    })
+
+    expect(result).toContain('requires a direct OpenAI provider connection')
+    expect(calls).toEqual(['LLM_Connection:list'])
   })
 
   it('includes session lifecycle steps (create, read, delete)', () => {

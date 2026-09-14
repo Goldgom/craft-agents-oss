@@ -36,6 +36,7 @@ export interface BackendRuntimePayload extends Record<string, unknown> {
 export interface BackendResolutionContext {
   connection: LlmConnection | null;
   provider: AgentProvider;
+  agentRuntime: import('../../../config/llm-connections.ts').AgentRuntimeProtocol;
   authType?: LlmAuthType;
   resolvedModel: string;
   capabilities: {

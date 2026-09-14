@@ -2195,11 +2195,12 @@ export class PiAgent extends BaseAgent {
         this.config.workspace.rootPath,
         this.config.session?.workingDirectory,
         this.config.systemPromptPreset,
-        'TokenBird Backend', // backendName
+        this.backendName,
         getCoAuthorPreference(), // respect user's includeCoAuthoredBy preference (#576)
         projectContext ?? undefined,
         this.config.agentPrompt,
         this.config.modelPromptSettings,
+        this.config.agentRuntime,
       );
 
       // Build context from sources

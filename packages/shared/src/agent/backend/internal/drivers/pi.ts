@@ -224,7 +224,9 @@ export const piDriver: ProviderDriver = {
       interceptor: resolvedPaths.interceptorBundlePath,
       node: resolvedPaths.nodeRuntimePath,
     },
-    piAuthProvider: providerOptions?.piAuthProvider || context.connection?.piAuthProvider,
+    piAuthProvider: providerOptions?.piAuthProvider
+      || context.connection?.piAuthProvider
+      || (context.connection?.providerType === 'anthropic' ? 'anthropic' : undefined),
     oauthProvider: context.connection?.oauthProvider,
     baseUrl: context.connection?.baseUrl,
     customEndpoint: context.connection?.customEndpoint,

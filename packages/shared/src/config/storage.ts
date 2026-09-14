@@ -2812,6 +2812,7 @@ export function updateLlmConnection(slug: string, updates: Partial<Omit<LlmConne
     slug: existing.slug,
     name: updates.name ?? existing.name,
     providerType: updates.providerType ?? existing.providerType,
+    agentRuntime: updates.agentRuntime !== undefined ? updates.agentRuntime : existing.agentRuntime,
     type: updates.type ?? existing.type, // Legacy field
     authType: updates.authType ?? existing.authType,
     oauthProvider: updates.oauthProvider !== undefined ? updates.oauthProvider : existing.oauthProvider,

@@ -1,7 +1,7 @@
 /**
  * Server spawner — start a headless TokenBird server as a child process.
  *
- * Spawns `bun run <serverEntry>`, reads stdout for the `CRAFT_SERVER_URL=`
+ * Spawns the server entry with the current Bun runtime, reads stdout for the `CRAFT_SERVER_URL=`
  * and `CRAFT_SERVER_TOKEN=` lines, and returns a handle to stop the server.
  */
 
@@ -53,14 +53,16 @@ function findServerEntry(): string {
 // ---------------------------------------------------------------------------
 
 export async function spawnServer(opts?: SpawnServerOptions): Promise<SpawnedServer> {
-  const serverEntry = opts?.serverEntry ?? findServerEntry()
+  const serverEntry = opts?.serverEntry ?? process.env.CRAFT_SERVER_ENTRY ?? findServerEntry()
   const startupTimeout = opts?.startupTimeout ?? 30_000
   const token = crypto.randomUUID()
 
   // Strip CLAUDECODE to avoid the Claude Agent SDK's nesting guard rejecting
   // subprocess launches when the CLI is invoked from within a Claude Code session.
   const { CLAUDECODE: _, ...parentEnv } = process.env
-  const proc: Subprocess = Bun.spawn(['bun', 'run', serverEntry], {
+  // Execute the TS entry directly. `bun run <file>` can create an intermediate
+  // process on Windows, leaving the actual server orphaned when the CLI exits.
+  const proc: Subprocess = Bun.spawn([process.execPath, serverEntry], {
     env: {
       ...parentEnv,
       ...opts?.env,

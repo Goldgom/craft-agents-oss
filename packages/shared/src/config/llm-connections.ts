@@ -55,6 +55,21 @@ export type LlmProviderType =
   | 'pi_compat';
 
 /**
+ * Agent loop / tool protocol used above the model transport.
+ *
+ * - `pi`: Pi coding-agent runtime (supports every configured provider)
+ * - `codex`: Codex Responses compatibility profile hosted by the Pi runtime
+ * - `claude-code`: native Claude Agent SDK / Claude Code runtime
+ */
+export type AgentRuntimeProtocol = 'pi' | 'codex' | 'claude-code';
+
+export const AGENT_RUNTIME_PROTOCOLS: readonly AgentRuntimeProtocol[] = [
+  'pi',
+  'codex',
+  'claude-code',
+];
+
+/**
  * @deprecated Use LlmProviderType instead. Kept for migration compatibility.
  */
 export type LlmConnectionType = 'anthropic' | 'openai' | 'openai-compat';
@@ -163,6 +178,12 @@ export interface LlmConnection {
   providerType: LlmProviderType;
 
   /**
+   * Agent runtime used for this connection. Optional for backward compatibility;
+   * legacy Anthropic connections resolve to Claude Code and all others to Pi.
+   */
+  agentRuntime?: AgentRuntimeProtocol;
+
+  /**
    * @deprecated Use providerType instead. Kept for migration compatibility.
    * Will be removed in a future version.
    */
@@ -247,6 +268,37 @@ export interface LlmConnectionWithStatus extends LlmConnection {
 
   /** Whether this is the global default connection */
   isDefault?: boolean;
+}
+
+/** Return the runtime protocols that can safely host this connection. */
+export function getCompatibleAgentRuntimes(
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider'>,
+): AgentRuntimeProtocol[] {
+  const compatible: AgentRuntimeProtocol[] = ['pi'];
+
+  if (connection.providerType === 'anthropic') {
+    compatible.push('claude-code');
+  }
+
+  if (
+    connection.providerType === 'pi'
+    && (connection.piAuthProvider === 'openai' || connection.piAuthProvider === 'openai-codex')
+  ) {
+    compatible.push('codex');
+  }
+
+  return compatible;
+}
+
+/** Resolve a persisted runtime fail-soft so an invalid manual edit cannot break sessions. */
+export function resolveAgentRuntime(
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'agentRuntime'>,
+): AgentRuntimeProtocol {
+  const fallback: AgentRuntimeProtocol = connection.providerType === 'anthropic'
+    ? 'claude-code'
+    : 'pi';
+  const requested = connection.agentRuntime ?? fallback;
+  return getCompatibleAgentRuntimes(connection).includes(requested) ? requested : fallback;
 }
 
 // ============================================================

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync
 import { dirname, join } from 'path'
 import { tmpdir } from 'node:os'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
-import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, getDefaultThinkingLevel, setDefaultThinkingLevel } from '@craft-agent/shared/config'
+import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, getDefaultThinkingLevel, setDefaultThinkingLevel, getDefaultLlmConnection, getLlmConnection, resolveAgentRuntime } from '@craft-agent/shared/config'
 import { isValidThinkingLevel, normalizeThinkingLevel, THINKING_LEVEL_IDS } from '@craft-agent/shared/agent/thinking-levels'
 import { setTransferableHandler } from './transfer'
 
@@ -507,7 +507,24 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   server.handle(RPC_CHANNELS.settings.PROMPTS_SYSTEM_GET, async (_ctx, workspaceId: string) => {
     const workspace = getWorkspaceOrThrow(workspaceId)
     const { getSystemPromptSources } = await import('@craft-agent/shared/prompts/system')
-    return getSystemPromptSources(undefined, undefined, workspace.rootPath, workspace.rootPath)
+    const defaultSlug = getDefaultLlmConnection()
+    const connection = defaultSlug ? getLlmConnection(defaultSlug) : null
+    const runtime = connection ? resolveAgentRuntime(connection) : 'claude-code'
+    const backendName = runtime === 'claude-code'
+      ? 'Claude Code'
+      : runtime === 'codex' ? 'Codex compatibility runtime' : 'Craft Agents Backend'
+    return getSystemPromptSources(
+      undefined,
+      undefined,
+      workspace.rootPath,
+      workspace.rootPath,
+      undefined,
+      backendName,
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    )
   })
   server.handle(RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_GET, async () => {
     const { getSystemPromptSettings } = await import('@craft-agent/shared/config/preferences')
