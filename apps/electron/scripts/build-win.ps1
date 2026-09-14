@@ -297,7 +297,10 @@ if ($env:MICROSOFT_OAUTH_CLIENT_ID) {
 }
 Push-Location $RootDir
 try {
-    & npx esbuild @MainArgs
+    # Use bunx rather than npx: this repo is bun-based, and on hosts where a
+    # stale npm (from another Node version) shadows the active one, `npx`
+    # crashes before the tool ever starts.
+    & bunx esbuild @MainArgs
     if ($LASTEXITCODE -ne 0) { throw "Main process build failed" }
 } finally {
     Pop-Location
@@ -322,7 +325,7 @@ try {
     if (Test-Path $RendererDir) { Remove-Item -Recurse -Force $RendererDir }
 
     # Run vite build
-    npx vite build --config apps/electron/vite.config.ts
+    bunx vite build --config apps/electron/vite.config.ts
     if ($LASTEXITCODE -ne 0) { throw "Renderer build failed" }
 
     # Verify renderer was built
@@ -453,7 +456,7 @@ while (-not $builderSuccess -and $builderRetry -lt $maxBuilderRetries) {
 
     # Build NSIS first so an unavailable MSI/WiX toolchain cannot discard the
     # otherwise usable Windows installer.
-    npx electron-builder --win nsis --x64 2>&1 | Tee-Object -Variable builderOutput
+    bunx electron-builder --win nsis --x64 2>&1 | Tee-Object -Variable builderOutput
 
     if ($LASTEXITCODE -eq 0) {
         $builderSuccess = $true
@@ -487,7 +490,7 @@ if (-not $builderSuccess) {
 Push-Location $ElectronDir
 try {
     Write-Host "  Building optional MSI installer..." -ForegroundColor Cyan
-    npx electron-builder --win msi --x64 2>&1 | Tee-Object -Variable msiOutput
+    bunx electron-builder --win msi --x64 2>&1 | Tee-Object -Variable msiOutput
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  WARNING: MSI build skipped (WiX unavailable or download failed)." -ForegroundColor Yellow
     } else {
