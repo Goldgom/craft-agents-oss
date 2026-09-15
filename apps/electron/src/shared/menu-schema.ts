@@ -48,7 +48,7 @@ export interface MenuItemSeparator {
 }
 
 /**
- * External-link menu item (e.g. "Help & Documentation").
+ * URL menu item (including internal tokenbird:// routes).
  *
  * Renderers turn this into `window.electronAPI.openUrl(url)`. Not consumed by the
  * Electron native menu builder — main process imports only EDIT/VIEW/WINDOW today.
@@ -57,7 +57,7 @@ export interface MenuItemUrl {
   type: 'url'
   id: string
   labelKey: string              // i18n key — resolve with t() at render time
-  url: string                   // Target URL passed to shell.openExternal
+  url: string                   // Target URL passed to the unified URL handler
   icon: string                  // Lucide icon name
 }
 
@@ -290,7 +290,7 @@ export const ROOT_MENU = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * External-link items rendered inside the Help submenu (desktop) and the Help
+ * Documentation items rendered inside the Help submenu (desktop) and the Help
  * sub-page (mobile). Excludes `keyboardShortcuts`, which is a `MenuItemAction`
  * and lives in `ROOT_MENU` so mobile can hoist it to the root list.
  */
@@ -299,7 +299,7 @@ export const HELP_LINKS: MenuItemUrl[] = [
     type: 'url',
     id: 'helpAndDocs',
     labelKey: 'menu.helpAndDocs',
-    url: 'https://thecraftagents.com/docs',
+    url: 'tokenbird://settings/guides',
     icon: 'HelpCircle',
   },
 ]

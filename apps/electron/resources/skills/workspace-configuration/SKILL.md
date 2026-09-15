@@ -12,3 +12,5 @@ Edit the smallest relevant configuration file and preserve unrelated entries. Us
 For labels and statuses, preserve hierarchy, fixed entries, value types, and state categories. For views, use the actual session fields supported by the application. For permissions and tool metadata, prefer narrow allowlists and explain any elevated access.
 
 Validate the file after changes and summarize exactly what users will observe in the interface.
+
+Prefer the `craft-agent` CLI for labels, sources, skills, and automations when it is available; inspect the command's `--help` first. Never guess a configuration schema. The canonical local references are `~/.tokenbird/docs/labels.md`, `statuses.md`, `permissions.md`, `tool-icons.md`, `skills.md`, and `craft-cli.md`.

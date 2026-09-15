@@ -8,7 +8,7 @@
 import { Type } from '@earendil-works/pi-ai';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { WebSearchProvider, WebSearchResult } from './types.ts';
-import { DDGSearchProvider } from './providers/ddg.ts';
+import { BingSearchProvider } from './providers/bing.ts';
 
 const schema = Type.Object({
   query: Type.String({ description: 'The search query' }),
@@ -55,7 +55,7 @@ function formatErrorSnippet(message: string, max = 180): string {
 
 export function createSearchTool(
   provider: WebSearchProvider,
-  fallbackProvider: WebSearchProvider = new DDGSearchProvider(),
+  fallbackProvider: WebSearchProvider = new BingSearchProvider(),
 ): ToolDefinition<typeof schema> {
   return {
     name: 'web_search',

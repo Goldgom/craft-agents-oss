@@ -2,9 +2,9 @@
  * Source Guides System
  *
  * Provides parsing utilities for source guides.
- * Setup guidance lives in the product docs at https://thecraftagents.com/docs.
+ * Setup guidance lives in the bundled docs under ~/.tokenbird/docs/.
  *
- * The agent should consult the product docs for setup guidance when creating sources.
+ * The agent should consult the bundled local docs when creating sources.
  */
 
 // ============================================================
@@ -189,7 +189,7 @@ export function extractDomainFromSource(source: {
 
 /**
  * @deprecated Bundled guides have been removed.
- * Setup guides live in the product docs at https://thecraftagents.com/docs.
+ * Setup guides live in the bundled docs under ~/.tokenbird/docs/.
  */
 export function getSourceGuideForDomain(_domain: string): ParsedSourceGuide | null {
   // Bundled guides removed - guides now live in the product docs
@@ -198,7 +198,7 @@ export function getSourceGuideForDomain(_domain: string): ParsedSourceGuide | nu
 
 /**
  * @deprecated Bundled guides have been removed.
- * Setup guides live in the product docs at https://thecraftagents.com/docs.
+ * Setup guides live in the bundled docs under ~/.tokenbird/docs/.
  */
 export function getSourceGuide(_source: {
   type?: string;
@@ -212,7 +212,7 @@ export function getSourceGuide(_source: {
 
 /**
  * @deprecated Bundled guides have been removed.
- * Setup guides live in the product docs at https://thecraftagents.com/docs.
+ * Setup guides live in the bundled docs under ~/.tokenbird/docs/.
  */
 export function getSourceKnowledge(_source: {
   type?: string;

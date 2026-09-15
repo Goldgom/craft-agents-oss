@@ -1,5 +1,5 @@
 appId: top.goldgom.tokenbird
-productName: TokenBird
+productName: 词元鸟
 copyright: Copyright © 2026 TokenNest
 
 electronVersion: "39.2.7"
@@ -156,6 +156,9 @@ dmg:
     height: 380
 
 win:
+  # Keep the executable/process name stable for updates, scripts, and existing
+  # firewall rules while presenting the localized product name to users.
+  executableName: TokenBird
   icon: resources/icon.ico
   target:
     - target: nsis
@@ -200,6 +203,12 @@ win:
       to: messaging-qqbot-worker/worker.cjs
 
 nsis:
+  # Follow the operating-system language for installer chrome. The installed
+  # product/shortcut name comes from the localized productName above.
+  installerLanguages:
+    - en_US
+    - zh_CN
+    - zh_TW
   # Show the NSIS wizard so users can choose the installation directory before
   # files are copied. This is required for custom per-user install locations.
   oneClick: false

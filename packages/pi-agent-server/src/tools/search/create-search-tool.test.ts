@@ -66,7 +66,7 @@ describe('createSearchTool', () => {
     };
 
     const fallbackProvider: WebSearchProvider = {
-      name: 'DuckDuckGo',
+      name: 'Bing',
       async search() {
         return [{ title: 'Fallback hit', url: 'https://fallback.example', description: 'ok' }];
       },
@@ -76,7 +76,7 @@ describe('createSearchTool', () => {
     const result = await tool.execute('tool-2', { query: 'craft', count: 5 });
 
     expect(result.details?.isError).toBeUndefined();
-    expect((result.content[0] as any).text).toContain('automatically fell back to DuckDuckGo');
+    expect((result.content[0] as any).text).toContain('automatically fell back to Bing');
     expect((result.content[0] as any).text).toContain('401 missing scope');
     expect((result.content[0] as any).text).toContain('https://fallback.example');
   });
@@ -90,7 +90,7 @@ describe('createSearchTool', () => {
     };
 
     const fallbackProvider: WebSearchProvider = {
-      name: 'DuckDuckGo',
+      name: 'Bing',
       async search() {
         throw new Error('fallback boom');
       },
@@ -101,7 +101,7 @@ describe('createSearchTool', () => {
 
     expect(result.details?.isError).toBe(true);
     expect((result.content[0] as any).text).toContain('primary (OpenAI) failed');
-    expect((result.content[0] as any).text).toContain('fallback (DuckDuckGo) failed');
+    expect((result.content[0] as any).text).toContain('fallback (Bing) failed');
   });
 
   it('truncates oversized provider errors in the tool result', async () => {
@@ -115,7 +115,7 @@ describe('createSearchTool', () => {
     };
 
     const fallbackProvider: WebSearchProvider = {
-      name: 'DuckDuckGo',
+      name: 'Bing',
       async search() {
         throw new Error(hugeFallback);
       },
@@ -134,18 +134,18 @@ describe('createSearchTool', () => {
   });
 
   it('does not recurse fallback when provider is already fallback provider', async () => {
-    const ddgProvider: WebSearchProvider = {
-      name: 'DuckDuckGo',
+    const bingProvider: WebSearchProvider = {
+      name: 'Bing',
       async search() {
-        throw new Error('ddg boom');
+        throw new Error('bing boom');
       },
     };
 
-    const tool = createSearchTool(ddgProvider, ddgProvider);
+    const tool = createSearchTool(bingProvider, bingProvider);
     const result = await tool.execute('tool-4', { query: 'craft' });
 
     expect(result.details?.isError).toBe(true);
     expect((result.content[0] as any).text).toContain('Search failed');
-    expect((result.content[0] as any).text).toContain('ddg boom');
+    expect((result.content[0] as any).text).toContain('bing boom');
   });
 });

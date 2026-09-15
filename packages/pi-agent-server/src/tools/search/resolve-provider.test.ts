@@ -3,7 +3,7 @@ import { resolveSearchProvider } from './resolve-provider.ts';
 import { ResponsesApiSearchProvider } from './providers/openai.ts';
 import { ChatGPTBackendSearchProvider } from './providers/chatgpt.ts';
 import { GoogleSearchProvider } from './providers/google.ts';
-import { DDGSearchProvider } from './providers/ddg.ts';
+import { BingSearchProvider } from './providers/bing.ts';
 
 /** Build a minimal JWT with a chatgpt_account_id claim. */
 function makeJwt(accountId: string): string {
@@ -56,7 +56,7 @@ describe('resolveSearchProvider', () => {
     expect(provider.name).toBe('ChatGPT');
   });
 
-  it('falls back to DDG for openai-codex + oauth with malformed JWT', () => {
+  it('falls back to Bing for openai-codex + oauth with malformed JWT', () => {
     const provider = resolveSearchProvider({
       provider: 'openai-codex',
       credential: {
@@ -67,16 +67,16 @@ describe('resolveSearchProvider', () => {
       },
     });
 
-    expect(provider).toBeInstanceOf(DDGSearchProvider);
+    expect(provider).toBeInstanceOf(BingSearchProvider);
   });
 
-  it('falls back to DDG for openai-codex + api_key with malformed non-JWT token', () => {
+  it('falls back to Bing for openai-codex + api_key with malformed non-JWT token', () => {
     const provider = resolveSearchProvider({
       provider: 'openai-codex',
       credential: { type: 'api_key', key: 'not-a-jwt' },
     });
 
-    expect(provider).toBeInstanceOf(DDGSearchProvider);
+    expect(provider).toBeInstanceOf(BingSearchProvider);
   });
 
   // --- OpenRouter ---
@@ -104,7 +104,7 @@ describe('resolveSearchProvider', () => {
 
   // --- Fallback cases ---
 
-  it('falls back to DDG for openai + oauth (no ChatGPT backend for plain openai)', () => {
+  it('falls back to Bing for openai + oauth (no ChatGPT backend for plain openai)', () => {
     const provider = resolveSearchProvider({
       provider: 'openai',
       credential: {
@@ -115,33 +115,33 @@ describe('resolveSearchProvider', () => {
       },
     });
 
-    expect(provider).toBeInstanceOf(DDGSearchProvider);
+    expect(provider).toBeInstanceOf(BingSearchProvider);
   });
 
-  it('falls back to DDG when provider is unknown', () => {
+  it('falls back to Bing when provider is unknown', () => {
     const provider = resolveSearchProvider({
       provider: 'unknown',
       credential: { type: 'api_key', key: 'x' },
     });
 
-    expect(provider).toBeInstanceOf(DDGSearchProvider);
+    expect(provider).toBeInstanceOf(BingSearchProvider);
   });
 
-  it('falls back to DDG when key is empty', () => {
+  it('falls back to Bing when key is empty', () => {
     const provider = resolveSearchProvider({
       provider: 'openai',
       credential: { type: 'api_key', key: '' },
     });
 
-    expect(provider).toBeInstanceOf(DDGSearchProvider);
+    expect(provider).toBeInstanceOf(BingSearchProvider);
   });
 
-  it('falls back to DDG when no piAuth is provided', () => {
-    expect(resolveSearchProvider()).toBeInstanceOf(DDGSearchProvider);
-    expect(resolveSearchProvider(undefined)).toBeInstanceOf(DDGSearchProvider);
+  it('falls back to Bing when no piAuth is provided', () => {
+    expect(resolveSearchProvider()).toBeInstanceOf(BingSearchProvider);
+    expect(resolveSearchProvider(undefined)).toBeInstanceOf(BingSearchProvider);
   });
 
-  it('falls back to DDG for github-copilot (no search API available)', () => {
+  it('falls back to Bing for github-copilot (no search API available)', () => {
     const provider = resolveSearchProvider({
       provider: 'github-copilot',
       credential: {
@@ -152,15 +152,15 @@ describe('resolveSearchProvider', () => {
       },
     });
 
-    expect(provider).toBeInstanceOf(DDGSearchProvider);
+    expect(provider).toBeInstanceOf(BingSearchProvider);
   });
 
-  it('falls back to DDG for vercel-ai-gateway (not yet wired for provider-native search)', () => {
+  it('falls back to Bing for vercel-ai-gateway (not yet wired for provider-native search)', () => {
     const provider = resolveSearchProvider({
       provider: 'vercel-ai-gateway',
       credential: { type: 'api_key', key: 'vercel-test-key' },
     });
 
-    expect(provider).toBeInstanceOf(DDGSearchProvider);
+    expect(provider).toBeInstanceOf(BingSearchProvider);
   });
 });

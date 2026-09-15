@@ -1,6 +1,6 @@
 {
   "name": "tokenbird",
-  "version": "1.1.0-community.1",
+  "version": "26.9.15",
   "license": "Apache-2.0",
   "description": "TokenBird AI agent workspace, deeply integrated with TokenNest",
   "type": "module",

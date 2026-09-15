@@ -3,7 +3,7 @@
  *
  * Priority:
  *   1. Provider-native search (OpenAI, ChatGPT, OpenRouter, Google) — best quality
- *   2. DuckDuckGo — universal fallback, no API key required
+ *   2. Bing — universal fallback, no API key required
  *
  * To add a new Responses API-compatible provider:
  *   1. Add a case here with the provider name and apiBase URL
@@ -14,7 +14,7 @@ import type { WebSearchProvider } from './types.ts';
 import { ResponsesApiSearchProvider } from './providers/openai.ts';
 import { ChatGPTBackendSearchProvider, extractChatGptAccountId } from './providers/chatgpt.ts';
 import { GoogleSearchProvider } from './providers/google.ts';
-import { DDGSearchProvider } from './providers/ddg.ts';
+import { BingSearchProvider } from './providers/bing.ts';
 
 export type SearchProviderCredential =
   | { type: 'api_key'; key: string }
@@ -78,7 +78,7 @@ export function resolveSearchProvider(piAuth?: SearchProviderAuthConfig, activeM
         activeModel ? { model: activeModel } : undefined,
       );
     }
-    // Can't extract accountId (malformed/non-JWT token) → fall through to DDG
+    // Can't extract accountId (malformed/non-JWT token) → fall through to Bing
   }
 
   // OpenRouter → same Responses API format, different base URL
@@ -96,8 +96,8 @@ export function resolveSearchProvider(piAuth?: SearchProviderAuthConfig, activeM
   }
 
   // Vercel AI Gateway is currently not wired to provider-native search routing.
-  // It intentionally falls back to DDG until we add an explicit Responses API mapping.
+  // It intentionally falls back to Bing until we add an explicit Responses API mapping.
 
   // Universal fallback — no API key required
-  return new DDGSearchProvider();
+  return new BingSearchProvider();
 }

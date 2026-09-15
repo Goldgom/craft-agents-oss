@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, jest, mock, spyOn } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { resolveBackendContext } from '@craft-agent/shared/agent/backend'
+import * as backend from '@craft-agent/shared/agent/backend'
 import { loadWorkspaceConfig } from '@craft-agent/shared/workspaces'
 import { SessionManager, createManagedSession } from './SessionManager.ts'
 import { buildRestartRequiredSignature } from './runtime-config.ts'
@@ -75,7 +75,7 @@ function injectSession(
     managed.backendRestartSignature = opts.backendRestartSignature
   } else {
     const workspaceConfig = loadWorkspaceConfig(workspaceRoot)
-    const ctx = resolveBackendContext({
+    const ctx = backend.resolveBackendContext({
       sessionConnectionSlug: llmConnection,
       workspaceDefaultConnectionSlug: workspaceConfig?.defaults?.defaultLlmConnection,
     })
@@ -103,6 +103,7 @@ describe('refreshConnectionRuntime', () => {
   })
 
   afterEach(() => {
+    mock.restore()
     rmSync(tmpRoot, { recursive: true, force: true })
   })
 
@@ -203,29 +204,70 @@ describe('refreshConnectionRuntime', () => {
     // pi_compat connection with explicit per-model `supportsImages`, the
     // helper must forward that field on `customModels` so the Pi subprocess
     // can re-register the model with `input: ['text', 'image']`.
-    const agent = createAgentStub()
-    injectSession(sm, 'shape-check', tmpRoot, 'slug-A', agent)
+    const connection = {
+      slug: 'custom-compat',
+      name: 'Custom endpoint',
+      providerType: 'pi_compat' as const,
+      agentRuntime: 'pi' as const,
+      authType: 'api_key_with_endpoint' as const,
+      baseUrl: 'https://custom.example.test/v1',
+      customEndpoint: { api: 'openai-completions' as const },
+      models: [
+        {
+          id: 'vision-model',
+          name: 'Vision model',
+          shortName: 'Vision',
+          description: 'Vision-capable test model',
+          provider: 'pi' as const,
+          contextWindow: 64_000,
+          supportsImages: true,
+        },
+        {
+          id: 'text-model',
+          name: 'Text model',
+          shortName: 'Text',
+          description: 'Text-only test model',
+          provider: 'pi' as const,
+          contextWindow: 32_000,
+          supportsImages: false,
+        },
+      ],
+      defaultModel: 'vision-model',
+      createdAt: Date.now(),
+    }
+    spyOn(backend, 'resolveBackendContext').mockReturnValue({
+      connection,
+      provider: 'pi',
+      agentRuntime: 'pi',
+      authType: 'api_key_with_endpoint',
+      resolvedModel: 'vision-model',
+      capabilities: { needsHttpPoolServer: false },
+    })
 
-    await sm.refreshConnectionRuntime('slug-A')
+    const agent = createAgentStub()
+    injectSession(sm, 'shape-check', tmpRoot, connection.slug, agent)
+
+    await sm.refreshConnectionRuntime(connection.slug)
 
     expect(agent.updateRuntimeConfig).toHaveBeenCalledTimes(1)
     const payload = agent.updateRuntimeConfig.mock.calls[0]?.[0]
     expect(payload).toBeDefined()
-    expect(payload).toMatchObject({
-      model: expect.any(String),
-      runtime: expect.any(Object),
+    expect(payload).toEqual({
+      model: 'vision-model',
+      providerType: 'pi_compat',
+      authType: 'api_key_with_endpoint',
+      runtime: {
+        baseUrl: 'https://custom.example.test/v1',
+        piAuthProvider: undefined,
+        customEndpoint: { api: 'openai-completions' },
+        customModels: [
+          { id: 'vision-model', contextWindow: 64_000, supportsImages: true },
+          { id: 'text-model', contextWindow: 32_000, supportsImages: false },
+        ],
+      },
     })
     // The runtime envelope mirrors what `pi-agent.ts:requestRuntimeConfigUpdate`
     // unpacks — `customModels` shape preserves `supportsImages` when set.
-    if (payload.runtime?.customModels) {
-      for (const m of payload.runtime.customModels) {
-        if (typeof m === 'object') {
-          expect(typeof m.id).toBe('string')
-          if ('supportsImages' in m) {
-            expect(typeof m.supportsImages).toBe('boolean')
-          }
-        }
-      }
-    }
+    expect(payload.runtime?.customModels).toHaveLength(2)
   })
 })

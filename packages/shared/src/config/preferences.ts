@@ -24,7 +24,7 @@ export interface DiffViewerPreferences {
 }
 
 /** Functional sections of the system prompt that users may enable/disable. */
-export type SystemPromptCapabilityId = 'browserTools' | 'webSearch' | 'structuredData' | 'documentTools' | 'themeDesign'
+export type SystemPromptCapabilityId = 'browserTools' | 'webSearch' | 'structuredData' | 'subagents' | 'documentTools' | 'themeDesign'
 
 export interface SystemPromptSettings {
   capabilities?: Partial<Record<SystemPromptCapabilityId, boolean>>
@@ -36,6 +36,7 @@ export const DEFAULT_SYSTEM_PROMPT_CAPABILITIES: Record<SystemPromptCapabilityId
   browserTools: true,
   webSearch: true,
   structuredData: true,
+  subagents: false,
   documentTools: true,
   themeDesign: true,
 }
@@ -88,6 +89,8 @@ export interface UserPreferences {
    * initial window consumes it and opens without a selected workspace.
    */
   selectWorkspaceOnNextLaunch?: boolean;
+  /** Internal: the latest first-launch product guide the user completed. */
+  gettingStartedGuideVersion?: number;
   // When the preferences were last updated
   updatedAt?: number;
 }

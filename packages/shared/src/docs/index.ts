@@ -101,6 +101,7 @@ export const APP_ROOT = '~/.tokenbird';
  */
 export const DOC_REFS = {
   appRoot: APP_ROOT,
+  productGuide: `${APP_ROOT}/docs/product-guide.md`,
   sources: `${APP_ROOT}/docs/sources.md`,
   permissions: `${APP_ROOT}/docs/permissions.md`,
   skills: `${APP_ROOT}/docs/skills.md`,
@@ -188,6 +189,7 @@ export {
 export {
   getDocUrl,
   getDocInfo,
+  LOCAL_DOCS_URL,
   DOCS,
   type DocFeature,
   type DocInfo,

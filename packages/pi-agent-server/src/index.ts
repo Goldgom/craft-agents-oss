@@ -603,7 +603,7 @@ async function ensureSession(): Promise<AgentSession> {
   //   - OpenAI/OpenRouter → Responses API built-in web_search
   //   - ChatGPT Plus (openai-codex) → ChatGPT backend responses endpoint
   //   - Google → Gemini API with googleSearch grounding
-  //   - Others → DuckDuckGo fallback
+  //   - Others → Bing fallback
   //
   // IMPORTANT: resolve dynamically on each search call so token_update refreshes
   // are used without recreating the session.

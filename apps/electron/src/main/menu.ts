@@ -1,4 +1,4 @@
-import { Menu, app, shell, BrowserWindow } from 'electron'
+import { Menu, app, BrowserWindow } from 'electron'
 import { i18n } from '@craft-agent/shared/i18n'
 import { RPC_CHANNELS, type BroadcastEventMap } from '../shared/types'
 import { EDIT_MENU, VIEW_MENU, WINDOW_MENU } from '../shared/menu-schema'
@@ -6,6 +6,8 @@ import type { MenuItem } from '../shared/menu-schema'
 import type { WindowManager } from './window-manager'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { mainLog, isDebugMode } from './logger'
+import { handleDeepLink } from './deep-link'
+import { LOCAL_DOCS_URL } from '@craft-agent/shared/docs'
 
 type ClientResolver = (webContentsId: number) => string | undefined
 
@@ -13,6 +15,18 @@ type ClientResolver = (webContentsId: number) => string | undefined
 let cachedWindowManager: WindowManager | null = null
 let cachedEventSink: EventSink | null = null
 let cachedClientResolver: ClientResolver | null = null
+
+function openLocalDocumentation(): void {
+  if (!cachedWindowManager) return
+  void handleDeepLink(
+    LOCAL_DOCS_URL,
+    cachedWindowManager,
+    cachedEventSink ?? undefined,
+    cachedClientResolver ?? undefined,
+  ).then(result => {
+    if (!result.success) mainLog.error(`[menu] Failed to open local documentation: ${result.error}`)
+  })
+}
 
 /**
  * Creates and sets the application menu for macOS.
@@ -234,7 +248,7 @@ export async function rebuildMenu(): Promise<void> {
       submenu: [
         {
           label: i18n.t("menu.helpAndDocs"),
-          click: () => shell.openExternal('https://thecraftagents.com/docs')
+          click: openLocalDocumentation
         },
         {
           label: i18n.t("menu.keyboardShortcuts"),

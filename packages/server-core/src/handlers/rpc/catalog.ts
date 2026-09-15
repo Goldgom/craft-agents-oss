@@ -20,6 +20,7 @@ export const HANDLED_CHANNELS = [
 ] as const
 
 const SYSTEM_GUIDE_TAGS: Record<string, string[]> = {
+  'product-guide.md': ['overview', 'feature', 'local'],
   'automations.md': ['automation', 'configuration'],
   'browser-tools.md': ['tools', 'browser'],
   'craft-cli.md': ['tools', 'cli'],
@@ -177,6 +178,10 @@ export function registerCatalogHandlers(server: RpcServer, deps: HandlerDeps): v
       })
     }
 
-    return guides.sort((a, b) => a.scope.localeCompare(b.scope) || a.title.localeCompare(b.title))
+    return guides.sort((a, b) => {
+      if (a.filename === 'product-guide.md') return -1
+      if (b.filename === 'product-guide.md') return 1
+      return a.scope.localeCompare(b.scope) || a.title.localeCompare(b.title)
+    })
   })
 }

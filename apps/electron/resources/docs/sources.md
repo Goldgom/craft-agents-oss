@@ -41,7 +41,7 @@ When a user wants to add a new source, follow this conversational setup process 
 
 ### 0. Check for a Specialized Source Guide (REQUIRED FIRST STEP)
 
-**Before doing anything else**, check the product documentation at https://thecraftagents.com/docs for a service-specific setup guide (fetch pages with your web tools, e.g. search for "{service} source setup").
+**Before doing anything else**, read the bundled documentation under `~/.tokenbird/docs/`, starting with `product-guide.md` and `sources.md`, for setup guidance.
 
 **Available guides:** GitHub, Linear, Slack, Gmail, Google Calendar, Google Drive, Google Docs, Google Sheets, Outlook, Microsoft Calendar, Teams, SharePoint, Craft, Filesystem, Brave Search, Memory
 
@@ -233,7 +233,7 @@ Concrete examples tailored to the user's workflow:
 ```
 User: I want to add Linear
 
-Agent: [FIRST: Fetches the Linear setup guide from https://thecraftagents.com/docs]
+Agent: [FIRST: Reads the bundled source documentation under ~/.tokenbird/docs/]
 
 Agent: I found the Linear setup guide! A few questions:
 1. What will you primarily use Linear for? (issue tracking, sprint planning, reporting?)

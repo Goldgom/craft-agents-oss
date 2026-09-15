@@ -11,7 +11,7 @@ interface BuiltinDocHelpButtonProps {
   label?: string
 }
 
-/** Opens the bundled Markdown guide, with the public docs as a fallback. */
+/** Opens the bundled Markdown guide, with the unified local guide as a fallback. */
 export function BuiltinDocHelpButton({
   feature,
   docFile = `${feature}.md`,

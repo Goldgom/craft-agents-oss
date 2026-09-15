@@ -38,7 +38,7 @@ const CODEX_SEARCH_MODELS: readonly string[] = PI_PREFERRED_DEFAULTS['openai-cod
 const FALLBACK_SEARCH_MODEL = CODEX_SEARCH_MODELS[0] ?? 'gpt-6-astra';
 // Bound the failover chain: the active model plus a few catalog fallbacks. The catalog's
 // tail (o3/gpt-4o era) is the least likely to be accepted by a ChatGPT-plan account, so a
-// longer chain adds sequential 400 round-trips before the DDG fallback, not recovery odds.
+// longer chain adds sequential 400 round-trips before the Bing fallback, not recovery odds.
 const MAX_MODEL_CANDIDATES = 4;
 const API_BASE = 'https://chatgpt.com/backend-api/codex';
 const JWT_CLAIM_PATH = 'https://api.openai.com/auth';

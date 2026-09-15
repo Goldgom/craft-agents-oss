@@ -388,7 +388,7 @@ describe('ChatGPTBackendSearchProvider', () => {
   });
 
   // Regression: craft-agents-oss#1023 — an "unsupported model" 400 must fail over to the next
-  // candidate model, not burn the tool-type retry on the same dead model and cascade to DDG.
+  // candidate model, not burn the tool-type retry on the same dead model and cascade to Bing.
   it('retries with the next candidate model when the account rejects the model', async () => {
     const attempts: Array<{ model: unknown; tool: unknown }> = [];
 
@@ -482,7 +482,7 @@ describe('ChatGPTBackendSearchProvider', () => {
   });
 
   // Failover is bounded: an account that rejects everything makes MAX_MODEL_CANDIDATES (4)
-  // requests — not one per catalog entry — before throwing (and the tool layer falls to DDG).
+  // requests — not one per catalog entry — before throwing (and the tool layer falls to Bing).
   // The thrown message is summarized rather than a raw concatenation of every attempt.
   it('caps the failover sweep at 4 candidate models and summarizes the thrown error', async () => {
     const modelsTried: unknown[] = [];

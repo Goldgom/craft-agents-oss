@@ -188,6 +188,11 @@ export class WindowManager {
     }
   }
 
+  /** Re-apply the localized app name after the user changes UI language. */
+  refreshLocalizedAppName(): void {
+    this.refreshWindowTitles()
+  }
+
   /**
    * Create a new window for a workspace
    * @param options - Window creation options

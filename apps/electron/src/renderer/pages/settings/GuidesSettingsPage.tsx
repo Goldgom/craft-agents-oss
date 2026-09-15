@@ -33,8 +33,25 @@ export default function GuidesSettingsPage() {
 
   const load = useCallback(async () => {
     if (!activeWorkspaceId) {
-      setGuides([])
-      setLoading(false)
+      setLoading(true)
+      try {
+        const content = await window.electronAPI.readFile('~/.tokenbird/docs/product-guide.md')
+        setGuides([{
+          id: 'system:product-guide.md',
+          title: '词元鸟本地功能指南',
+          filename: 'product-guide.md',
+          path: '~/.tokenbird/docs/product-guide.md',
+          summary: '随安装包提供的完整离线功能说明。',
+          tags: ['system', 'overview', 'feature', 'local'],
+          scope: 'system',
+          content,
+        }])
+      } catch (error) {
+        setGuides([])
+        toast.error(error instanceof Error ? error.message : t('settings.guides.loadError'))
+      } finally {
+        setLoading(false)
+      }
       return
     }
     setLoading(true)
@@ -50,16 +67,18 @@ export default function GuidesSettingsPage() {
   useEffect(() => { void load() }, [load])
   useEffect(() => { setPage(1) }, [search, selectedTag, guides])
 
-  const tags = useMemo(() => Array.from(new Set(guides.flatMap(guide => guide.tags))).sort(), [guides])
+  const productGuide = useMemo(() => guides.find(guide => guide.filename === 'product-guide.md'), [guides])
+  const referenceGuides = useMemo(() => guides.filter(guide => guide.filename !== 'product-guide.md'), [guides])
+  const tags = useMemo(() => Array.from(new Set(referenceGuides.flatMap(guide => guide.tags))).sort(), [referenceGuides])
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase()
-    return guides.filter(guide => {
+    return referenceGuides.filter(guide => {
       if (selectedTag !== 'all' && !guide.tags.includes(selectedTag)) return false
       if (!query) return true
       return [guide.title, guide.filename, guide.summary, guide.sourceName, guide.content, ...guide.tags]
         .some(value => value?.toLowerCase().includes(query))
     })
-  }, [guides, search, selectedTag])
+  }, [referenceGuides, search, selectedTag])
   const visible = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
@@ -76,6 +95,16 @@ export default function GuidesSettingsPage() {
       <div className="min-h-0 flex-1 mask-fade-y">
         <ScrollArea className="h-full">
           <div className="mx-auto max-w-4xl space-y-6 px-5 py-7">
+            {productGuide && (
+              <SettingsSection title={productGuide.title} description={productGuide.summary}>
+                <SettingsCard>
+                  <div className="px-6 py-5">
+                    <Markdown>{productGuide.content}</Markdown>
+                  </div>
+                </SettingsCard>
+              </SettingsSection>
+            )}
+
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input value={search} onChange={event => setSearch(event.target.value)} className="pl-9" placeholder={t('settings.guides.searchPlaceholder')} />

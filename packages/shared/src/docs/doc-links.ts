@@ -1,9 +1,10 @@
 /**
- * Documentation links and summaries for contextual help throughout the UI.
- * Summaries provide quick context; "Learn more" opens the full docs.
+ * Local documentation metadata for contextual help throughout the UI.
+ * Summaries provide quick context; every documentation link opens the same
+ * bundled guide page inside TokenBird.
  */
 
-const DOC_BASE_URL = 'https://thecraftagents.com/docs'
+export const LOCAL_DOCS_URL = 'tokenbird://settings/guides'
 
 export type DocFeature =
   | 'sources'
@@ -23,7 +24,7 @@ export type DocFeature =
   | 'messaging'
 
 export interface DocInfo {
-  /** Path relative to DOC_BASE_URL */
+  /** Legacy topic path retained as metadata for search and future anchors. */
   path: string
   /** Display title for the help popover */
   title: string
@@ -125,10 +126,10 @@ export const DOCS: Record<DocFeature, DocInfo> = {
 }
 
 /**
- * Get the full documentation URL for a feature
+ * Get the unified local documentation route for a feature.
  */
-export function getDocUrl(feature: DocFeature): string {
-  return `${DOC_BASE_URL}${DOCS[feature].path}`
+export function getDocUrl(_feature: DocFeature): string {
+  return LOCAL_DOCS_URL
 }
 
 /**

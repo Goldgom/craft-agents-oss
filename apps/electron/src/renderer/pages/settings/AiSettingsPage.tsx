@@ -352,6 +352,7 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
   const oauthIdentityLine = connection.authType === 'oauth' && connection.oauthAccountEmail
     ? [connection.oauthAccountEmail, connection.oauthOrganizationName].filter(Boolean).join(' · ')
     : null
+  const currentRuntime = resolveAgentRuntime(connection)
 
   return (
     <SettingsRow
@@ -389,7 +390,29 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
       )}
       description={getDescription()}
     >
-      <DropdownMenu modal={false} onOpenChange={setMenuOpen}>
+      <div className="flex items-center gap-1.5">
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-background px-2.5 text-xs font-medium text-foreground shadow-minimal transition-colors hover:bg-foreground/[0.04]"
+              aria-label={t('settings.ai.runtime.title')}
+            >
+              <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
+              <span>{t(`settings.ai.runtime.${currentRuntime === 'claude-code' ? 'claudeCode' : currentRuntime}`)}</span>
+              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <StyledDropdownMenuContent align="end">
+            {getCompatibleAgentRuntimes(connection).map(runtime => (
+              <StyledDropdownMenuItem key={runtime} onClick={() => onSetAgentRuntime(runtime)}>
+                <span className="flex-1">{t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}`)}</span>
+                {currentRuntime === runtime && <Check className="h-3.5 w-3.5" />}
+              </StyledDropdownMenuItem>
+            ))}
+          </StyledDropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu modal={false} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <button
             className="p-1.5 rounded-md hover:bg-foreground/[0.05] data-[state=open]:bg-foreground/[0.05] transition-colors"
@@ -450,20 +473,6 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
               </DropdownMenuSub>
             )
           })()}
-          <DropdownMenuSub>
-            <StyledDropdownMenuSubTrigger>
-              <Settings2 className="h-3.5 w-3.5" />
-              <span>{t('settings.ai.runtime.title')}</span>
-            </StyledDropdownMenuSubTrigger>
-            <StyledDropdownMenuSubContent>
-              {getCompatibleAgentRuntimes(connection).map(runtime => (
-                <StyledDropdownMenuItem key={runtime} onClick={() => onSetAgentRuntime(runtime)}>
-                  <span className="flex-1">{t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}`)}</span>
-                  {resolveAgentRuntime(connection) === runtime && <Check className="h-3.5 w-3.5" />}
-                </StyledDropdownMenuItem>
-              ))}
-            </StyledDropdownMenuSubContent>
-          </DropdownMenuSub>
           <StyledDropdownMenuSeparator />
           <StyledDropdownMenuItem
             onClick={onDelete}
@@ -474,7 +483,8 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
             <span>{t("common.delete")}</span>
           </StyledDropdownMenuItem>
         </StyledDropdownMenuContent>
-      </DropdownMenu>
+        </DropdownMenu>
+      </div>
     </SettingsRow>
   )
 }

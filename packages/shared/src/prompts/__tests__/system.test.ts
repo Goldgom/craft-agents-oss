@@ -1,12 +1,25 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { existsSync, readFileSync } from 'fs'
+import { join } from 'path'
 
 // Stub the preferences module so we can toggle `getCoAuthorPreference` per test
 // without touching disk. `formatPreferencesForPrompt` is stubbed to '' because
 // it's unrelated to the behavior under test here.
 let mockIncludeCoAuthoredBy = true
+let mockSubagentsEnabled = false
 mock.module('../../config/preferences.ts', () => ({
   getCoAuthorPreference: () => mockIncludeCoAuthoredBy,
   formatPreferencesForPrompt: () => '',
+  getSystemPromptSettings: () => ({
+    capabilities: {
+      browserTools: true,
+      webSearch: true,
+      structuredData: true,
+      subagents: mockSubagentsEnabled,
+      documentTools: true,
+      themeDesign: true,
+    },
+  }),
 }))
 
 import { getSystemPrompt, getSystemPromptSources, formatProjectContextForPrompt } from '../system'
@@ -16,6 +29,10 @@ const GIT_CONVENTIONS_HEADING = '## Git Conventions'
 const CO_AUTHOR_TRAILER = 'Co-Authored-By: TokenBird <agents-noreply@craft.do>'
 
 describe('system prompt guidance', () => {
+  beforeEach(() => {
+    mockSubagentsEnabled = false
+  })
+
   it('uses backend-neutral debug log querying guidance (rg/grep via Bash)', () => {
     const prompt = getSystemPrompt(
       undefined,
@@ -32,9 +49,62 @@ describe('system prompt guidance', () => {
 
   it('does not mention Grep in call_llm tool-dependency guidance', () => {
     const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+    const skill = readFileSync(join(import.meta.dir, '..', '..', '..', '..', '..', 'apps', 'electron', 'resources', 'skills', 'llm-delegation', 'SKILL.md'), 'utf8')
 
-    expect(prompt).toContain('The subtask needs file/shell tools (for example, Read or Bash)')
-    expect(prompt).not.toContain('The subtask needs tools (Read, Bash, Grep)')
+    expect(prompt).toContain('llm-delegation')
+    expect(prompt).not.toContain('The subtask needs file/shell tools')
+    expect(skill).toContain('file, shell, browser, or source tools')
+    expect(skill).not.toContain('Read, Bash, Grep')
+  })
+
+  it('injects Subagent Collaboration guidance only when enabled', () => {
+    const disabledPrompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+    expect(disabledPrompt).not.toContain('## Subagent Collaboration')
+
+    mockSubagentsEnabled = true
+    const enabledPrompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+    expect(enabledPrompt).toContain('## Subagent Collaboration')
+    expect(enabledPrompt).toContain('subagent-collaboration')
+    expect(enabledPrompt).toContain('You remain responsible for permissions')
+
+    const source = getSystemPromptSources(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+      .find(item => item.id === 'capability:subagents')
+    expect(source?.enabled).toBe(true)
+    expect(source?.content).toContain('subagent-collaboration')
+  })
+
+  it('keeps feature playbooks out of the resident prompt while preserving discovery and safety', () => {
+    const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+
+    expect(prompt.length).toBeLessThan(20_000)
+    expect(prompt).toContain('## Built-in Skills (On-Demand)')
+    expect(prompt).toContain('browser-automation')
+    expect(prompt).toContain('pages-authoring')
+    expect(prompt).toContain('document-workflows')
+    expect(prompt).not.toContain('browser_tool click-at 350 200')
+    expect(prompt).not.toContain('"filename": "Q1_Revenue.xlsx"')
+    expect(prompt).toContain('## Permission Modes')
+    expect(prompt).toContain('## Tool Metadata')
+    const skillPaths = [...prompt.matchAll(/Read `([^`]+\/skills\/[^`]+\/SKILL\.md)`\./g)].map(match => match[1]!)
+    expect(skillPaths.length).toBeGreaterThanOrEqual(17)
+    expect(skillPaths.every(path => existsSync(path))).toBe(true)
+  })
+
+  it('also injects Subagent Collaboration guidance for lightweight models when enabled', () => {
+    mockSubagentsEnabled = true
+    const prompt = getSystemPrompt(
+      undefined,
+      undefined,
+      '/tmp/workspace',
+      '/tmp/workspace',
+      undefined,
+      'Test Backend',
+      true,
+      undefined,
+      undefined,
+      { lightweight: true },
+    )
+    expect(prompt).toContain('## Subagent Collaboration')
   })
 })
 

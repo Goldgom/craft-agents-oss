@@ -534,7 +534,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     if (!input || typeof input !== 'object') throw new Error('Invalid system prompt settings')
     const raw = input as Record<string, unknown>
     const capabilities = raw.capabilities && typeof raw.capabilities === 'object' ? raw.capabilities as Record<string, unknown> : {}
-    const allowed = ['browserTools', 'webSearch', 'structuredData', 'documentTools', 'themeDesign'] as const
+    const allowed = ['browserTools', 'webSearch', 'structuredData', 'subagents', 'documentTools', 'themeDesign'] as const
     const normalized: Record<string, boolean> = {}
     for (const key of allowed) if (capabilities[key] !== undefined) normalized[key] = Boolean(capabilities[key])
     const editableInstructions = typeof raw.editableInstructions === 'string' ? raw.editableInstructions.slice(0, 20_000) : ''

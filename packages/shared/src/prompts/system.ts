@@ -16,6 +16,7 @@ import type { ModelPromptSettings } from '../config/llm-connections.ts';
 import type { AgentRuntimeProtocol } from '../config/llm-connections.ts';
 import type { SystemPromptSource } from '../protocol/dto.ts';
 import { getAgentRuntimePrompt, inferAgentRuntimeFromBackendName } from './runtimes/index.ts';
+import { getBundledAssetsDir } from '../utils/paths.ts';
 import {
   loadWorkspacePrompts,
   loadEnabledWorkspacePrompts,
@@ -315,6 +316,74 @@ export const MCP_PROMPT_ENHANCEMENT = `
 - If authentication or activation is required, follow the source authentication flow and retry after it completes.
 `;
 
+/** Optional guidance injected when the user enables Subagent collaboration. */
+export const SUBAGENT_COLLABORATION_PROMPT = `
+## Subagent Collaboration
+
+Subagent collaboration is enabled. When a bounded task benefits from independent context or parallel work, read the built-in \`subagent-collaboration\` skill listed below before using the Agent/Task tool exposed by the current runtime. You remain responsible for permissions, verification, conflict resolution, and the final result.
+`;
+
+type BuiltinPromptSkill = {
+  slug: string;
+  description: string;
+  capability?: SystemPromptCapabilityId;
+};
+
+/**
+ * Compact discovery metadata for app-shipped skills. Full instructions stay on
+ * disk and are read only when the current task matches, keeping the stable
+ * system prompt small without hiding product capabilities from the model.
+ */
+const BUILTIN_PROMPT_SKILLS: readonly BuiltinPromptSkill[] = [
+  { slug: 'source-authoring', description: 'Use or configure API, MCP, and local-folder sources.' },
+  { slug: 'workspace-configuration', description: 'Edit labels, statuses, views, permissions, and tool metadata.' },
+  { slug: 'automation-authoring', description: 'Create event, schedule, and hosted-script automations.' },
+  { slug: 'agent-authoring', description: 'Create focused custom agents and their tool allowlists.' },
+  { slug: 'skill-authoring', description: 'Create or update reusable workspace skills.' },
+  { slug: 'browser-automation', description: 'Operate the in-app browser, including snapshots, forms, downloads, and lifecycle.', capability: 'browserTools' },
+  { slug: 'web-research', description: 'Research current facts with WebSearch/WebFetch and verify sources.', capability: 'webSearch' },
+  { slug: 'structured-data', description: 'Render datatables/spreadsheets and handle large datasets token-efficiently.', capability: 'structuredData' },
+  { slug: 'document-workflows', description: 'Read, create, convert, compare, and edit office documents and media.', capability: 'documentTools' },
+  { slug: 'theme-package-design', description: 'Build portable offline theme or skin packages.', capability: 'themeDesign' },
+  { slug: 'llm-delegation', description: 'Use call_llm for isolated, tool-free processing and structured extraction.' },
+  { slug: 'session-workflows', description: 'Manage session metadata, tasks, background work, and cross-session handoffs.' },
+  { slug: 'pages-authoring', description: 'Create persistent Pages and their secure live-data bridge.' },
+  { slug: 'previews-and-diagrams', description: 'Render Mermaid, HTML, PDF, image, Markdown, and tabbed previews.' },
+  { slug: 'messaging-and-collaboration', description: 'Work with messaging channels, shared collaboration boards, and collaboration files.' },
+  { slug: 'resource-transfer', description: 'Export or import portable source and integration bundles.' },
+  { slug: 'remote-operations', description: 'Run scoped local/remote shell commands and transfer files over SFTP.' },
+  { slug: 'subagent-collaboration', description: 'Delegate bounded tool-using work and integrate verified results.', capability: 'subagents' },
+] as const;
+
+function getBuiltinSkillPath(slug: string): string {
+  const root = getBundledAssetsDir('skills');
+  const fallbackRoot = [
+    join(process.cwd(), 'apps', 'electron', 'resources', 'skills'),
+    join(process.cwd(), '..', '..', 'apps', 'electron', 'resources', 'skills'),
+    join(process.cwd(), 'resources', 'skills'),
+  ].find(candidate => existsSync(candidate));
+  return root
+    ? join(root, slug, 'SKILL.md').replace(/\\/g, '/')
+    : fallbackRoot
+      ? join(fallbackRoot, slug, 'SKILL.md').replace(/\\/g, '/')
+      : `${APP_ROOT}/bundled-skills/${slug}/SKILL.md`;
+}
+
+function formatBuiltinSkillsPrompt(compact = false): string {
+  const capabilities = getSystemPromptSettings().capabilities;
+  const visible = BUILTIN_PROMPT_SKILLS.filter(skill => {
+    if (skill.capability && capabilities[skill.capability] === false) return false;
+    if (skill.capability === 'browserTools' && !getBrowserToolEnabled()) return false;
+    return true;
+  });
+  const entries = visible.map(skill => compact
+    ? `- \`${skill.slug}\`: ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`
+    : `- **${skill.slug}** — ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`
+  ).join('\n');
+
+  return `## Built-in Skills (On-Demand)\n\nThe following app-shipped skills describe existing capabilities. When the current request matches one, read its SKILL.md before acting; do not read unrelated skills. A project, workspace, or global skill with the same slug takes precedence when explicitly mentioned.\n\n${entries}`;
+}
+
 /**
  * System prompt preset types for different agent contexts.
  * - 'default': Full TokenBird system prompt
@@ -373,7 +442,9 @@ export function getLightweightModelSystemPrompt(
 - Be concise; state what you did and any blockers.${coAuthor}
 ${agent}
 
-${runtimePrompt}`;
+${runtimePrompt}
+
+${formatBuiltinSkillsPrompt(true)}`;
 }
 
 /**
@@ -411,6 +482,7 @@ export function getSystemPrompt(
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference();
   if (modelPromptSettings?.lightweight) {
     let prompt = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, agentPrompt, agentRuntime);
+    if (getSystemPromptSettings().capabilities.subagents) prompt += `\n\n${SUBAGENT_COLLABORATION_PROMPT.trim()}`;
     if (modelPromptSettings.mcpPromptEnhancement) prompt += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`;
     return prompt;
   }
@@ -707,7 +779,7 @@ You are TokenBird - an AI assistant that helps users connect and work across the
 
 ${runtimePrompt}
 
-**Product documentation:** The TokenBird docs live at https://thecraftagents.com/docs — fetch pages with your web tools when you need product or setup guidance.
+**Product documentation:** The complete TokenBird feature guide is bundled locally at ${DOC_REFS.productGuide}. Read local files under ${DOC_REFS.docsDir} when you need product or setup guidance.
 
 ## External Sources
 
@@ -899,7 +971,7 @@ The \`session\` MCP server provides tools for managing external sources:
 
 **Source creation workflow:**
 1. Read \`${DOC_REFS.sources}\` for the full setup guide
-2. Check the product docs (https://thecraftagents.com/docs) for service-specific guides
+2. Check the bundled docs under \`${DOC_REFS.docsDir}\` for setup guidance
 3. Create \`config.json\` in \`sources/{slug}/\`
 4. Create \`permissions.json\` for Explore mode
 5. Write \`guide.md\` with usage instructions
@@ -1369,12 +1441,33 @@ You have a \`send_developer_feedback\` tool — a direct line to the TokenBird d
 
 **Skip it for:** one-off user errors or issues clearly outside the product's control.` : ''}`;
 
-  // Keep the core safety/tool protocol fixed, while allowing optional
-  // capability documentation to be disabled to reduce prompt size.
-  if (!promptSettings.capabilities.webSearch) assembled = removePromptSection(assembled, '## Web Search')
-  if (!promptSettings.capabilities.structuredData) assembled = removePromptSection(assembled, '## Structured Data (Tables & Spreadsheets)')
-  if (!promptSettings.capabilities.documentTools) assembled = removePromptSection(assembled, '## Document Tools')
-  if (!promptSettings.capabilities.themeDesign) assembled = removePromptSection(assembled, '## Theme Package Design')
+  // Detailed feature playbooks live in bundled skills and are loaded only for
+  // matching tasks. Safety, permission, runtime, and tool-call protocols stay
+  // resident; only delay-loadable feature documentation is removed.
+  for (const heading of [
+    '## External Sources',
+    '## Theme Package Design',
+    '## Skills',
+    '## Configuration Documentation',
+    '## TokenBird CLI',
+    '## Source Management Tools',
+    '## Web Search',
+    '## Structured Data (Tables & Spreadsheets)',
+    '## LLM Tool (`call_llm`)',
+    '## Browser Tools',
+    '## Session Self-Management',
+    '## Pages',
+    '## Diagrams and Visualization',
+    '## HTML Preview',
+    '## Source Templates',
+    '## PDF Preview',
+    '## Image Preview',
+    '## Markdown Preview',
+    '## Multiple Items (Tabs)',
+    '## Document Tools',
+  ]) assembled = removePromptSection(assembled, heading)
+  assembled += `\n\n${formatBuiltinSkillsPrompt()}`
+  if (promptSettings.capabilities.subagents) assembled += `\n\n${SUBAGENT_COLLABORATION_PROMPT.trim()}`
   if (promptSettings.editableInstructions?.trim()) assembled += `\n\n## User supplemental instructions\n${promptSettings.editableInstructions.trim()}`
   return assembled;
 }
@@ -1404,6 +1497,7 @@ export function getSystemPromptSources(
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference()
   if (modelPromptSettings?.lightweight) {
     let content = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, undefined, agentRuntime)
+    if (getSystemPromptSettings().capabilities.subagents) content += `\n\n${SUBAGENT_COLLABORATION_PROMPT.trim()}`
     if (modelPromptSettings.mcpPromptEnhancement) content += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`
     return [{ id: 'lightweight-system', source: 'builtin', title: 'Lightweight system prompt', content, enabled: true }]
   }
@@ -1416,6 +1510,7 @@ export function getSystemPromptSources(
   const capabilitySections: Array<[SystemPromptCapabilityId, string, string]> = [
     ['webSearch', '## Web Search', 'Web search capability'],
     ['structuredData', '## Structured Data (Tables & Spreadsheets)', 'Structured data rendering'],
+    ['subagents', '## Subagent Collaboration', 'Subagent collaboration'],
     ['documentTools', '## Document Tools', 'Document tools'],
     ['browserTools', '## Browser Tools', 'Browser tools'],
     ['themeDesign', '## Theme Package Design', 'Theme package design'],
@@ -1426,6 +1521,30 @@ export function getSystemPromptSources(
       sources.push({ id: `capability:${capability}`, source: 'builtin', title, content: section, enabled: getSystemPromptSettings().capabilities[capability] !== false })
       coreBuiltin = removePromptSection(coreBuiltin, heading)
     }
+  }
+  coreBuiltin = removePromptSection(coreBuiltin, '## Built-in Skills (On-Demand)')
+  const generalSkills = BUILTIN_PROMPT_SKILLS.filter(skill => !skill.capability)
+  if (generalSkills.length > 0) {
+    sources.push({
+      id: 'builtin-skills:on-demand',
+      source: 'builtin',
+      title: 'Built-in skills (on demand)',
+      content: `## Built-in Skills (On-Demand)\n\n${generalSkills.map(skill => `- **${skill.slug}** — ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`).join('\n')}`,
+      enabled: true,
+    })
+  }
+  for (const capability of Object.keys(getSystemPromptSettings().capabilities) as SystemPromptCapabilityId[]) {
+    if (sources.some(source => source.id === `capability:${capability}`)) continue
+    const skills = BUILTIN_PROMPT_SKILLS.filter(skill => skill.capability === capability)
+    if (skills.length === 0) continue
+    sources.push({
+      id: `capability:${capability}`,
+      source: 'builtin',
+      title: `${capability} on-demand skill`,
+      content: skills.map(skill => `- **${skill.slug}** — ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`).join('\n'),
+      enabled: getSystemPromptSettings().capabilities[capability] !== false
+        && (capability !== 'browserTools' || getBrowserToolEnabled()),
+    })
   }
   coreBuiltin = removePromptSection(coreBuiltin, runtimeHeading)
   coreBuiltin = removePromptSection(coreBuiltin, '## User supplemental instructions')

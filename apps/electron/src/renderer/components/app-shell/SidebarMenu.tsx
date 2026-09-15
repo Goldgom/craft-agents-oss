@@ -23,7 +23,7 @@ import {
   Settings2,
   Plus,
   Trash2,
-  ExternalLink,
+  BookOpen,
 } from 'lucide-react'
 import { useMenuComponents } from '@/components/ui/menu-context'
 import { getDocUrl, type DocFeature } from '@craft-agent/shared/docs/doc-links'
@@ -203,7 +203,7 @@ export function SidebarMenu({
         )}
         <Separator />
         <MenuItem onClick={() => window.electronAPI.openUrl(getDocUrl(docFeature))}>
-          <ExternalLink className="h-3.5 w-3.5" />
+          <BookOpen className="h-3.5 w-3.5" />
           <span className="flex-1">{learnMoreLabel}</span>
         </MenuItem>
       </>
@@ -222,7 +222,7 @@ export function SidebarMenu({
         )}
         {onAddSkill && <Separator />}
         <MenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('skills'))}>
-          <ExternalLink className="h-3.5 w-3.5" />
+          <BookOpen className="h-3.5 w-3.5" />
           <span className="flex-1">{t("common.learnMore")}</span>
         </MenuItem>
       </>
@@ -255,7 +255,7 @@ export function SidebarMenu({
         )}
         <Separator />
         <MenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('automations'))}>
-          <ExternalLink className="h-3.5 w-3.5" />
+          <BookOpen className="h-3.5 w-3.5" />
           <span className="flex-1">{t("sidebarMenu.learnMoreAutomations")}</span>
         </MenuItem>
       </>

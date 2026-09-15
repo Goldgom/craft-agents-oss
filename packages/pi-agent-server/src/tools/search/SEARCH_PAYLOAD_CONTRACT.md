@@ -18,7 +18,7 @@ Required headers:
 - `Content-Type: application/json`
 
 Known-good body fields for search:
-- `model`: derived from the active connection, NOT hardcoded. The plumbed active-session model is tried first, then the shared `openai-codex` catalog (`PI_PREFERRED_DEFAULTS['openai-codex']`) as fallbacks, capped at 4 candidates total (`MAX_MODEL_CANDIDATES`) so a fully-rejecting account is bounded to 4 round-trips before the DDG fallback. A 400 counts as a model rejection only when the error names the model (`isModelRejectionError`) — a hosted-tool "is not supported" refusal takes the tool-type retry instead. Hardcoding a single model here previously caused a total search outage when that model was retired (craft-agents-oss#1023).
+- `model`: derived from the active connection, NOT hardcoded. The plumbed active-session model is tried first, then the shared `openai-codex` catalog (`PI_PREFERRED_DEFAULTS['openai-codex']`) as fallbacks, capped at 4 candidates total (`MAX_MODEL_CANDIDATES`) so a fully-rejecting account is bounded to 4 round-trips before the Bing fallback. A 400 counts as a model rejection only when the error names the model (`isModelRejectionError`) — a hosted-tool "is not supported" refusal takes the tool-type retry instead. Hardcoding a single model here previously caused a total search outage when that model was retired (craft-agents-oss#1023).
 - `store: false`
 - `stream: true`
 - `instructions: string`

@@ -4,7 +4,7 @@ import { useTheme } from '@/hooks/useTheme'
 import type { ThemeOverrides } from '@config/theme'
 import { useSetAtom, useStore, useAtomValue, useAtom } from 'jotai'
 import type { Session, Workspace, SessionEvent, Message, FileAttachment, StoredAttachment, PermissionRequest, CredentialRequest, CredentialResponse, SetupNeeds, SessionStatus, NewChatActionParams, ContentBadge, LlmConnectionWithStatus, PermissionModeState, StartupServerContext } from '../shared/types'
-import type { SessionDraft, DraftAttachmentRef } from '@craft-agent/shared/config'
+import type { SessionDraft, DraftAttachmentRef, UserPreferences } from '@craft-agent/shared/config'
 import type { SessionOptions, SessionOptionUpdates } from './hooks/useSessionOptions'
 import { defaultSessionOptions, mergeSessionOptions } from './hooks/useSessionOptions'
 import { generateMessageId } from '../shared/types'
@@ -18,6 +18,7 @@ import ServerPickerPage from './pages/ServerPickerPage'
 import { ResetConfirmationDialog } from '@/components/ResetConfirmationDialog'
 import { DeleteSessionConfirmationDialog } from '@/components/DeleteSessionConfirmationDialog'
 import { SplashScreen } from '@/components/SplashScreen'
+import { GettingStartedGuide } from '@/components/GettingStartedGuide'
 import { TooltipProvider } from '@craft-agent/ui'
 import { FocusProvider } from '@/context/FocusContext'
 import { ModalProvider } from '@/context/ModalContext'
@@ -86,6 +87,10 @@ import { getFileManagerName } from '@/lib/platform'
 import { rendererLog } from '@/lib/logger'
 import { ActionRegistryProvider } from '@/actions'
 import { toast } from 'sonner'
+import {
+  GETTING_STARTED_GUIDE_VERSION,
+  shouldShowGettingStartedGuide,
+} from '@/lib/getting-started-guide'
 
 // PDF previews are opened on demand. Loading the renderer lazily keeps pdf.js
 // and its worker off the startup path.
@@ -436,6 +441,7 @@ export default function App() {
   const [sessionLoadError, setSessionLoadError] = useState<string | null>(null)
   const [splashExiting, setSplashExiting] = useState(false)
   const [splashHidden, setSplashHidden] = useState(false)
+  const [showGettingStartedGuide, setShowGettingStartedGuide] = useState(false)
 
   // Notifications enabled state (from app settings)
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
@@ -457,6 +463,52 @@ export default function App() {
   // Handler for when splash exit animation completes
   const handleSplashExitComplete = useCallback(() => {
     setSplashHidden(true)
+  }, [])
+
+  useEffect(() => {
+    if (appState !== 'ready') return
+
+    let cancelled = false
+    window.electronAPI.readPreferences()
+      .then(({ content }) => {
+        if (cancelled) return
+        try {
+          const preferences = JSON.parse(content) as UserPreferences
+          setShowGettingStartedGuide(
+            shouldShowGettingStartedGuide(preferences.gettingStartedGuideVersion),
+          )
+        } catch {
+          setShowGettingStartedGuide(true)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setShowGettingStartedGuide(true)
+      })
+
+    return () => { cancelled = true }
+  }, [appState])
+
+  const handleGettingStartedComplete = useCallback(() => {
+    setShowGettingStartedGuide(false)
+
+    void window.electronAPI.readPreferences()
+      .then(async ({ content }) => {
+        let preferences: UserPreferences
+        try {
+          preferences = JSON.parse(content) as UserPreferences
+        } catch {
+          preferences = {}
+        }
+        preferences.gettingStartedGuideVersion = GETTING_STARTED_GUIDE_VERSION
+        preferences.updatedAt = Date.now()
+        const result = await window.electronAPI.writePreferences(JSON.stringify(preferences, null, 2))
+        if (!result.success) {
+          console.warn('[GettingStarted] Failed to save completion:', result.error)
+        }
+      })
+      .catch((error) => {
+        console.warn('[GettingStarted] Failed to save completion:', error)
+      })
   }, [])
 
   // Apply theme via hook (injects CSS variables)
@@ -2151,6 +2203,13 @@ export default function App() {
             <SplashScreen
               isExiting={splashExiting}
               onExitComplete={handleSplashExitComplete}
+            />
+          )}
+
+          {!showSplash && showGettingStartedGuide && (
+            <GettingStartedGuide
+              open
+              onComplete={handleGettingStartedComplete}
             />
           )}
 

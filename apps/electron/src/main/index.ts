@@ -9,12 +9,14 @@ import { hostname, homedir } from 'os'
 import { join, delimiter, basename } from 'path'
 import * as Sentry from '@sentry/electron/main'
 import { redactSensitiveHeadersInPlace, redactSensitiveKeysInPlace } from '@craft-agent/shared/utils'
+import { getLocalizedProductName } from '@craft-agent/shared/branding'
 
 // Keep Electron-managed state separate from every Craft Agents installation,
 // including development launches where Electron would otherwise derive the
 // directory name from package metadata.
 const electronUserDataDir = join(app.getPath('appData'), 'TokenBird')
-app.setName('TokenBird')
+const systemUiLanguage = Intl.DateTimeFormat().resolvedOptions().locale
+app.setName(getLocalizedProductName(systemUiLanguage))
 app.setPath('userData', electronUserDataDir)
 app.setPath('sessionData', join(electronUserDataDir, 'Session Data'))
 app.setAppLogsPath(join(electronUserDataDir, 'logs'))
@@ -74,6 +76,7 @@ const persistedUiLanguage = getPersistedUiLanguage()
 if (persistedUiLanguage) {
   void i18n.changeLanguage(persistedUiLanguage)
 }
+app.setName(process.env.CRAFT_APP_NAME || getLocalizedProductName(persistedUiLanguage ?? systemUiLanguage))
 // Note: deferred startup log lives below where mainLog is available (after log.initialize()).
 
 // Set anonymous machine ID for Sentry user tracking (no PII — just a hash).
@@ -530,7 +533,7 @@ ipcMain.handle('data:importFromLocalFile', async (_event, filePath: string) => {
 
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
 // Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "TokenBird [1]")
-app.setName(process.env.CRAFT_APP_NAME || 'TokenBird')
+app.setName(process.env.CRAFT_APP_NAME || getLocalizedProductName(persistedUiLanguage ?? systemUiLanguage))
 
 // Register as default protocol client for tokenbird:// URLs
 // This must be done before app.whenReady() on some platforms
@@ -1330,6 +1333,10 @@ app.whenReady().then(async () => {
         const code = lang as LanguageCode
         await i18n.changeLanguage(code)
         setPersistedUiLanguage(code)
+        if (!process.env.CRAFT_APP_NAME) {
+          app.setName(getLocalizedProductName(code))
+          windowManager?.refreshLocalizedAppName()
+        }
         mainLog.info('[i18n] changeLanguage IPC applied', {
           incoming: code,
           previousResolved,

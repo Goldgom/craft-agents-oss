@@ -77,7 +77,7 @@ export default function PromptOverviewPage() {
       setEditableInstructions(settings.editableInstructions ?? '')
     } catch (error) {
       if (isMissingRemoteHandler(error)) {
-        setCapabilities({ browserTools: true, webSearch: true, structuredData: true, documentTools: true, themeDesign: true })
+        setCapabilities({ browserTools: true, webSearch: true, structuredData: true, subagents: false, documentTools: true, themeDesign: true })
         setEditableInstructions('')
         usingLegacyRemote = true
       } else {
@@ -125,7 +125,7 @@ export default function PromptOverviewPage() {
             )}
             <SettingsSection title={t('settings.promptOverview.capabilitiesTitle')} description={t('settings.promptOverview.capabilitiesDescription')}>
               <SettingsCard divided>
-                {(['browserTools', 'webSearch', 'structuredData', 'documentTools', 'themeDesign'] as const).map(capability => (
+                {(['browserTools', 'webSearch', 'structuredData', 'subagents', 'documentTools', 'themeDesign'] as const).map(capability => (
                   <SettingsToggle
                     key={capability}
                     label={t(`settings.promptOverview.capability.${capability}`)}
