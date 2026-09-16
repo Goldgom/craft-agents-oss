@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { extractChatGptAccountId, NativeCodexAgent } from './native-codex-agent.ts';
-import { AbortReason } from './backend/types.ts';
+import { AbortReason, type BackendConfig } from './backend/types.ts';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-function createAgent(): NativeCodexAgent {
+function createAgent(overrides: Partial<BackendConfig> = {}): NativeCodexAgent {
   const now = Date.now();
   return new NativeCodexAgent({
     provider: 'pi',
@@ -12,6 +15,7 @@ function createAgent(): NativeCodexAgent {
     workspace: { id: 'test', name: 'Test', slug: 'test', rootPath: process.cwd(), createdAt: now },
     session: { id: 'test-session', name: 'Test', workspaceRootPath: process.cwd(), createdAt: now, lastUsedAt: now, permissionMode: 'ask' },
     isHeadless: true,
+    ...overrides,
   }, { path: 'codex', source: 'PATH', version: '0.154.0', testedProtocol: true });
 }
 
@@ -37,6 +41,23 @@ describe('extractChatGptAccountId', () => {
 });
 
 describe('NativeCodexAgent protocol adaptation', () => {
+  it('isolates managed Codex configuration by TokenBird connection', async () => {
+    const configRoot = await mkdtemp(join(tmpdir(), 'tokenbird-codex-home-'));
+    const previous = process.env.TOKENBIRD_CONFIG_DIR;
+    process.env.TOKENBIRD_CONFIG_DIR = configRoot;
+    const agent = createAgent({ authType: 'api_key', connectionSlug: 'deepseek-primary' });
+    try {
+      const env = await agent['buildCodexEnvironment']();
+      expect(env?.CODEX_HOME).toBe(join(configRoot, 'codex', 'connections', 'deepseek-primary'));
+      expect(env?.CODEX_HOME).not.toContain('.codex-native');
+    } finally {
+      agent.destroy();
+      if (previous === undefined) delete process.env.TOKENBIRD_CONFIG_DIR;
+      else process.env.TOKENBIRD_CONFIG_DIR = previous;
+      await rm(configRoot, { recursive: true, force: true });
+    }
+  });
+
   it('uses non-reserved transport aliases for Craft dynamic tools', () => {
     const agent = createAgent();
     const tools = agent['buildDynamicTools']();

@@ -272,7 +272,7 @@ export interface LlmConnectionWithStatus extends LlmConnection {
 
 /** Return the runtime protocols that can safely host this connection. */
 export function getCompatibleAgentRuntimes(
-  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider'>,
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint'>,
 ): AgentRuntimeProtocol[] {
   const compatible: AgentRuntimeProtocol[] = ['pi'];
 
@@ -280,10 +280,12 @@ export function getCompatibleAgentRuntimes(
     compatible.push('claude-code');
   }
 
-  if (
-    connection.providerType === 'pi'
-    && (connection.piAuthProvider === 'openai' || connection.piAuthProvider === 'openai-codex')
-  ) {
+  const isCodexTransport = connection.providerType === 'pi'
+    ? ['openai', 'openai-codex', 'deepseek', 'pi'].includes(connection.piAuthProvider ?? '')
+    : connection.providerType === 'pi_compat'
+      && (connection.oauthProvider === 'tokennest' || connection.customEndpoint?.api === 'openai-completions');
+
+  if (isCodexTransport) {
     compatible.push('codex');
   }
 
@@ -292,7 +294,7 @@ export function getCompatibleAgentRuntimes(
 
 /** Resolve a persisted runtime fail-soft so an invalid manual edit cannot break sessions. */
 export function resolveAgentRuntime(
-  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'agentRuntime'>,
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint' | 'agentRuntime'>,
 ): AgentRuntimeProtocol {
   const fallback: AgentRuntimeProtocol = connection.providerType === 'anthropic'
     ? 'claude-code'

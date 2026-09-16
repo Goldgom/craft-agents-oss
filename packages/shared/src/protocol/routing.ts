@@ -177,6 +177,10 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.rtk.GET_STATUS,
   RPC_CHANNELS.rtk.GET_GAIN,
 
+  // codex — TokenBird-managed local agent runtime
+  RPC_CHANNELS.codex.GET_STATUS,
+  RPC_CHANNELS.codex.INSTALL,
+
   // tools — local tool settings
   RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
@@ -234,6 +238,24 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
 // ---------------------------------------------------------------------------
 
 export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
+  // workspace agents and collaboration state live with the workspace server
+  RPC_CHANNELS.agents.LIST,
+  RPC_CHANNELS.agents.SAVE,
+  RPC_CHANNELS.agents.DELETE,
+  RPC_CHANNELS.agents.GENERATE,
+  RPC_CHANNELS.agents.CHANGED,
+  RPC_CHANNELS.collaborations.CREATE,
+  RPC_CHANNELS.collaborations.GET,
+  RPC_CHANNELS.collaborations.LIST,
+  RPC_CHANNELS.collaborations.LIST_CANDIDATES,
+  RPC_CHANNELS.collaborations.PUT_FILE,
+  RPC_CHANNELS.collaborations.GET_FILE,
+  RPC_CHANNELS.collaborations.REPORT,
+  RPC_CHANNELS.collaborations.REQUEST,
+  RPC_CHANNELS.collaborations.UPDATE_BOARD,
+  RPC_CHANNELS.collaborations.RETRY_DELIVERY,
+  RPC_CHANNELS.collaborations.END,
+  RPC_CHANNELS.collaborations.EVENT,
   // workspace catalogs — tools and feature/source guide documents
   RPC_CHANNELS.catalog.LIST_TOOLS,
   RPC_CHANNELS.catalog.LIST_GUIDES,

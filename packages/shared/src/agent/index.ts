@@ -6,7 +6,14 @@ export * from './conversation-summary.ts';
 export { PiAgent, PiBackend } from './pi-agent.ts';
 export { CodexAgent, CodexCompatibilityAgent } from './codex-agent.ts';
 export { NativeCodexAgent, extractChatGptAccountId } from './native-codex-agent.ts';
-export { configureNativeCodexResourcesPath, resolveNativeCodexBinary } from '../codex/binary-resolver.ts';
+export {
+  configureNativeCodexResourcesPath,
+  resolveNativeCodexBinary,
+  getNativeCodexStatus,
+  installManagedNativeCodex,
+  MANAGED_CODEX_VERSION,
+} from '../codex/binary-resolver.ts';
+export type { NativeCodexStatus, ManagedCodexInstallResult } from '../codex/binary-resolver.ts';
 export * from './errors.ts';
 export * from './options.ts';
 

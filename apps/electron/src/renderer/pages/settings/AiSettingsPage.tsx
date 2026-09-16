@@ -746,6 +746,8 @@ export default function AiSettingsPage() {
   const [enable1MContext, setEnable1MContext] = useState(false)
   const [rtkEnabled, setRtkEnabled] = useState(false)
   const [rtkStatus, setRtkStatus] = useState<{ installed: boolean; path: string | null; version: string | null } | null>(null)
+  const [codexStatus, setCodexStatus] = useState<{ installed: boolean; path: string | null; version: string | null } | null>(null)
+  const [codexInstalling, setCodexInstalling] = useState(false)
   const [rtkRechecking, setRtkRechecking] = useState(false)
   const [rtkGain, setRtkGain] = useState<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>(null)
   const [showApiBalances, setShowApiBalances] = useState(true)
@@ -792,6 +794,9 @@ export default function AiSettingsPage() {
 
         const status = await window.electronAPI.getRtkStatus()
         setRtkStatus(status)
+
+        const nativeCodexStatus = await window.electronAPI.getNativeCodexStatus()
+        setCodexStatus(nativeCodexStatus)
 
         // Check credential health for potential issues (corruption, machine migration)
         const health = await window.electronAPI.getCredentialHealth()
@@ -1081,6 +1086,28 @@ export default function AiSettingsPage() {
     }
   }, [refreshLlmConnections, t])
 
+  const handleInstallCodex = useCallback(async () => {
+    if (!window.electronAPI || codexInstalling) return
+    setCodexInstalling(true)
+    const toastId = toast.loading(t('settings.ai.runtime.codexInstalling'))
+    try {
+      const result = await window.electronAPI.installNativeCodex()
+      if (result.success) {
+        setCodexStatus(result)
+        toast.success(t('settings.ai.runtime.codexInstalled'), { id: toastId })
+      } else {
+        toast.error(t('settings.ai.runtime.codexInstallFailed'), { id: toastId, description: result.error })
+      }
+    } catch (error) {
+      toast.error(t('settings.ai.runtime.codexInstallFailed'), {
+        id: toastId,
+        description: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      setCodexInstalling(false)
+    }
+  }, [codexInstalling, t])
+
   const handleSetAgentRuntime = useCallback(async (
     connection: LlmConnectionWithStatus,
     runtime: AgentRuntimeProtocol,
@@ -1095,6 +1122,19 @@ export default function AiSettingsPage() {
       if (result.success) {
         await refreshLlmConnections()
         toast.success(t('settings.ai.runtime.updated'))
+        if (runtime === 'codex') {
+          const status = await window.electronAPI.getNativeCodexStatus().catch(() => null)
+          if (status && !status.installed) {
+            toast.warning(t('settings.ai.runtime.codex'), {
+              description: t('settings.ai.runtime.codexMissingDesc'),
+              duration: Infinity,
+              action: {
+                label: t('settings.ai.runtime.codexInstallAction'),
+                onClick: () => { void handleInstallCodex() },
+              },
+            })
+          }
+        }
       } else {
         toast.error(t('settings.ai.runtime.updateFailed'))
       }
@@ -1102,7 +1142,7 @@ export default function AiSettingsPage() {
       console.error('Failed to update agent runtime:', error)
       toast.error(t('settings.ai.runtime.updateFailed'))
     }
-  }, [refreshLlmConnections, t])
+  }, [handleInstallCodex, refreshLlmConnections, t])
 
   const handleModelPromptSettingChange = useCallback(async (
     connection: LlmConnectionWithStatus,
@@ -1291,6 +1331,29 @@ export default function AiSettingsPage() {
                       description: t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}Desc`),
                     }))}
                   />
+                  {defaultConnection && getCompatibleAgentRuntimes(defaultConnection).includes('codex') && (
+                    <SettingsRow
+                      label={t('settings.ai.runtime.codex')}
+                      description={codexStatus?.installed
+                        ? `${t('settings.ai.runtime.codexInstalled')} ${codexStatus.version ?? ''}`.trim()
+                        : codexStatus === null
+                          ? t('common.checking')
+                          : t('settings.ai.runtime.codexMissingDesc')}
+                    >
+                      {!codexStatus?.installed && (
+                        <Button
+                          size="sm"
+                          onClick={() => { void handleInstallCodex() }}
+                          disabled={codexInstalling || codexStatus === null}
+                          className="bg-background shadow-minimal text-foreground hover:bg-foreground/5 rounded-lg"
+                        >
+                          {codexInstalling
+                            ? t('settings.ai.runtime.codexInstalling')
+                            : t('settings.ai.runtime.codexInstallAction')}
+                        </Button>
+                      )}
+                    </SettingsRow>
+                  )}
                 </SettingsCard>
               </SettingsSection>
               )}

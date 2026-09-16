@@ -65,6 +65,8 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.rtk.SET_ENABLED,
   RPC_CHANNELS.rtk.GET_STATUS,
   RPC_CHANNELS.rtk.GET_GAIN,
+  RPC_CHANNELS.codex.GET_STATUS,
+  RPC_CHANNELS.codex.INSTALL,
 ] as const
 
 /**
@@ -455,6 +457,18 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   server.handle(RPC_CHANNELS.rtk.GET_GAIN, async () => {
     const { getRtkGain } = await import('@craft-agent/shared/agent')
     return getRtkGain()
+  })
+
+  // Detect or install the tested Codex CLI. Installation is isolated under
+  // ~/.tokenbird/runtime and never modifies the user's native ~/.codex setup.
+  server.handle(RPC_CHANNELS.codex.GET_STATUS, async (_ctx, opts?: { forceRecheck?: boolean }) => {
+    const { getNativeCodexStatus } = await import('@craft-agent/shared/agent')
+    return getNativeCodexStatus(opts)
+  })
+
+  server.handle(RPC_CHANNELS.codex.INSTALL, async () => {
+    const { installManagedNativeCodex } = await import('@craft-agent/shared/agent')
+    return installManagedNativeCodex()
   })
 
   // ============================================================

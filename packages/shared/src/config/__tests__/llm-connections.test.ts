@@ -192,7 +192,7 @@ describe('agent runtime compatibility', () => {
     ])
   })
 
-  it('offers Codex only for OpenAI transports managed by Pi', () => {
+  it('offers Codex for native OpenAI, TokenBird, DeepSeek, and OpenAI-compatible transports', () => {
     expect(getCompatibleAgentRuntimes({ providerType: 'pi', piAuthProvider: 'openai' })).toEqual([
       'pi',
       'codex',
@@ -201,8 +201,32 @@ describe('agent runtime compatibility', () => {
       'pi',
       'codex',
     ])
+    expect(getCompatibleAgentRuntimes({ providerType: 'pi', piAuthProvider: 'pi' })).toEqual([
+      'pi',
+      'codex',
+    ])
+    expect(getCompatibleAgentRuntimes({ providerType: 'pi', piAuthProvider: 'deepseek' })).toEqual([
+      'pi',
+      'codex',
+    ])
+    expect(getCompatibleAgentRuntimes({
+      providerType: 'pi_compat',
+      piAuthProvider: 'openai',
+      customEndpoint: { api: 'openai-completions' },
+    })).toEqual(['pi', 'codex'])
+    expect(getCompatibleAgentRuntimes({
+      providerType: 'pi_compat',
+      piAuthProvider: 'openai',
+      oauthProvider: 'tokennest',
+      customEndpoint: { api: 'openai-completions' },
+    })).toEqual(['pi', 'codex'])
     expect(getCompatibleAgentRuntimes({ providerType: 'pi', piAuthProvider: 'google' })).toEqual(['pi'])
     expect(getCompatibleAgentRuntimes({ providerType: 'pi_compat', piAuthProvider: 'openai' })).toEqual(['pi'])
+    expect(getCompatibleAgentRuntimes({
+      providerType: 'pi_compat',
+      piAuthProvider: 'anthropic',
+      customEndpoint: { api: 'anthropic-messages' },
+    })).toEqual(['pi'])
   })
 
   it('keeps legacy defaults and fails soft for incompatible persisted values', () => {

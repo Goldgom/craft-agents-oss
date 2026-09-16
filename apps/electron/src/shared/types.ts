@@ -724,6 +724,24 @@ export interface ElectronAPI {
   getRtkStatus(opts?: { forceRecheck?: boolean }): Promise<{ installed: boolean; path: string | null; version: string | null }>
   getRtkGain(): Promise<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>
 
+  // Native Codex runtime (TokenBird-managed installation)
+  getNativeCodexStatus(opts?: { forceRecheck?: boolean }): Promise<{
+    installed: boolean
+    path: string | null
+    version: string | null
+    source: 'CRAFT_CODEX_PATH' | 'CODEX_PATH' | 'bundled' | 'managed' | 'PATH' | null
+    testedProtocol: boolean
+  }>
+  installNativeCodex(): Promise<{
+    success: boolean
+    installed: boolean
+    path: string | null
+    version: string | null
+    source: 'CRAFT_CODEX_PATH' | 'CODEX_PATH' | 'bundled' | 'managed' | 'PATH' | null
+    testedProtocol: boolean
+    error?: string
+  }>
+
   // Network proxy settings
   getNetworkProxySettings(): Promise<NetworkProxySettings | undefined>
   setNetworkProxySettings(settings: NetworkProxySettings): Promise<void>

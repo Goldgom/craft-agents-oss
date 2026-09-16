@@ -411,6 +411,10 @@ export const RPC_CHANNELS = {
     GET_STATUS: 'rtk:getStatus',
     GET_GAIN: 'rtk:getGain',
   },
+  codex: {
+    GET_STATUS: 'codex:getStatus',
+    INSTALL: 'codex:install',
+  },
   badge: {
     REFRESH: 'badge:refresh',
     SET_ICON: 'badge:setIcon',

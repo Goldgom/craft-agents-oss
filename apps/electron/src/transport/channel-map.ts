@@ -370,6 +370,10 @@ export const CHANNEL_MAP = {
   getRtkStatus: invoke(RPC_CHANNELS.rtk.GET_STATUS),
   getRtkGain: invoke(RPC_CHANNELS.rtk.GET_GAIN),
 
+  // Native Codex runtime
+  getNativeCodexStatus: invoke(RPC_CHANNELS.codex.GET_STATUS),
+  installNativeCodex: invoke(RPC_CHANNELS.codex.INSTALL),
+
   // Badge
   refreshBadge: invoke(RPC_CHANNELS.badge.REFRESH),
   setDockIconWithBadge: invoke(RPC_CHANNELS.badge.SET_ICON),

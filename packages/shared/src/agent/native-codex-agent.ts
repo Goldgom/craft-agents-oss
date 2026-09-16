@@ -15,6 +15,7 @@ import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import { saveBinaryResponse } from '../utils/binary-detection.ts';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { getConfigDir } from '../config/paths.ts';
 import { getSystemPrompt } from '../prompts/system.ts';
 import { NativeCodexAppServerClient, type NativeCodexServerRequest } from '../codex/native-app-server-client.ts';
 import type {
@@ -226,11 +227,14 @@ export class NativeCodexAgent extends BaseAgent {
     // authType=none deliberately keeps the global home so an existing `codex login`
     // can be used by an explicitly unmanaged connection.
     if (!['api_key', 'api_key_with_endpoint', 'oauth'].includes(this.config.authType ?? '')) return undefined;
-    // Managed credentials must never fall through to the user's global Codex
-    // home, including validation/utility agents without a persisted session.
-    const sessionPath = this.getSessionStoragePath()
-      ?? getSessionPath(this.config.workspace.rootPath, this._sessionId);
-    const codexHome = join(sessionPath, '.codex-native');
+    // Managed credentials and Codex configuration are connection-owned and
+    // persistent, but fully isolated from the user's native ~/.codex profile.
+    // A stable connection home also avoids creating a fresh auth/config copy
+    // for every TokenBird session.
+    const connectionKey = (this.config.connectionSlug ?? 'managed')
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'managed';
+    const codexHome = join(getConfigDir(), 'codex', 'connections', connectionKey);
     await mkdir(codexHome, { recursive: true });
     return { CODEX_HOME: codexHome };
   }

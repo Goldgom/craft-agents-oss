@@ -286,7 +286,14 @@ export function createCodexBackend(
   nativeBinary = resolveNativeCodexBinary(),
 ): AgentBackend {
   const runtime = getBackendRuntime(config);
-  const nativeCompatible = !runtime.baseUrl
+  // Native app-server currently owns OpenAI transports only. Other connections
+  // can still select the Codex agent protocol, but must use the Pi compatibility
+  // runtime so DeepSeek/TokenBird credentials are never sent to OpenAI by mistake.
+  const nativeProviderCompatible = !runtime.piAuthProvider
+    || runtime.piAuthProvider === 'openai'
+    || runtime.piAuthProvider === 'openai-codex';
+  const nativeCompatible = nativeProviderCompatible
+    && !runtime.baseUrl
     && !runtime.customEndpoint
     && ['api_key', 'api_key_with_endpoint', 'oauth', 'none', undefined].includes(config.authType);
   if (config.authType === 'none' && (!nativeBinary || !nativeCompatible)) {

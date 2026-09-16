@@ -137,6 +137,19 @@ describe('createBackend / createAgent', () => {
       expect(agent).toBeInstanceOf(CodexCompatibilityAgent);
     });
 
+    it('keeps DeepSeek and TokenBird transports on the Codex compatibility runtime', () => {
+      const binary = { path: 'codex', source: 'PATH' as const, version: '0.154.0', testedProtocol: true };
+      for (const piAuthProvider of ['deepseek', 'pi']) {
+        const agent = createCodexBackend(createTestConfig({
+          provider: 'pi',
+          agentRuntime: 'codex',
+          authType: 'api_key',
+          runtime: { piAuthProvider },
+        }), binary);
+        expect(agent).toBeInstanceOf(CodexCompatibilityAgent);
+      }
+    });
+
     it('uses Pi when an Anthropic connection explicitly selects Pi', () => {
       const agent = createBackend(createTestConfig({ provider: 'pi', agentRuntime: 'pi' }));
 
