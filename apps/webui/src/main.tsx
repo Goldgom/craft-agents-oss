@@ -40,9 +40,10 @@ function ErrorBoundary({ children }: { children: React.ReactNode }) {
 
 function Root() {
   const workspaceId = useAtomValue(windowWorkspaceIdAtom)
+  const isAndroidApp = new URLSearchParams(window.location.search).get('embedded') === 'android'
 
   return (
-    <ThemeProvider activeWorkspaceId={workspaceId}>
+    <ThemeProvider activeWorkspaceId={workspaceId} defaultMode={isAndroidApp ? 'dark' : 'system'}>
       <App />
       <Toaster />
     </ThemeProvider>

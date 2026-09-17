@@ -198,6 +198,12 @@ export interface LlmConnection {
   /** Provider-specific refresh/revocation behavior for third-party LLM OAuth. */
   oauthProvider?: LlmOAuthProvider;
 
+  /** TokenNest routing group applied to model requests for this connection. */
+  channelGroup?: string;
+
+  /** Groups the authenticated TokenNest account may route through. */
+  channelGroups?: Array<{ id: string; name: string; ratio?: number | string; models?: string[] }>;
+
   /** Override available models (for custom endpoints that don't support model listing) */
   models?: Array<ModelDefinition | string>;
 

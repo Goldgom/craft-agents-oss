@@ -28,6 +28,9 @@ import type { Workspace } from '../../electron/src/shared/types'
 type AndroidBridge = {
   reload: () => void
   configureServer: () => void
+  dismissKeyboard: () => void
+  getOAuthCallbackUrl: () => string
+  openTokenNestOAuth: (url: string) => void
 }
 
 declare global {
@@ -147,7 +150,10 @@ export function MobileControls() {
   }, [android, navigationOpen, workspaceOpen])
 
   useEffect(() => {
-    if (!android) return
+    // Workspace discovery is not needed for the normal chat path. Defer the
+    // two RPCs until the picker is actually opened to reduce startup work on
+    // slower Android devices.
+    if (!android || !workspaceOpen) return
 
     let cancelled = false
     const loadWorkspaces = async () => {
@@ -168,9 +174,15 @@ export function MobileControls() {
 
     void loadWorkspaces()
     return () => { cancelled = true }
-  }, [android])
+  }, [android, workspaceOpen])
 
   if (!android) return null
+
+  const dismissKeyboard = () => {
+    const activeElement = document.activeElement
+    if (activeElement instanceof HTMLElement) activeElement.blur()
+    window.CraftAgentAndroid?.dismissKeyboard()
+  }
 
   const closeNavigation = () => setNavigationOpen(false)
   const closeOverlays = () => {
@@ -229,6 +241,7 @@ export function MobileControls() {
           aria-expanded={workspaceOpen}
           aria-controls="mobile-workspace-controls-panel"
           onClick={() => {
+            dismissKeyboard()
             setNavigationOpen(false)
             setWorkspaceOpen(value => !value)
           }}
@@ -284,6 +297,7 @@ export function MobileControls() {
           aria-expanded={navigationOpen}
           aria-controls="mobile-controls-panel"
           onClick={() => {
+            dismissKeyboard()
             setWorkspaceOpen(false)
             setNavigationOpen(value => !value)
           }}
@@ -300,7 +314,10 @@ export function MobileControls() {
           aria-label="应用菜单"
         >
           <div className="mobile-controls__header">
-            <span>应用菜单</span>
+            <span>
+              <strong>TokenBird</strong>
+              <small>应用菜单</small>
+            </span>
             <button type="button" onClick={closeNavigation} aria-label="关闭菜单">
               <X aria-hidden="true" />
             </button>

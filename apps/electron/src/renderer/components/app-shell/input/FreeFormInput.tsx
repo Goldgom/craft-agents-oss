@@ -458,8 +458,8 @@ export function FreeFormInput({
 
   // Hide placeholder entirely when panel is unfocused in multi-panel layout
   const shuffledPlaceholder = React.useMemo(
-    () => Array.isArray(effectivePlaceholderProp) ? shuffleArray(effectivePlaceholderProp) : effectivePlaceholderProp,
-    [] // eslint-disable-line react-hooks/exhaustive-deps -- intentionally shuffle only on mount
+    () => Array.isArray(placeholderOptions) ? shuffleArray(placeholderOptions) : placeholderOptions,
+    [placeholderOptions]
   )
   const effectivePlaceholder = isFocusedPanel ? shuffledPlaceholder : ''
 

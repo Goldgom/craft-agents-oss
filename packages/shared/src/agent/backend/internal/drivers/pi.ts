@@ -244,6 +244,9 @@ export const piDriver: ProviderDriver = {
       }
       return m.id;
     }),
+    customHeaders: context.connection?.oauthProvider === 'tokennest' && context.connection.channelGroup
+      ? { 'X-TokenNest-Group': context.connection.channelGroup }
+      : undefined,
   }),
   fetchModels: async ({ connection, credentials, timeoutMs }) => {
     // Copilot OAuth: fetch models directly from the Copilot API via HTTP.

@@ -54,6 +54,7 @@ export function SettingsToggle({
   return (
     <div
       data-layout="settings-row"
+      data-settings-control-kind="toggle"
       className={cn(
         'flex items-center justify-between',
         inCard ? 'px-4 py-3.5' : 'py-3',

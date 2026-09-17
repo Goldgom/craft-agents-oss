@@ -297,7 +297,13 @@ export function ThemeProvider({
   }>({ background: null, chat: null, sidebar: null, characters: { left: null, right: null } })
 
   // === Derived values ===
-  const resolvedMode = mode === 'system' ? systemPreference : mode
+  // The native Android shell is intentionally dark and older WebViews can
+  // report a light `prefers-color-scheme` even while drawing a dark surface.
+  // Force the shared renderer to the matching palette so it never produces
+  // dark-on-dark onboarding or settings screens.
+  const isAndroidEmbedded = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('embedded') === 'android'
+  const resolvedMode = isAndroidEmbedded ? 'dark' : mode === 'system' ? systemPreference : mode
   // Effective theme: preview > workspace override > app default
   const effectiveColorTheme = previewColorTheme ?? workspaceColorTheme ?? colorTheme
   const effectiveColorThemeSource: 'preview' | 'workspace' | 'app' =

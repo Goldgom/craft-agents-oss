@@ -110,9 +110,23 @@ try {
         New-Item -ItemType Directory -Force $bridgeDest | Out-Null
         Copy-Item $bridgeSource (Join-Path $bridgeDest "index.js") -Force
     }
-    # Bump the version marker when the bundled runtime changes so
-    # LocalAgentServer re-extracts assets instead of retaining stale files.
-    Set-Content -Path (Join-Path $serverAssetRoot "version.txt") -Value "$bunAndroidVersion" -NoNewline
+    # The marker must follow the server bundle as well as Bun. A Bun-only
+    # marker leaves stale server code installed when an app update keeps the
+    # same runtime version.
+    $bundleHashLines = Get-ChildItem -LiteralPath $serverAssetRoot -Recurse -File |
+        Sort-Object FullName |
+        ForEach-Object {
+            $relative = $_.FullName.Substring($serverAssetRoot.Length).TrimStart("\", "/")
+            "$relative`:$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash)"
+        }
+    $bundleHashBytes = [Text.Encoding]::UTF8.GetBytes(($bundleHashLines -join "`n"))
+    $bundleHasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bundleHash = -join ($bundleHasher.ComputeHash($bundleHashBytes) | ForEach-Object { $_.ToString("x2") })
+    } finally {
+        $bundleHasher.Dispose()
+    }
+    Set-Content -Path (Join-Path $serverAssetRoot "version.txt") -Value "$bunAndroidVersion-$($bundleHash.Substring(0, 16))" -NoNewline
 
     # Bun publishes a native Android runtime rather than a Windows host
     # executable. Store it as a JNI library so Android extracts it into the
@@ -137,6 +151,7 @@ try {
     }
     if (-not (Test-Path $bunSource)) { throw "Bun Android runtime archive did not contain $bunSource." }
     Copy-Item $bunSource $bunRuntime -Force
+    Write-Output "Bundled Bun $bunAndroidVersion supports local mode on Android API 28 and newer; API 26/27 remain supported in remote mode."
 } finally {
     Pop-Location
 }

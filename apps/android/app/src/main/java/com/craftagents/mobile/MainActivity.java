@@ -6,8 +6,12 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.Rect;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
@@ -19,6 +23,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -30,20 +35,21 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
+import org.json.JSONObject;
+
 import java.io.IOException;
-import java.util.EnumMap;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class MainActivity extends Activity {
     private static final String PREFS = "craft_agent_mobile";
@@ -55,9 +61,21 @@ public final class MainActivity extends Activity {
     private static final String REMOTE_SERVER_URL_KEY = "remote_server_url";
     private static final String REMOTE_SERVER_TOKEN_KEY = "remote_server_token";
     private static final String DEFAULT_LOCAL_SERVER_URL = "ws://127.0.0.1:9100";
+    private static final int COLOR_BACKGROUND = Color.rgb(16, 17, 20);
+    private static final int COLOR_SURFACE = Color.rgb(25, 27, 32);
+    private static final int COLOR_SURFACE_ALT = Color.rgb(31, 34, 40);
+    private static final int COLOR_BORDER = Color.rgb(52, 56, 66);
+    private static final int COLOR_TEXT = Color.rgb(244, 245, 247);
+    private static final int COLOR_MUTED = Color.rgb(164, 169, 180);
+    private static final int COLOR_ACCENT = Color.rgb(99, 102, 241);
     private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
     private static final String ANDROID_BACK_SCRIPT =
-            "(function(){return !window.dispatchEvent(new CustomEvent('craft-agent-android-back',{cancelable:true}));})()";
+            "(function(){"
+                    + "var guideOpen=!!document.querySelector('[data-getting-started-guide]');"
+                    + "var handled=!window.dispatchEvent(new CustomEvent('craft-agent-android-back',{cancelable:true}));"
+                    + "return guideOpen||handled;"
+                    + "})()";
+    private static final String TOKENNEST_OAUTH_CALLBACK_EVENT = "craft-agent:tokennest-oauth-callback";
 
     private enum ServerMode {
         LOCAL("local"),
@@ -93,9 +111,13 @@ public final class MainActivity extends Activity {
     private LocalWebServer localWebServer;
     private LocalAgentServer localAgentServer;
     private final ExecutorService serverExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicInteger connectionAttempt = new AtomicInteger();
     private ServerMode activeMode;
     private boolean showingServerConfiguration;
+    private boolean configurationAllowCancel;
+    private ConfigurationPage configurationPage = ConfigurationPage.MODE_PICKER;
     private boolean backDispatchPending;
+    private int imeBottomInset;
     private ValueCallback<Uri[]> pendingFileChooser;
     private OnBackInvokedCallback backInvokedCallback;
 
@@ -108,12 +130,9 @@ public final class MainActivity extends Activity {
         buildUi();
         registerBackHandler();
 
-        ServerMode savedMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
-        if (savedMode == null) {
-            showServerConfiguration(false);
-        } else {
-            connect(savedMode);
-        }
+        // Always ask which mode should be used on a fresh launch. This avoids
+        // trapping older devices in a remembered local-server startup failure.
+        showServerConfiguration(false);
     }
 
     private void migrateLegacyServerProfile() {
@@ -130,7 +149,7 @@ public final class MainActivity extends Activity {
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(16, 17, 20));
+        root.setBackgroundColor(COLOR_BACKGROUND);
 
         content = new FrameLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(
@@ -139,12 +158,63 @@ public final class MainActivity extends Activity {
         webView = new WebView(this);
         configureWebView(webView);
         setContentView(root);
+        installImeResizeSupport();
+    }
+
+    /**
+     * Some Android 15/OEM combinations keep an edge-to-edge WebView at its
+     * full height even with SOFT_INPUT_ADJUST_RESIZE. Shrink the native WebView
+     * by the authoritative IME inset so the browser viewport and composer are
+     * never left underneath the keyboard. Older releases use the visible
+     * display frame as the equivalent signal.
+     */
+    private void installImeResizeSupport() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                int bottom = insets.isVisible(WindowInsets.Type.ime())
+                        ? insets.getInsets(WindowInsets.Type.ime()).bottom
+                        : 0;
+                updateWebViewImeInset(showingServerConfiguration ? 0 : bottom);
+                return insets;
+            });
+            root.post(root::requestApplyInsets);
+            return;
+        }
+
+        Rect visibleFrame = new Rect();
+        root.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            root.getWindowVisibleDisplayFrame(visibleFrame);
+            int obscuredBottom = Math.max(0, root.getRootView().getHeight() - visibleFrame.bottom);
+            int bottom = obscuredBottom > dp(120) ? obscuredBottom : 0;
+            updateWebViewImeInset(showingServerConfiguration ? 0 : bottom);
+        });
+    }
+
+    private void updateWebViewImeInset(int bottom) {
+        imeBottomInset = Math.max(0, bottom);
+        if (webView == null || webView.getParent() != content) return;
+        ViewGroup.LayoutParams rawParams = webView.getLayoutParams();
+        if (!(rawParams instanceof FrameLayout.LayoutParams)) return;
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) rawParams;
+        if (params.bottomMargin == imeBottomInset) return;
+        params.bottomMargin = imeBottomInset;
+        webView.setLayoutParams(params);
+    }
+
+    private void dismissKeyboard() {
+        View focused = getCurrentFocus();
+        if (focused != null) focused.clearFocus();
+        InputMethodManager inputMethodManager =
+                (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (inputMethodManager != null && webView != null) {
+            inputMethodManager.hideSoftInputFromWindow(webView.getWindowToken(), 0);
+        }
     }
 
     private void configureWebView(WebView view) {
         // The app owns the full-screen surface; native WebView chrome and
         // overscroll glow only add visual noise on Android.
-        view.setBackgroundColor(Color.rgb(16, 17, 20));
+        view.setBackgroundColor(COLOR_BACKGROUND);
         view.setOverScrollMode(View.OVER_SCROLL_NEVER);
         view.setVerticalScrollBarEnabled(false);
         view.setHorizontalScrollBarEnabled(false);
@@ -161,6 +231,14 @@ public final class MainActivity extends Activity {
         settings.setDisplayZoomControls(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        // TokenBird supplies its own complete dark palette. Android WebView's
+        // algorithmic darkening can otherwise process that palette a second
+        // time and turn light text black on the already-dark surface.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            settings.setAlgorithmicDarkeningAllowed(false);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            settings.setForceDark(WebSettings.FORCE_DARK_OFF);
+        }
         settings.setUserAgentString(settings.getUserAgentString() + " CraftAgentAndroid/" + BuildConfig.VERSION_NAME);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
@@ -208,143 +286,304 @@ public final class MainActivity extends Activity {
     }
 
     private void showServerConfiguration(boolean allowCancel) {
+        boolean cancelPendingLocalStart = configurationPage == ConfigurationPage.CONNECTING
+                && activeMode != ServerMode.LOCAL;
         showingServerConfiguration = true;
+        configurationAllowCancel = allowCancel;
+        configurationPage = ConfigurationPage.MODE_PICKER;
         showSystemBars();
+        connectionAttempt.incrementAndGet();
+        if (cancelPendingLocalStart) serverExecutor.execute(localAgentServer::stop);
 
-        ServerMode initialMode = activeMode;
-        if (initialMode == null) {
-            initialMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
-        }
-        if (initialMode == null) initialMode = ServerMode.LOCAL;
+        ServerMode savedMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
+        LinearLayout page = createConfigurationPage(
+                R.string.server_home_title,
+                R.string.server_home_description);
 
-        Map<ServerMode, ServerProfile> drafts = new EnumMap<>(ServerMode.class);
-        drafts.put(ServerMode.LOCAL, getSavedProfile(ServerMode.LOCAL));
-        drafts.put(ServerMode.REMOTE, getSavedProfile(ServerMode.REMOTE));
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.ic_launcher);
+        logo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(76), dp(76));
+        logoParams.gravity = Gravity.CENTER_HORIZONTAL;
+        logoParams.setMargins(0, 0, 0, dp(24));
+        page.addView(logo, 0, logoParams);
 
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(true);
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        page.setGravity(Gravity.CENTER_HORIZONTAL);
-        page.setPadding(dp(24), dp(40), dp(24), dp(32));
-        applyServerPageInsets(page);
-        scrollView.addView(page, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        TextView title = textView(R.string.server_home_title, 24, Color.WHITE);
-        title.setGravity(Gravity.CENTER);
-        page.addView(title, matchWrap());
-
-        TextView subtitle = textView(R.string.server_home_description, 14, Color.rgb(166, 170, 178));
-        subtitle.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams subtitleParams = matchWrap();
-        subtitleParams.setMargins(0, dp(10), 0, dp(28));
-        page.addView(subtitle, subtitleParams);
-
-        RadioGroup modeGroup = new RadioGroup(this);
-        modeGroup.setOrientation(RadioGroup.HORIZONTAL);
-        modeGroup.setGravity(Gravity.CENTER);
-        RadioButton local = serverModeButton(R.string.local_server);
-        local.setId(View.generateViewId());
-        RadioButton remote = serverModeButton(R.string.remote_server);
-        remote.setId(View.generateViewId());
-        modeGroup.addView(local, new RadioGroup.LayoutParams(0, dp(52), 1f));
-        modeGroup.addView(remote, new RadioGroup.LayoutParams(0, dp(52), 1f));
-        page.addView(modeGroup, matchWrap());
-
-        TextView modeDescription = textView(0, 13, Color.rgb(148, 152, 160));
-        LinearLayout.LayoutParams descriptionParams = matchWrap();
-        descriptionParams.setMargins(0, dp(14), 0, dp(16));
-        page.addView(modeDescription, descriptionParams);
-
-        EditText urlInput = new EditText(this);
-        urlInput.setSingleLine(true);
-        urlInput.setTextColor(Color.WHITE);
-        urlInput.setHintTextColor(Color.rgb(115, 118, 126));
-        urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        urlInput.setHint(R.string.server_url_hint);
-        page.addView(urlInput, matchWrap());
-
-        EditText tokenInput = new EditText(this);
-        tokenInput.setSingleLine(true);
-        tokenInput.setTextColor(Color.WHITE);
-        tokenInput.setHintTextColor(Color.rgb(115, 118, 126));
-        tokenInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        tokenInput.setHint(R.string.server_token_hint);
-        LinearLayout.LayoutParams tokenParams = matchWrap();
-        tokenParams.setMargins(0, dp(10), 0, dp(24));
-        page.addView(tokenInput, tokenParams);
-
-        final ServerMode[] editingMode = { initialMode };
-        final boolean[] changingMode = { false };
-        Runnable renderProfile = () -> {
-            changingMode[0] = true;
-            ServerProfile profile = drafts.get(editingMode[0]);
-            urlInput.setText(profile == null ? "" : profile.url);
-            tokenInput.setText(profile == null ? "" : profile.token);
-            boolean builtInLocal = editingMode[0] == ServerMode.LOCAL;
-            urlInput.setEnabled(!builtInLocal);
-            tokenInput.setEnabled(!builtInLocal);
-            modeDescription.setText(builtInLocal
-                    ? R.string.local_server_description
-                    : R.string.remote_server_description);
-            modeGroup.check(builtInLocal ? local.getId() : remote.getId());
-            changingMode[0] = false;
-        };
-
-        modeGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            if (changingMode[0]) return;
-            drafts.put(editingMode[0], new ServerProfile(
-                    urlInput.getText().toString(), tokenInput.getText().toString()));
-            editingMode[0] = checkedId == local.getId() ? ServerMode.LOCAL : ServerMode.REMOTE;
-            renderProfile.run();
-        });
-        renderProfile.run();
-
-        Button connectButton = new Button(this);
-        connectButton.setText(R.string.save_and_connect);
-        connectButton.setAllCaps(false);
-        connectButton.setTextSize(15);
-        connectButton.setOnClickListener(view -> {
-            ServerMode mode = editingMode[0];
-            // Local mode always targets the backend bundled in this APK. The
-            // URL field is retained for profile compatibility, but must not
-            // redirect the embedded server to an arbitrary endpoint.
-            String normalizedUrl = mode == ServerMode.LOCAL
-                    ? DEFAULT_LOCAL_SERVER_URL
-                    : normalizeUrl(urlInput.getText().toString(), mode);
-            if (normalizedUrl == null) {
-                urlInput.setError(getString(R.string.server_url_invalid));
+        boolean localAvailable = LocalAgentServer.isSupportedOnThisDevice();
+        View localCard = createModeCard(
+                R.string.local_server,
+                localAvailable ? R.string.local_server_description : R.string.local_server_unsupported,
+                R.string.local_mode_badge,
+                savedMode == ServerMode.LOCAL,
+                localAvailable);
+        localCard.setOnClickListener(view -> {
+            if (!LocalAgentServer.isSupportedOnThisDevice()) {
+                Toast.makeText(this, R.string.local_server_unsupported, Toast.LENGTH_LONG).show();
                 return;
             }
+            preferences.edit().putString(MODE_KEY, ServerMode.LOCAL.value).apply();
+            connect(ServerMode.LOCAL);
+        });
+        page.addView(localCard, cardParams());
 
-            drafts.put(mode, new ServerProfile(normalizedUrl, tokenInput.getText().toString().trim()));
-            saveProfiles(drafts, mode);
-            connect(mode);
+        View remoteCard = createModeCard(
+                R.string.remote_server,
+                R.string.remote_server_description,
+                R.string.remote_mode_badge,
+                savedMode == ServerMode.REMOTE,
+                true);
+        remoteCard.setOnClickListener(view -> showRemoteServerForm());
+        page.addView(remoteCard, cardParams());
+
+        TextView privacy = textView(R.string.connection_privacy_note, 12, COLOR_MUTED);
+        privacy.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams privacyParams = matchWrap();
+        privacyParams.setMargins(dp(10), dp(10), dp(10), 0);
+        page.addView(privacy, privacyParams);
+
+        if (allowCancel && activeMode != null) {
+            Button cancel = secondaryButton(android.R.string.cancel);
+            cancel.setOnClickListener(view -> showWebView());
+            LinearLayout.LayoutParams cancelParams = matchWrap();
+            cancelParams.setMargins(0, dp(18), 0, 0);
+            page.addView(cancel, cancelParams);
+        }
+
+        showConfigurationPage(page);
+    }
+
+    private void showRemoteServerForm() {
+        showingServerConfiguration = true;
+        configurationPage = ConfigurationPage.REMOTE_FORM;
+        showSystemBars();
+
+        LinearLayout page = createConfigurationPage(
+                R.string.remote_form_title,
+                R.string.remote_form_description);
+        ServerProfile profile = getSavedProfile(ServerMode.REMOTE);
+
+        TextView urlLabel = fieldLabel(R.string.server_url_label);
+        page.addView(urlLabel, matchWrap());
+        EditText urlInput = createTextInput(
+                R.string.server_url_hint,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        urlInput.setText(profile.url);
+        page.addView(urlInput, fieldParams(dp(8), dp(18)));
+
+        TextView tokenLabel = fieldLabel(R.string.server_token_label);
+        page.addView(tokenLabel, matchWrap());
+        EditText tokenInput = createTextInput(
+                R.string.server_token_hint,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        tokenInput.setText(profile.token);
+        page.addView(tokenInput, fieldParams(dp(8), dp(24)));
+
+        Button connectButton = primaryButton(R.string.save_and_connect);
+        connectButton.setOnClickListener(view -> {
+            String normalizedUrl = normalizeUrl(urlInput.getText().toString(), ServerMode.REMOTE);
+            if (normalizedUrl == null) {
+                urlInput.setError(getString(R.string.server_url_invalid));
+                urlInput.requestFocus();
+                return;
+            }
+            preferences.edit()
+                    .putString(MODE_KEY, ServerMode.REMOTE.value)
+                    .putString(REMOTE_SERVER_URL_KEY, normalizedUrl)
+                    .putString(REMOTE_SERVER_TOKEN_KEY, tokenInput.getText().toString().trim())
+                    .apply();
+            connect(ServerMode.REMOTE);
         });
         page.addView(connectButton, matchWrap());
 
-        if (allowCancel && activeMode != null) {
-            Button cancelButton = new Button(this);
-            cancelButton.setText(android.R.string.cancel);
-            cancelButton.setAllCaps(false);
-            cancelButton.setOnClickListener(view -> showWebView());
-            LinearLayout.LayoutParams cancelParams = matchWrap();
-            cancelParams.setMargins(0, dp(8), 0, 0);
-            page.addView(cancelButton, cancelParams);
-        }
+        Button back = secondaryButton(R.string.back_to_mode_selection);
+        back.setOnClickListener(view -> showServerConfiguration(configurationAllowCancel));
+        LinearLayout.LayoutParams backParams = matchWrap();
+        backParams.setMargins(0, dp(10), 0, 0);
+        page.addView(back, backParams);
 
+        showConfigurationPage(page);
+        urlInput.post(() -> {
+            urlInput.requestFocus();
+            urlInput.setSelection(urlInput.length());
+        });
+    }
+
+    private LinearLayout createConfigurationPage(int titleRes, int descriptionRes) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER_HORIZONTAL);
+        page.setPadding(dp(24), dp(44), dp(24), dp(32));
+        applyServerPageInsets(page);
+
+        TextView title = textView(titleRes, 27, COLOR_TEXT);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        page.addView(title, matchWrap());
+
+        TextView subtitle = textView(descriptionRes, 14, COLOR_MUTED);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setLineSpacing(0f, 1.12f);
+        LinearLayout.LayoutParams subtitleParams = matchWrap();
+        subtitleParams.setMargins(0, dp(10), 0, dp(28));
+        page.addView(subtitle, subtitleParams);
+        return page;
+    }
+
+    private void showConfigurationPage(LinearLayout page) {
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setClipToPadding(false);
+        scrollView.setBackgroundColor(COLOR_BACKGROUND);
+        scrollView.addView(page, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         replaceContent(scrollView);
     }
 
-    private RadioButton serverModeButton(int labelRes) {
-        RadioButton button = new RadioButton(this);
+    private View createModeCard(
+            int titleRes,
+            int descriptionRes,
+            int badgeRes,
+            boolean preferred,
+            boolean available
+    ) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(17), dp(18), dp(17));
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setAlpha(available ? 1f : 0.58f);
+        card.setBackground(roundedBackground(COLOR_SURFACE, preferred ? COLOR_ACCENT : COLOR_BORDER, 16, preferred ? 2 : 1));
+
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.HORIZONTAL);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = textView(titleRes, 17, COLOR_TEXT);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView badge = textView(badgeRes, 11, preferred ? Color.WHITE : COLOR_MUTED);
+        badge.setGravity(Gravity.CENTER);
+        badge.setPadding(dp(9), dp(5), dp(9), dp(5));
+        badge.setBackground(roundedBackground(preferred ? COLOR_ACCENT : COLOR_SURFACE_ALT, Color.TRANSPARENT, 12, 0));
+        heading.addView(badge);
+        card.addView(heading, matchWrap());
+
+        TextView description = textView(descriptionRes, 13, COLOR_MUTED);
+        description.setLineSpacing(0f, 1.12f);
+        LinearLayout.LayoutParams descriptionParams = matchWrap();
+        descriptionParams.setMargins(0, dp(9), 0, 0);
+        card.addView(description, descriptionParams);
+        return card;
+    }
+
+    private EditText createTextInput(int hintRes, int inputType) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setTextColor(COLOR_TEXT);
+        input.setTextSize(16);
+        input.setHintTextColor(Color.rgb(112, 117, 128));
+        input.setInputType(inputType);
+        input.setHint(hintRes);
+        input.setPadding(dp(15), 0, dp(15), 0);
+        input.setMinHeight(dp(54));
+        input.setBackground(roundedBackground(COLOR_SURFACE, COLOR_BORDER, 13, 1));
+        return input;
+    }
+
+    private TextView fieldLabel(int labelRes) {
+        TextView label = textView(labelRes, 13, COLOR_MUTED);
+        label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return label;
+    }
+
+    private Button primaryButton(int labelRes) {
+        Button button = new Button(this);
         button.setText(labelRes);
+        button.setAllCaps(false);
+        button.setTextSize(16);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(15);
-        button.setGravity(Gravity.CENTER);
-        button.setBackgroundColor(Color.rgb(36, 38, 44));
+        button.setMinHeight(dp(54));
+        button.setBackground(roundedBackground(COLOR_ACCENT, Color.TRANSPARENT, 14, 0));
         return button;
+    }
+
+    private Button secondaryButton(int labelRes) {
+        Button button = new Button(this);
+        button.setText(labelRes);
+        button.setAllCaps(false);
+        button.setTextSize(14);
+        button.setTextColor(COLOR_MUTED);
+        button.setMinHeight(dp(48));
+        button.setBackground(roundedBackground(Color.TRANSPARENT, Color.TRANSPARENT, 12, 0));
+        return button;
+    }
+
+    private GradientDrawable roundedBackground(int fill, int stroke, int radiusDp, int strokeDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(radiusDp));
+        if (strokeDp > 0) drawable.setStroke(dp(strokeDp), stroke);
+        return drawable;
+    }
+
+    private LinearLayout.LayoutParams cardParams() {
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, 0, 0, dp(14));
+        return params;
+    }
+
+    private LinearLayout.LayoutParams fieldParams(int top, int bottom) {
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, top, 0, bottom);
+        return params;
+    }
+
+    private void showConnectionProgress() {
+        showingServerConfiguration = true;
+        configurationPage = ConfigurationPage.CONNECTING;
+        showSystemBars();
+        LinearLayout page = createConfigurationPage(
+                R.string.preparing_local_server,
+                R.string.preparing_local_server_description);
+
+        ProgressBar progress = new ProgressBar(this);
+        progress.setIndeterminateTintList(ColorStateList.valueOf(COLOR_ACCENT));
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        progressParams.gravity = Gravity.CENTER_HORIZONTAL;
+        progressParams.setMargins(0, dp(14), 0, dp(30));
+        page.addView(progress, progressParams);
+
+        Button changeMode = secondaryButton(R.string.choose_another_mode);
+        changeMode.setOnClickListener(view -> showServerConfiguration(configurationAllowCancel));
+        page.addView(changeMode, matchWrap());
+        showConfigurationPage(page);
+    }
+
+    private void showConnectionError(String details) {
+        showingServerConfiguration = true;
+        configurationPage = ConfigurationPage.ERROR;
+        showSystemBars();
+        LinearLayout page = createConfigurationPage(
+                R.string.local_server_failed,
+                R.string.local_server_failed_description);
+
+        TextView error = textView(0, 12, Color.rgb(229, 156, 156));
+        error.setText(details);
+        error.setTextIsSelectable(true);
+        error.setPadding(dp(14), dp(12), dp(14), dp(12));
+        error.setBackground(roundedBackground(Color.rgb(48, 28, 31), Color.rgb(101, 53, 59), 12, 1));
+        LinearLayout.LayoutParams errorParams = matchWrap();
+        errorParams.setMargins(0, 0, 0, dp(22));
+        page.addView(error, errorParams);
+
+        Button retry = primaryButton(R.string.retry_local_server);
+        retry.setOnClickListener(view -> connect(ServerMode.LOCAL));
+        page.addView(retry, matchWrap());
+        Button chooseMode = secondaryButton(R.string.choose_another_mode);
+        chooseMode.setOnClickListener(view -> showServerConfiguration(configurationAllowCancel));
+        LinearLayout.LayoutParams chooseParams = matchWrap();
+        chooseParams.setMargins(0, dp(8), 0, 0);
+        page.addView(chooseMode, chooseParams);
+        showConfigurationPage(page);
     }
 
     private TextView textView(int textRes, int sizeSp, int color) {
@@ -358,21 +597,6 @@ public final class MainActivity extends Activity {
     private LinearLayout.LayoutParams matchWrap() {
         return new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-    }
-
-    private void saveProfiles(Map<ServerMode, ServerProfile> profiles, ServerMode selectedMode) {
-        ServerProfile local = profiles.get(ServerMode.LOCAL);
-        ServerProfile remote = profiles.get(ServerMode.REMOTE);
-        SharedPreferences.Editor editor = preferences.edit().putString(MODE_KEY, selectedMode.value);
-        if (local != null) {
-            editor.putString(LOCAL_SERVER_URL_KEY, local.url.trim());
-            editor.putString(LOCAL_SERVER_TOKEN_KEY, local.token.trim());
-        }
-        if (remote != null) {
-            editor.putString(REMOTE_SERVER_URL_KEY, remote.url.trim());
-            editor.putString(REMOTE_SERVER_TOKEN_KEY, remote.token.trim());
-        }
-        editor.apply();
     }
 
     private ServerProfile getSavedProfile(ServerMode mode) {
@@ -392,53 +616,73 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        if (localAgentServer != null) localAgentServer.stop();
+        connectionAttempt.incrementAndGet();
+        if (localAgentServer != null && localAgentServer.isRunning()) {
+            serverExecutor.execute(localAgentServer::stop);
+        }
         ServerProfile profile = getSavedProfile(mode);
         String url = normalizeUrl(profile.url, mode);
         if (url == null) {
-            showServerConfiguration(activeMode != null);
+            showRemoteServerForm();
             return;
         }
-
-        activeMode = mode;
-        showingServerConfiguration = false;
 
         try {
             int port = getLocalWebPort();
             localWebServer.setConnectionConfig(url, profile.token, mode.value);
+            activeMode = mode;
             showWebView();
             webView.loadUrl("http://127.0.0.1:" + port + "/index.html?embedded=android");
         } catch (IOException error) {
             Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+            showRemoteServerForm();
         }
+    }
+
+    private enum ConfigurationPage {
+        MODE_PICKER,
+        REMOTE_FORM,
+        CONNECTING,
+        ERROR
     }
 
     /** Start the bundled Bun backend before opening the WebView. */
     private void connectLocalServer() {
-        activeMode = ServerMode.LOCAL;
-        showingServerConfiguration = false;
-        Toast.makeText(this, R.string.starting_local_server, Toast.LENGTH_SHORT).show();
+        if (!LocalAgentServer.isSupportedOnThisDevice()) {
+            Toast.makeText(this, R.string.local_server_unsupported, Toast.LENGTH_LONG).show();
+            showServerConfiguration(configurationAllowCancel);
+            return;
+        }
+
+        int attempt = connectionAttempt.incrementAndGet();
+        showConnectionProgress();
 
         serverExecutor.execute(() -> {
             try {
-                String token = localAgentServer.start();
+                LocalAgentServer.ConnectionInfo connection = localAgentServer.start();
                 runOnUiThread(() -> {
-                    if (isFinishing()) return;
+                    if (isFinishing() || attempt != connectionAttempt.get()) return;
                     try {
                         int webPort = getLocalWebPort();
                         localWebServer.setConnectionConfig(
-                                "ws://127.0.0.1:9100", token, ServerMode.LOCAL.value);
+                                "ws://127.0.0.1:" + connection.port,
+                                connection.token,
+                                ServerMode.LOCAL.value);
+                        preferences.edit()
+                                .putString(MODE_KEY, ServerMode.LOCAL.value)
+                                .putString(LOCAL_SERVER_URL_KEY, "ws://127.0.0.1:" + connection.port)
+                                .apply();
+                        activeMode = ServerMode.LOCAL;
                         showWebView();
                         webView.loadUrl("http://127.0.0.1:" + webPort + "/index.html?embedded=android");
                     } catch (IOException error) {
-                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                        showConnectionError(error.getMessage());
                     }
                 });
             } catch (IOException error) {
                 runOnUiThread(() -> {
-                    showingServerConfiguration = true;
-                    Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
-                    showServerConfiguration(activeMode != null);
+                    if (isFinishing() || attempt != connectionAttempt.get()) return;
+                    showConnectionError(error.getMessage());
                 });
             }
         });
@@ -447,6 +691,7 @@ public final class MainActivity extends Activity {
     private void showWebView() {
         showingServerConfiguration = false;
         replaceContent(webView);
+        updateWebViewImeInset(imeBottomInset);
         enableImmersiveMode();
     }
 
@@ -500,6 +745,28 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void dispatchTokenNestOAuthCallback(
+            String code,
+            String state,
+            String error,
+            String errorDescription
+    ) {
+        String detail = "{\"code\":" + jsonStringOrNull(code)
+                + ",\"state\":" + jsonStringOrNull(state)
+                + ",\"error\":" + jsonStringOrNull(error)
+                + ",\"error_description\":" + jsonStringOrNull(errorDescription) + "}";
+        String script = "window.dispatchEvent(new CustomEvent("
+                + JSONObject.quote(TOKENNEST_OAUTH_CALLBACK_EVENT)
+                + ",{detail:" + detail + "}));";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(script, null);
+        });
+    }
+
+    private static String jsonStringOrNull(String value) {
+        return value == null ? "null" : JSONObject.quote(value);
+    }
+
     private void replaceContent(View view) {
         ViewGroup parent = (ViewGroup) view.getParent();
         if (parent != null) parent.removeView(view);
@@ -510,7 +777,7 @@ public final class MainActivity extends Activity {
 
     private int getLocalWebPort() throws IOException {
         if (localWebServer == null) {
-            localWebServer = new LocalWebServer(getAssets());
+            localWebServer = new LocalWebServer(getAssets(), this::dispatchTokenNestOAuthCallback);
             return localWebServer.start();
         }
         return localWebServer.getPort();
@@ -540,12 +807,18 @@ public final class MainActivity extends Activity {
     }
 
     private void handleBackPressed() {
-        if (showingServerConfiguration && activeMode != null) {
-            showWebView();
+        if (showingServerConfiguration) {
+            if (configurationPage != ConfigurationPage.MODE_PICKER) {
+                showServerConfiguration(configurationAllowCancel);
+            } else if (activeMode != null) {
+                showWebView();
+            } else {
+                super.onBackPressed();
+            }
             return;
         }
 
-        if (showingServerConfiguration || backDispatchPending) return;
+        if (backDispatchPending) return;
 
         // Give Android-only React overlays the first chance to consume Back.
         // If nothing handles it, continue through WebView/browser history.
@@ -587,6 +860,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        connectionAttempt.incrementAndGet();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback);
             backInvokedCallback = null;
@@ -668,7 +942,48 @@ public final class MainActivity extends Activity {
 
         @JavascriptInterface
         public void configureServer() {
-            runOnUiThread(() -> showServerConfiguration(true));
+            runOnUiThread(() -> {
+                dismissKeyboard();
+                showServerConfiguration(true);
+            });
+        }
+
+        @JavascriptInterface
+        public void dismissKeyboard() {
+            runOnUiThread(MainActivity.this::dismissKeyboard);
+        }
+
+        /** The TokenNest native OAuth client is registered for an IP-literal loopback callback. */
+        @JavascriptInterface
+        public String getOAuthCallbackUrl() {
+            try {
+                return "http://127.0.0.1:" + getLocalWebPort() + "/callback";
+            } catch (IOException error) {
+                return "";
+            }
+        }
+
+        /** Open only the fixed TokenNest authorization endpoint in the system browser. */
+        @JavascriptInterface
+        public void openTokenNestOAuth(String rawUrl) {
+            Uri uri = Uri.parse(rawUrl == null ? "" : rawUrl);
+            boolean allowed = "https".equalsIgnoreCase(uri.getScheme())
+                    && "openai.goldgom.top".equalsIgnoreCase(uri.getHost())
+                    && "/oauth/authorize".equals(uri.getPath());
+            if (!allowed) {
+                dispatchTokenNestOAuthCallback(
+                        null, null, "invalid_authorization_url", "TokenNest authorization URL was rejected");
+                return;
+            }
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, uri));
+                } catch (ActivityNotFoundException | SecurityException failure) {
+                    Toast.makeText(MainActivity.this, R.string.external_link_unavailable, Toast.LENGTH_LONG).show();
+                    dispatchTokenNestOAuthCallback(
+                            null, null, "browser_unavailable", "No browser is available to open TokenNest");
+                }
+            });
         }
     }
 

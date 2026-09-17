@@ -3,6 +3,7 @@ import type { CredentialManager } from '../credentials/manager.ts';
 import {
   TOKENNEST_OAUTH_CONFIG,
   exchangeTokenNestTokens,
+  fetchTokenNestChannelGroups,
   getValidTokenNestCredentials,
   prepareTokenNestOAuth,
   refreshTokenNestTokens,
@@ -85,5 +86,27 @@ describe('TokenNest OAuth', () => {
     expect(refreshRequests[0]).toContain('refresh_token=one-time-refresh-token');
     expect(setLlmOAuth).toHaveBeenCalledTimes(1);
     expect(stored.refreshToken).toBe('rotated-refresh-token');
+  });
+
+  test('normalizes OAuth channel groups and sends only the bearer grant', async () => {
+    let authorization = '';
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      authorization = new Headers(init?.headers).get('authorization') ?? '';
+      return Response.json({ data: {
+        default: { desc: 'Default', ratio: 1, models: ['gpt-5.6-sol'] },
+        auto: { desc: 'Automatic', ratio: 'auto' },
+      } });
+    }) as typeof fetch;
+
+    await expect(fetchTokenNestChannelGroups('oauth-access')).resolves.toEqual([
+      { id: 'default', name: 'Default', ratio: 1, models: ['gpt-5.6-sol'] },
+      { id: 'auto', name: 'Automatic', ratio: 'auto' },
+    ]);
+    expect(authorization).toBe('Bearer oauth-access');
+  });
+
+  test('hides the group selector when an older TokenNest has no OAuth groups endpoint', async () => {
+    globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof fetch;
+    await expect(fetchTokenNestChannelGroups('oauth-access')).resolves.toEqual([]);
   });
 });

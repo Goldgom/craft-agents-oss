@@ -52,6 +52,49 @@ function getSystemTheme(): boolean {
   return darkMediaQuery?.matches ?? false
 }
 
+const TOKENNEST_OAUTH_CALLBACK_EVENT = 'craft-agent:tokennest-oauth-callback'
+const TOKENNEST_OAUTH_TIMEOUT_MS = 5 * 60 * 1000
+
+interface TokenNestOAuthCallback {
+  code?: string | null
+  state?: string | null
+  error?: string | null
+  error_description?: string | null
+}
+
+function waitForAndroidTokenNestCallback(
+  expectedState: string,
+  openBrowser: () => void,
+): Promise<TokenNestOAuthCallback> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener(TOKENNEST_OAUTH_CALLBACK_EVENT, onCallback)
+      reject(new Error('TokenNest sign-in timed out'))
+    }, TOKENNEST_OAUTH_TIMEOUT_MS)
+
+    const onCallback = (event: Event) => {
+      const detail = (event as CustomEvent<TokenNestOAuthCallback>).detail
+      // Ignore unrelated loopback requests. The RPC server performs the same
+      // state and flow ownership checks before exchanging any authorization code.
+      const nativeOpenError = !detail?.state
+        && (detail?.error === 'browser_unavailable' || detail?.error === 'invalid_authorization_url')
+      if (!nativeOpenError && detail?.state !== expectedState) return
+      window.clearTimeout(timeout)
+      window.removeEventListener(TOKENNEST_OAUTH_CALLBACK_EVENT, onCallback)
+      resolve(detail ?? {})
+    }
+
+    window.addEventListener(TOKENNEST_OAUTH_CALLBACK_EVENT, onCallback)
+    try {
+      openBrowser()
+    } catch (error) {
+      window.clearTimeout(timeout)
+      window.removeEventListener(TOKENNEST_OAUTH_CALLBACK_EVENT, onCallback)
+      reject(error)
+    }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Create web API
 // ---------------------------------------------------------------------------
@@ -63,13 +106,15 @@ export interface WebApiOptions {
   workspaceId?: string
   /** Bearer token for embedded/mobile clients that do not have HTTP cookies. */
   token?: string
+  /** Native Android's selected connection mode. Browser WebUI defaults to remote. */
+  connectionMode?: 'local' | 'remote'
 }
 
 export function createWebApi(options: WebApiOptions): {
   api: ElectronAPI
   client: WsRpcClient
 } {
-  const { serverUrl, workspaceId, token } = options
+  const { serverUrl, workspaceId, token, connectionMode } = options
   // The browser adapter has no native window manager to retain this value.
   // Keep it in sync locally so components mounted after the Android workspace
   // picker (such as the floating switcher) see the selected workspace.
@@ -116,6 +161,10 @@ export function createWebApi(options: WebApiOptions): {
     // System info
     getVersions: () => ({ node: 'n/a', chrome: navigator.userAgent, electron: 'web' }),
     getRuntimeEnvironment: () => 'web',
+    getStartupContext: () => Promise.resolve({
+      mode: connectionMode ?? 'remote',
+      ...(connectionMode === 'remote' ? { serverUrl } : {}),
+    }),
     getSystemWarnings: () => Promise.resolve({ vcredistMissing: false }),
     isDebugMode: () => Promise.resolve(import.meta.env.DEV),
 
@@ -332,11 +381,52 @@ export function createWebApi(options: WebApiOptions): {
         error: i18n.t('errors.chatGptOAuthNotAvailable'),
       }
     },
-    // TokenNest native-app OAuth currently requires an IP loopback callback.
-    startTokenNestOAuth: async () => ({
-      success: false,
-      error: 'TokenNest sign-in is currently available in the desktop app.',
-    }),
+    // Android owns a loopback HTTP server for bundled WebUI assets. Reuse it
+    // as the RFC 8252 callback listener and send the result back to this
+    // WebView, while PKCE material and token exchange stay on the agent server.
+    startTokenNestOAuth: async (connectionSlug = 'tokennest') => {
+      const bridge = window.CraftAgentAndroid
+      if (!bridge) {
+        return { success: false, error: 'TokenNest sign-in requires the TokenBird Android app or desktop app.' }
+      }
+
+      let flowId: string | undefined
+      let state: string | undefined
+      try {
+        const callbackUrl = bridge.getOAuthCallbackUrl()
+        if (!callbackUrl) throw new Error('Android OAuth callback server is unavailable')
+        const started = await client.invoke('tokennest:startOAuth', { connectionSlug, callbackUrl })
+        flowId = started.flowId
+        const expectedState = started.state
+        state = expectedState
+
+        const callback = await waitForAndroidTokenNestCallback(
+          expectedState,
+          () => bridge.openTokenNestOAuth(started.authUrl),
+        )
+        if (!callback.state || callback.state !== expectedState) {
+          throw new Error('TokenNest OAuth state mismatch')
+        }
+        if (callback.error) {
+          throw new Error(callback.error_description || callback.error)
+        }
+        if (!callback.code) throw new Error('No authorization code received')
+
+        return await client.invoke('tokennest:completeOAuth', {
+          flowId,
+          state: expectedState,
+          code: callback.code,
+        })
+      } catch (error) {
+        if (flowId && state) {
+          client.invoke('tokennest:cancelOAuth', { flowId, state }).catch(() => {})
+        }
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'TokenNest OAuth failed',
+        }
+      }
+    },
   }
 
   const api = { ...baseApi, ...webOverrides, ...oauthOverrides } as ElectronAPI

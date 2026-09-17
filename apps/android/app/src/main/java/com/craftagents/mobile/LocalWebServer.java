@@ -1,6 +1,7 @@
 package com.craftagents.mobile;
 
 import android.content.res.AssetManager;
+import android.net.Uri;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -20,8 +21,27 @@ import java.util.concurrent.Executors;
 
 /** Serves the bundled web UI on loopback so the WebView has a normal HTTP origin. */
 final class LocalWebServer {
+    interface OAuthCallbackListener {
+        void onCallback(String code, String state, String error, String errorDescription);
+    }
+
+    private static final byte[] OAUTH_CALLBACK_PAGE = ("<!doctype html><html lang=\"zh-CN\"><head>"
+            + "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            + "<title>TokenBird</title><style>body{margin:0;background:#101114;color:#f4f5f7;"
+            + "font-family:system-ui,-apple-system,sans-serif;display:grid;place-items:center;min-height:100vh}"
+            + "main{max-width:30rem;margin:1.5rem;padding:2rem;border:1px solid #343842;border-radius:1rem;"
+            + "background:#191b20;text-align:center}h1{font-size:1.3rem;margin:.5rem 0}p{color:#a4a9b4;line-height:1.6}"
+            + ".mark{display:grid;place-items:center;width:3rem;height:3rem;margin:auto;border-radius:50%;"
+            + "background:#6366f1;font-size:1.5rem}</style></head><body><main><div class=\"mark\">&#10003;</div>"
+            + "<h1>授权信息已返回</h1><p>请返回词元鸟，应用将继续完成登录。<br>Return to TokenBird to finish signing in.</p>"
+            + "</main></body></html>").getBytes(StandardCharsets.UTF_8);
+
     private final AssetManager assets;
-    private final ExecutorService clients = Executors.newCachedThreadPool();
+    private final OAuthCallbackListener oauthCallbackListener;
+    // A WebView can request hundreds of split JS/theme assets at once. Keep a
+    // small bounded worker pool so low-memory devices do not create one thread
+    // per request during the first render.
+    private final ExecutorService clients = Executors.newFixedThreadPool(4);
     private volatile ServerSocket serverSocket;
     private volatile ConnectionConfig connectionConfig;
 
@@ -37,8 +57,9 @@ final class LocalWebServer {
         }
     }
 
-    LocalWebServer(AssetManager assets) {
+    LocalWebServer(AssetManager assets, OAuthCallbackListener oauthCallbackListener) {
         this.assets = assets;
+        this.oauthCallbackListener = oauthCallbackListener;
     }
 
     int start() throws IOException {
@@ -103,7 +124,8 @@ final class LocalWebServer {
                 return;
             }
 
-            String path = parts[1].split("\\?", 2)[0];
+            String requestTarget = parts[1];
+            String path = requestTarget.split("\\?", 2)[0];
             path = URLDecoder.decode(path, "UTF-8");
             if (path.startsWith("/")) path = path.substring(1);
             if (path.isEmpty()) path = "index.html";
@@ -127,16 +149,33 @@ final class LocalWebServer {
                 return;
             }
 
-            byte[] content;
-            String contentType;
-            try (InputStream asset = assets.open("webui/" + path)) {
-                content = readAll(asset);
-                contentType = contentType(path);
+            // The OAuth loopback callback is a synthetic route, not a bundled
+            // asset. Handle it before AssetManager lookup; otherwise the
+            // missing "webui/callback" file returns 404 and the WebView never
+            // receives the authorization result.
+            if ("callback".equals(path)) {
+                writeResponse(output, 200, "text/html; charset=utf-8", OAUTH_CALLBACK_PAGE,
+                        "HEAD".equals(parts[0]));
+                if (!"HEAD".equals(parts[0])) notifyOAuthCallback(requestTarget);
+                return;
+            }
+
+            InputStream asset;
+            try {
+                asset = assets.open("webui/" + path);
             } catch (IOException missing) {
                 writeResponse(output, 404, "text/plain; charset=utf-8", "Not Found".getBytes(StandardCharsets.UTF_8), false);
                 return;
             }
-            writeResponse(output, 200, contentType, content, "HEAD".equals(parts[0]));
+
+            try (InputStream content = asset) {
+                writeAssetResponse(
+                        output,
+                        contentType(path),
+                        content,
+                        "HEAD".equals(parts[0]),
+                        path.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache");
+            }
         } catch (IOException ignored) {
             // Client disconnects are normal during WebView reloads.
         }
@@ -149,9 +188,48 @@ final class LocalWebServer {
                 + "Content-Type: " + type + "\r\n"
                 + "Content-Length: " + body.length + "\r\n"
                 + "Cache-Control: " + cacheControl + "\r\n"
+                + "X-Content-Type-Options: nosniff\r\n"
                 + "Connection: close\r\n\r\n";
         output.write(headers.getBytes(StandardCharsets.UTF_8));
         if (!headOnly) output.write(body);
+        output.flush();
+    }
+
+    private void notifyOAuthCallback(String requestTarget) {
+        try {
+            Uri callback = Uri.parse("http://127.0.0.1" + requestTarget);
+            oauthCallbackListener.onCallback(
+                    callback.getQueryParameter("code"),
+                    callback.getQueryParameter("state"),
+                    callback.getQueryParameter("error"),
+                    callback.getQueryParameter("error_description"));
+        } catch (RuntimeException ignored) {
+            oauthCallbackListener.onCallback(null, null, "invalid_callback", "Invalid OAuth callback URL");
+        }
+    }
+
+    private static void writeAssetResponse(
+            OutputStream output,
+            String type,
+            InputStream asset,
+            boolean headOnly,
+            String cacheControl
+    ) throws IOException {
+        // Static files can be several megabytes. Stream them directly from the
+        // APK instead of allocating an equally large byte[] for every request.
+        // Connection-close framing is valid HTTP/1.1 when Content-Length is
+        // unknown for a compressed AssetManager entry.
+        String headers = "HTTP/1.1 200 OK\r\n"
+                + "Content-Type: " + type + "\r\n"
+                + "Cache-Control: " + cacheControl + "\r\n"
+                + "X-Content-Type-Options: nosniff\r\n"
+                + "Connection: close\r\n\r\n";
+        output.write(headers.getBytes(StandardCharsets.UTF_8));
+        if (!headOnly) {
+            byte[] buffer = new byte[32 * 1024];
+            int count;
+            while ((count = asset.read(buffer)) != -1) output.write(buffer, 0, count);
+        }
         output.flush();
     }
 
@@ -195,14 +273,6 @@ final class LocalWebServer {
         // Android client still supports API 26, so decode explicitly instead
         // of allowing a request on an older device to throw NoSuchMethodError.
         return line.size() == 0 ? null : new String(line.toByteArray(), StandardCharsets.ISO_8859_1);
-    }
-
-    private static byte[] readAll(InputStream input) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[16 * 1024];
-        int count;
-        while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
-        return output.toByteArray();
     }
 
     private static String contentType(String path) {

@@ -14,9 +14,60 @@ export const TOKENNEST_OAUTH_CONFIG = {
   tokenUrl: 'https://openai.goldgom.top/api/oauth2/token',
   revocationUrl: 'https://openai.goldgom.top/api/oauth2/revoke',
   balanceUrl: 'https://openai.goldgom.top/api/oauth2/balance',
+  groupsUrl: 'https://openai.goldgom.top/api/oauth2/groups',
   apiBaseUrl: 'https://openai.goldgom.top/v1',
   scopes: 'api balance:read offline_access',
 } as const;
+
+export interface TokenNestChannelGroup {
+  id: string;
+  name: string;
+  ratio?: number | string;
+  models?: string[];
+}
+
+/**
+ * Fetch groups available to the OAuth grant. This endpoint is an optional
+ * TokenNest extension; older servers return 404 and the client keeps working
+ * without a group selector.
+ */
+export async function fetchTokenNestChannelGroups(accessToken: string): Promise<TokenNestChannelGroup[]> {
+  const response = await fetch(TOKENNEST_OAUTH_CONFIG.groupsUrl, {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return [];
+  const payload = await response.json() as unknown;
+  const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : root;
+  const entries = Array.isArray(data) ? data : Object.entries(data);
+  const groups: TokenNestChannelGroup[] = [];
+  for (const entry of entries) {
+    if (typeof entry === 'string') {
+      groups.push({ id: entry, name: entry });
+      continue;
+    }
+    if (Array.isArray(entry)) {
+      const [id, raw] = entry;
+      if (typeof id !== 'string') continue;
+      const detail = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+      const models = Array.isArray(detail.models) ? detail.models.filter((model): model is string => typeof model === 'string') : [];
+      groups.push({
+        id,
+        name: typeof detail.desc === 'string' && detail.desc.trim() ? detail.desc : id,
+        ratio: typeof detail.ratio === 'number' || typeof detail.ratio === 'string' ? detail.ratio : undefined,
+        ...(models.length > 0 ? { models } : {}),
+      });
+      continue;
+    }
+    if (entry && typeof entry === 'object') {
+      const detail = entry as Record<string, unknown>;
+      const id = typeof detail.id === 'string' ? detail.id : typeof detail.name === 'string' ? detail.name : '';
+      const models = Array.isArray(detail.models) ? detail.models.filter((model): model is string => typeof model === 'string') : [];
+      if (id) groups.push({ id, name: typeof detail.description === 'string' ? detail.description : id, ratio: typeof detail.ratio === 'number' || typeof detail.ratio === 'string' ? detail.ratio : undefined, ...(models.length > 0 ? { models } : {}) });
+    }
+  }
+  return groups;
+}
 
 export interface TokenNestTokens {
   accessToken: string;

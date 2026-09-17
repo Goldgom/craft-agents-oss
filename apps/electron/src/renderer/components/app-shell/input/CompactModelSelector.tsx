@@ -132,7 +132,11 @@ export function CompactModelSelector({
   const availableModels = React.useMemo(() => {
     if (connectionUnavailable) return []
     if (!effectiveConnectionDetails) return ANTHROPIC_MODELS
-    return effectiveConnectionDetails.models || ANTHROPIC_MODELS
+    const models = effectiveConnectionDetails.models || ANTHROPIC_MODELS
+    const selectedGroup = effectiveConnectionDetails.channelGroups?.find(group => group.id === effectiveConnectionDetails.channelGroup)
+    if (!selectedGroup?.models?.length) return models
+    const allowed = new Set(selectedGroup.models)
+    return models.filter(model => allowed.has(typeof model === 'string' ? model : model.id))
   }, [effectiveConnectionDetails, connectionUnavailable])
 
   const currentModelDisplayName = React.useMemo(() => {
@@ -205,6 +209,19 @@ export function CompactModelSelector({
     },
     [onModelChange, onConnectionChange, effectiveConnection],
   )
+
+  const handleChannelGroupChange = React.useCallback(async (connection: LlmConnectionWithStatus, channelGroup: string) => {
+    const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = connection
+    const result = await window.electronAPI.saveLlmConnection({ ...connectionData, channelGroup })
+    if (result.success) {
+      await appShellCtx?.refreshLlmConnections?.()
+      const group = connection.channelGroups?.find(item => item.id === channelGroup)
+      if (group?.models?.length && !group.models.includes(currentModel)) {
+        onModelChange(group.models[0], connection.slug)
+      }
+      setOpen(false)
+    }
+  }, [appShellCtx, currentModel, onModelChange])
 
   return (
     <Drawer open={open} onOpenChange={setOpen}>
@@ -444,6 +461,35 @@ export function CompactModelSelector({
                 </DrawerClose>
               )
             })
+          )}
+
+          {/* === Thinking section === */}
+          {effectiveConnectionDetails?.oauthProvider === 'tokennest' && (effectiveConnectionDetails.channelGroups?.length ?? 0) > 0 && pickerMode !== 'unavailable' && (
+            <>
+              <div className="px-3 pt-4 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
+                {t('chat.modelPicker.channelGroupSection')}
+              </div>
+              {effectiveConnectionDetails.channelGroups!.map(group => {
+                const isSelected = effectiveConnectionDetails.channelGroup === group.id
+                return (
+                  <button
+                    type="button"
+                    key={group.id}
+                    onClick={() => void handleChannelGroupChange(effectiveConnectionDetails, group.id)}
+                    className={cn(
+                      'flex items-center justify-between w-full px-3 py-2 rounded-lg text-left transition-colors',
+                      isSelected ? 'bg-foreground/5' : 'hover:bg-foreground/5',
+                    )}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{group.name}</div>
+                      {group.ratio != null && <div className="text-xs text-foreground/50">{t('settings.ai.channelGroupRatio', { ratio: group.ratio })}</div>}
+                    </div>
+                    {isSelected && <Check className="h-3 w-3 text-foreground/60" />}
+                  </button>
+                )
+              })}
+            </>
           )}
 
           {/* === Thinking section === */}

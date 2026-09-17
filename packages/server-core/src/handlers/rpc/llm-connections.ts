@@ -600,6 +600,11 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
 
   // Get stored API key for an LLM connection (masked — for edit form display only)
   server.handle(RPC_CHANNELS.llmConnections.GET_API_KEY, async (_ctx, slug: string): Promise<string | null> => {
+    const connection = getLlmConnection(slug)
+    // OAuth grants are bearer credentials, never user-managed API keys. Keep
+    // them out of every API-key display/edit path even if stale key material
+    // happens to exist under the same connection slug.
+    if (!connection || connection.authType === 'oauth') return null
     const manager = getCredentialManager()
     const key = await manager.getLlmApiKey(slug)
     if (!key) return null
@@ -839,7 +844,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     }
 
     try {
-      const { exchangeTokenNestTokens, revokeTokenNestToken, TOKENNEST_OAUTH_CONFIG } = await import('@craft-agent/shared/auth')
+      const { exchangeTokenNestTokens, fetchTokenNestChannelGroups, revokeTokenNestToken, TOKENNEST_OAUTH_CONFIG } = await import('@craft-agent/shared/auth')
       const credentialManager = getCredentialManager()
       const tokens = await exchangeTokenNestTokens(args.code, flow.codeVerifier, flow.redirectUri)
       const discovered = await listCustomModels({
@@ -852,7 +857,11 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
         throw new Error(discovered.error || 'TokenNest returned no available models')
       }
 
-      const models = discovered.models.map(model => model.id)
+      const channelGroups = await fetchTokenNestChannelGroups(tokens.accessToken).catch(() => [])
+      const models = [...new Set([
+        ...discovered.models.map(model => model.id),
+        ...channelGroups.flatMap(group => group.models ?? []),
+      ])]
       const existing = getLlmConnection(flow.connectionSlug)
       const connection: LlmConnection = {
         ...(existing ?? {
@@ -871,6 +880,10 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
           ? existing.defaultModel
           : models[0],
         modelSelectionMode: 'automaticallySyncedFromProvider',
+        channelGroups: channelGroups.length > 0 ? channelGroups : existing?.channelGroups,
+        channelGroup: channelGroups.some(group => group.id === existing?.channelGroup)
+          ? existing?.channelGroup
+          : channelGroups[0]?.id ?? existing?.channelGroup,
       }
 
       await credentialManager.setLlmOAuth(flow.connectionSlug, tokens)

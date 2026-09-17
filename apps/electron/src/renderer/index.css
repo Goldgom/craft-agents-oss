@@ -1432,13 +1432,13 @@ html.dark[data-scenic] .fullscreen-overlay-background {
    label on the left, switch on the right. Stretching the switch to 100% width
    produced a long black pill bar that looked broken. */
 @container panel (max-width: 448px) {
-  [data-layout="settings-row"]:not(:has([data-slot="switch"])) {
+  [data-layout="settings-row"]:not([data-settings-control-kind="toggle"]) {
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
   }
 
-  [data-layout="settings-row"]:not(:has([data-slot="switch"])) > [data-layout="settings-control"] {
+  [data-layout="settings-row"]:not([data-settings-control-kind="toggle"]) > [data-layout="settings-control"] {
     width: 100%;
     min-width: 0;
     margin-left: 0;
@@ -1447,9 +1447,9 @@ html.dark[data-scenic] .fullscreen-overlay-background {
   }
 
   /* Full-width form controls (selects, inputs) in stacked layout */
-  [data-layout="settings-row"]:not(:has([data-slot="switch"])) [data-slot="select-trigger"],
-  [data-layout="settings-row"]:not(:has([data-slot="switch"])) [data-layout="settings-control"] > .w-\[180px\],
-  [data-layout="settings-row"]:not(:has([data-slot="switch"])) [data-layout="settings-control"] > .w-\[200px\] {
+  [data-layout="settings-row"]:not([data-settings-control-kind="toggle"]) [data-slot="select-trigger"],
+  [data-layout="settings-row"]:not([data-settings-control-kind="toggle"]) [data-layout="settings-control"] > .w-\[180px\],
+  [data-layout="settings-row"]:not([data-settings-control-kind="toggle"]) [data-layout="settings-control"] > .w-\[200px\] {
     width: 100%;
     max-width: 100%;
     min-width: 0;

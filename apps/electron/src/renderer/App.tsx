@@ -91,6 +91,7 @@ import {
   GETTING_STARTED_GUIDE_VERSION,
   shouldShowGettingStartedGuide,
 } from '@/lib/getting-started-guide'
+import { resolveAuthGatedAppState } from '@/lib/app-startup'
 
 // PDF previews are opened on demand. Loading the renderer lazily keeps pdf.js
 // and its worker off the startup path.
@@ -511,6 +512,23 @@ export default function App() {
       })
   }, [])
 
+  useEffect(() => {
+    if (!isAndroidEmbedded || !showGettingStartedGuide) return
+
+    const root = document.documentElement
+    const handleAndroidBack = (event: Event) => {
+      event.preventDefault()
+      handleGettingStartedComplete()
+    }
+
+    root.classList.add('getting-started-guide-open')
+    window.addEventListener('craft-agent-android-back', handleAndroidBack)
+    return () => {
+      root.classList.remove('getting-started-guide-open')
+      window.removeEventListener('craft-agent-android-back', handleAndroidBack)
+    }
+  }, [handleGettingStartedComplete, isAndroidEmbedded, showGettingStartedGuide])
+
   // Apply theme via hook (injects CSS variables)
   // shikiTheme is passed to ShikiThemeProvider to ensure correct syntax highlighting
   // theme for dark-only themes in light system mode
@@ -800,13 +818,9 @@ export default function App() {
   const handleReauthLogin = useCallback(async () => {
     // Re-check setup needs
     const needs = await window.electronAPI.getSetupNeeds()
-    if (needs.isFullyConfigured || isAndroidEmbedded) {
-      setAppState('ready')
-    } else {
-      setSetupNeeds(needs)
-      setAppState('onboarding')
-    }
-  }, [isAndroidEmbedded])
+    setSetupNeeds(needs)
+    setAppState(resolveAuthGatedAppState(needs.isFullyConfigured, windowWorkspaceId))
+  }, [windowWorkspaceId])
 
   // Reauth reset handler - open reset confirmation dialog
   const handleReauthReset = useCallback(() => {
@@ -833,27 +847,19 @@ export default function App() {
         const needs = await window.electronAPI.getSetupNeeds()
         setSetupNeeds(needs)
 
-        if (needs.isFullyConfigured || isAndroidEmbedded) {
-          // If no workspace is selected (thin client without CRAFT_WORKSPACE_ID),
-          // show workspace picker before entering the main app
-          if (!wsId) {
-            setAppState('workspace-picker')
-          } else {
-            setAppState('ready')
-          }
-        } else {
-          // New user or needs setup - show onboarding
-          setAppState('onboarding')
-        }
+        // Authentication setup is platform-independent. Android previously
+        // bypassed this gate entirely, which hid the provider connection guide
+        // on a fresh local-mode server.
+        setAppState(resolveAuthGatedAppState(needs.isFullyConfigured, wsId))
       } catch (error) {
         console.error('Failed to check auth state:', error)
         // If check fails, show onboarding to be safe
-        setAppState(isAndroidEmbedded ? 'workspace-picker' : 'onboarding')
+        setAppState('onboarding')
       }
     }
 
     initialize()
-  }, [isAndroidEmbedded])
+  }, [])
 
   // Session selection state
   const [sessionSelection, setSession] = useSession()
@@ -1880,8 +1886,7 @@ export default function App() {
       initializeSessions([])
       setWorkspaces([])
       setWindowWorkspaceId(null)
-      // Reset setupNeeds to force fresh onboarding start on desktop. Android
-      // keeps provider setup in Settings and returns to workspace selection.
+      // Reset setupNeeds to force a fresh provider connection guide.
       setSetupNeeds({
         needsBillingConfig: true,
         needsCredentials: true,
@@ -1889,13 +1894,13 @@ export default function App() {
       })
       // Reset onboarding hook state
       onboarding.reset()
-      setAppState(isAndroidEmbedded ? 'workspace-picker' : 'onboarding')
+      setAppState('onboarding')
     } catch (error) {
       console.error('Reset failed:', error)
     } finally {
       setShowResetDialog(false)
     }
-  }, [onboarding, initializeSessions, isAndroidEmbedded])
+  }, [onboarding, initializeSessions])
 
   // Handle workspace selection
   // - Default: switch workspace in same window (in-window switching)

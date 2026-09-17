@@ -80,7 +80,9 @@ function getModelOptionsForConnection(
 
   // If connection has explicit models, use those
   if (connection.models && connection.models.length > 0) {
-    return connection.models.map((m) => {
+    const selectedGroup = connection.channelGroups?.find(group => group.id === connection.channelGroup)
+    const allowedModels = selectedGroup?.models?.length ? new Set(selectedGroup.models) : null
+    return connection.models.filter(m => !allowedModels || allowedModels.has(typeof m === 'string' ? m : m.id)).map((m) => {
       if (typeof m === 'string') {
         return { value: m, label: getModelShortName(m), description: '' }
       }
@@ -1193,6 +1195,19 @@ export default function AiSettingsPage() {
     await refreshLlmConnections()
   }, [defaultConnection, refreshLlmConnections])
 
+  const handleDefaultChannelGroupChange = useCallback(async (channelGroup: string) => {
+    if (!window.electronAPI || !defaultConnection || defaultConnection.oauthProvider !== 'tokennest') return
+    const group = defaultConnection.channelGroups?.find(item => item.id === channelGroup)
+    const defaultModel = group?.models?.length && !group.models.includes(defaultConnection.defaultModel ?? '')
+      ? group.models[0]
+      : defaultConnection.defaultModel
+    const updated = { ...defaultConnection, channelGroup, defaultModel }
+    const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = updated
+    const result = await window.electronAPI.saveLlmConnection(connectionData as import('../../../shared/types').LlmConnection)
+    if (result.success) await refreshLlmConnections()
+    else toast.error(t('settings.ai.channelGroupUpdateFailed'), { description: result.error })
+  }, [defaultConnection, refreshLlmConnections, t])
+
   const handleDefaultThinkingChange = useCallback(async (level: ThinkingLevel) => {
     if (!window.electronAPI) return
 
@@ -1331,6 +1346,19 @@ export default function AiSettingsPage() {
                       description: t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}Desc`),
                     }))}
                   />
+                  {defaultConnection?.oauthProvider === 'tokennest' && (defaultConnection.channelGroups?.length ?? 0) > 0 && (
+                    <SettingsMenuSelectRow
+                      label={t('settings.ai.channelGroup')}
+                      description={t('settings.ai.channelGroupDesc')}
+                      value={defaultConnection.channelGroup ?? defaultConnection.channelGroups?.[0]?.id ?? ''}
+                      onValueChange={handleDefaultChannelGroupChange}
+                      options={(defaultConnection.channelGroups ?? []).map(group => ({
+                        value: group.id,
+                        label: group.name,
+                        description: group.ratio == null ? group.id : t('settings.ai.channelGroupRatio', { ratio: group.ratio }),
+                      }))}
+                    />
+                  )}
                   {defaultConnection && getCompatibleAgentRuntimes(defaultConnection).includes('codex') && (
                     <SettingsRow
                       label={t('settings.ai.runtime.codex')}

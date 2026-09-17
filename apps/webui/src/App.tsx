@@ -25,9 +25,14 @@ function LoadingScreen() {
   const { t } = useTranslation()
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen font-sans text-foreground/50 gap-3">
-      <div className="animate-spin w-6 h-6 border-2 border-current border-t-transparent rounded-full" />
-      <p className="text-[13px]">{t("webui.connectingToServer")}</p>
+    <div className="relative flex h-screen items-center justify-center overflow-hidden bg-background px-6 font-sans text-foreground">
+      <div className="pointer-events-none absolute -top-24 left-1/2 size-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
+      <div className="relative flex w-full max-w-sm flex-col items-center rounded-3xl border border-border/60 bg-card/80 px-7 py-10 text-center shadow-modal-small">
+        <img src="./icon-192.png" alt="" className="mb-5 size-16 rounded-2xl shadow-minimal" />
+        <h1 className="text-xl font-semibold tracking-tight">TokenBird</h1>
+        <div className="mt-5 size-7 animate-spin rounded-full border-2 border-primary/25 border-t-primary" />
+        <p className="mt-4 text-sm text-muted-foreground">{t("webui.connectingToServer")}</p>
+      </div>
     </div>
   )
 }
@@ -36,16 +41,26 @@ function ErrorScreen({ message, onRetry, embedded }: { message: string; onRetry:
   const { t } = useTranslation()
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen font-sans text-foreground/50 gap-3">
-      <p className="text-base font-medium text-destructive">{t("webui.connectionFailed")}</p>
-      <p className="text-[13px] max-w-md text-center">{message}</p>
-      <div className="flex gap-2 mt-2">
+    <div className="flex h-screen items-center justify-center bg-background px-6 font-sans text-foreground">
+      <div className="w-full max-w-md rounded-3xl border border-border/60 bg-card px-6 py-8 text-center shadow-modal-small">
+        <div className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl bg-destructive/10 text-xl text-destructive">!</div>
+        <p className="text-lg font-semibold text-foreground">{t("webui.connectionFailed")}</p>
+        <p className="mx-auto mt-2 max-w-sm break-words text-[13px] leading-relaxed text-muted-foreground">{message}</p>
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
         <button
           onClick={onRetry}
-          className="px-4 py-1.5 rounded-md bg-background shadow-minimal text-[13px] text-foreground/70 cursor-pointer"
+          className="min-h-11 rounded-xl bg-primary px-5 py-2 text-sm font-medium text-primary-foreground shadow-minimal"
         >
           {t("common.retry")}
         </button>
+        {embedded && window.CraftAgentAndroid && (
+          <button
+            onClick={() => window.CraftAgentAndroid?.configureServer()}
+            className="min-h-11 rounded-xl border border-border bg-background px-5 py-2 text-sm font-medium text-foreground"
+          >
+            {t("settings.server.title")}
+          </button>
+        )}
         {!embedded && (
           <button
             onClick={() => {
@@ -53,11 +68,12 @@ function ErrorScreen({ message, onRetry, embedded }: { message: string; onRetry:
                 window.location.href = '/login'
               })
             }}
-            className="px-4 py-1.5 rounded-md bg-background shadow-minimal text-[13px] text-foreground/70 cursor-pointer"
+            className="min-h-11 rounded-xl border border-border bg-background px-5 py-2 text-sm font-medium text-foreground"
           >
             {t("webui.logOut")}
           </button>
         )}
+        </div>
       </div>
     </div>
   )
@@ -82,6 +98,7 @@ export default function App() {
       const params = new URLSearchParams(window.location.search)
       let embeddedWsUrl = params.get('ws')
       let embeddedToken = params.get('token') ?? undefined
+      let embeddedConnectionMode: 'local' | 'remote' | undefined
       if (params.get('embedded') === 'android') {
         const mobileConfigResponse = await fetch('/api/mobile-config', {
           credentials: 'same-origin',
@@ -90,9 +107,14 @@ export default function App() {
         if (!mobileConfigResponse.ok) {
           throw new Error(`Failed to load Android server config: ${mobileConfigResponse.status}`)
         }
-        const mobileConfig = await mobileConfigResponse.json() as { wsUrl?: string; token?: string }
+        const mobileConfig = await mobileConfigResponse.json() as {
+          wsUrl?: string
+          token?: string
+          mode?: 'local' | 'remote'
+        }
         embeddedWsUrl = mobileConfig.wsUrl ?? null
         embeddedToken = mobileConfig.token || undefined
+        embeddedConnectionMode = mobileConfig.mode
       }
       let wsUrl = embeddedWsUrl ?? ''
       if (!wsUrl) {
@@ -134,7 +156,12 @@ export default function App() {
         clientRef.current.destroy()
       }
 
-      const { api, client } = createWebApi({ serverUrl: wsUrl, workspaceId, token: embeddedToken })
+      const { api, client } = createWebApi({
+        serverUrl: wsUrl,
+        workspaceId,
+        token: embeddedToken,
+        connectionMode: embeddedConnectionMode,
+      })
       clientRef.current = client
 
       // 4. Set window.electronAPI — must happen before any Electron component mounts

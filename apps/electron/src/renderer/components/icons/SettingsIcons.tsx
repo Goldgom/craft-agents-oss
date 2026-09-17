@@ -24,12 +24,14 @@ import {
   Wrench,
   Activity,
   Users,
+  ChartNoAxesCombined,
 } from 'lucide-react'
 import type { SettingsSubpage } from '../../../shared/types'
 
 type IconProps = { className?: string }
 
 export const AppSettingsIcon = ({ className }: IconProps) => <ToggleRight className={className} />
+export const UsageSettingsIcon = ({ className }: IconProps) => <ChartNoAxesCombined className={className} />
 export const AiSettingsIcon = ({ className }: IconProps) => <Sparkles className={className} />
 export const AppearanceIcon = ({ className }: IconProps) => <Palette className={className} />
 export const InputIcon = ({ className }: IconProps) => <Keyboard className={className} />
@@ -54,6 +56,7 @@ export const CollaborationsIcon = ({ className }: IconProps) => <Users className
  */
 export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconProps>> = {
   app: AppSettingsIcon,
+  usage: UsageSettingsIcon,
   ai: AiSettingsIcon,
   appearance: AppearanceIcon,
   input: InputIcon,

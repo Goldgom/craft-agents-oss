@@ -19,6 +19,13 @@ export default defineConfig({
   base: './',
   build: {
     outDir: resolve(__dirname, 'dist'),
+    // Android 8 devices often retain their factory WebView. Vite's modern
+    // default target can emit syntax those WebViews cannot parse even though
+    // the native shell itself supports API 26. Chrome 67 matches the original
+    // Android 8.1 WebView generation while remaining compatible with current
+    // browsers.
+    target: 'chrome67',
+    cssTarget: 'chrome67',
     // Remove previous hashed chunks before every build. The Android packager
     // copies dist wholesale, so the old misspelled option caused the APK to
     // grow on every build.

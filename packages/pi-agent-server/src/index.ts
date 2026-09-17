@@ -128,6 +128,7 @@ interface InitMessage {
   branchFromSdkTurnId?: string;
   customEndpoint?: { api: CustomEndpointApi; supportsImages?: boolean };
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
+  customHeaders?: Record<string, string>;
   piAuth?: { provider: string; credential: PiCredential };
   /** Windows: globally configured Git Bash path (config.json gitBashPath) for the built-in bash tool */
   gitBashPath?: string;
@@ -142,6 +143,7 @@ interface RuntimeConfigUpdateMessage {
   baseUrl?: string;
   customEndpoint?: { api: CustomEndpointApi; supportsImages?: boolean };
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
+  customHeaders?: Record<string, string>;
 }
 
 /** Messages from main process (stdin) */
@@ -495,6 +497,7 @@ function registerCustomEndpointModels(
     apiKey: resolveCustomEndpointApiKey(),
     api,
     authHeader: true,
+    headers: initConfig?.customHeaders,
     models: allIds.map(id => buildCustomEndpointModelDef(
       id,
       { supportsImages: initConfig?.customEndpoint?.supportsImages === true },
@@ -1668,6 +1671,7 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       baseUrl: msg.baseUrl,
       customEndpoint: msg.customEndpoint,
       customModels: msg.customModels,
+      customHeaders: msg.customHeaders,
     };
 
     if (piModelRegistry && initConfig.baseUrl?.trim() && initConfig.customEndpoint) {

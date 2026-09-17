@@ -51,8 +51,14 @@ export function GettingStartedGuide({ open, onComplete }: GettingStartedGuidePro
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onComplete() }}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-3xl">
-        <div className="relative overflow-hidden px-5 pb-5 pt-7 sm:px-8 sm:pb-7 sm:pt-8">
+      <DialogContent
+        data-getting-started-guide
+        className="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-3xl"
+      >
+        <div
+          data-getting-started-guide-scroll
+          className="relative overflow-hidden px-5 pb-5 pt-7 sm:px-8 sm:pb-7 sm:pt-8"
+        >
           <div className="pointer-events-none absolute -right-24 -top-24 size-64 rounded-full bg-accent/10 blur-3xl" />
           <div className="pointer-events-none absolute -bottom-28 -left-20 size-56 rounded-full bg-foreground/[0.04] blur-3xl" />
 
