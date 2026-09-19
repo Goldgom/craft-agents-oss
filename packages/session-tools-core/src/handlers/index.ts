@@ -55,6 +55,10 @@ export type { TransformDataArgs } from './transform-data.ts';
 export { handleScriptSandbox } from './script-sandbox.ts';
 export type { ScriptSandboxArgs } from './script-sandbox.ts';
 
+// Android permission and advanced network ADB bridges
+export { handleAndroidPermission, handleAndroidAdb } from './android-device.ts';
+export type { AndroidPermissionArgs, AndroidAdbArgs } from './android-device.ts';
+
 // Render Template
 export { handleRenderTemplate } from './render-template.ts';
 export type { RenderTemplateArgs } from './render-template.ts';

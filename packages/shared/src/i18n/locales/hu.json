@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "Add meg a nevet, és válaszd ki, hova mentse a munkaterületet.",
   "workspace.creating": "Létrehozás...",
   "workspace.defaultLocation": "Alapértelmezett hely",
+  "workspace.firstWorkspaceDesc": "Munkamenet létrehozása előtt munkaterületre van szükség. A kezdéshez adj neki nevet.",
+  "workspace.firstWorkspaceTitle": "Első munkaterület létrehozása",
   "workspace.loadingWorkspaces": "Munkaterületek betöltése...",
   "workspace.locationLabel": "Hely",
   "workspace.myRemoteWorkspace": "Távoli munkaterületem",

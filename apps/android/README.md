@@ -6,14 +6,14 @@ This is the Android client for TokenBird Community Edition. It starts a loopback
 
 Requirements:
 
-- Android SDK with platform `android-36` and build tools `36.1.0` or newer.
+- Android SDK with platform `android-36`, build tools `36.1.0` or newer, and an Android NDK (the build script uses it for the ARM64 Bun compatibility layer).
 - JDK 17. The build script downloads a portable Temurin JDK 17 into `.toolchains/android/jdk17` when no JDK 17 is available.
 - Network access on the first build so the Gradle wrapper can download Gradle 8.13, Android Gradle Plugin dependencies, and the ARM64 Android Bun runtime.
 
 With command-line tools installed, the SDK packages can be prepared with:
 
 ```powershell
-sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.1.0"
+sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.1.0" "ndk;28.2.13676358"
 ```
 
 From the repository root:

@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "Namen eingeben und Speicherort für den Workspace wählen.",
   "workspace.creating": "Wird erstellt...",
   "workspace.defaultLocation": "Standardspeicherort",
+  "workspace.firstWorkspaceDesc": "Bevor du eine Sitzung erstellen kannst, benötigst du einen Workspace. Gib ihm einen Namen, um zu beginnen.",
+  "workspace.firstWorkspaceTitle": "Ersten Workspace erstellen",
   "workspace.loadingWorkspaces": "Arbeitsbereiche werden geladen...",
   "workspace.locationLabel": "Speicherort",
   "workspace.myRemoteWorkspace": "Mein Remote-Workspace",

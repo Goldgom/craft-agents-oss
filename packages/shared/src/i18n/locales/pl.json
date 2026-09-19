@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "Podaj nazwę i wybierz miejsce przechowywania Workspace.",
   "workspace.creating": "Tworzenie...",
   "workspace.defaultLocation": "Domyślna lokalizacja",
+  "workspace.firstWorkspaceDesc": "Przed utworzeniem sesji potrzebujesz Workspace. Nadaj mu nazwę, aby rozpocząć.",
+  "workspace.firstWorkspaceTitle": "Utwórz pierwszy Workspace",
   "workspace.loadingWorkspaces": "Ładowanie przestrzeni roboczych...",
   "workspace.locationLabel": "Lokalizacja",
   "workspace.myRemoteWorkspace": "Mój zdalny Workspace",

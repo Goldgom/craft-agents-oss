@@ -70,8 +70,12 @@ export function WorkspacePicker({ onSelectWorkspace }: WorkspacePickerProps) {
     <div className="flex h-screen items-center justify-center bg-sidebar px-4">
       <AddWorkspaceContainer>
         <AddWorkspaceStepHeader
-          title={t("workspace.selectWorkspace")}
-          description={t("workspace.selectWorkspaceDesc")}
+          title={workspaces.length === 0
+            ? t("workspace.firstWorkspaceTitle")
+            : t("workspace.selectWorkspace")}
+          description={workspaces.length === 0
+            ? t("workspace.firstWorkspaceDesc")
+            : t("workspace.selectWorkspaceDesc")}
         />
 
         {error && (
@@ -110,6 +114,7 @@ export function WorkspacePicker({ onSelectWorkspace }: WorkspacePickerProps) {
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleCreate()}
             placeholder={t("workspace.newWorkspaceName")}
+            autoFocus={workspaces.length === 0}
             className="w-full rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
           />
           <AddWorkspacePrimaryButton

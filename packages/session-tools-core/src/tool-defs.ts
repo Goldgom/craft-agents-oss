@@ -33,6 +33,7 @@ import { handleUpdatePreferences } from './handlers/update-preferences.ts';
 import { handleTransformData } from './handlers/transform-data.ts';
 import { handleScriptSandbox } from './handlers/script-sandbox.ts';
 import { handleRunShell, handleLocalBash } from './handlers/shell-tools.ts';
+import { handleAndroidPermission, handleAndroidAdb } from './handlers/android-device.ts';
 import { handleSftpTransfer } from './handlers/sftp-transfer.ts';
 import { handleRenderTemplate } from './handlers/render-template.ts';
 import { handleSendDeveloperFeedback } from './handlers/send-developer-feedback.ts';
@@ -169,6 +170,20 @@ export const LocalBashSchema = z.object({
   command: z.string().describe('Shell command to execute on the CLIENT machine (the user\'s local computer), e.g. to read local files or run local tools. In remote mode this runs on the client; in local mode it is equivalent to runshell.'),
   cwd: z.string().optional().describe('Working directory on the client machine. Defaults to the session working directory or workspace root.'),
   timeoutMs: z.number().min(1000).max(600000).optional().describe('Timeout in milliseconds (default 120000).'),
+});
+
+export const AndroidPermissionSchema = z.object({
+  action: z.enum(['status', 'request']).describe('status lists current grants; request shows a native user confirmation and Android runtime prompt'),
+  permission: z.enum(['camera', 'microphone', 'notifications', 'photos', 'videos', 'audio', 'location', 'contacts', 'calendar']).optional()
+    .describe('Allowlisted Android permission to request. Required for action=request.'),
+  reason: z.string().max(300).optional()
+    .describe('Plain-language reason shown to the user. Required for action=request.'),
+});
+
+export const AndroidAdbSchema = z.object({
+  action: z.enum(['status', 'shell']).describe('status reports configuration; shell asks the user to approve one command'),
+  command: z.string().max(4000).optional().describe('ADB shell command. Required for action=shell.'),
+  reason: z.string().max(240).optional().describe('Why the command is needed; shown in the native confirmation. Required for action=shell.'),
 });
 
 export const SftpTransferSchema = z.object({
@@ -552,6 +567,14 @@ In remote mode the agent runs on a server, but this tool executes on the machine
 - stdout/stderr and the exit code are returned; output is capped at 200k chars
 - Default timeout 120s (max 600s)`,
 
+  android_permission: `Inspect or request an Android app runtime permission from the connected phone.
+
+Use action=status before assuming access. For action=request, provide one allowlisted permission and a short, specific reason. TokenBird shows a native explanation and Android's system permission dialog; denial is final for that call and must not be bypassed. A grant only authorizes the app itself—it does not imply that arbitrary phone data is automatically exposed to the AI.`,
+
+  android_adb: `Use the connected Android client's advanced network ADB bridge.
+
+Use action=status first. action=shell is available only after the user explicitly enables and configures network ADB in Android settings. Every command is displayed verbatim in a native confirmation and runs only after approval. Prefer normal app APIs and android_permission; use ADB only when the task genuinely requires device-level diagnostics or automation. Do not disable security controls, alter ADB authorization, or hide the purpose of a command.`,
+
   sftp_transfer: `Transfer a file between the CLIENT machine and the remote server over the configured SFTP connection.
 
 Use this for binary or large files that should not be copied through shell output. Upload reads a local client path and writes it under the configured remote SFTP root. Download reads a remote path and writes it to an absolute local client path.
@@ -832,6 +855,8 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'script_sandbox', description: TOOL_DESCRIPTIONS.script_sandbox, inputSchema: ScriptSandboxSchema, executionMode: 'registry', safeMode: 'allow', handler: handleScriptSandbox },
   { name: 'runshell', description: TOOL_DESCRIPTIONS.runshell, inputSchema: RunShellSchema, executionMode: 'registry', safeMode: 'block', handler: handleRunShell },
   { name: 'localbash', description: TOOL_DESCRIPTIONS.localbash, inputSchema: LocalBashSchema, executionMode: 'registry', safeMode: 'block', handler: handleLocalBash },
+  { name: 'android_permission', description: TOOL_DESCRIPTIONS.android_permission, inputSchema: AndroidPermissionSchema, executionMode: 'registry', safeMode: 'block', handler: handleAndroidPermission },
+  { name: 'android_adb', description: TOOL_DESCRIPTIONS.android_adb, inputSchema: AndroidAdbSchema, executionMode: 'registry', safeMode: 'block', handler: handleAndroidAdb },
   { name: 'sftp_transfer', description: TOOL_DESCRIPTIONS.sftp_transfer, inputSchema: SftpTransferSchema, executionMode: 'registry', safeMode: 'block', handler: handleSftpTransfer },
   { name: 'render_template', description: TOOL_DESCRIPTIONS.render_template, inputSchema: RenderTemplateSchema, executionMode: 'registry', safeMode: 'allow', handler: handleRenderTemplate },
   { name: 'send_developer_feedback', description: TOOL_DESCRIPTIONS.send_developer_feedback, inputSchema: SendDeveloperFeedbackSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSendDeveloperFeedback },

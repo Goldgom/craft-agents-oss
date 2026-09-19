@@ -37,6 +37,38 @@ export const CLIENT_RUN_SHELL = 'client:runShell'
 /** Capability: transfer a file between the client and its configured remote server over SFTP. */
 export const CLIENT_SFTP_TRANSFER = 'client:sftpTransfer'
 
+/** Capability: inspect or request an allowlisted Android runtime permission. */
+export const CLIENT_ANDROID_PERMISSION = 'client:android:permission'
+
+/** Capability: execute a user-confirmed command through the Android network ADB client. */
+export const CLIENT_ANDROID_ADB = 'client:android:adb'
+
+export interface AndroidPermissionRequest {
+  action: 'status' | 'request'
+  permission?: 'camera' | 'microphone' | 'notifications' | 'photos' | 'videos' | 'audio' | 'location' | 'contacts' | 'calendar'
+  reason?: string
+}
+
+export interface AndroidPermissionResult {
+  permissions: Array<{ key: string; status: 'granted' | 'denied' }>
+}
+
+export interface AndroidAdbRequest {
+  action: 'status' | 'shell'
+  command?: string
+  reason?: string
+}
+
+export interface AndroidAdbResult {
+  enabled?: boolean
+  host?: string
+  port?: number
+  requiresSystemPairing?: boolean
+  stdout?: string
+  exitCode?: number
+  truncated?: boolean
+}
+
 /** Request shape for CLIENT_RUN_SHELL. */
 export interface ClientShellRequest {
   command: string

@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "输入名称并选择工作区存储位置。",
   "workspace.creating": "正在创建...",
   "workspace.defaultLocation": "默认位置",
+  "workspace.firstWorkspaceDesc": "创建会话前需要先有一个工作区。为工作区命名后即可开始使用。",
+  "workspace.firstWorkspaceTitle": "创建你的第一个工作区",
   "workspace.loadingWorkspaces": "正在加载工作区...",
   "workspace.locationLabel": "位置",
   "workspace.myRemoteWorkspace": "我的远程工作区",

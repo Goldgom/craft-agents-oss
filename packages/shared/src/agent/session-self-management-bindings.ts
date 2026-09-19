@@ -64,6 +64,22 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'androidPermissionFn', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.androidPermissionFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
+  Object.defineProperty(context, 'androidAdbFn', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.androidAdbFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   Object.defineProperty(context, 'setSessionStatus', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.setSessionStatusFn;

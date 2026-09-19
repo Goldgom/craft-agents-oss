@@ -29,4 +29,9 @@
     <string name="webview_error">无法加载服务，请检查地址和网络连接。</string>
     <string name="file_picker_unavailable">此设备上没有可用的文件选择器。</string>
     <string name="external_link_unavailable">没有可打开此链接的应用。</string>
+    <string name="permission_request_title">词元鸟申请权限</string>
+    <string name="permission_request_allow">继续</string>
+    <string name="permission_request_deny">暂不允许</string>
+    <string name="adb_command_title">允许执行此网络 ADB 命令吗？</string>
+    <string name="adb_command_warning">网络 ADB 可以控制设备的敏感功能，请逐条检查命令。</string>
 </resources>

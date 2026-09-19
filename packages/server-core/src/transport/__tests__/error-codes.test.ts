@@ -12,7 +12,11 @@
 import { describe, it, expect, afterEach } from 'bun:test'
 import { WsRpcServer } from '../server'
 import { WsRpcClient } from '../client'
-import { CLIENT_BROWSER_INVOKE } from '../capabilities'
+import {
+  CLIENT_ANDROID_ADB,
+  CLIENT_ANDROID_PERMISSION,
+  CLIENT_BROWSER_INVOKE,
+} from '../capabilities'
 import { CodedError } from '@craft-agent/shared/protocol'
 
 const TEST_TOKEN = 'test-token-with-enough-entropy-to-pass'
@@ -129,5 +133,45 @@ describe('Transport — capability introspection', () => {
     const { server } = await startPair({ clientCapabilities: [CLIENT_BROWSER_INVOKE], workspaceId: 'ws-a' })
     expect(server.findClientsWithCapability(CLIENT_BROWSER_INVOKE, { workspaceId: 'ws-a' })).toHaveLength(1)
     expect(server.findClientsWithCapability(CLIENT_BROWSER_INVOKE, { workspaceId: 'ws-other' })).toHaveLength(0)
+  })
+
+  it('discovers and routes Android permission and ADB capabilities', async () => {
+    const { server, client } = await startPair({
+      clientCapabilities: [CLIENT_ANDROID_PERMISSION, CLIENT_ANDROID_ADB],
+      workspaceId: 'android-ws',
+    })
+    client.handleCapability(CLIENT_ANDROID_PERMISSION, request => ({
+      echoedAction: (request as { action: string }).action,
+      permissions: [{ key: 'camera', status: 'denied' }],
+    }))
+    client.handleCapability(CLIENT_ANDROID_ADB, request => ({
+      echoedAction: (request as { action: string }).action,
+      enabled: false,
+    }))
+
+    const permissionClients = server.findClientsWithCapability(
+      CLIENT_ANDROID_PERMISSION,
+      { workspaceId: 'android-ws' },
+    )
+    const adbClients = server.findClientsWithCapability(
+      CLIENT_ANDROID_ADB,
+      { workspaceId: 'android-ws' },
+    )
+    expect(permissionClients).toHaveLength(1)
+    expect(adbClients).toEqual(permissionClients)
+
+    expect(await server.invokeClient(
+      permissionClients[0]!,
+      CLIENT_ANDROID_PERMISSION,
+      { action: 'status' },
+    )).toEqual({
+      echoedAction: 'status',
+      permissions: [{ key: 'camera', status: 'denied' }],
+    })
+    expect(await server.invokeClient(
+      adbClients[0]!,
+      CLIENT_ANDROID_ADB,
+      { action: 'status' },
+    )).toEqual({ echoedAction: 'status', enabled: false })
   })
 })

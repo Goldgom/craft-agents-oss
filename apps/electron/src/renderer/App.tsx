@@ -512,23 +512,6 @@ export default function App() {
       })
   }, [])
 
-  useEffect(() => {
-    if (!isAndroidEmbedded || !showGettingStartedGuide) return
-
-    const root = document.documentElement
-    const handleAndroidBack = (event: Event) => {
-      event.preventDefault()
-      handleGettingStartedComplete()
-    }
-
-    root.classList.add('getting-started-guide-open')
-    window.addEventListener('craft-agent-android-back', handleAndroidBack)
-    return () => {
-      root.classList.remove('getting-started-guide-open')
-      window.removeEventListener('craft-agent-android-back', handleAndroidBack)
-    }
-  }, [handleGettingStartedComplete, isAndroidEmbedded, showGettingStartedGuide])
-
   // Apply theme via hook (injects CSS variables)
   // shikiTheme is passed to ShikiThemeProvider to ensure correct syntax highlighting
   // theme for dark-only themes in light system mode
@@ -788,23 +771,25 @@ export default function App() {
 
   // Handle onboarding completion
   const handleOnboardingComplete = useCallback(async () => {
+    let nextWorkspaceId: string | null = null
     try {
       // Reload workspaces after onboarding
       const ws = await window.electronAPI.getWorkspaces()
-      if (ws.length > 0) {
+      const availableWorkspaces = applyWorkspaceFilter(ws)
+      applyAndSetWorkspaces(ws)
+      if (availableWorkspaces.length > 0) {
+        nextWorkspaceId = availableWorkspaces[0].id
         // Switch to workspace in-place (no window close/reopen)
-        await window.electronAPI.switchWorkspace(ws[0].id)
-        setWindowWorkspaceId(ws[0].id)
-        applyAndSetWorkspaces(ws)
-      } else {
-        applyAndSetWorkspaces(ws)
+        await window.electronAPI.switchWorkspace(nextWorkspaceId)
+        setWindowWorkspaceId(nextWorkspaceId)
       }
     } catch (error) {
       console.error('[App] Failed to load workspaces after onboarding:', error)
-      // Still transition to ready — the app can recover via reconnect
+      // Do not enter the main UI without a usable workspace. The picker can
+      // retry the server request and gives the user a clear recovery path.
     }
-    setAppState('ready')
-  }, [applyAndSetWorkspaces])
+    setAppState(resolveAuthGatedAppState(true, nextWorkspaceId))
+  }, [applyAndSetWorkspaces, applyWorkspaceFilter, setWindowWorkspaceId])
 
   // Onboarding hook — onConfigSaved fires immediately when billing is saved,
   // ensuring connection state updates before the wizard closes.

@@ -24,21 +24,6 @@ import {
 } from 'lucide-react'
 import { navigate, routes } from '../../electron/src/renderer/lib/navigate'
 import type { Workspace } from '../../electron/src/shared/types'
-
-type AndroidBridge = {
-  reload: () => void
-  configureServer: () => void
-  dismissKeyboard: () => void
-  getOAuthCallbackUrl: () => string
-  openTokenNestOAuth: (url: string) => void
-}
-
-declare global {
-  interface Window {
-    CraftAgentAndroid?: AndroidBridge
-  }
-}
-
 function isAndroidApp() {
   return new URLSearchParams(window.location.search).get('embedded') === 'android'
     && Boolean(window.CraftAgentAndroid)

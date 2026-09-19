@@ -167,45 +167,6 @@ html[data-mobile-app="android"] .h-screen {
   height: var(--app-viewport-height, 100dvh) !important;
 }
 
-/* The one-time product guide uses a centered desktop dialog. Some Android
-   WebViews do not retain Tailwind's percentage translate in the WebUI bundle,
-   leaving its left edge at 50% of the screen. Make this Android-only surface
-   a full-screen, two-row sheet so content scrolls while its action stays
-   reachable on short and low-resolution devices. */
-html[data-mobile-app="android"] [data-getting-started-guide] {
-  inset: 0 !important;
-  width: 100% !important;
-  height: var(--app-viewport-height, 100dvh) !important;
-  max-width: none !important;
-  max-height: var(--app-viewport-height, 100dvh) !important;
-  transform: none !important;
-  grid-template-rows: minmax(0, 1fr) auto;
-  overflow: hidden !important;
-  /* WebView 101 does not understand the shared OKLCH background token. Use
-     the native shell's equivalent solid color so the app beneath cannot show
-     through this full-screen surface. */
-  background: rgb(16, 17, 20) !important;
-  border: 0;
-  border-radius: 0;
-}
-
-html[data-mobile-app="android"] [data-getting-started-guide-scroll] {
-  min-height: 0;
-  overflow-x: hidden !important;
-  overflow-y: auto !important;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-html[data-mobile-app="android"] [data-getting-started-guide] [data-slot="dialog-footer"] {
-  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
-}
-
-html[data-mobile-app="android"].getting-started-guide-open .mobile-controls,
-html[data-mobile-app="android"].getting-started-guide-open .mobile-app-menu {
-  display: none !important;
-}
-
 .mobile-app-menu {
   position: fixed;
   inset: 0;

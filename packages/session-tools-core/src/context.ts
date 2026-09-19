@@ -212,6 +212,16 @@ export interface SessionToolContext {
   /** Transfer files through the connected desktop client's configured SFTP profile. */
   transferSftpFileFn?: (args: SftpTransferArgs) => Promise<SftpTransferResult>;
 
+  /** Ask the connected Android client to report or request an allowlisted runtime permission. */
+  androidPermissionFn?: (
+    args: import('./handlers/android-device.ts').AndroidPermissionArgs,
+  ) => Promise<unknown>;
+
+  /** Query or invoke the connected Android client's user-confirmed network ADB bridge. */
+  androidAdbFn?: (
+    args: import('./handlers/android-device.ts').AndroidAdbArgs,
+  ) => Promise<unknown>;
+
   /** Path to sources folder within workspace */
   get sourcesPath(): string;
 

@@ -1,6 +1,6 @@
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
-import { CLIENT_BROWSER_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
-import { executeShell, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
+import { CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
+import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
@@ -1628,6 +1628,16 @@ export class SessionManager implements ISessionManager {
       { workspaceId: session.workspace.id },
     )
     return candidates[0] ?? null
+  }
+
+  private getAndroidClient(sid: string, capability: string): string | null {
+    if (!this.rpcServer) return null
+    const session = this.sessions.get(sid)
+    if (!session) return null
+    return this.rpcServer.findClientsWithCapability(
+      capability,
+      { workspaceId: session.workspace.id },
+    )[0] ?? null
   }
 
   /** Returns a strictly increasing timestamp (ms). When Date.now() collides with
@@ -4743,6 +4753,30 @@ export class SessionManager implements ISessionManager {
             10 * 60_000,
             args,
           ) as ClientSftpTransferResult
+        },
+        androidPermissionFn: async (args: AndroidPermissionArgs): Promise<unknown> => {
+          const clientId = this.getAndroidClient(managed.id, CLIENT_ANDROID_PERMISSION)
+          if (!clientId || !this.rpcServer) {
+            throw new Error('No connected Android client provides permission management')
+          }
+          return await this.rpcServer.invokeClientWithTimeout!(
+            clientId,
+            CLIENT_ANDROID_PERMISSION,
+            135_000,
+            args,
+          )
+        },
+        androidAdbFn: async (args: AndroidAdbArgs): Promise<unknown> => {
+          const clientId = this.getAndroidClient(managed.id, CLIENT_ANDROID_ADB)
+          if (!clientId || !this.rpcServer) {
+            throw new Error('No connected Android client provides network ADB')
+          }
+          return await this.rpcServer.invokeClientWithTimeout!(
+            clientId,
+            CLIENT_ANDROID_ADB,
+            135_000,
+            args,
+          )
         },
         setSessionLabelsFn: async (sessionId: string | undefined, labels: string[]) => {
           await this.setSessionLabels(sessionId ?? managed.id, labels)

@@ -15,6 +15,18 @@ import { WsRpcClient } from '../../../electron/src/transport/client'
 import { buildClientApi } from '../../../electron/src/transport/build-api'
 import { CHANNEL_MAP } from '../../../electron/src/transport/channel-map'
 import type { ElectronAPI, TransportConnectionState } from '../../../electron/src/shared/types'
+import {
+  CLIENT_ANDROID_ADB,
+  CLIENT_ANDROID_PERMISSION,
+  type AndroidAdbRequest,
+  type AndroidPermissionRequest,
+} from '@craft-agent/server-core/transport'
+import {
+  invokeAndroidNative,
+  parseAndroidJson,
+  type AndroidPermissionSnapshot,
+  type NetworkAdbConfig,
+} from '../../../electron/src/shared/android-native'
 
 // ---------------------------------------------------------------------------
 // Web file picker (replaces native Electron dialog)
@@ -119,14 +131,59 @@ export function createWebApi(options: WebApiOptions): {
   // Keep it in sync locally so components mounted after the Android workspace
   // picker (such as the floating switcher) see the selected workspace.
   let activeWorkspaceId = workspaceId
+  const androidBridge = window.CraftAgentAndroid
+  const androidCapabilities = androidBridge
+    ? [CLIENT_ANDROID_PERMISSION, CLIENT_ANDROID_ADB]
+    : []
 
   const client = new WsRpcClient(serverUrl, {
     workspaceId,
     token,
     autoReconnect: true,
     mode: 'remote',
+    clientCapabilities: androidCapabilities,
     // No token — auth is via session cookie sent on WebSocket upgrade
   })
+
+  if (androidBridge) {
+    client.handleCapability(CLIENT_ANDROID_PERMISSION, async (request: AndroidPermissionRequest) => {
+      if (request.action === 'status') {
+        return parseAndroidJson<AndroidPermissionSnapshot>(
+          androidBridge.getPermissionSnapshot(),
+          { permissions: [] },
+        )
+      }
+      if (!request.permission) throw new Error('permission is required')
+      return await invokeAndroidNative<AndroidPermissionSnapshot>(
+        'craft-agent:android-permission-result',
+        requestId => androidBridge.requestPermission(
+          requestId,
+          request.permission!,
+          request.reason ?? 'AI needs this permission to complete the requested work.',
+        ),
+      )
+    })
+
+    client.handleCapability(CLIENT_ANDROID_ADB, async (request: AndroidAdbRequest) => {
+      if (request.action === 'status') {
+        return parseAndroidJson<NetworkAdbConfig>(androidBridge.getNetworkAdbConfig(), {
+          enabled: false,
+          host: '',
+          port: 0,
+          requiresSystemPairing: true,
+        })
+      }
+      if (!request.command) throw new Error('command is required')
+      return await invokeAndroidNative(
+        'craft-agent:android-adb-result',
+        requestId => androidBridge.runNetworkAdbCommand(
+          requestId,
+          request.command!,
+          request.reason ?? 'AI requested this command to complete the current task.',
+        ),
+      )
+    })
+  }
 
   // Build the API proxy from the same channel map the Electron app uses
   const baseApi = buildClientApi(

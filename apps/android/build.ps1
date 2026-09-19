@@ -76,15 +76,33 @@ try {
     if (Test-Path $serverAssetRoot) { Remove-Item -Recurse -Force $serverAssetRoot }
     New-Item -ItemType Directory -Force $serverAssetRoot | Out-Null
 
-    # Bundle the headless server into one JS file. sharp and markitdown-js are
-    # deliberately external: both depend on desktop/native components and are
-    # loaded only when the corresponding optional image/document feature is
-    # used. The Claude Agent SDK JavaScript is bundled here as well; its native
-    # executable is NOT bundled (the glibc Linux binary cannot run on Android's
-    # bionic libc) — local Claude agent turns are unsupported on-device.
-    $serverEntry = Join-Path $serverAssetRoot "server.js"
-    & bun build --target=bun --external=markitdown-js --external=sharp --outfile=$serverEntry (Join-Path $projectRoot "packages\server\src\index.ts")
+    # Keep the Android startup graph split into small ESM chunks. Loading the
+    # previous 20+ MB single-file bundle can leave Bun compiling indefinitely
+    # on some Android 12 vendor runtimes before the first JS statement runs.
+    # Messaging is disabled in local Android mode, and Claude Code has no
+    # Android native executable, so neither dependency belongs in the APK's
+    # eager server graph.
+    & bun build `
+        --target=bun `
+        --format=esm `
+        --splitting `
+        --external=markitdown-js `
+        --external=sharp `
+        --external=@craft-agent/messaging-gateway `
+        --external=@anthropic-ai/claude-agent-sdk `
+        --entry-naming=server.js `
+        --chunk-naming=chunks/[name]-[hash].[ext] `
+        --outdir=$serverAssetRoot `
+        (Join-Path $projectRoot "packages\server\src\index.ts")
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    # Static imports still reference the Claude SDK even though Android rejects
+    # Claude sessions before use. Resolve those imports to a tiny fail-fast ESM
+    # shim instead of parsing and shipping the 1.8 MB desktop SDK.
+    $claudeStubSource = Join-Path $androidRoot "runtime-stubs\anthropic-claude-agent-sdk"
+    $claudeStubDest = Join-Path $serverAssetRoot "node_modules\@anthropic-ai\claude-agent-sdk"
+    New-Item -ItemType Directory -Force (Split-Path -Parent $claudeStubDest) | Out-Null
+    Copy-Item -LiteralPath $claudeStubSource -Destination $claudeStubDest -Recurse -Force
 
     $resourceRoot = Join-Path $serverAssetRoot "resources"
     New-Item -ItemType Directory -Force $resourceRoot | Out-Null
@@ -151,6 +169,27 @@ try {
     }
     if (-not (Test-Path $bunSource)) { throw "Bun Android runtime archive did not contain $bunSource." }
     Copy-Item $bunSource $bunRuntime -Force
+
+    # Bun probes close_range(2) during startup. A few Android 12 vendor
+    # seccomp profiles (including vivo PD1981) kill that syscall instead of
+    # returning ENOSYS, so Bun never reaches its fallback. Build a tiny
+    # LD_PRELOAD compatibility library that rejects only close_range before it
+    # reaches the kernel. LocalAgentServer loads it for the Bun child process.
+    $ndkRoot = Join-Path $sdkRoot "ndk"
+    $ndk = Get-ChildItem -LiteralPath $ndkRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object { [version]$_.Name } -Descending |
+        Select-Object -First 1
+    if (-not $ndk) {
+        throw "Android NDK is required to build the Bun seccomp compatibility library. Install it with sdkmanager 'ndk;28.2.13676358'."
+    }
+    $androidClang = Join-Path $ndk.FullName "toolchains\llvm\prebuilt\windows-x86_64\bin\aarch64-linux-android28-clang.cmd"
+    if (-not (Test-Path $androidClang)) {
+        throw "Android ARM64 compiler not found at $androidClang."
+    }
+    $compatSource = Join-Path $androidRoot "runtime\bun-seccomp-compat.c"
+    $compatRuntime = Join-Path $jniRoot "libbun_seccomp_compat.so"
+    & $androidClang -shared -fPIC -O2 -Wall -Wextra -Werror -o $compatRuntime $compatSource
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Output "Bundled Bun $bunAndroidVersion supports local mode on Android API 28 and newer; API 26/27 remain supported in remote mode."
 } finally {
     Pop-Location

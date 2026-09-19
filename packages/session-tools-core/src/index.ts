@@ -234,6 +234,8 @@ export {
   ScriptSandboxSchema,
   RunShellSchema,
   LocalBashSchema,
+  AndroidPermissionSchema,
+  AndroidAdbSchema,
   SftpTransferSchema,
   RenderTemplateSchema,
   // Browser tool schema
@@ -268,6 +270,8 @@ export {
   // JSON Schema converter
   getToolDefsAsJsonSchema,
 } from './tool-defs.ts';
+
+export type { AndroidPermissionArgs, AndroidAdbArgs } from './handlers/android-device.ts';
 
 export type {
   SessionToolExecutionMode,

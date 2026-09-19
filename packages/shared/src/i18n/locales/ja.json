@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "名前を入力し、Workspaceの保存場所を選択してください。",
   "workspace.creating": "作成中...",
   "workspace.defaultLocation": "デフォルトの場所",
+  "workspace.firstWorkspaceDesc": "セッションを作成するには、先にWorkspaceが必要です。名前を付けて開始してください。",
+  "workspace.firstWorkspaceTitle": "最初のWorkspaceを作成",
   "workspace.loadingWorkspaces": "ワークスペースを読み込み中...",
   "workspace.locationLabel": "場所",
   "workspace.myRemoteWorkspace": "My Remote Workspace",

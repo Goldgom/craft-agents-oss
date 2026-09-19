@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "Entrez un nom et choisissez où stocker votre espace de travail.",
   "workspace.creating": "Création...",
   "workspace.defaultLocation": "Emplacement par défaut",
+  "workspace.firstWorkspaceDesc": "Un espace de travail est nécessaire avant de créer une session. Donnez-lui un nom pour commencer.",
+  "workspace.firstWorkspaceTitle": "Créez votre premier espace de travail",
   "workspace.loadingWorkspaces": "Chargement des espaces de travail...",
   "workspace.locationLabel": "Emplacement",
   "workspace.myRemoteWorkspace": "Mon espace de travail à distance",

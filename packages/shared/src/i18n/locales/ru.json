@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "Введите имя и выберите, где хранить ваше рабочее пространство.",
   "workspace.creating": "Создание...",
   "workspace.defaultLocation": "Местоположение по умолчанию",
+  "workspace.firstWorkspaceDesc": "Перед созданием сессии необходимо создать рабочую область. Задайте ей имя, чтобы начать.",
+  "workspace.firstWorkspaceTitle": "Создайте первую рабочую область",
   "workspace.loadingWorkspaces": "Загрузка рабочих пространств...",
   "workspace.locationLabel": "Расположение",
   "workspace.myRemoteWorkspace": "Мое удаленное рабочее место",

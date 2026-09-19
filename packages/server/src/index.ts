@@ -37,11 +37,6 @@ import { getWorkspaces } from '@craft-agent/shared/config'
 import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import type { MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
 
-// --generate-token: print a crypto-random token and exit
-if (process.argv.includes('--generate-token')) {
-  console.log(generateServerToken())
-  process.exit(0)
-}
 import type { WsRpcTlsOptions } from '@craft-agent/server-core/transport'
 import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient } from '@craft-agent/server-core/handlers/rpc'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
@@ -49,6 +44,13 @@ import { initModelRefreshService, setFetcherPlatform } from '@craft-agent/server
 import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/services'
 import type { HandlerDeps } from '@craft-agent/server-core/handlers'
 import type { ServerInstance } from '@craft-agent/server-core/bootstrap'
+
+async function main(): Promise<void> {
+// --generate-token: print a crypto-random token and exit
+if (process.argv.includes('--generate-token')) {
+  console.log(generateServerToken())
+  process.exit(0)
+}
 
 process.env.CRAFT_IS_PACKAGED ??= 'false'
 const minimalServer = process.env.CRAFT_MINIMAL_SERVER === 'true' || process.env.CRAFT_MINIMAL_SERVER === '1'
@@ -388,3 +390,9 @@ if (!isLocalBind && instance.protocol === 'ws') {
 
 process.on('SIGINT', () => { void shutdown() })
 process.on('SIGTERM', () => { void shutdown() })
+}
+
+void main().catch((error) => {
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error))
+  process.exit(1)
+})

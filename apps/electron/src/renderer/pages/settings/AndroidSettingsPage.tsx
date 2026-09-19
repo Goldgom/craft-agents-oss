@@ -1,15 +1,43 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, RefreshCw, SlidersHorizontal, Sparkles, Wifi } from 'lucide-react'
+import {
+  Bell,
+  CalendarDays,
+  Camera,
+  ChevronLeft,
+  Contact,
+  ExternalLink,
+  Film,
+  Images,
+  MapPin,
+  Mic,
+  Music,
+  RefreshCw,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  TerminalSquare,
+  Wifi,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { navigate, routes } from '@/lib/navigate'
-
-type AndroidBridge = {
-  configureServer?: () => void
-  reload?: () => void
-}
+import {
+  invokeAndroidNative,
+  parseAndroidJson,
+  type AndroidBridge,
+  type AndroidPermissionKey,
+  type AndroidPermissionSnapshot,
+  type NetworkAdbConfig,
+} from '../../../shared/android-native'
 
 function androidBridge(): AndroidBridge | undefined {
   return (window as Window & { CraftAgentAndroid?: AndroidBridge }).CraftAgentAndroid
+}
+
+const DEFAULT_ADB_CONFIG: NetworkAdbConfig = {
+  enabled: false,
+  host: '127.0.0.1',
+  port: 5555,
+  requiresSystemPairing: true,
 }
 
 /**
@@ -22,6 +50,10 @@ function androidBridge(): AndroidBridge | undefined {
 export default function AndroidSettingsPage() {
   const [serverConfig, setServerConfig] = useState<string>('本地服务器')
   const [thinkingLevel, setThinkingLevel] = useState<string>('加载中…')
+  const [permissionSnapshot, setPermissionSnapshot] = useState<AndroidPermissionSnapshot>({ permissions: [] })
+  const [requestingPermission, setRequestingPermission] = useState<AndroidPermissionKey | null>(null)
+  const [adbConfig, setAdbConfig] = useState<NetworkAdbConfig>(DEFAULT_ADB_CONFIG)
+  const [adbMessage, setAdbMessage] = useState('')
 
   useEffect(() => {
     const loadServerConfig = async () => {
@@ -47,7 +79,84 @@ export default function AndroidSettingsPage() {
     window.electronAPI.getDefaultThinkingLevel?.()
       .then((level: any) => setThinkingLevel(String(level)))
       .catch(() => setThinkingLevel('默认'))
+
+    const bridge = androidBridge()
+    if (bridge) {
+      setPermissionSnapshot(parseAndroidJson(bridge.getPermissionSnapshot(), { permissions: [] }))
+      setAdbConfig(parseAndroidJson(bridge.getNetworkAdbConfig(), DEFAULT_ADB_CONFIG))
+    }
   }, [])
+
+  const permissionItems: Array<{
+    key: AndroidPermissionKey
+    label: string
+    description: string
+    icon: typeof Camera
+  }> = [
+    { key: 'camera', label: '相机', description: '拍摄照片、扫描资料', icon: Camera },
+    { key: 'microphone', label: '麦克风', description: '语音输入与录音任务', icon: Mic },
+    { key: 'notifications', label: '通知', description: '任务完成与后台提醒', icon: Bell },
+    { key: 'photos', label: '照片', description: '读取用户允许的图片', icon: Images },
+    { key: 'videos', label: '视频', description: '读取用户允许的视频', icon: Film },
+    { key: 'audio', label: '音频', description: '读取设备上的音频媒体', icon: Music },
+    { key: 'location', label: '位置', description: '需要地点上下文的任务', icon: MapPin },
+    { key: 'contacts', label: '联系人', description: '读取通讯录前仍需明确用途', icon: Contact },
+    { key: 'calendar', label: '日历', description: '读取或写入日程', icon: CalendarDays },
+  ]
+
+  const refreshPermissions = () => {
+    const bridge = androidBridge()
+    if (!bridge) return
+    setPermissionSnapshot(parseAndroidJson(bridge.getPermissionSnapshot(), { permissions: [] }))
+  }
+
+  const requestPermission = async (key: AndroidPermissionKey, label: string) => {
+    const bridge = androidBridge()
+    if (!bridge || requestingPermission) return
+    setRequestingPermission(key)
+    try {
+      await invokeAndroidNative<AndroidPermissionSnapshot>(
+        'craft-agent:android-permission-result',
+        requestId => bridge.requestPermission(requestId, key, `你正在权限管理中启用“${label}”权限。`),
+      )
+    } catch {
+      // Native Android already showed the authoritative result to the user.
+    } finally {
+      refreshPermissions()
+      setRequestingPermission(null)
+    }
+  }
+
+  const saveAdb = () => {
+    const bridge = androidBridge()
+    if (!bridge) return
+    const result = parseAndroidJson<{ success: boolean; error?: string; config?: NetworkAdbConfig }>(
+      bridge.setNetworkAdbConfig(adbConfig.host, adbConfig.port, adbConfig.enabled),
+      { success: false, error: '保存失败' },
+    )
+    if (result.success && result.config) {
+      setAdbConfig(result.config)
+      setAdbMessage('网络 ADB 配置已保存')
+    } else {
+      setAdbMessage(result.error ?? '网络 ADB 配置无效')
+    }
+  }
+
+  const testAdb = async () => {
+    const bridge = androidBridge()
+    if (!bridge) return
+    setAdbMessage('正在连接…')
+    try {
+      const result = await invokeAndroidNative<{ stdout?: string }>(
+        'craft-agent:android-adb-result',
+        requestId => bridge.testNetworkAdb(requestId),
+        40_000,
+      )
+      setAdbMessage(result.stdout?.includes('tokenbird-adb-ready') ? '连接成功' : '已连接，但返回内容异常')
+    } catch (error) {
+      setAdbMessage(error instanceof Error ? error.message : '连接失败')
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -118,6 +227,101 @@ export default function AndroidSettingsPage() {
               <span className="min-w-0 flex-1 text-[15px]">默认思考级别</span>
               <span className="text-sm text-muted-foreground">{thinkingLevel}</span>
             </div>
+          </div>
+        </section>
+
+        <section className="mb-5">
+          <h2 className="mb-2 px-1 text-xs font-medium tracking-wide text-muted-foreground">权限管理</h2>
+          <div className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-xs">
+            <div className="flex items-start gap-3 border-b border-border/50 px-4 py-4">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-emerald-500/10 text-emerald-500"><ShieldCheck className="size-5" /></span>
+              <div>
+                <p className="text-[15px] font-medium">按需授权</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">AI 只能申请下列白名单权限；Android 会显示系统确认框，拒绝后任务不会绕过授权。</p>
+              </div>
+            </div>
+            {permissionItems.map(({ key, label, description, icon: Icon }, index) => {
+              const granted = permissionSnapshot.permissions.find(item => item.key === key)?.status === 'granted'
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`flex min-h-[68px] w-full items-center gap-3 px-4 text-left active:bg-foreground/5 ${index > 0 ? 'border-t border-border/50' : ''}`}
+                  disabled={granted || requestingPermission !== null}
+                  onClick={() => void requestPermission(key, label)}
+                >
+                  <Icon className="size-5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px]">{label}</span>
+                    <span className="block text-xs text-muted-foreground">{description}</span>
+                  </span>
+                  <span className={granted ? 'text-xs text-emerald-500' : 'text-xs text-muted-foreground'}>
+                    {granted ? '已允许' : requestingPermission === key ? '等待确认…' : '申请'}
+                  </span>
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              className="flex min-h-[58px] w-full items-center gap-3 border-t border-border/50 px-4 text-left active:bg-foreground/5"
+              onClick={() => androidBridge()?.openApplicationSettings()}
+            >
+              <ExternalLink className="size-5 text-muted-foreground" />
+              <span className="flex-1 text-[15px]">打开 Android 应用权限设置</span>
+              <span className="text-muted-foreground">›</span>
+            </button>
+          </div>
+        </section>
+
+        <section className="mb-5">
+          <h2 className="mb-2 px-1 text-xs font-medium tracking-wide text-muted-foreground">高级功能</h2>
+          <div className="overflow-hidden rounded-2xl border border-amber-500/25 bg-card shadow-xs">
+            <div className="flex items-start gap-3 border-b border-border/50 px-4 py-4">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-amber-500/10 text-amber-500"><TerminalSquare className="size-5" /></span>
+              <div>
+                <p className="text-[15px] font-medium">网络 ADB</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">仅供高级用户。请先在系统中完成无线调试或 TCP ADB 授权；AI 每次执行命令仍需你单独确认。</p>
+              </div>
+            </div>
+            <label className="flex min-h-[58px] items-center gap-3 px-4">
+              <span className="flex-1 text-[15px]">允许 TokenBird 使用网络 ADB</span>
+              <input
+                type="checkbox"
+                checked={adbConfig.enabled}
+                onChange={event => setAdbConfig(config => ({ ...config, enabled: event.target.checked }))}
+                className="size-5 accent-primary"
+              />
+            </label>
+            <div className="grid grid-cols-[1fr_96px] gap-2 border-t border-border/50 px-4 py-3">
+              <input
+                value={adbConfig.host}
+                onChange={event => setAdbConfig(config => ({ ...config, host: event.target.value }))}
+                placeholder="127.0.0.1"
+                className="h-11 min-w-0 rounded-xl border border-border bg-transparent px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+              />
+              <input
+                value={adbConfig.port}
+                type="number"
+                min={1}
+                max={65535}
+                onChange={event => setAdbConfig(config => ({ ...config, port: Number(event.target.value) }))}
+                className="h-11 rounded-xl border border-border bg-transparent px-3 text-sm outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2 border-t border-border/50 px-4 py-3">
+              <Button variant="outline" onClick={saveAdb}>保存配置</Button>
+              <Button variant="outline" disabled={!adbConfig.enabled} onClick={() => void testAdb()}>测试连接</Button>
+            </div>
+            {adbMessage && <p className="px-4 pb-3 text-xs text-muted-foreground">{adbMessage}</p>}
+            <button
+              type="button"
+              className="flex min-h-[58px] w-full items-center gap-3 border-t border-border/50 px-4 text-left active:bg-foreground/5"
+              onClick={() => androidBridge()?.openWirelessDebuggingSettings()}
+            >
+              <Wifi className="size-5 text-muted-foreground" />
+              <span className="flex-1 text-[15px]">打开系统无线调试设置</span>
+              <ExternalLink className="size-4 text-muted-foreground" />
+            </button>
           </div>
         </section>
 

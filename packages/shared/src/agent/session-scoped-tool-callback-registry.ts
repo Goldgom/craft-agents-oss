@@ -104,6 +104,16 @@ export interface SessionScopedToolCallbacks {
     args: import('@craft-agent/session-tools-core').SftpTransferArgs,
   ) => Promise<import('@craft-agent/session-tools-core').SftpTransferResult>;
 
+  /** Connected Android client's allowlisted runtime permission bridge. */
+  androidPermissionFn?: (
+    args: import('@craft-agent/session-tools-core').AndroidPermissionArgs,
+  ) => Promise<unknown>;
+
+  /** Connected Android client's opt-in, per-command-confirmed network ADB bridge. */
+  androidAdbFn?: (
+    args: import('@craft-agent/session-tools-core').AndroidAdbArgs,
+  ) => Promise<unknown>;
+
   /** Set labels on a session (defaults to current). */
   setSessionLabelsFn?: (sessionId: string | undefined, labels: string[]) => void | Promise<void>;
   /** Set status on a session (defaults to current). */

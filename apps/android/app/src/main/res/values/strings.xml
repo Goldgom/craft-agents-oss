@@ -29,4 +29,9 @@
     <string name="webview_error">Unable to load the server. Check the URL and connection.</string>
     <string name="file_picker_unavailable">No compatible file picker is available on this device.</string>
     <string name="external_link_unavailable">No app is available to open this link.</string>
+    <string name="permission_request_title">TokenBird requests permission</string>
+    <string name="permission_request_allow">Continue</string>
+    <string name="permission_request_deny">Not now</string>
+    <string name="adb_command_title">Allow this network ADB command?</string>
+    <string name="adb_command_warning">Network ADB can control sensitive parts of this device. Review every command carefully.</string>
 </resources>

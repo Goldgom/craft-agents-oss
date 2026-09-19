@@ -1,11 +1,14 @@
 package com.craftagents.mobile;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Insets;
@@ -15,6 +18,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -41,12 +45,16 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.util.SparseArray;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -60,6 +68,9 @@ public final class MainActivity extends Activity {
     private static final String LOCAL_SERVER_TOKEN_KEY = "local_server_token";
     private static final String REMOTE_SERVER_URL_KEY = "remote_server_url";
     private static final String REMOTE_SERVER_TOKEN_KEY = "remote_server_token";
+    private static final String ADB_ENABLED_KEY = "network_adb_enabled";
+    private static final String ADB_HOST_KEY = "network_adb_host";
+    private static final String ADB_PORT_KEY = "network_adb_port";
     private static final String DEFAULT_LOCAL_SERVER_URL = "ws://127.0.0.1:9100";
     private static final int COLOR_BACKGROUND = Color.rgb(16, 17, 20);
     private static final int COLOR_SURFACE = Color.rgb(25, 27, 32);
@@ -69,6 +80,7 @@ public final class MainActivity extends Activity {
     private static final int COLOR_MUTED = Color.rgb(164, 169, 180);
     private static final int COLOR_ACCENT = Color.rgb(99, 102, 241);
     private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
+    private static final int PERMISSION_REQUEST_CODE_START = 4100;
     private static final String ANDROID_BACK_SCRIPT =
             "(function(){"
                     + "var guideOpen=!!document.querySelector('[data-getting-started-guide]');"
@@ -120,12 +132,26 @@ public final class MainActivity extends Activity {
     private int imeBottomInset;
     private ValueCallback<Uri[]> pendingFileChooser;
     private OnBackInvokedCallback backInvokedCallback;
+    private final AtomicInteger permissionRequestCode = new AtomicInteger(PERMISSION_REQUEST_CODE_START);
+    private final SparseArray<PendingPermissionRequest> pendingPermissionRequests = new SparseArray<>();
+    private AdbClient adbClient;
+
+    private static final class PendingPermissionRequest {
+        final String requestId;
+        final String permissionKey;
+
+        PendingPermissionRequest(String requestId, String permissionKey) {
+            this.requestId = requestId;
+            this.permissionKey = permissionKey;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         localAgentServer = new LocalAgentServer(this);
+        adbClient = new AdbClient(this);
         migrateLegacyServerProfile();
         buildUi();
         registerBackHandler();
@@ -845,6 +871,259 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private String[] permissionsForKey(String key) {
+        if (key == null) return null;
+        switch (key) {
+            case "camera":
+                return new String[]{Manifest.permission.CAMERA};
+            case "microphone":
+                return new String[]{Manifest.permission.RECORD_AUDIO};
+            case "notifications":
+                return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        ? new String[]{Manifest.permission.POST_NOTIFICATIONS}
+                        : new String[0];
+            case "location":
+                return new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION};
+            case "contacts":
+                return new String[]{Manifest.permission.READ_CONTACTS};
+            case "calendar":
+                return new String[]{Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR};
+            case "photos":
+                if (Build.VERSION.SDK_INT >= 34) {
+                    return new String[]{Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED};
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    return new String[]{Manifest.permission.READ_MEDIA_IMAGES};
+                }
+                return new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
+            case "videos":
+                if (Build.VERSION.SDK_INT >= 34) {
+                    return new String[]{Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED};
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    return new String[]{Manifest.permission.READ_MEDIA_VIDEO};
+                }
+                return new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
+            case "audio":
+                return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        ? new String[]{Manifest.permission.READ_MEDIA_AUDIO}
+                        : new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
+            default:
+                return null;
+        }
+    }
+
+    private boolean hasAllPermissions(String[] permissions) {
+        if (permissions == null) return false;
+        for (String permission : permissions) {
+            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return false;
+        }
+        return true;
+    }
+
+    private boolean hasPermissionKey(String key) {
+        if ("location".equals(key)) {
+            return checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        }
+        if (Build.VERSION.SDK_INT >= 34 && ("photos".equals(key) || "videos".equals(key))) {
+            String fullPermission = "photos".equals(key)
+                    ? Manifest.permission.READ_MEDIA_IMAGES
+                    : Manifest.permission.READ_MEDIA_VIDEO;
+            return checkSelfPermission(fullPermission) == PackageManager.PERMISSION_GRANTED
+                    || checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED;
+        }
+        return hasAllPermissions(permissionsForKey(key));
+    }
+
+    private String permissionSnapshotJson() {
+        String[] keys = {"camera", "microphone", "notifications", "photos", "videos", "audio", "location", "contacts", "calendar"};
+        JSONArray entries = new JSONArray();
+        for (String key : keys) {
+            String[] permissions = permissionsForKey(key);
+            JSONObject entry = new JSONObject();
+            try {
+                entry.put("key", key);
+                entry.put("status", permissions != null && hasPermissionKey(key) ? "granted" : "denied");
+            } catch (Exception ignored) {
+                // Fixed keys and primitive values cannot fail JSON encoding.
+            }
+            entries.put(entry);
+        }
+        JSONObject result = new JSONObject();
+        try {
+            result.put("permissions", entries);
+        } catch (Exception ignored) {}
+        return result.toString();
+    }
+
+    private void requestPermissionFromBridge(String requestId, String permissionKey, String reason) {
+        String[] permissions = permissionsForKey(permissionKey);
+        if (permissions == null) {
+            dispatchNativeResult("craft-agent:android-permission-result", requestId,
+                    false, "unsupported_permission", "Unsupported Android permission", null);
+            return;
+        }
+        if (hasPermissionKey(permissionKey)) {
+            dispatchNativeResult("craft-agent:android-permission-result", requestId,
+                    true, null, null, permissionSnapshotJson());
+            return;
+        }
+        String safeReason = reason == null || reason.trim().isEmpty()
+                ? "AI needs this permission to complete the requested work."
+                : reason.trim().substring(0, Math.min(reason.trim().length(), 300));
+        runOnUiThread(() -> new AlertDialog.Builder(this)
+                .setTitle(R.string.permission_request_title)
+                .setMessage(safeReason + "\n\nPermission: " + permissionKey)
+                .setNegativeButton(R.string.permission_request_deny, (dialog, which) ->
+                        dispatchNativeResult("craft-agent:android-permission-result", requestId,
+                                false, "user_denied", "User declined the permission request", null))
+                .setPositiveButton(R.string.permission_request_allow, (dialog, which) -> {
+                    if (permissions.length == 0) {
+                        dispatchNativeResult("craft-agent:android-permission-result", requestId,
+                                true, null, null, permissionSnapshotJson());
+                        return;
+                    }
+                    int code = permissionRequestCode.incrementAndGet();
+                    pendingPermissionRequests.put(code, new PendingPermissionRequest(requestId, permissionKey));
+                    requestPermissions(permissions, code);
+                })
+                .setOnCancelListener(dialog -> dispatchNativeResult(
+                        "craft-agent:android-permission-result", requestId,
+                        false, "user_cancelled", "User cancelled the permission request", null))
+                .show());
+    }
+
+    private boolean isValidAdbHost(String host) {
+        return host != null && host.length() <= 253
+                && host.matches("[A-Za-z0-9._:-]+")
+                && !host.startsWith("-") && !host.endsWith("-");
+    }
+
+    private String adbConfigJson() {
+        JSONObject result = new JSONObject();
+        try {
+            result.put("enabled", preferences.getBoolean(ADB_ENABLED_KEY, false));
+            result.put("host", preferences.getString(ADB_HOST_KEY, "127.0.0.1"));
+            result.put("port", preferences.getInt(ADB_PORT_KEY, 5555));
+            result.put("requiresSystemPairing", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R);
+        } catch (Exception ignored) {}
+        return result.toString();
+    }
+
+    private String saveAdbConfig(String host, int port, boolean enabled) {
+        JSONObject result = new JSONObject();
+        try {
+            if (!isValidAdbHost(host) || port < 1 || port > 65535) {
+                result.put("success", false);
+                result.put("error", "Enter a valid ADB host and port");
+                return result.toString();
+            }
+            preferences.edit()
+                    .putString(ADB_HOST_KEY, host.trim())
+                    .putInt(ADB_PORT_KEY, port)
+                    .putBoolean(ADB_ENABLED_KEY, enabled)
+                    .apply();
+            result.put("success", true);
+            result.put("config", new JSONObject(adbConfigJson()));
+        } catch (Exception error) {
+            try {
+                result.put("success", false);
+                result.put("error", error.getMessage());
+            } catch (Exception ignored) {}
+        }
+        return result.toString();
+    }
+
+    private void runAdbCommand(String requestId, String command, String reason, boolean requireConfirmation) {
+        if (!preferences.getBoolean(ADB_ENABLED_KEY, false)) {
+            dispatchNativeResult("craft-agent:android-adb-result", requestId,
+                    false, "adb_disabled", "Network ADB is disabled in Android settings", null);
+            return;
+        }
+        if (command == null || command.trim().isEmpty() || command.length() > 4000) {
+            dispatchNativeResult("craft-agent:android-adb-result", requestId,
+                    false, "invalid_command", "ADB command is empty or too long", null);
+            return;
+        }
+        Runnable execute = () -> serverExecutor.execute(() -> {
+            String host = preferences.getString(ADB_HOST_KEY, "127.0.0.1");
+            int port = preferences.getInt(ADB_PORT_KEY, 5555);
+            try {
+                AdbClient.Result result = adbClient.execute(host, port, command, 30_000);
+                JSONObject payload = new JSONObject();
+                payload.put("stdout", result.stdout);
+                payload.put("exitCode", result.exitCode);
+                payload.put("truncated", result.truncated);
+                dispatchNativeResult("craft-agent:android-adb-result", requestId,
+                        true, null, null, payload.toString());
+            } catch (Exception error) {
+                dispatchNativeResult("craft-agent:android-adb-result", requestId,
+                        false, "adb_connection_failed", error.getMessage(), null);
+            }
+        });
+
+        if (!requireConfirmation) {
+            execute.run();
+            return;
+        }
+        String rawReason = reason == null ? "" : reason.trim();
+        final String safeReason = rawReason.length() > 240 ? rawReason.substring(0, 240) : rawReason;
+        String message = getString(R.string.adb_command_warning)
+                + (safeReason.isEmpty() ? "" : "\n\n" + safeReason)
+                + "\n\n$ " + command;
+        runOnUiThread(() -> new AlertDialog.Builder(this)
+                .setTitle(R.string.adb_command_title)
+                .setMessage(message)
+                .setNegativeButton(R.string.permission_request_deny, (dialog, which) ->
+                        dispatchNativeResult("craft-agent:android-adb-result", requestId,
+                                false, "user_denied", "User declined the ADB command", null))
+                .setPositiveButton(R.string.permission_request_allow, (dialog, which) -> execute.run())
+                .setOnCancelListener(dialog -> dispatchNativeResult(
+                        "craft-agent:android-adb-result", requestId,
+                        false, "user_cancelled", "User cancelled the ADB command", null))
+                .show());
+    }
+
+    private void dispatchNativeResult(
+            String eventName,
+            String requestId,
+            boolean success,
+            String errorCode,
+            String error,
+            String payloadJson
+    ) {
+        JSONObject detail = new JSONObject();
+        try {
+            detail.put("requestId", requestId == null ? "" : requestId);
+            detail.put("success", success);
+            if (errorCode != null) detail.put("errorCode", errorCode);
+            if (error != null) detail.put("error", error);
+            if (payloadJson != null) detail.put("result", new JSONObject(payloadJson));
+        } catch (Exception ignored) {}
+        String script = "window.dispatchEvent(new CustomEvent(" + JSONObject.quote(eventName)
+                + ",{detail:" + detail + "}));";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(script, null);
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        PendingPermissionRequest pending = pendingPermissionRequests.get(requestCode);
+        if (pending != null) {
+            pendingPermissionRequests.remove(requestCode);
+            boolean granted = hasPermissionKey(pending.permissionKey);
+            dispatchNativeResult("craft-agent:android-permission-result", pending.requestId,
+                    granted,
+                    granted ? null : "permission_denied",
+                    granted ? null : "Android permission was not granted",
+                    permissionSnapshotJson());
+            return;
+        }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
@@ -951,6 +1230,60 @@ public final class MainActivity extends Activity {
         @JavascriptInterface
         public void dismissKeyboard() {
             runOnUiThread(MainActivity.this::dismissKeyboard);
+        }
+
+        @JavascriptInterface
+        public String getPermissionSnapshot() {
+            return permissionSnapshotJson();
+        }
+
+        @JavascriptInterface
+        public void requestPermission(String requestId, String permissionKey, String reason) {
+            requestPermissionFromBridge(requestId, permissionKey, reason);
+        }
+
+        @JavascriptInterface
+        public void openApplicationSettings() {
+            runOnUiThread(() -> {
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            });
+        }
+
+        @JavascriptInterface
+        public String getNetworkAdbConfig() {
+            return adbConfigJson();
+        }
+
+        @JavascriptInterface
+        public String setNetworkAdbConfig(String host, int port, boolean enabled) {
+            return saveAdbConfig(host, port, enabled);
+        }
+
+        @JavascriptInterface
+        public void openWirelessDebuggingSettings() {
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS"));
+                } catch (ActivityNotFoundException error) {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+                    } catch (ActivityNotFoundException fallbackError) {
+                        Toast.makeText(MainActivity.this, R.string.external_link_unavailable, Toast.LENGTH_LONG).show();
+                    }
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void testNetworkAdb(String requestId) {
+            runAdbCommand(requestId, "echo tokenbird-adb-ready", "", false);
+        }
+
+        @JavascriptInterface
+        public void runNetworkAdbCommand(String requestId, String command, String reason) {
+            runAdbCommand(requestId, command, reason, true);
         }
 
         /** The TokenNest native OAuth client is registered for an IP-literal loopback callback. */

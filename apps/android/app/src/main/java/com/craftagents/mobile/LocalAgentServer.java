@@ -96,6 +96,13 @@ final class LocalAgentServer {
             if (!bun.isFile()) throw new IOException("Bundled Android Bun runtime is missing");
             bun.setExecutable(true, false);
 
+            File seccompCompat = new File(
+                    context.getApplicationInfo().nativeLibraryDir,
+                    "libbun_seccomp_compat.so");
+            if (!seccompCompat.isFile()) {
+                throw new IOException("Bundled Android Bun compatibility library is missing");
+            }
+
             token = generateToken();
             port = findAvailablePort();
             File entry = new File(serverRoot, "server.js");
@@ -113,12 +120,14 @@ final class LocalAgentServer {
             environment.put("CRAFT_RESOURCES_PATH", new File(serverRoot, "resources").getAbsolutePath());
             environment.put("CRAFT_IS_PACKAGED", "true");
             environment.put("CRAFT_ANDROID", "true");
+            environment.put("CRAFT_MINIMAL_SERVER", "true");
             environment.put("CRAFT_DISABLE_MESSAGING", "true");
             environment.put("CRAFT_VERSION", BuildConfig.VERSION_NAME);
             environment.put("HOME", context.getFilesDir().getAbsolutePath());
             environment.put("TMPDIR", context.getCacheDir().getAbsolutePath());
             environment.put("XDG_CACHE_HOME", new File(context.getCacheDir(), "xdg").getAbsolutePath());
             environment.put("XDG_CONFIG_HOME", new File(context.getFilesDir(), "config").getAbsolutePath());
+            environment.put("LD_PRELOAD", seccompCompat.getAbsolutePath());
 
             try {
                 process = builder.start();

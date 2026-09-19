@@ -7,8 +7,7 @@
 
 import type { SessionToolContext } from '../context.ts';
 import type { ToolResult } from '../types.ts';
-import { renderMermaidSVG } from 'beautiful-mermaid';
-import { normalizeMermaidSource } from '../validation.ts';
+import { normalizeMermaidSource, validateMermaidSyntax } from '../validation.ts';
 
 export interface MermaidValidateArgs {
   code: string;
@@ -31,9 +30,21 @@ export async function handleMermaidValidate(
   const { code } = args;
 
   try {
-    // renderMermaidSVG throws if syntax/layout is invalid. Use the renderer path
-    // rather than parseMermaid(), which only understands flowchart/state syntax.
-    renderMermaidSVG(normalizeMermaidSource(code));
+    if (process.env.CRAFT_ANDROID === 'true') {
+      // ELK is several megabytes of generated JavaScript. Parsing it as part of
+      // Android's local-server bootstrap can stall Bun on some vendor builds.
+      // The WebView still renders Mermaid normally; only the server-side tool
+      // uses this lightweight structural validation on Android.
+      const validation = validateMermaidSyntax(code);
+      if (!validation.valid) {
+        throw new Error(validation.errors.map(issue => issue.message).join('; '));
+      }
+    } else {
+      // Keep the renderer-backed validation on desktop/server builds. Dynamic
+      // loading gives the Android split bundle a real lazy boundary around ELK.
+      const { renderMermaidSVG } = await import('beautiful-mermaid');
+      renderMermaidSVG(normalizeMermaidSource(code));
+    }
 
     return {
       content: [{

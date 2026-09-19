@@ -2233,6 +2233,8 @@
   "workspace.createWorkspaceDesc": "Enter a name and choose where to store your workspace.",
   "workspace.creating": "Creating...",
   "workspace.defaultLocation": "Default location",
+  "workspace.firstWorkspaceDesc": "A workspace is required before you can create a session. Name one to get started.",
+  "workspace.firstWorkspaceTitle": "Create your first workspace",
   "workspace.loadingWorkspaces": "Loading workspaces...",
   "workspace.locationLabel": "Location",
   "workspace.myRemoteWorkspace": "My Remote Workspace",
