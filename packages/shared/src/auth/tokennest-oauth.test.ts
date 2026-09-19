@@ -4,6 +4,8 @@ import {
   TOKENNEST_OAUTH_CONFIG,
   exchangeTokenNestTokens,
   fetchTokenNestChannelGroups,
+  fetchTokenNestUsageRecords,
+  fetchTokenNestUsageSummary,
   getValidTokenNestCredentials,
   prepareTokenNestOAuth,
   refreshTokenNestTokens,
@@ -18,7 +20,7 @@ describe('TokenNest OAuth', () => {
     const url = new URL(prepared.authUrl);
     expect(url.origin + url.pathname).toBe(TOKENNEST_OAUTH_CONFIG.authorizationUrl);
     expect(url.searchParams.get('client_id')).toBe(TOKENNEST_OAUTH_CONFIG.clientId);
-    expect(url.searchParams.get('scope')).toBe('api balance:read offline_access');
+    expect(url.searchParams.get('scope')).toBe('api balance:read groups:read usage:read invoice:read offline_access');
     expect(url.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:6477/callback');
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
     expect(url.searchParams.get('state')).toBe(prepared.state);
@@ -96,7 +98,7 @@ describe('TokenNest OAuth', () => {
         default: { desc: 'Default', ratio: 1, models: ['gpt-5.6-sol'] },
         auto: { desc: 'Automatic', ratio: 'auto' },
       } });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(fetchTokenNestChannelGroups('oauth-access')).resolves.toEqual([
       { id: 'default', name: 'Default', ratio: 1, models: ['gpt-5.6-sol'] },
@@ -106,7 +108,30 @@ describe('TokenNest OAuth', () => {
   });
 
   test('hides the group selector when an older TokenNest has no OAuth groups endpoint', async () => {
-    globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response('', { status: 404 })) as unknown as typeof fetch;
     await expect(fetchTokenNestChannelGroups('oauth-access')).resolves.toEqual([]);
+  });
+
+  test('normalizes provider-authoritative usage summary and records', async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/summary')) return Response.json({ data: {
+        start_timestamp: 10, end_timestamp: 20, request_count: 2,
+        input_tokens: 30, output_tokens: 10, total_tokens: 40,
+        charged_quota: 1500, charged_amount_usd: 0.003, currency: 'USD',
+      } });
+      return Response.json({ data: { total: 1, page: 1, page_size: 100, items: [{
+        timestamp: 15, model: 'gpt-5', group: 'vip', input_tokens: 30,
+        output_tokens: 10, total_tokens: 40, charged_quota: 1500,
+        charged_amount_usd: 0.003, status: 'succeeded', request_id: 'req-1',
+      }] } });
+    }) as typeof fetch;
+
+    await expect(fetchTokenNestUsageSummary('access', 10, 20)).resolves.toMatchObject({
+      requestCount: 2, totalTokens: 40, chargedAmountUsd: 0.003,
+    });
+    await expect(fetchTokenNestUsageRecords('access', { startTimestamp: 10, endTimestamp: 20 })).resolves.toMatchObject({
+      total: 1, items: [{ model: 'gpt-5', group: 'vip', totalTokens: 40, requestId: 'req-1' }],
+    });
   });
 });

@@ -15,8 +15,10 @@ export const TOKENNEST_OAUTH_CONFIG = {
   revocationUrl: 'https://openai.goldgom.top/api/oauth2/revoke',
   balanceUrl: 'https://openai.goldgom.top/api/oauth2/balance',
   groupsUrl: 'https://openai.goldgom.top/api/oauth2/groups',
+  usageSummaryUrl: 'https://openai.goldgom.top/api/oauth2/usage/summary',
+  usageRecordsUrl: 'https://openai.goldgom.top/api/oauth2/usage/records',
   apiBaseUrl: 'https://openai.goldgom.top/v1',
-  scopes: 'api balance:read offline_access',
+  scopes: 'api balance:read groups:read usage:read invoice:read offline_access',
 } as const;
 
 export interface TokenNestChannelGroup {
@@ -24,6 +26,130 @@ export interface TokenNestChannelGroup {
   name: string;
   ratio?: number | string;
   models?: string[];
+}
+
+export interface TokenNestUsageSummary {
+  startTimestamp: number;
+  endTimestamp: number;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  chargedQuota: number;
+  chargedAmountUsd: number;
+  currency: string;
+}
+
+export interface TokenNestUsageRecord {
+  timestamp: number;
+  model: string;
+  group: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  chargedQuota: number;
+  chargedAmountUsd: number;
+  status: string;
+  requestId: string;
+}
+
+export interface TokenNestUsageRecordsPage {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: TokenNestUsageRecord[];
+}
+
+export class TokenNestRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'TokenNestRequestError';
+  }
+}
+
+async function tokenNestJson(accessToken: string, url: URL | string): Promise<Record<string, unknown>> {
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
+  });
+  const body = await response.text();
+  let payload: unknown;
+  try {
+    payload = body ? JSON.parse(body) : {};
+  } catch {
+    throw new Error(`TokenNest returned invalid JSON (${response.status})`);
+  }
+  const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  if (!response.ok) {
+    const detail = typeof root.error_description === 'string'
+      ? root.error_description
+      : typeof root.message === 'string'
+        ? root.message
+        : typeof root.error === 'string' ? root.error : `HTTP ${response.status}`;
+    throw new TokenNestRequestError(`TokenNest request failed: ${detail.slice(0, 300)}`, response.status);
+  }
+  const data = root.data;
+  return data && typeof data === 'object' ? data as Record<string, unknown> : root;
+}
+
+function finiteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+export async function fetchTokenNestUsageSummary(
+  accessToken: string,
+  startTimestamp: number,
+  endTimestamp: number,
+): Promise<TokenNestUsageSummary> {
+  const url = new URL(TOKENNEST_OAUTH_CONFIG.usageSummaryUrl);
+  url.searchParams.set('start_timestamp', String(startTimestamp));
+  url.searchParams.set('end_timestamp', String(endTimestamp));
+  const data = await tokenNestJson(accessToken, url);
+  return {
+    startTimestamp: finiteNumber(data.start_timestamp),
+    endTimestamp: finiteNumber(data.end_timestamp),
+    requestCount: finiteNumber(data.request_count),
+    inputTokens: finiteNumber(data.input_tokens),
+    outputTokens: finiteNumber(data.output_tokens),
+    totalTokens: finiteNumber(data.total_tokens),
+    chargedQuota: finiteNumber(data.charged_quota),
+    chargedAmountUsd: finiteNumber(data.charged_amount_usd),
+    currency: typeof data.currency === 'string' ? data.currency : 'USD',
+  };
+}
+
+export async function fetchTokenNestUsageRecords(
+  accessToken: string,
+  options: { startTimestamp: number; endTimestamp: number; page?: number; pageSize?: number },
+): Promise<TokenNestUsageRecordsPage> {
+  const url = new URL(TOKENNEST_OAUTH_CONFIG.usageRecordsUrl);
+  url.searchParams.set('start_timestamp', String(options.startTimestamp));
+  url.searchParams.set('end_timestamp', String(options.endTimestamp));
+  url.searchParams.set('page', String(options.page ?? 1));
+  url.searchParams.set('page_size', String(Math.min(100, Math.max(1, options.pageSize ?? 100))));
+  const data = await tokenNestJson(accessToken, url);
+  const rawItems = Array.isArray(data.items) ? data.items : [];
+  const items = rawItems.flatMap((entry): TokenNestUsageRecord[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    const item = entry as Record<string, unknown>;
+    return [{
+      timestamp: finiteNumber(item.timestamp),
+      model: typeof item.model === 'string' ? item.model : '',
+      group: typeof item.group === 'string' ? item.group : '',
+      inputTokens: finiteNumber(item.input_tokens),
+      outputTokens: finiteNumber(item.output_tokens),
+      totalTokens: finiteNumber(item.total_tokens),
+      chargedQuota: finiteNumber(item.charged_quota),
+      chargedAmountUsd: finiteNumber(item.charged_amount_usd),
+      status: typeof item.status === 'string' ? item.status : '',
+      requestId: typeof item.request_id === 'string' ? item.request_id : '',
+    }];
+  });
+  return {
+    total: finiteNumber(data.total),
+    page: finiteNumber(data.page) || options.page || 1,
+    pageSize: finiteNumber(data.page_size) || options.pageSize || 100,
+    items,
+  };
 }
 
 /**

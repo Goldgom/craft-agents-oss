@@ -206,6 +206,8 @@ export const CHANNEL_MAP = {
   // Workspace tool and feature guide catalogs
   listWorkspaceTools: invoke(RPC_CHANNELS.catalog.LIST_TOOLS),
   listFeatureGuides: invoke(RPC_CHANNELS.catalog.LIST_GUIDES),
+  getRuntimeTools: invoke(RPC_CHANNELS.tools.GET_RUNTIME_TOOLS),
+  setRuntimeToolPath: invoke(RPC_CHANNELS.tools.SET_RUNTIME_TOOL_PATH),
 
   // Data migration (跨系统迁移数据)
   exportAllData: invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA),
@@ -432,9 +434,11 @@ export const CHANNEL_MAP = {
   testLlmConnection: invoke(RPC_CHANNELS.llmConnections.TEST),
   setDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_DEFAULT),
   setWorkspaceDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT),
+  refreshLlmConnectionModels: invoke(RPC_CHANNELS.llmConnections.REFRESH_MODELS),
   getLlmConnectionBalances: invoke(RPC_CHANNELS.llmConnections.GET_BALANCES),
   getShowApiBalances: invoke(RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES),
   setShowApiBalances: invoke(RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES),
+  getTokenNestUsage: invoke(RPC_CHANNELS.tokennest.GET_USAGE),
 
   // Projects
   getProjects: invoke(RPC_CHANNELS.projects.GET),

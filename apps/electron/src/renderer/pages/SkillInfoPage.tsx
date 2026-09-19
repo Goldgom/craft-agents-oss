@@ -17,6 +17,7 @@ import { SkillAvatar } from '@/components/ui/skill-avatar'
 import { routes, navigate } from '@/lib/navigate'
 import { useActiveWorkspace } from '@/context/AppShellContext'
 import { getFileManagerName } from '@/lib/platform'
+import { localizeBuiltinSkill } from '@/lib/skill-display'
 import {
   Info_Page,
   Info_Section,
@@ -32,7 +33,7 @@ interface SkillInfoPageProps {
 }
 
 export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory }: SkillInfoPageProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [skill, setSkill] = useState<LoadedSkill | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -54,7 +55,7 @@ export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory
         // Find the skill by slug
         const found = skills.find((s) => s.slug === skillSlug)
         if (found) {
-          setSkill(found)
+          setSkill(localizeBuiltinSkill(found, i18n.resolvedLanguage ?? i18n.language))
         } else {
           setError(t('skillInfo.notFound'))
         }
@@ -73,7 +74,7 @@ export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory
       if (changedWorkspaceId !== workspaceId) return
       const updated = skills.find((s) => s.slug === skillSlug)
       if (updated) {
-        setSkill(updated)
+        setSkill(localizeBuiltinSkill(updated, i18n.resolvedLanguage ?? i18n.language))
       }
     })
 
@@ -81,7 +82,7 @@ export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory
       isMounted = false
       unsubscribe?.()
     }
-  }, [workspaceId, skillSlug, workingDirectory])
+  }, [workspaceId, skillSlug, workingDirectory, i18n.resolvedLanguage, i18n.language, t])
 
   // Handle open in finder
   const handleOpenInFinder = useCallback(async () => {
@@ -197,7 +198,7 @@ export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory
                 {skill.metadata.description}
               </Info_Table.Row>
               <Info_Table.Row label={t('common.source')}>
-                {skill.source === 'builtin' ? 'Built-in' :
+                {skill.source === 'builtin' ? t('settings.promptOverview.source.builtin') :
                  skill.source === 'project' ? t('skillInfo.sourceProject') :
                  skill.source === 'global' ? t('skillInfo.sourceGlobal') :
                  t('skillInfo.sourceWorkspace')}

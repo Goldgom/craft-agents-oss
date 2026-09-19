@@ -91,7 +91,7 @@ export function SkillsListPanel({
             )}
             {skill.source === 'builtin' && (
               <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-info/10 text-info">
-                Built-in
+                {t('settings.promptOverview.source.builtin')}
               </span>
             )}
             <span className="truncate">{skill.metadata.description}</span>
@@ -119,7 +119,7 @@ export function SkillsListPanel({
             deleteLabel={skill.source === 'workspace'
               ? t('skillsList.deleteSkill')
               : skill.source === 'builtin'
-                ? 'Built-in skill'
+                ? t('settings.promptOverview.source.builtin')
                 : t('skillsList.managedByProject')}
             onSendToWorkspace={hasOtherWorkspaces && skill.source === 'workspace' ? () => {
               setSendResourceSlug(skill.slug)

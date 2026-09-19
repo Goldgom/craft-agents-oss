@@ -20,3 +20,21 @@ export interface NetworkProxySettings {
   httpsProxy?: string;
   noProxy?: string;
 }
+
+export type RuntimeToolId = 'java' | 'python' | 'node';
+
+export interface RuntimeToolPaths {
+  java?: string;
+  python?: string;
+  node?: string;
+}
+
+export interface RuntimeToolStatus {
+  id: RuntimeToolId;
+  source: 'custom' | 'bundled' | 'system' | 'missing';
+  configuredPath?: string;
+  executablePath?: string;
+  version?: string;
+  available: boolean;
+  error?: string;
+}

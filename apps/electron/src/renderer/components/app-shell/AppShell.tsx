@@ -36,6 +36,7 @@ import {
   Terminal,
   Wrench,
   Users,
+  ChartNoAxesCombined,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -96,6 +97,7 @@ import type { Session, Workspace, FileAttachment, PermissionRequest, LoadedSourc
 import { sessionMetaMapAtom, sendToWorkspaceAtom, type SessionMeta } from "@/atoms/sessions"
 import { sourcesAtom } from "@/atoms/sources"
 import { skillsAtom } from "@/atoms/skills"
+import { localizeBuiltinSkills } from '@/lib/skill-display'
 import { panelStackAtom, panelCountAtom, focusedPanelIdAtom, focusedSessionIdAtom, focusNextPanelAtom, focusPrevPanelAtom, parseSessionIdFromRoute } from "@/atoms/panel-stack"
 import { type SessionStatusId, type SessionStatus, statusConfigsToSessionStatuses } from "@/config/session-status-config"
 import { useStatuses } from "@/hooks/useStatuses"
@@ -538,7 +540,7 @@ function AppShellContent({
     pendingPermissions,
   } = contextValue
 
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
 
   // Get hotkey labels from centralized action registry
   const newChatHotkey = useActionLabel('app.newChat').hotkey
@@ -635,6 +637,7 @@ function AppShellContent({
   // Pages behaves the same way: both the library grid and an open page render
   // full-width in the content area — there is no pages navigator list.
   const isPagesView = isPagesNavigation(navState)
+  const isUsageView = isSettingsNavigation(navState) && navState.subpage === 'usage'
 
   // Derive source filter from navigation state (only when in sources navigator)
   const sourceFilter: SourceFilter | null = isSourcesNavigation(navState) ? navState.filter ?? null : null
@@ -915,7 +918,11 @@ function AppShellContent({
   }, [sources, setSourcesAtom])
 
   // Skills state (workspace-scoped)
-  const [skills, setSkills] = React.useState<LoadedSkill[]>([])
+  const [loadedSkills, setSkills] = React.useState<LoadedSkill[]>([])
+  const skills = React.useMemo(
+    () => localizeBuiltinSkills(loadedSkills, i18n.resolvedLanguage ?? i18n.language),
+    [loadedSkills, i18n.resolvedLanguage, i18n.language],
+  )
   // Sync skills to atom for NavigationContext auto-selection
   const setSkillsAtom = useSetAtom(skillsAtom)
   React.useEffect(() => {
@@ -1875,6 +1882,10 @@ function AppShellContent({
     navigate(routes.view.settings('collaborations'))
   }, [])
 
+  const handleUsageClick = useCallback(() => {
+    navigate(routes.view.settings('usage'))
+  }, [])
+
   // ============================================================================
   // EDIT POPOVER STATE
   // ============================================================================
@@ -2289,6 +2300,7 @@ function AppShellContent({
     }
 
     // Settings navigator
+    if (isUsageView) return t("settings.usage.title")
     if (isSettingsNavigation(navState)) return t("sidebar.settings")
 
     // Sessions navigator - use sessionFilter
@@ -2308,7 +2320,7 @@ function AppShellContent({
       default:
         return t("sidebar.allSessions")
     }
-  }, [navState, t, sessionFilter, automationFilter, labelConfigs, viewConfigs, effectiveSessionStatuses])
+  }, [navState, t, sessionFilter, automationFilter, labelConfigs, viewConfigs, effectiveSessionStatuses, isUsageView])
 
   // Build recursive sidebar items from the shared display-sorted label tree.
   // Each node renders with condensed height (compact: true) since many labels expected.
@@ -2740,10 +2752,17 @@ function AppShellContent({
                     { id: "separator:skills-settings", type: "separator" },
                     // --- Settings ---
                     {
+                      id: "nav:usage",
+                      title: t("settings.usage.title"),
+                      icon: ChartNoAxesCombined,
+                      variant: isUsageView ? "default" : "ghost",
+                      onClick: handleUsageClick,
+                    },
+                    {
                       id: "nav:settings",
                       title: t("sidebar.settings"),
                       icon: Settings,
-                      variant: isSettingsNavigation(navState) ? "default" : "ghost",
+                      variant: (isSettingsNavigation(navState) && !isUsageView) ? "default" : "ghost",
                       onClick: () => handleSettingsClick(),
                     },
                     {
@@ -3685,7 +3704,7 @@ function AppShellContent({
             )}
             </div>
           }
-          navigatorWidth={isAutoCompact ? sessionListWidth : (effectiveSidebarAndNavigatorHidden || isBoardView || isPagesView ? 0 : sessionListWidth)}
+          navigatorWidth={isAutoCompact ? (isUsageView ? 0 : sessionListWidth) : (effectiveSidebarAndNavigatorHidden || isBoardView || isPagesView || isUsageView ? 0 : sessionListWidth)}
           isSidebarAndNavigatorHidden={effectiveSidebarAndNavigatorHidden}
           isRightSidebarVisible={false}
           isCompact={isAutoCompact}
@@ -3726,7 +3745,7 @@ function AppShellContent({
         )}
 
         {/* Session List Resize Handle (absolute, hidden in focused mode, board view, and pages) */}
-        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isPagesView && (
+        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isPagesView && !isUsageView && (
         <div
           ref={sessionListHandleRef}
           onMouseDown={(e) => { e.preventDefault(); setIsResizing('session-list') }}

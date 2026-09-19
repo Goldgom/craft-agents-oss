@@ -5,12 +5,13 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Spinner } from '@craft-agent/ui'
 import type { WorkspaceToolCatalogItem, WorkspaceToolCatalogResult } from '@craft-agent/shared/protocol'
+import type { RuntimeToolId, RuntimeToolStatus } from '@craft-agent/shared/config/types'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { SettingsCard, SettingsSection } from '@/components/settings'
+import { SettingsCard, SettingsInput, SettingsSection } from '@/components/settings'
 import { useAppShellContext } from '@/context/AppShellContext'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import { cn } from '@/lib/utils'
@@ -67,6 +68,33 @@ export default function ToolsSettingsPage() {
   const [search, setSearch] = useState('')
   const [builtinPage, setBuiltinPage] = useState(1)
   const [addedPage, setAddedPage] = useState(1)
+  const [runtimeTools, setRuntimeTools] = useState<RuntimeToolStatus[]>([])
+  const [runtimePaths, setRuntimePaths] = useState<Record<RuntimeToolId, string>>({ java: '', python: '', node: '' })
+  const [savingRuntime, setSavingRuntime] = useState<RuntimeToolId | null>(null)
+
+  const loadRuntimeTools = useCallback(async () => {
+    try {
+      const statuses = await window.electronAPI.getRuntimeTools()
+      setRuntimeTools(statuses)
+      setRuntimePaths(Object.fromEntries(statuses.map(item => [item.id, item.configuredPath ?? ''])) as Record<RuntimeToolId, string>)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.tools.runtimeLoadError'))
+    }
+  }, [t])
+
+  const saveRuntimePath = useCallback(async (tool: RuntimeToolId, reset = false) => {
+    setSavingRuntime(tool)
+    try {
+      const statuses = await window.electronAPI.setRuntimeToolPath(tool, reset ? undefined : runtimePaths[tool])
+      setRuntimeTools(statuses)
+      setRuntimePaths(Object.fromEntries(statuses.map(item => [item.id, item.configuredPath ?? ''])) as Record<RuntimeToolId, string>)
+      toast.success(t(reset ? 'settings.tools.runtimeResetSuccess' : 'settings.tools.runtimeSaveSuccess'))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.tools.runtimeSaveError'))
+    } finally {
+      setSavingRuntime(null)
+    }
+  }, [runtimePaths, t])
 
   const load = useCallback(async () => {
     if (!activeWorkspaceId) {
@@ -85,6 +113,7 @@ export default function ToolsSettingsPage() {
   }, [activeWorkspaceId, t])
 
   useEffect(() => { void load() }, [load])
+  useEffect(() => { void loadRuntimeTools() }, [loadRuntimeTools])
   useEffect(() => { setBuiltinPage(1); setAddedPage(1) }, [search, result.tools])
 
   const filtered = useMemo(() => {
@@ -112,6 +141,39 @@ export default function ToolsSettingsPage() {
       <div className="min-h-0 flex-1 mask-fade-y">
         <ScrollArea className="h-full">
           <div className="mx-auto max-w-4xl space-y-7 px-5 py-7">
+            <SettingsSection title={t('settings.tools.runtimeTitle')} description={t('settings.tools.runtimeDescription')}>
+              <SettingsCard divided>
+                {(['java', 'python', 'node'] as RuntimeToolId[]).map((tool) => {
+                  const status = runtimeTools.find(item => item.id === tool)
+                  return (
+                    <div key={tool} className="px-4 py-3.5">
+                      <SettingsInput
+                        label={t(`settings.tools.runtime.${tool}`)}
+                        description={status?.available
+                          ? t('settings.tools.runtimeStatus', { source: t(`settings.tools.runtimeSource.${status.source}`), version: status.version ?? '' })
+                          : t('settings.tools.runtimeMissing')}
+                        value={runtimePaths[tool]}
+                        onChange={value => setRuntimePaths(current => ({ ...current, [tool]: value }))}
+                        placeholder={status?.source === 'bundled' ? status.executablePath : t('settings.tools.runtimePlaceholder')}
+                        disabled={savingRuntime === tool}
+                        error={status?.error}
+                        action={(
+                          <div className="flex gap-2">
+                            <Button variant="outline" disabled={savingRuntime !== null} onClick={() => void saveRuntimePath(tool, true)}>
+                              {t('settings.tools.useBundled')}
+                            </Button>
+                            <Button disabled={savingRuntime !== null} onClick={() => void saveRuntimePath(tool)}>
+                              {savingRuntime === tool ? <Spinner /> : t('common.save')}
+                            </Button>
+                          </div>
+                        )}
+                      />
+                    </div>
+                  )
+                })}
+              </SettingsCard>
+            </SettingsSection>
+
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input value={search} onChange={event => setSearch(event.target.value)} className="pl-9" placeholder={t('settings.tools.searchPlaceholder')} />

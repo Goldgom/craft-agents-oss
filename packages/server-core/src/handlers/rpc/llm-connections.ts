@@ -1,4 +1,4 @@
-import { RPC_CHANNELS, type LlmConnectionSetup, type ListCustomModelsParams, type ListCustomModelsResult } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type LlmConnectionSetup, type ListCustomModelsParams, type ListCustomModelsResult, type TokenNestUsagePoint, type TokenNestUsageRecordDto, type TokenNestUsageSnapshot } from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { setSetupDeferred } from '@craft-agent/shared/config/storage'
@@ -147,6 +147,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.tokennest.START_OAUTH,
   RPC_CHANNELS.tokennest.COMPLETE_OAUTH,
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
+  RPC_CHANNELS.tokennest.GET_USAGE,
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
   RPC_CHANNELS.copilot.GET_AUTH_STATUS,
@@ -622,6 +623,24 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       // Check if this is an update or create
       const existing = getLlmConnection(connection.slug)
       if (existing) {
+        if (existing.oauthProvider === 'tokennest') {
+          const requestedGroup = connection.channelGroup
+          const group = requestedGroup
+            ? existing.channelGroups?.find(item => item.id === requestedGroup)
+            : undefined
+          if (requestedGroup && !group) {
+            return { success: false, error: 'The selected TokenNest group is not available' }
+          }
+          if (group?.models?.length && connection.defaultModel && !group.models.includes(connection.defaultModel)) {
+            connection = { ...connection, defaultModel: group.models[0] }
+          }
+          // Provider-authoritative capabilities may only be changed by the refresh flow.
+          connection = {
+            ...connection,
+            models: existing.models,
+            channelGroups: existing.channelGroups,
+          }
+        }
         // Update existing connection (can't change slug)
         const { slug: _slug, ...updates } = connection
         const success = updateLlmConnection(connection.slug, updates)
@@ -776,12 +795,157 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
         return { success: false, error: 'Connection not found' }
       }
 
-      await getModelRefreshService().refreshNow(slug)
+      if (connection.oauthProvider === 'tokennest') {
+        const { getValidTokenNestCredentials, fetchTokenNestChannelGroups, TOKENNEST_OAUTH_CONFIG } = await import('@craft-agent/shared/auth')
+        const credentialManager = getCredentialManager()
+        let credentials = await getValidTokenNestCredentials(slug, credentialManager)
+        if (!credentials) return { success: false, error: 'TokenNest authentication has expired. Please sign in again.' }
+        let discovered = await listCustomModels({
+          baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
+          apiKey: credentials.accessToken,
+          api: 'openai-completions',
+        })
+        if (!discovered.models.length && /\b401\b/.test(discovered.error ?? '')) {
+          credentials = await getValidTokenNestCredentials(slug, credentialManager, true)
+          if (!credentials) return { success: false, error: 'TokenNest authentication has expired. Please sign in again.' }
+          discovered = await listCustomModels({
+            baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
+            apiKey: credentials.accessToken,
+            api: 'openai-completions',
+          })
+        }
+        if (!discovered.models.length) return { success: false, error: discovered.error || 'TokenNest returned no available models' }
+        const refreshedGroups = await fetchTokenNestChannelGroups(credentials.accessToken)
+        const channelGroups = refreshedGroups.length > 0 ? refreshedGroups : connection.channelGroups ?? []
+        const models = [...new Set([
+          ...discovered.models.map(model => model.id),
+          ...channelGroups.flatMap(group => group.models ?? []),
+        ])]
+        const channelGroup = channelGroups.some(group => group.id === connection.channelGroup)
+          ? connection.channelGroup
+          : channelGroups[0]?.id
+        const groupModels = channelGroups.find(group => group.id === channelGroup)?.models
+        const selectableModels = groupModels?.length ? groupModels : models
+        const defaultModel = connection.defaultModel && selectableModels.includes(connection.defaultModel)
+          ? connection.defaultModel
+          : selectableModels[0] ?? models[0]
+        const updated = updateLlmConnection(slug, {
+          models,
+          channelGroups,
+          channelGroup,
+          defaultModel,
+        })
+        if (!updated) return { success: false, error: 'Failed to save refreshed TokenNest models' }
+        await sessionManager.reinitializeAuth(slug)
+      } else {
+        await getModelRefreshService().refreshNow(slug)
+      }
       return { success: true }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error'
       deps.platform.logger?.error(`Failed to refresh models for ${slug}: ${msg}`)
       return { success: false, error: msg }
+    }
+  })
+
+  server.handle(RPC_CHANNELS.tokennest.GET_USAGE, async (_ctx, args: {
+    connectionSlug: string
+    days?: number
+  }): Promise<TokenNestUsageSnapshot> => {
+    const connection = getLlmConnection(args.connectionSlug)
+    if (!connection || connection.oauthProvider !== 'tokennest') {
+      throw new Error('TokenNest connection not found')
+    }
+    const days = Math.min(90, Math.max(1, Math.trunc(args.days ?? 30)))
+    const endTimestamp = Math.floor(Date.now() / 1000)
+    const startTimestamp = endTimestamp - days * 24 * 60 * 60
+    const {
+      fetchTokenNestUsageRecords,
+      fetchTokenNestUsageSummary,
+      getValidTokenNestCredentials,
+      TokenNestRequestError,
+    } = await import('@craft-agent/shared/auth')
+    const credentialManager = getCredentialManager()
+    let credentials = await getValidTokenNestCredentials(connection.slug, credentialManager)
+    if (!credentials) throw new Error('TokenNest authentication has expired. Please sign in again.')
+
+    const fetchUsage = async (accessToken: string) => {
+      const summary = await fetchTokenNestUsageSummary(accessToken, startTimestamp, endTimestamp)
+      const records = []
+      let total = 0
+      const maxPages = 50
+      for (let page = 1; page <= maxPages; page += 1) {
+        const result = await fetchTokenNestUsageRecords(accessToken, { startTimestamp, endTimestamp, page, pageSize: 100 })
+        total = result.total
+        records.push(...result.items)
+        if (records.length >= total || result.items.length === 0) break
+      }
+      return { summary, records, truncated: records.length < total }
+    }
+
+    let result
+    try {
+      result = await fetchUsage(credentials.accessToken)
+    } catch (error) {
+      if (!(error instanceof TokenNestRequestError) || error.status !== 401) throw error
+      credentials = await getValidTokenNestCredentials(connection.slug, credentialManager, true)
+      if (!credentials) throw new Error('TokenNest authentication has expired. Please sign in again.')
+      result = await fetchUsage(credentials.accessToken)
+    }
+
+    const daily = new Map<string, TokenNestUsagePoint>()
+    const byModel = new Map<string, TokenNestUsagePoint>()
+    const add = (map: Map<string, TokenNestUsagePoint>, key: string, label: string, record: typeof result.records[number]) => {
+      const point = map.get(key) ?? { key, label, requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 }
+      point.requests += 1
+      point.inputTokens += record.inputTokens
+      point.outputTokens += record.outputTokens
+      point.totalTokens += record.totalTokens
+      point.costUsd += record.chargedAmountUsd
+      map.set(key, point)
+    }
+    for (const record of result.records) {
+      const day = new Date(record.timestamp * 1000).toISOString().slice(0, 10)
+      add(daily, day, day, record)
+      const model = record.model || 'unknown'
+      add(byModel, model, model, record)
+    }
+    const recentRecords: TokenNestUsageRecordDto[] = result.records.slice(0, 50).map(record => ({
+      timestamp: record.timestamp,
+      model: record.model,
+      group: record.group,
+      inputTokens: record.inputTokens,
+      outputTokens: record.outputTokens,
+      totalTokens: record.totalTokens,
+      costUsd: record.chargedAmountUsd,
+      status: record.status,
+      requestId: record.requestId,
+    }))
+    const cachedBalance = balanceCache.get(connection.slug)
+    const providerBalance = cachedBalance && cachedBalance.expiresAt > Date.now()
+      ? cachedBalance.value
+      : await fetchApiBalance(connection, credentials.accessToken)
+    balanceCache.set(connection.slug, { value: providerBalance, expiresAt: Date.now() + BALANCE_CACHE_TTL_MS })
+    return {
+      connectionSlug: connection.slug,
+      ...(providerBalance ? { balance: {
+        remaining: providerBalance.remaining,
+        currency: providerBalance.currency,
+        display: providerBalance.display,
+      } } : {}),
+      startTimestamp: result.summary.startTimestamp || startTimestamp,
+      endTimestamp: result.summary.endTimestamp || endTimestamp,
+      requestCount: result.summary.requestCount,
+      inputTokens: result.summary.inputTokens,
+      outputTokens: result.summary.outputTokens,
+      totalTokens: result.summary.totalTokens,
+      costUsd: result.summary.chargedAmountUsd,
+      currency: result.summary.currency,
+      daily: [...daily.values()].sort((a, b) => a.key.localeCompare(b.key)),
+      byModel: [...byModel.values()].sort((a, b) => b.totalTokens - a.totalTokens),
+      recentRecords,
+      truncated: result.truncated,
+      updatedAt: Date.now(),
     }
   })
 

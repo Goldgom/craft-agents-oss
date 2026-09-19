@@ -528,6 +528,30 @@ if ($LASTEXITCODE -ne 0 -or $PackagedGitVersion -ne "git version 2.55.0.windows.
 }
 Write-Host "Bundled Git Bash verified: $PackagedGitVersion" -ForegroundColor Green
 
+# Verify the clean-machine programming runtimes from the packaged tree itself.
+$PackagedToolchains = "$ElectronDir\release\win-unpacked\resources\app\vendor\toolchains"
+$PackagedJava = "$PackagedToolchains\jdk\bin\java.exe"
+$PackagedJavac = "$PackagedToolchains\jdk\bin\javac.exe"
+$PackagedPython = "$PackagedToolchains\python\python.exe"
+$PackagedPip = "$PackagedToolchains\python\Scripts\pip.cmd"
+$PackagedNode = "$PackagedToolchains\node\node.exe"
+$PackagedNpm = "$PackagedToolchains\node\npm.cmd"
+foreach ($RequiredPath in @($PackagedJava, $PackagedJavac, $PackagedPython, $PackagedPip, $PackagedNode, $PackagedNpm)) {
+    if (-not (Test-Path -LiteralPath $RequiredPath -PathType Leaf)) {
+        throw "Packaged toolchain verification failed: missing $RequiredPath"
+    }
+}
+$JavaVersion = (& $PackagedJava --version | Select-Object -First 1)
+$JavacVersion = (& $PackagedJavac --version | Select-Object -First 1)
+$PythonVersion = & $PackagedPython --version
+$PipVersion = & $PackagedPython -m pip --version
+$NodeVersion = & $PackagedNode --version
+$NpmVersion = & $PackagedNpm --version
+if ($JavaVersion -notmatch '^openjdk 17\.0\.14' -or $JavacVersion -notmatch '^javac 17\.0\.14') { throw "Unexpected packaged JDK: $JavaVersion / $JavacVersion" }
+if ($PythonVersion -ne 'Python 3.12.10' -or $PipVersion -notmatch '^pip ') { throw "Unexpected packaged Python: $PythonVersion / $PipVersion" }
+if ($NodeVersion -ne 'v22.14.0' -or -not $NpmVersion) { throw "Unexpected packaged Node.js: $NodeVersion / npm $NpmVersion" }
+Write-Host "Bundled toolchains verified: $JavaVersion; $PythonVersion; Node.js $NodeVersion; npm $NpmVersion" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "=== Build Complete ===" -ForegroundColor Green
 Write-Host "Installer: $($InstallerPath.FullName)"

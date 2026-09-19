@@ -52,16 +52,18 @@ function createHarness() {
 }
 
 function stubStorage(existing: config.LlmConnection | null = null) {
-  const setLlmOAuth = mock(async (_slug: string, _tokens: unknown) => {})
+  let oauth = { accessToken: 'stored-access-token', refreshToken: 'stored-refresh-token', expiresAt: Date.now() + 60 * 60_000 }
+  const getLlmOAuth = mock(async (_slug: string) => oauth)
+  const setLlmOAuth = mock(async (_slug: string, tokens: typeof oauth) => { oauth = { ...oauth, ...tokens } })
   const deleteLlmCredentials = mock(async (_slug: string) => {})
-  const credentialManager = { setLlmOAuth, deleteLlmCredentials }
+  const credentialManager = { getLlmOAuth, setLlmOAuth, deleteLlmCredentials }
   spyOn(credentials, 'getCredentialManager').mockReturnValue(credentialManager as never)
   spyOn(config, 'getLlmConnection').mockImplementation(slug => existing?.slug === slug ? existing : null)
   spyOn(config, 'getDefaultLlmConnection').mockReturnValue(null)
   const add = spyOn(config, 'addLlmConnection').mockReturnValue(true)
   const update = spyOn(config, 'updateLlmConnection').mockReturnValue(true)
   const setDefault = spyOn(config, 'setDefaultLlmConnection').mockReturnValue(true)
-  return { add, update, setDefault, setLlmOAuth, deleteLlmCredentials }
+  return { add, update, setDefault, getLlmOAuth, setLlmOAuth, deleteLlmCredentials }
 }
 
 function stubTokenNestFetch(options?: { models?: string[]; modelStatus?: number }) {
@@ -84,6 +86,9 @@ function stubTokenNestFetch(options?: { models?: string[]; modelStatus?: number 
       const status = options?.modelStatus ?? 200
       return Response.json({ data: models.map(id => ({ id })) }, { status })
     }
+    if (url.endsWith('/api/oauth2/groups')) return Response.json({ data: {
+      default: { desc: 'Default', ratio: 1, models },
+    } })
     if (url.endsWith('/api/oauth2/revoke')) return new Response(null, { status: 200 })
     throw new Error(`Unexpected request: ${method} ${url}`)
   }) as unknown as typeof fetch
@@ -174,5 +179,59 @@ describe('TokenNest OAuth RPC handlers', () => {
       accessToken: 'new-access-token',
     }))
     expect(harness.reinitializeAuth).toHaveBeenCalledWith(existing.slug)
+  })
+
+  it('refreshes TokenNest models and groups with automatically renewed credentials', async () => {
+    const existing: config.LlmConnection = {
+      slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
+      oauthProvider: 'tokennest', piAuthProvider: 'openai', baseUrl: 'https://openai.goldgom.top/v1',
+      customEndpoint: { api: 'openai-completions' }, models: ['old-model'], defaultModel: 'old-model',
+      modelSelectionMode: 'automaticallySyncedFromProvider', createdAt: 1,
+    }
+    const storage = stubStorage(existing)
+    stubTokenNestFetch({ models: ['gpt-5.6-sol', 'gpt-5.6-terra'] })
+    const harness = createHarness()
+
+    const result = await harness.getHandler(RPC_CHANNELS.llmConnections.REFRESH_MODELS)(harness.context, existing.slug)
+
+    expect(result).toEqual({ success: true })
+    expect(storage.update).toHaveBeenCalledWith(existing.slug, expect.objectContaining({
+      models: ['gpt-5.6-sol', 'gpt-5.6-terra'],
+      channelGroup: 'default',
+      defaultModel: 'gpt-5.6-sol',
+      channelGroups: [{ id: 'default', name: 'Default', ratio: 1, models: ['gpt-5.6-sol', 'gpt-5.6-terra'] }],
+    }))
+    expect(harness.reinitializeAuth).toHaveBeenCalledWith(existing.slug)
+  })
+
+  it('returns provider-authoritative daily and model usage aggregates', async () => {
+    const existing: config.LlmConnection = {
+      slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
+      oauthProvider: 'tokennest', piAuthProvider: 'openai', baseUrl: 'https://openai.goldgom.top/v1',
+      customEndpoint: { api: 'openai-completions' }, models: ['gpt-5'], defaultModel: 'gpt-5',
+      modelSelectionMode: 'automaticallySyncedFromProvider', createdAt: 1,
+    }
+    stubStorage(existing)
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/summary')) return Response.json({ data: {
+        start_timestamp: 10, end_timestamp: 20, request_count: 2, input_tokens: 30,
+        output_tokens: 10, total_tokens: 40, charged_amount_usd: 0.003, currency: 'USD',
+      } })
+      if (url.pathname.endsWith('/records')) return Response.json({ data: { total: 2, page: 1, page_size: 100, items: [
+        { timestamp: 15, model: 'gpt-5', group: 'default', input_tokens: 20, output_tokens: 5, total_tokens: 25, charged_amount_usd: 0.002, status: 'succeeded', request_id: 'one' },
+        { timestamp: 16, model: 'gpt-5', group: 'default', input_tokens: 10, output_tokens: 5, total_tokens: 15, charged_amount_usd: 0.001, status: 'succeeded', request_id: 'two' },
+      ] } })
+      throw new Error(`Unexpected request: ${url}`)
+    }) as unknown as typeof fetch
+    const harness = createHarness()
+
+    const result = await harness.getHandler(RPC_CHANNELS.tokennest.GET_USAGE)(harness.context, { connectionSlug: existing.slug, days: 30 }) as import('@craft-agent/shared/protocol').TokenNestUsageSnapshot
+
+    expect(result.totalTokens).toBe(40)
+    expect(result.byModel).toEqual([expect.objectContaining({ key: 'gpt-5', requests: 2, totalTokens: 40 })])
+    expect(result.daily).toHaveLength(1)
+    expect(result.recentRecords).toHaveLength(2)
+    expect(result.truncated).toBe(false)
   })
 })

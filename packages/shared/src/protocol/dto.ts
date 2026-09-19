@@ -734,6 +734,47 @@ export interface LlmConnectionBalance {
   updatedAt: number
 }
 
+export interface TokenNestUsagePoint {
+  key: string
+  label: string
+  requests: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  costUsd: number
+}
+
+export interface TokenNestUsageRecordDto {
+  timestamp: number
+  model: string
+  group: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  costUsd: number
+  status: string
+  requestId: string
+}
+
+/** Provider-authoritative TokenNest usage, aggregated on the credential-owning server. */
+export interface TokenNestUsageSnapshot {
+  connectionSlug: string
+  balance?: { remaining?: number; currency?: string; display?: string }
+  startTimestamp: number
+  endTimestamp: number
+  requestCount: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  costUsd: number
+  currency: string
+  daily: TokenNestUsagePoint[]
+  byModel: TokenNestUsagePoint[]
+  recentRecords: TokenNestUsageRecordDto[]
+  truncated: boolean
+  updatedAt: number
+}
+
 /**
  * Resolved Anthropic OAuth identity (issue #838), captured from the
  * token-exchange response. Shape mirrors `ClaudeOAuthIdentity` in

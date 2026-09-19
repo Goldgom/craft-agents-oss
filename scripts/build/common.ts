@@ -13,6 +13,7 @@ import {
   lstatSync,
   readdirSync,
   readFileSync,
+  writeFileSync,
 } from 'fs';
 import { join, dirname } from 'path';
 import { createHash } from 'crypto';
@@ -52,6 +53,12 @@ export const UV_VERSION = '0.10.6';
  * install or configure Git separately.
  */
 export const GIT_FOR_WINDOWS_VERSION = '2.55.0.windows.3';
+
+/** Reproducible Windows toolchains bundled for clean-machine use. */
+export const NODE_VERSION = '22.14.0';
+export const PYTHON_VERSION = '3.12.10';
+export const PYTHON_NUGET_SHA512 = 'u9pNz2iKlCEbYtUJaKkbOPMF0LjR7NkCafdKhvigpPzrt8oWKgdTpHaR6z3wyWQAm9PYGUxv0Zr66NX9AeHMDw==';
+export const TEMURIN_JDK_VERSION = '17.0.14+7';
 
 /** Directory name used for the extracted PortableGit runtime. */
 export const BUNDLED_GIT_BASH_DIR = 'git-bash';
@@ -346,6 +353,21 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
   }
 }
 
+async function verifySha512Base64(filePath: string, expectedHash: string): Promise<boolean> {
+  const buffer = await Bun.file(filePath).arrayBuffer();
+  const hash = createHash('sha512').update(Buffer.from(buffer)).digest('base64');
+  return hash === expectedHash.trim();
+}
+
+async function extractZip(archivePath: string, destination: string): Promise<void> {
+  mkdirSync(destination, { recursive: true });
+  if (process.platform === 'win32') {
+    await $`powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${destination}' -Force"`.quiet();
+  } else {
+    await $`unzip -q -o ${archivePath} -d ${destination}`;
+  }
+}
+
 interface GitHubReleaseAsset {
   name: string;
   browser_download_url: string;
@@ -441,6 +463,101 @@ export async function downloadGitBash(config: BuildConfig): Promise<void> {
     rmSync(targetDir, { recursive: true, force: true });
     cpSync(extractDir, targetDir, { recursive: true });
     console.log(`  Git Bash installed to ${targetDir} ✓`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/** Download full Node/npm, CPython/pip, and Temurin JDK distributions for Windows. */
+export async function downloadWindowsToolchains(config: BuildConfig): Promise<void> {
+  const { platform, arch, electronDir } = config;
+  if (platform !== 'win32') return;
+  if (arch !== 'x64') throw new Error(`Bundled Windows toolchains are not available for ${arch}`);
+
+  const toolchainsDir = join(electronDir, 'vendor', 'toolchains');
+  const nodeDir = join(toolchainsDir, 'node');
+  const pythonDir = join(toolchainsDir, 'python');
+  const jdkDir = join(toolchainsDir, 'jdk');
+  const pythonPipModule = join(pythonDir, 'Lib', 'site-packages', 'pip', '__init__.py');
+  if (existsSync(join(pythonDir, 'python.exe')) && existsSync(pythonPipModule)) {
+    const scriptsDir = join(pythonDir, 'Scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const pipWrapper = '@echo off\r\n"%~dp0..\\python.exe" -m pip %*\r\n';
+    writeFileSync(join(scriptsDir, 'pip.cmd'), pipWrapper, 'utf8');
+    writeFileSync(join(scriptsDir, 'pip3.cmd'), pipWrapper, 'utf8');
+  }
+  const complete = existsSync(join(nodeDir, 'node.exe'))
+    && existsSync(join(nodeDir, 'npm.cmd'))
+    && existsSync(join(pythonDir, 'python.exe'))
+    && existsSync(pythonPipModule)
+    && existsSync(join(pythonDir, 'Scripts', 'pip.cmd'))
+    && existsSync(join(jdkDir, 'bin', 'java.exe'))
+    && existsSync(join(jdkDir, 'bin', 'javac.exe'));
+  if (complete) {
+    console.log(`Windows toolchains already present at ${toolchainsDir}`);
+    return;
+  }
+
+  if (process.platform !== 'win32') {
+    throw new Error('Windows toolchains can only be provisioned on a Windows build host');
+  }
+
+  const tempDir = join(electronDir, '.toolchains-download-temp');
+  rmSync(tempDir, { recursive: true, force: true });
+  mkdirSync(tempDir, { recursive: true });
+  try {
+    // Node.js official binary distribution (includes npm, npx, Corepack and LICENSE).
+    const nodeName = `node-v${NODE_VERSION}-win-x64.zip`;
+    const nodeArchive = join(tempDir, nodeName);
+    const nodeChecksums = join(tempDir, 'node-SHASUMS256.txt');
+    await $`curl -fsSL --retry 3 --retry-delay 2 -o ${nodeArchive} ${`https://nodejs.org/dist/v${NODE_VERSION}/${nodeName}`}`;
+    await $`curl -fsSL --retry 3 --retry-delay 2 -o ${nodeChecksums} ${`https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt`}`;
+    const nodeHash = readFileSync(nodeChecksums, 'utf8').split(/\r?\n/)
+      .find(line => line.endsWith(`  ${nodeName}`))?.split(/\s+/)[0];
+    if (!nodeHash || !await verifySha256(nodeArchive, nodeHash)) throw new Error('Node.js checksum verification failed');
+    const nodeExtract = join(tempDir, 'node-extract');
+    await extractZip(nodeArchive, nodeExtract);
+    rmSync(nodeDir, { recursive: true, force: true });
+    cpSync(join(nodeExtract, `node-v${NODE_VERSION}-win-x64`), nodeDir, { recursive: true });
+
+    // The official Python NuGet distribution is relocatable and includes pip.
+    const pythonName = `python.${PYTHON_VERSION}.nupkg`;
+    const pythonArchive = join(tempDir, pythonName);
+    const pythonBase = `https://api.nuget.org/v3-flatcontainer/python/${PYTHON_VERSION}`;
+    await $`curl -fsSL --retry 3 --retry-delay 2 -o ${pythonArchive} ${`${pythonBase}/${pythonName}`}`;
+    if (!await verifySha512Base64(pythonArchive, PYTHON_NUGET_SHA512)) throw new Error('Python checksum verification failed');
+    const pythonExtract = join(tempDir, 'python-extract');
+    await extractZip(pythonArchive, pythonExtract);
+    rmSync(pythonDir, { recursive: true, force: true });
+    cpSync(join(pythonExtract, 'tools'), pythonDir, { recursive: true });
+    const scriptsDir = join(pythonDir, 'Scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const pipWrapper = '@echo off\r\n"%~dp0..\\python.exe" -m pip %*\r\n';
+    writeFileSync(join(scriptsDir, 'pip.cmd'), pipWrapper, 'utf8');
+    writeFileSync(join(scriptsDir, 'pip3.cmd'), pipWrapper, 'utf8');
+
+    // Eclipse Temurin JDK (not a JRE) includes java, javac, javadoc and legal notices.
+    const jdkAssetVersion = TEMURIN_JDK_VERSION.replace('+', '_');
+    const jdkName = `OpenJDK17U-jdk_x64_windows_hotspot_${jdkAssetVersion}.zip`;
+    const jdkArchive = join(tempDir, jdkName);
+    const jdkChecksum = join(tempDir, `${jdkName}.sha256.txt`);
+    const jdkRelease = TEMURIN_JDK_VERSION.replace('+', '%2B');
+    const jdkBase = githubUrl(`https://github.com/adoptium/temurin17-binaries/releases/download/jdk-${jdkRelease}`);
+    await $`curl -fsSL --retry 3 --retry-delay 2 -o ${jdkArchive} ${`${jdkBase}/${jdkName}`}`;
+    await $`curl -fsSL --retry 3 --retry-delay 2 -o ${jdkChecksum} ${`${jdkBase}/${jdkName}.sha256.txt`}`;
+    const jdkHash = readFileSync(jdkChecksum, 'utf8').match(/[a-fA-F0-9]{64}/)?.[0];
+    if (!jdkHash || !await verifySha256(jdkArchive, jdkHash)) throw new Error('Temurin JDK checksum verification failed');
+    const jdkExtract = join(tempDir, 'jdk-extract');
+    await extractZip(jdkArchive, jdkExtract);
+    const jdkRoot = readdirSync(jdkExtract, { withFileTypes: true }).find(entry => entry.isDirectory());
+    if (!jdkRoot) throw new Error('Temurin JDK archive did not contain a root directory');
+    rmSync(jdkDir, { recursive: true, force: true });
+    cpSync(join(jdkExtract, jdkRoot.name), jdkDir, { recursive: true });
+
+    if (!existsSync(join(nodeDir, 'node.exe')) || !existsSync(join(pythonDir, 'python.exe')) || !existsSync(join(jdkDir, 'bin', 'javac.exe'))) {
+      throw new Error('Bundled Windows toolchain verification failed after extraction');
+    }
+    console.log(`  Windows JDK, Python and Node toolchains installed to ${toolchainsDir} ✓`);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

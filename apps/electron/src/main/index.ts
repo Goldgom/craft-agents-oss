@@ -10,6 +10,7 @@ import { join, delimiter, basename } from 'path'
 import * as Sentry from '@sentry/electron/main'
 import { redactSensitiveHeadersInPlace, redactSensitiveKeysInPlace } from '@craft-agent/shared/utils'
 import { getLocalizedProductName } from '@craft-agent/shared/branding'
+import { applyRuntimeToolEnvironment } from './runtime-toolchains'
 
 // Keep Electron-managed state separate from every Craft Agents installation,
 // including development launches where Electron would otherwise derive the
@@ -213,6 +214,10 @@ if (isDebugMode) {
   // - binDir exposes wrapper commands (pdf-tool, docx-tool, ...)
   // - uvPlatformDir exposes raw `uv` for direct shell usage / debugging
   process.env.PATH = `${binDir}${delimiter}${uvPlatformDir}${delimiter}${process.env.PATH}`
+
+  // JDK, Python and Node are shipped with desktop builds. User-selected paths
+  // override one runtime at a time; every new agent subprocess inherits them.
+  applyRuntimeToolEnvironment()
 
   if (!bundledUvExists) {
     mainLog.warn('Bundled uv binary missing, CLI document tools may fail unless uv is available on PATH.', {

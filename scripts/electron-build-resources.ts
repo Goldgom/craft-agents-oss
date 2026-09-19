@@ -9,6 +9,7 @@ import {
   copySessionServer,
   verifyMcpServersExist,
   downloadGitBash,
+  downloadWindowsToolchains,
   downloadUv,
   type Arch,
   type BuildConfig,
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
   // Windows packages include an official PortableGit runtime so Bash and Git
   // work on a clean machine without a separate system installation.
   await downloadGitBash(buildConfig);
+  await downloadWindowsToolchains(buildConfig);
 
   if (existsSync(srcDir)) {
     cpSync(srcDir, destDir, { recursive: true, force: true });

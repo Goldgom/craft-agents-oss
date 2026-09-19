@@ -257,6 +257,7 @@ export const RPC_CHANNELS = {
     START_OAUTH: 'tokennest:startOAuth',
     COMPLETE_OAUTH: 'tokennest:completeOAuth',
     CANCEL_OAUTH: 'tokennest:cancelOAuth',
+    GET_USAGE: 'tokennest:getUsage',
   },
   copilot: {
     START_OAUTH: 'copilot:startOAuth',
@@ -398,6 +399,8 @@ export const RPC_CHANNELS = {
     SET_BROWSER_TOOL_ENABLED: 'tools:setBrowserToolEnabled',
     GET_REQUIRE_SOURCE_GUIDE: 'tools:getRequireSourceGuide',
     SET_REQUIRE_SOURCE_GUIDE: 'tools:setRequireSourceGuide',
+    GET_RUNTIME_TOOLS: 'tools:getRuntimeTools',
+    SET_RUNTIME_TOOL_PATH: 'tools:setRuntimeToolPath',
   },
   caching: {
     GET_EXTENDED_PROMPT_CACHE: 'caching:getExtendedPromptCache',

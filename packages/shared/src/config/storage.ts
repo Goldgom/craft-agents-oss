@@ -90,6 +90,9 @@ export interface StoredConfig {
   networkProxy?: import('./types.ts').NetworkProxySettings;
   // Windows: path to Git Bash (bash.exe) for the SDK subprocess
   gitBashPath?: string;
+  // Optional local overrides for the JDK, Python and Node runtimes. Empty/missing
+  // values use the copies bundled with the desktop application.
+  runtimeToolPaths?: import('./types.ts').RuntimeToolPaths;
   // Selected theme pack id (theme-packs/<id>/). Undefined = no pack.
   themePack?: string;
   // User chose "Setup later" during onboarding — skip showing onboarding on next launch
@@ -651,6 +654,26 @@ export function clearGitBashPath(): void {
   if (!config || !config.gitBashPath) return;
   delete config.gitBashPath;
   saveConfig(config);
+}
+
+export function getRuntimeToolPaths(): import('./types.ts').RuntimeToolPaths {
+  const config = loadStoredConfig();
+  return { ...(config?.runtimeToolPaths ?? {}) };
+}
+
+export function setRuntimeToolPath(
+  tool: import('./types.ts').RuntimeToolId,
+  path: string | undefined,
+): boolean {
+  const config = loadStoredConfig();
+  if (!config) return false;
+  const next = { ...(config.runtimeToolPaths ?? {}) };
+  const normalized = path?.trim();
+  if (normalized) next[tool] = normalized;
+  else delete next[tool];
+  config.runtimeToolPaths = next;
+  saveConfig(config);
+  return true;
 }
 
 // Note: getDefaultWorkingDirectory/setDefaultWorkingDirectory removed

@@ -477,6 +477,7 @@ export function useInlineMention({
   onSelect,
   workspaceId,
 }: UseInlineMentionOptions): UseInlineMentionReturn {
+  const { t } = useTranslation()
   const [isOpen, setIsOpen] = React.useState(false)
   const [filter, setFilter] = React.useState('')
   // committedFilter: only updates when IPC returns (or immediately when no IPC needed).
@@ -511,7 +512,7 @@ export function useInlineMention({
     if (skills.length > 0) {
       result.push({
         id: 'skills',
-        label: 'Skills',
+        label: t('sidebar.skills'),
         items: skills.map(skill => ({
           id: skill.slug,
           type: 'skill' as const,
@@ -526,7 +527,7 @@ export function useInlineMention({
     if (sources.length > 0) {
       result.push({
         id: 'sources',
-        label: 'Sources',
+        label: t('sidebar.sources'),
         items: sources
           .filter(source => source.config.slug && source.config.name)
           .map(source => ({
@@ -549,7 +550,7 @@ export function useInlineMention({
     }
 
     return result
-  }, [skills, sources, fileResults])
+  }, [skills, sources, fileResults, t])
 
   const handleInputChange = React.useCallback((value: string, cursorPosition: number) => {
     // Store current state for handleSelect

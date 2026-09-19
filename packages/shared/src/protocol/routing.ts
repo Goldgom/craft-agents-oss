@@ -186,6 +186,8 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.GET_REQUIRE_SOURCE_GUIDE,
   RPC_CHANNELS.tools.SET_REQUIRE_SOURCE_GUIDE,
+  RPC_CHANNELS.tools.GET_RUNTIME_TOOLS,
+  RPC_CHANNELS.tools.SET_RUNTIME_TOOL_PATH,
 
   // browserPane — Electron BrowserView
   RPC_CHANNELS.browserPane.CREATE,
@@ -367,6 +369,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.tokennest.START_OAUTH,
   RPC_CHANNELS.tokennest.COMPLETE_OAUTH,
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
+  RPC_CHANNELS.tokennest.GET_USAGE,
 
   // copilot — OAuth via capability passthrough
   RPC_CHANNELS.copilot.START_OAUTH,

@@ -194,6 +194,9 @@ win:
     # unless the user has explicitly selected a custom Git Bash path.
     - from: vendor/git-bash
       to: app/vendor/git-bash
+    # Complete JDK, CPython/pip and Node/npm distributions for clean machines.
+    - from: vendor/toolchains
+      to: app/vendor/toolchains
     - from: resources/bin/win32-x64
       to: app/resources/bin/win32-x64
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).

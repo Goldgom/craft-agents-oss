@@ -556,6 +556,8 @@ export interface ElectronAPI {
   // Workspace tool and feature guide catalogs
   listWorkspaceTools(workspaceId: string): Promise<import('@craft-agent/shared/protocol').WorkspaceToolCatalogResult>
   listFeatureGuides(workspaceId: string): Promise<import('@craft-agent/shared/protocol').FeatureGuideCatalogItem[]>
+  getRuntimeTools(): Promise<import('@craft-agent/shared/config/types').RuntimeToolStatus[]>
+  setRuntimeToolPath(tool: import('@craft-agent/shared/config/types').RuntimeToolId, path?: string): Promise<import('@craft-agent/shared/config/types').RuntimeToolStatus[]>
 
   // Data migration (跨系统迁移数据)
   exportAllData(): Promise<ExportAllDataResponse>
@@ -820,9 +822,11 @@ export interface ElectronAPI {
   getDefaultThinkingLevel(): Promise<ThinkingLevel>
   setDefaultThinkingLevel(level: ThinkingLevel): Promise<{ success: boolean; error?: string }>
   setWorkspaceDefaultLlmConnection(workspaceId: string, slug: string | null): Promise<{ success: boolean; error?: string }>
+  refreshLlmConnectionModels(slug: string): Promise<{ success: boolean; error?: string }>
   getLlmConnectionBalances(): Promise<Array<import('@craft-agent/shared/protocol').LlmConnectionBalance>>
   getShowApiBalances(): Promise<boolean>
   setShowApiBalances(enabled: boolean): Promise<void>
+  getTokenNestUsage(args: { connectionSlug: string; days?: number }): Promise<import('@craft-agent/shared/protocol').TokenNestUsageSnapshot>
 
   // Projects (workspace-scoped)
   getProjects(workspaceId: string): Promise<unknown>

@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Check } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { FilterableSelectPopover } from '@craft-agent/ui'
 
 import { cn } from '@/lib/utils'
@@ -33,6 +34,8 @@ export function SkillSelectorPopover({
   onToggleSlug,
   workspaceId,
 }: SkillSelectorPopoverProps) {
+  const { t } = useTranslation()
+
   return (
     <FilterableSelectPopover
       open={open}
@@ -43,15 +46,15 @@ export function SkillSelectorPopover({
       getLabel={(skill) => skill.metadata.name}
       isSelected={(skill) => selectedSlugs.includes(skill.slug)}
       onToggle={(skill) => onToggleSlug(skill.slug)}
-      filterPlaceholder="Search skills..."
+      filterPlaceholder={t('common.search')}
       emptyState={(
         <>
-          No skills configured.
+          {t('skillsList.noSkillsConfigured')}
           <br />
-          Add skills in Settings.
+          {t('skillsList.emptyDescription')}
         </>
       )}
-      noResultsState="No matching skills."
+      noResultsState={t('chat.noResults')}
       minWidth={200}
       maxWidth={320}
       renderItem={(skill, state) => (
