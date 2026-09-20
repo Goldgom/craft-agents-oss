@@ -116,7 +116,7 @@
     },
     "apps/cli": {
       "name": "@craft-agent/cli",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "bin": {
         "craft-cli": "src/index.ts",
       },
@@ -132,7 +132,7 @@
     },
     "apps/electron": {
       "name": "@tokenbird/electron",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/messaging-gateway": "workspace:*",
@@ -182,37 +182,9 @@
         "@types/ws": "^8.18.1",
       },
     },
-    "apps/viewer": {
-      "name": "@craft-agent/viewer",
-      "version": "26.9.15",
-      "dependencies": {
-        "@craft-agent/core": "workspace:*",
-        "@craft-agent/ui": "workspace:*",
-        "react": "^18.3.1",
-        "react-dom": "^18.3.1",
-        "react-i18next": "^17.0.2",
-      },
-      "devDependencies": {
-        "@tailwindcss/typography": "^0.5.16",
-        "@tailwindcss/vite": "^4.0.0",
-        "@vitejs/plugin-react": "^4.4.1",
-        "class-variance-authority": "^0.7.1",
-        "clsx": "^2.1.1",
-        "lucide-react": "^0.501.0",
-        "motion": "^12.0.0",
-        "react-markdown": "^9.0.3",
-        "rehype-raw": "^7.0.0",
-        "remark-gfm": "^4.0.1",
-        "shiki": "^3.0.0",
-        "tailwind-merge": "^2.6.0",
-        "tailwindcss": "^4.0.0",
-        "typescript": "^5.7.3",
-        "vite": "^6.2.5",
-      },
-    },
     "apps/webui": {
       "name": "@craft-agent/webui",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@craft-agent/shared": "workspace:*",
         "@craft-agent/ui": "workspace:*",
@@ -227,7 +199,7 @@
     },
     "packages/core": {
       "name": "@craft-agent/core",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "devDependencies": {
         "@types/uuid": "^11.0.0",
       },
@@ -238,7 +210,7 @@
     },
     "packages/messaging-gateway": {
       "name": "@craft-agent/messaging-gateway",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/messaging-whatsapp-worker": "workspace:*",
@@ -254,7 +226,7 @@
     },
     "packages/messaging-qqbot-worker": {
       "name": "@craft-agent/messaging-qqbot-worker",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@tencent-connect/qqbot-nodejs": "^1.0.4",
       },
@@ -265,7 +237,7 @@
     },
     "packages/messaging-whatsapp-worker": {
       "name": "@craft-agent/messaging-whatsapp-worker",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@whiskeysockets/baileys": "^6.7.0",
       },
@@ -276,7 +248,7 @@
     },
     "packages/pi-agent-server": {
       "name": "@craft-agent/pi-agent-server",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "bin": {
         "pi-agent-server": "./dist/index.js",
       },
@@ -295,7 +267,7 @@
     },
     "packages/server": {
       "name": "@craft-agent/server",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "bin": {
         "craft-server": "src/index.ts",
       },
@@ -313,7 +285,7 @@
     },
     "packages/server-core": {
       "name": "@craft-agent/server-core",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/shared": "workspace:*",
@@ -329,7 +301,7 @@
     },
     "packages/session-mcp-server": {
       "name": "@craft-agent/session-mcp-server",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "bin": {
         "session-mcp-server": "./dist/index.js",
       },
@@ -345,7 +317,7 @@
     },
     "packages/session-tools-core": {
       "name": "@craft-agent/session-tools-core",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "beautiful-mermaid": "*",
         "gray-matter": "^4.0.3",
@@ -358,7 +330,7 @@
     },
     "packages/shared": {
       "name": "@craft-agent/shared",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/session-tools-core": "workspace:*",
@@ -390,7 +362,7 @@
     },
     "packages/ui": {
       "name": "@craft-agent/ui",
-      "version": "26.9.15",
+      "version": "26.9.20",
       "dependencies": {
         "@craft-agent/core": "workspace:*",
         "@craft-agent/shared": "workspace:*",
@@ -666,8 +638,6 @@
     "@craft-agent/shared": ["@craft-agent/shared@workspace:packages/shared"],
 
     "@craft-agent/ui": ["@craft-agent/ui@workspace:packages/ui"],
-
-    "@craft-agent/viewer": ["@craft-agent/viewer@workspace:apps/viewer"],
 
     "@craft-agent/webui": ["@craft-agent/webui@workspace:apps/webui"],
 
@@ -3735,14 +3705,6 @@
 
     "@craft-agent/session-tools-core/zod": ["zod@3.25.76", "http://registry.npm.taobao.org/zod/-/zod-3.25.76.tgz", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
-    "@craft-agent/viewer/@vitejs/plugin-react": ["@vitejs/plugin-react@4.7.0", "http://registry.npm.taobao.org/@vitejs/plugin-react/-/plugin-react-4.7.0.tgz", { "dependencies": { "@babel/core": "^7.28.0", "@babel/plugin-transform-react-jsx-self": "^7.27.1", "@babel/plugin-transform-react-jsx-source": "^7.27.1", "@rolldown/pluginutils": "1.0.0-beta.27", "@types/babel__core": "^7.20.5", "react-refresh": "^0.17.0" }, "peerDependencies": { "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0" } }, "sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA=="],
-
-    "@craft-agent/viewer/lucide-react": ["lucide-react@0.501.0", "http://registry.npm.taobao.org/lucide-react/-/lucide-react-0.501.0.tgz", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-E2KoyhW59fCb/yUbR3rbDer83fqn7a8NG91ZhIot2yWaPHjPyGzzsNKh40N//GezYShAuycf3TcQksRQznIsRw=="],
-
-    "@craft-agent/viewer/react-markdown": ["react-markdown@9.1.0", "http://registry.npm.taobao.org/react-markdown/-/react-markdown-9.1.0.tgz", { "dependencies": { "@types/hast": "^3.0.0", "@types/mdast": "^4.0.0", "devlop": "^1.0.0", "hast-util-to-jsx-runtime": "^2.0.0", "html-url-attributes": "^3.0.0", "mdast-util-to-hast": "^13.0.0", "remark-parse": "^11.0.0", "remark-rehype": "^11.0.0", "unified": "^11.0.0", "unist-util-visit": "^5.0.0", "vfile": "^6.0.0" }, "peerDependencies": { "@types/react": ">=18", "react": ">=18" } }, "sha512-xaijuJB0kzGiUdG7nc2MOMDUDBWPyGAjZtUrow9XxUeua8IqeP+VlIfAZ3bphpcLTnSZXz6z9jcVC/TCwbfgdw=="],
-
-    "@craft-agent/viewer/tailwind-merge": ["tailwind-merge@2.6.0", "http://registry.npm.taobao.org/tailwind-merge/-/tailwind-merge-2.6.0.tgz", {}, "sha512-P+Vu1qXfzediirmHOC3xKGAYeZtPcV9g76X+xg2FD4tYgR71ewMA35Y3sCz3zhiN/dwefRpJX0yBcgwi1fXNQA=="],
-
     "@earendil-works/chord/esbuild": ["esbuild@0.28.1", "https://registry.npmmirror.com/esbuild/-/esbuild-0.28.1.tgz", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.28.1", "@esbuild/android-arm": "0.28.1", "@esbuild/android-arm64": "0.28.1", "@esbuild/android-x64": "0.28.1", "@esbuild/darwin-arm64": "0.28.1", "@esbuild/darwin-x64": "0.28.1", "@esbuild/freebsd-arm64": "0.28.1", "@esbuild/freebsd-x64": "0.28.1", "@esbuild/linux-arm": "0.28.1", "@esbuild/linux-arm64": "0.28.1", "@esbuild/linux-ia32": "0.28.1", "@esbuild/linux-loong64": "0.28.1", "@esbuild/linux-mips64el": "0.28.1", "@esbuild/linux-ppc64": "0.28.1", "@esbuild/linux-riscv64": "0.28.1", "@esbuild/linux-s390x": "0.28.1", "@esbuild/linux-x64": "0.28.1", "@esbuild/netbsd-arm64": "0.28.1", "@esbuild/netbsd-x64": "0.28.1", "@esbuild/openbsd-arm64": "0.28.1", "@esbuild/openbsd-x64": "0.28.1", "@esbuild/openharmony-arm64": "0.28.1", "@esbuild/sunos-x64": "0.28.1", "@esbuild/win32-arm64": "0.28.1", "@esbuild/win32-ia32": "0.28.1", "@esbuild/win32-x64": "0.28.1" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw=="],
 
     "@earendil-works/pi-ai/@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.123.0", "https://registry.npmmirror.com/@anthropic-ai/sdk/-/sdk-0.123.0.tgz", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-Y9oX9mPNGZClHQOFqrWRk43Srcu/UHuPq3rfxxOq7JgW0gi+lJA2MAOK4Ul3k/+AUrwRWFJvd0tK3oC0Pw25dw=="],
@@ -4178,10 +4140,6 @@
     "@craft-agent/server/@types/node/undici-types": ["undici-types@6.21.0", "http://registry.npm.taobao.org/undici-types/-/undici-types-6.21.0.tgz", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@craft-agent/session-mcp-server/@types/node/undici-types": ["undici-types@6.21.0", "http://registry.npm.taobao.org/undici-types/-/undici-types-6.21.0.tgz", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
-
-    "@craft-agent/viewer/@vitejs/plugin-react/@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.0-beta.27", "http://registry.npm.taobao.org/@rolldown/pluginutils/-/pluginutils-1.0.0-beta.27.tgz", {}, "sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA=="],
-
-    "@craft-agent/viewer/@vitejs/plugin-react/react-refresh": ["react-refresh@0.17.0", "http://registry.npm.taobao.org/react-refresh/-/react-refresh-0.17.0.tgz", {}, "sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ=="],
 
     "@earendil-works/chord/esbuild/@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.28.1", "https://registry.npmmirror.com/@esbuild/aix-ppc64/-/aix-ppc64-0.28.1.tgz", { "os": "aix", "cpu": "ppc64" }, "sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ=="],
 

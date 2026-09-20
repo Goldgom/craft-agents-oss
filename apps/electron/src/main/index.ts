@@ -11,6 +11,7 @@ import * as Sentry from '@sentry/electron/main'
 import { redactSensitiveHeadersInPlace, redactSensitiveKeysInPlace } from '@craft-agent/shared/utils'
 import { getLocalizedProductName } from '@craft-agent/shared/branding'
 import { applyRuntimeToolEnvironment } from './runtime-toolchains'
+import { exportChatTranscript } from './chat-export'
 
 // Keep Electron-managed state separate from every Craft Agents installation,
 // including development launches where Electron would otherwise derive the
@@ -886,6 +887,13 @@ app.whenReady().then(async () => {
         || BrowserWindow.getAllWindows()[0]
       const result = await dialog.showSaveDialog(win, spec)
       return { canceled: result.canceled, filePath: result.filePath }
+    })
+    ipcMain.handle('__chat:export', async (event, request) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+        || BrowserWindow.getFocusedWindow()
+        || BrowserWindow.getAllWindows()[0]
+        || null
+      return exportChatTranscript(win, request)
     })
 
     // `localbash` bridge — the remote server asks THIS machine to run a shell

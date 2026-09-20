@@ -617,6 +617,7 @@ if (isClientOnly) {
   })
   return result.canceled ? null : result.filePath ?? null
 }
+;(api as ElectronAPI).exportChatTranscript = (request) => ipcRenderer.invoke('__chat:export', request)
 
 // These APIs describe or operate on the client application. Do not route them
 // over WebSocket: a thin client has no embedded RPC server, and the remote

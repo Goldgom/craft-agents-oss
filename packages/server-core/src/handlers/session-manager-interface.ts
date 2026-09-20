@@ -21,7 +21,6 @@ import type {
   CredentialResponse,
   PermissionModeState,
   UnreadSummary,
-  ShareResult,
 } from '@craft-agent/shared/protocol'
 import type { SessionBundle, DispatchMode, SessionCollaboration } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
@@ -182,14 +181,6 @@ export interface ISessionManager {
    * the same server-side effect as the desktop accept button.
    */
   acceptPlan(sessionId: string, planPath?: string): Promise<void>
-
-  // ---------------------------------------------------------------------------
-  // Sharing
-  // ---------------------------------------------------------------------------
-
-  shareToViewer(sessionId: string): Promise<ShareResult>
-  updateShare(sessionId: string): Promise<ShareResult>
-  revokeShare(sessionId: string): Promise<ShareResult>
 
   // ---------------------------------------------------------------------------
   // Export / Import

@@ -29,7 +29,6 @@ const EN_PATH = join(ROOT, 'packages/shared/src/i18n/locales/en.json')
 
 const SCAN_DIRS = [
   'apps/electron/src',
-  'apps/viewer/src',
   'apps/webui/src',
   'packages/shared/src',
   'packages/ui/src',

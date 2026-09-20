@@ -247,7 +247,7 @@ mock.module('@craft-agent/shared/sessions', () => ({
       'lastReadMessageId','hasUnread',
       'enabledSourceSlugs','permissionMode','previousPermissionMode','workingDirectory',
       'model','llmConnection','connectionLocked','thinkingLevel',
-      'sharedUrl','sharedId','pendingPlanExecution',
+      'pendingPlanExecution',
       'isArchived','archivedAt',
       'branchFromMessageId','branchFromSdkSessionId','branchFromSessionPath',
     ]

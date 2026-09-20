@@ -817,10 +817,6 @@ interface ManagedSession {
   // SDK cwd for session storage - set once at creation, never changes.
   // Ensures SDK can find session transcripts regardless of workingDirectory changes.
   sdkCwd?: string
-  // Shared viewer URL (if shared via viewer)
-  sharedUrl?: string
-  // Shared session ID in viewer (for revoke)
-  sharedId?: string
   // Model to use for this session (overrides global config if set)
   model?: string
   // LLM connection slug for this session (locked after first message)
@@ -2369,8 +2365,6 @@ export class SessionManager implements ISessionManager {
       if (managed.enabledSourceSlugs === undefined) managed.enabledSourceSlugs = stored.enabledSourceSlugs
       if (managed.lastReadMessageId === undefined) managed.lastReadMessageId = stored.lastReadMessageId
       if (managed.hasUnread === undefined) managed.hasUnread = stored.hasUnread
-      if (managed.sharedUrl === undefined) managed.sharedUrl = stored.sharedUrl
-      if (managed.sharedId === undefined) managed.sharedId = stored.sharedId
       if (managed.transferredSessionSummary === undefined) managed.transferredSessionSummary = stored.transferredSessionSummary
       if (managed.transferredSessionSummaryApplied === undefined) managed.transferredSessionSummaryApplied = stored.transferredSessionSummaryApplied
 
@@ -2839,8 +2833,6 @@ export class SessionManager implements ISessionManager {
       managed.lastReadMessageId = storedSession.lastReadMessageId
       managed.hasUnread = storedSession.hasUnread  // Explicit unread flag for NEW badge state machine
       managed.enabledSourceSlugs = storedSession.enabledSourceSlugs
-      managed.sharedUrl = storedSession.sharedUrl
-      managed.sharedId = storedSession.sharedId
       // Sync name from disk - ensures title persistence across lazy loading
       managed.name = storedSession.name
       // Restore LLM connection state - ensures correct provider on resume
@@ -5598,174 +5590,6 @@ export class SessionManager implements ISessionManager {
   }
 
   // ============================================
-  // Session Sharing
-  // ============================================
-
-  /**
-   * Share session to the web viewer
-   * Uploads session data and returns shareable URL
-   */
-  async shareToViewer(sessionId: string): Promise<import('@craft-agent/shared/protocol').ShareResult> {
-    const managed = this.sessions.get(sessionId)
-    if (!managed) {
-      return { success: false, error: 'Session not found' }
-    }
-
-    // Signal async operation start for shimmer effect
-    managed.isAsyncOperationOngoing = true
-    this.sendEvent({ type: 'async_operation', sessionId, isOngoing: true }, managed.workspace.id)
-
-    try {
-      // Load session directly from disk (already in correct format)
-      const storedSession = loadStoredSession(managed.workspace.rootPath, sessionId)
-      if (!storedSession) {
-        return { success: false, error: 'Session file not found' }
-      }
-
-      const { VIEWER_URL } = await import('@craft-agent/shared/branding')
-      const response = await fetch(`${VIEWER_URL}/s/api`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(storedSession)
-      })
-
-      if (!response.ok) {
-        sessionLog.error(`Share failed with status ${response.status}`)
-        if (response.status === 413) {
-          return { success: false, error: 'Session file is too large to share' }
-        }
-        return { success: false, error: 'Failed to upload session' }
-      }
-
-      const data = await response.json() as { id: string; url: string }
-
-      // Store shared info in session
-      managed.sharedUrl = data.url
-      managed.sharedId = data.id
-      const workspaceRootPath = managed.workspace.rootPath
-      await updateSessionMetadata(workspaceRootPath, sessionId, {
-        sharedUrl: data.url,
-        sharedId: data.id,
-      })
-
-      sessionLog.info(`Session ${sessionId} shared at ${data.url}`)
-      // Notify all windows for this workspace
-      this.sendEvent({ type: 'session_shared', sessionId, sharedUrl: data.url }, managed.workspace.id)
-      return { success: true, url: data.url }
-    } catch (error) {
-      sessionLog.error('Share error:', error)
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
-    } finally {
-      // Signal async operation end
-      managed.isAsyncOperationOngoing = false
-      this.sendEvent({ type: 'async_operation', sessionId, isOngoing: false }, managed.workspace.id)
-    }
-  }
-
-  /**
-   * Update an existing shared session
-   * Re-uploads session data to the same URL
-   */
-  async updateShare(sessionId: string): Promise<import('@craft-agent/shared/protocol').ShareResult> {
-    const managed = this.sessions.get(sessionId)
-    if (!managed) {
-      return { success: false, error: 'Session not found' }
-    }
-    if (!managed.sharedId) {
-      return { success: false, error: 'Session not shared' }
-    }
-
-    // Signal async operation start for shimmer effect
-    managed.isAsyncOperationOngoing = true
-    this.sendEvent({ type: 'async_operation', sessionId, isOngoing: true }, managed.workspace.id)
-
-    try {
-      // Load session directly from disk (already in correct format)
-      const storedSession = loadStoredSession(managed.workspace.rootPath, sessionId)
-      if (!storedSession) {
-        return { success: false, error: 'Session file not found' }
-      }
-
-      const { VIEWER_URL } = await import('@craft-agent/shared/branding')
-      const response = await fetch(`${VIEWER_URL}/s/api/${managed.sharedId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(storedSession)
-      })
-
-      if (!response.ok) {
-        sessionLog.error(`Update share failed with status ${response.status}`)
-        if (response.status === 413) {
-          return { success: false, error: 'Session file is too large to share' }
-        }
-        return { success: false, error: 'Failed to update shared session' }
-      }
-
-      sessionLog.info(`Session ${sessionId} share updated at ${managed.sharedUrl}`)
-      return { success: true, url: managed.sharedUrl }
-    } catch (error) {
-      sessionLog.error('Update share error:', error)
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
-    } finally {
-      // Signal async operation end
-      managed.isAsyncOperationOngoing = false
-      this.sendEvent({ type: 'async_operation', sessionId, isOngoing: false }, managed.workspace.id)
-    }
-  }
-
-  /**
-   * Revoke a shared session
-   * Deletes from viewer and clears local shared state
-   */
-  async revokeShare(sessionId: string): Promise<import('@craft-agent/shared/protocol').ShareResult> {
-    const managed = this.sessions.get(sessionId)
-    if (!managed) {
-      return { success: false, error: 'Session not found' }
-    }
-    if (!managed.sharedId) {
-      return { success: false, error: 'Session not shared' }
-    }
-
-    // Signal async operation start for shimmer effect
-    managed.isAsyncOperationOngoing = true
-    this.sendEvent({ type: 'async_operation', sessionId, isOngoing: true }, managed.workspace.id)
-
-    try {
-      const { VIEWER_URL } = await import('@craft-agent/shared/branding')
-      const response = await fetch(
-        `${VIEWER_URL}/s/api/${managed.sharedId}`,
-        { method: 'DELETE' }
-      )
-
-      if (!response.ok) {
-        sessionLog.error(`Revoke failed with status ${response.status}`)
-        return { success: false, error: 'Failed to revoke share' }
-      }
-
-      // Clear shared info
-      delete managed.sharedUrl
-      delete managed.sharedId
-      const workspaceRootPath = managed.workspace.rootPath
-      await updateSessionMetadata(workspaceRootPath, sessionId, {
-        sharedUrl: undefined,
-        sharedId: undefined,
-      })
-
-      sessionLog.info(`Session ${sessionId} share revoked`)
-      // Notify all windows for this workspace
-      this.sendEvent({ type: 'session_unshared', sessionId }, managed.workspace.id)
-      return { success: true }
-    } catch (error) {
-      sessionLog.error('Revoke error:', error)
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
-    } finally {
-      // Signal async operation end
-      managed.isAsyncOperationOngoing = false
-      this.sendEvent({ type: 'async_operation', sessionId, isOngoing: false }, managed.workspace.id)
-    }
-  }
-
-  // ============================================
   // Session Sources
   // ============================================
 
@@ -6507,24 +6331,6 @@ export class SessionManager implements ISessionManager {
       // Brief wait for the query to finish tearing down before we delete session files.
       // Prevents file corruption from overlapping writes during rapid delete operations.
       await new Promise(resolve => setTimeout(resolve, 100))
-    }
-
-    // Revoke share if session was shared (prevent orphaned viewer copies)
-    if (managed.sharedId) {
-      try {
-        const { VIEWER_URL } = await import('@craft-agent/shared/branding')
-        const response = await fetch(
-          `${VIEWER_URL}/s/api/${managed.sharedId}`,
-          { method: 'DELETE', signal: AbortSignal.timeout(5000) }
-        )
-        if (!response.ok) {
-          sessionLog.warn(`Failed to revoke share for ${sessionId}: HTTP ${response.status}`)
-        } else {
-          sessionLog.info(`Revoked share for deleted session ${sessionId}`)
-        }
-      } catch (error) {
-        sessionLog.warn(`Failed to revoke share for ${sessionId}:`, error)
-      }
     }
 
     // Clean up delta flush timers to prevent orphaned timers
@@ -9850,8 +9656,6 @@ export class SessionManager implements ISessionManager {
 
     // Fork-specific: clear sharing state and attempt resume-first strategy
     if (mode === 'fork') {
-      storedSession.sharedUrl = undefined
-      storedSession.sharedId = undefined
 
       // Resume-first: try to find a compatible LLM connection on the target workspace.
       // If found and the session has an sdkSessionId, preserve it for API-level resume.

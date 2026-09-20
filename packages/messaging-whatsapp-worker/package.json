@@ -1,6 +1,6 @@
 {
   "name": "@craft-agent/messaging-whatsapp-worker",
-  "version": "26.9.15",
+  "version": "26.9.20",
   "license": "Apache-2.0",
   "description": "WhatsApp worker subprocess for TokenBird (Baileys-based, unofficial API)",
   "type": "module",

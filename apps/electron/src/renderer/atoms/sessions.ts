@@ -31,9 +31,6 @@ export interface SessionMeta {
   workingDirectory?: string
   enabledSourceSlugs?: string[]
   /** Shared viewer URL (if shared via viewer) */
-  sharedUrl?: string
-  /** Shared session ID in viewer (for revoke) */
-  sharedId?: string
   /** ID of the last final (non-intermediate) assistant message - for unread detection */
   lastFinalMessageId?: string
   /**

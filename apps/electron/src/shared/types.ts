@@ -268,7 +268,6 @@ import type {
   PermissionResponseOptions,
   CredentialResponse,
   SessionCommand,
-  ShareResult,
   RefreshTitleResult,
   FileSearchResult,
   SessionSearchResult,
@@ -327,7 +326,10 @@ export interface ElectronAPI {
   respondToCredential(sessionId: string, requestId: string, response: CredentialResponse): Promise<boolean>
 
   // Consolidated session command handler
-  sessionCommand(sessionId: string, command: SessionCommand): Promise<void | ShareResult | RefreshTitleResult | { count: number }>
+  sessionCommand(sessionId: string, command: SessionCommand): Promise<void | RefreshTitleResult | { count: number }>
+
+  /** Export the currently loaded conversation on this device without uploading it. */
+  exportChatTranscript(request: import('../main/chat-export').ChatExportRequest): Promise<import('../main/chat-export').ChatExportResult>
 
   // Server info (REMOTE_ELIGIBLE — returns data from whichever server owns the workspace)
   getServerHomeDir(): Promise<string>

@@ -88,7 +88,7 @@ Keys use **flat dot-notation** with a category prefix:
 | `sessionMenu.*` | Session context menu actions | `sessionMenu.archive` |
 | `settings.*` | Settings pages — nested by page ID | `settings.ai.connections` |
 | `chat.*` | Chat input, session viewer, inline UI | `chat.attachFiles` |
-| `toast.*` | Toast/notification messages | `toast.failedToShare` |
+| `toast.*` | Toast/notification messages | `toast.unknownError` |
 | `errors.*` | Error screens | `errors.sessionNotFound` |
 | `onboarding.*` | Onboarding flow — nested by step | `onboarding.welcome.title` |
 | `dialog.*` | Modal dialogs | `dialog.reset.title` |

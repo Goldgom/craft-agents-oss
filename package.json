@@ -1,6 +1,6 @@
 {
   "name": "tokenbird",
-  "version": "26.9.15",
+  "version": "26.9.20",
   "license": "Apache-2.0",
   "description": "TokenBird AI agent workspace, deeply integrated with TokenNest",
   "type": "module",
@@ -86,10 +86,6 @@
     "electron:dist:dev:win": "CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --win",
     "electron:dist:dev:linux": "CRAFT_DEV_RUNTIME=1 bun run electron:build && cd apps/electron && electron-builder --config electron-builder.yml --linux",
     "playground:dev": "lsof -ti:5173 | xargs kill -9 2>/dev/null; vite dev --config apps/electron/vite.config.ts --open /playground.html",
-    "viewer:dev": "lsof -ti:5174 | xargs kill -9 2>/dev/null; vite dev --config apps/viewer/vite.config.ts --open /s/tz5-13I84pwK_he",
-    "viewer:typecheck": "cd apps/viewer && bun run typecheck",
-    "viewer:build": "vite build --config apps/viewer/vite.config.ts",
-    "viewer:preview": "vite preview --config apps/viewer/vite.config.ts",
     "webui:dev": "lsof -ti:5175 | xargs kill -9 2>/dev/null; vite dev --config apps/webui/vite.config.ts",
     "webui:clean": "rm -rf apps/webui/dist",
     "webui:build": "vite build --config apps/webui/vite.config.ts",

@@ -362,7 +362,17 @@ async function verifySha512Base64(filePath: string, expectedHash: string): Promi
 async function extractZip(archivePath: string, destination: string): Promise<void> {
   mkdirSync(destination, { recursive: true });
   if (process.platform === 'win32') {
-    await $`powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${destination}' -Force"`.quiet();
+    // Windows PowerShell 5.1 rejects ZIP-compatible archives unless their
+    // filename ends in .zip (NuGet packages use the .nupkg extension).
+    const powershellArchive = archivePath.toLowerCase().endsWith('.zip')
+      ? archivePath
+      : `${archivePath}.zip`;
+    if (powershellArchive !== archivePath) copyFileSync(archivePath, powershellArchive);
+    try {
+      await $`powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '${powershellArchive}' -DestinationPath '${destination}' -Force"`.quiet();
+    } finally {
+      if (powershellArchive !== archivePath) rmSync(powershellArchive, { force: true });
+    }
   } else {
     await $`unzip -q -o ${archivePath} -d ${destination}`;
   }

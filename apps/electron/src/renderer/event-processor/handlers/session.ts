@@ -37,8 +37,6 @@ import type {
   LLMConnectionChangedEvent,
   UserMessageEvent,
   MessageAnnotationsUpdatedEvent,
-  SessionSharedEvent,
-  SessionUnsharedEvent,
   AuthRequestEvent,
   AuthCompletedEvent,
   UsageUpdateEvent,
@@ -907,49 +905,6 @@ export function handlePlanSubmitted(
   return {
     state: {
       session: appendMessage(session, event.message),
-      streaming,
-    },
-    effects: [],
-  }
-}
-
-/**
- * Handle session_shared - session was shared to viewer
- */
-export function handleSessionShared(
-  state: SessionState,
-  event: SessionSharedEvent
-): ProcessResult {
-  const { session, streaming } = state
-
-  return {
-    state: {
-      session: {
-        ...session,
-        sharedUrl: event.sharedUrl,
-      },
-      streaming,
-    },
-    effects: [],
-  }
-}
-
-/**
- * Handle session_unshared - session share was revoked
- */
-export function handleSessionUnshared(
-  state: SessionState,
-  _event: SessionUnsharedEvent
-): ProcessResult {
-  const { session, streaming } = state
-
-  return {
-    state: {
-      session: {
-        ...session,
-        sharedUrl: undefined,
-        sharedId: undefined,
-      },
       streaming,
     },
     effects: [],

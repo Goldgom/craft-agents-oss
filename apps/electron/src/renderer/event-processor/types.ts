@@ -452,23 +452,6 @@ export interface MessageAnnotationsUpdatedEvent {
 }
 
 /**
- * Session shared event - session was shared to viewer
- */
-export interface SessionSharedEvent {
-  type: 'session_shared'
-  sessionId: string
-  sharedUrl: string
-}
-
-/**
- * Session unshared event - session share was revoked
- */
-export interface SessionUnsharedEvent {
-  type: 'session_unshared'
-  sessionId: string
-}
-
-/**
  * Auth request event - unified auth flow (credential or OAuth)
  * Adds auth-request message to session and displays inline auth UI
  */
@@ -560,8 +543,6 @@ export type AgentEvent =
   | WorkflowAgentCompletedEvent
   | UserMessageEvent
   | MessageAnnotationsUpdatedEvent
-  | SessionSharedEvent
-  | SessionUnsharedEvent
   | AuthRequestEvent
   | AuthCompletedEvent
   | SourceActivatedEvent
