@@ -30,6 +30,7 @@ describe('bundled skills', () => {
       expect(builtinSlugs).toContain('document-workflows')
       expect(builtinSlugs).toContain('pages-authoring')
       expect(builtinSlugs).toContain('subagent-collaboration')
+      expect(builtinSlugs).toContain('windows-desktop-control')
       expect(loadSkillBySlug(workspaceRoot, builtin!.slug)?.source).toBe('builtin')
 
       const overrideDir = join(workspaceRoot, 'skills', builtin!.slug)

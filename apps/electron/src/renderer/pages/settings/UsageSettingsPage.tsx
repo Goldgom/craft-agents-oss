@@ -120,8 +120,8 @@ export default function UsageSettingsPage() {
   return <div className="flex h-full flex-col bg-muted/10">
     <PanelHeader title={t('settings.usage.title')} actions={<Button variant="outline" size="sm" disabled={loading} onClick={() => void load()}><RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', loading && 'animate-spin')} />{t('common.refresh')}</Button>} />
     <div className="min-h-0 flex-1"><ScrollArea className="h-full"><div className="mx-auto max-w-6xl space-y-8 px-5 py-7 lg:px-8">
-      <section className="relative overflow-hidden rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.09] via-background to-background p-5 shadow-xs md:p-6">
-        <div className="pointer-events-none absolute -right-16 -top-20 size-56 rounded-full bg-primary/10 blur-3xl" />
+      <section className="relative overflow-hidden rounded-2xl border border-accent/15 bg-gradient-to-br from-accent/[0.09] via-background to-background p-5 shadow-xs md:p-6">
+        <div className="pointer-events-none absolute -right-16 -top-20 size-56 rounded-full bg-accent/10 blur-3xl" />
         <div className="relative flex flex-col gap-5">
           <div className="flex items-start gap-4">
             <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-xs ring-1 ring-black/5"><img src={tokenNestLogo} alt="TokenNest" className="size-9 object-contain" /></div>
@@ -130,8 +130,8 @@ export default function UsageSettingsPage() {
           {tokenNestConnections.length === 0 ? <div className="flex items-center gap-3 rounded-xl border border-dashed bg-background/70 px-4 py-5 text-sm text-muted-foreground"><ServerCog className="size-5 shrink-0" />{t('settings.usage.tokenNestSignInRequired')}</div> : <div className="grid gap-3 xl:grid-cols-2">{tokenNestConnections.map(connection => {
             const balance = balances.find(item => item.connectionSlug === connection.slug) ?? usage[connection.slug]?.balance
             const selected = activeSlug === connection.slug
-            return <div key={connection.slug} role="button" tabIndex={0} onClick={() => setSelectedSlug(connection.slug)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setSelectedSlug(connection.slug) }} className={cn('group rounded-xl border bg-background/90 p-4 transition-colors', selected ? 'border-primary/35 shadow-xs ring-1 ring-primary/10' : 'border-border/70 hover:border-primary/25')}>
-              <div className="flex items-start gap-3"><div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><WalletCards className="size-5" /></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><div className="truncate text-sm font-semibold">{connection.name}</div>{selected && <span className="size-2 shrink-0 rounded-full bg-primary ring-4 ring-primary/10" />}</div><div className="mt-1 text-xs text-muted-foreground">{t('settings.usage.balance')}</div><div className="mt-0.5 text-xl font-semibold tracking-tight tabular-nums">{balanceText(balance)}</div></div></div>
+            return <div key={connection.slug} role="button" tabIndex={0} onClick={() => setSelectedSlug(connection.slug)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setSelectedSlug(connection.slug) }} className={cn('group rounded-xl border bg-background/90 p-4 transition-colors', selected ? 'border-accent/35 shadow-xs ring-1 ring-accent/10' : 'border-border/70 hover:border-accent/25')}>
+              <div className="flex items-start gap-3"><div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent"><WalletCards className="size-5" /></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><div className="truncate text-sm font-semibold">{connection.name}</div>{selected && <span className="size-2 shrink-0 rounded-full bg-accent ring-4 ring-accent/10" />}</div><div className="mt-1 text-xs text-muted-foreground">{t('settings.usage.balance')}</div><div className="mt-0.5 text-xl font-semibold tracking-tight tabular-nums">{balanceText(balance)}</div></div></div>
               <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/50 pt-3" onClick={event => event.stopPropagation()}>
                 {(connection.channelGroups?.length ?? 0) > 0 && <label className="flex h-8 items-center gap-2 rounded-md border bg-muted/30 px-2 text-xs text-muted-foreground">{t('settings.ai.channelGroup')}<select className="max-w-36 bg-transparent text-sm font-medium text-foreground outline-none" value={connection.channelGroup ?? connection.channelGroups?.[0]?.id ?? ''} onChange={event => void changeGroup(connection.slug, event.target.value)}>{connection.channelGroups?.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>}
                 <Button variant="ghost" size="sm" className="ml-auto h-8" disabled={refreshingSlug === connection.slug} onClick={() => void refreshConnection(connection.slug)}><RefreshCw className={cn('mr-1.5 size-3.5', refreshingSlug === connection.slug && 'animate-spin')} />{t('settings.usage.refreshModelsAndGroups')}</Button>
@@ -160,18 +160,53 @@ function UsageDashboard({ title, description, totals, currency, daily, byModel, 
   return <div className="space-y-8"><SettingsSection title={title} description={description}><div className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric icon={Coins} label={t('settings.usage.totalTokens')} value={formatTokens(totals.total)} tone="primary" /><Metric icon={ArrowUpRight} label={t('settings.usage.inputTokens')} value={formatTokens(totals.input)} tone="blue" /><Metric icon={Sparkles} label={t('settings.usage.outputTokens')} value={formatTokens(totals.output)} tone="violet" /><Metric icon={CircleDollarSign} label={t('settings.usage.estimatedCost')} value={formatMoney(totals.cost, currency)} tone="emerald" /></div></SettingsSection><div className="grid gap-7 lg:grid-cols-[1.15fr_0.85fr]"><SettingsSection title={t('settings.usage.dailyTitle')} description={t('settings.usage.last30Days')}><SettingsCard divided={false} className="border border-border/60 shadow-xs"><DailyChart points={daily} empty={t('settings.usage.noRecords')} /></SettingsCard></SettingsSection><SettingsSection title={t('settings.usage.byModelTitle')} description={t('settings.usage.byModelDescription')}><SettingsCard divided={false} className="border border-border/60 shadow-xs"><UsageBars points={byModel.slice(0, 8)} empty={t('settings.usage.noRecords')} /></SettingsCard></SettingsSection></div></div>
 }
 function DailyChart({ points, empty }: { points: TokenNestUsagePoint[]; empty: string }) {
-  const max = Math.max(1, ...points.map(point => point.totalTokens))
   if (!points.length) return <EmptyChart text={empty} />
-  return <div className="p-5"><div className="flex h-44 items-end gap-1.5 border-b border-border/60 pt-4">{points.map(point => <div key={point.key} className="group relative flex h-full min-w-0 flex-1 items-end" title={`${point.label}: ${formatTokens(point.totalTokens)}`}><div className="w-full min-w-1 rounded-t-sm bg-gradient-to-t from-primary/60 to-primary transition-colors group-hover:from-primary/80" style={{ height: `${Math.max(3, point.totalTokens / max * 100)}%` }} /><div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-modal-small group-hover:block"><div>{point.label}</div><div className="font-semibold tabular-nums">{formatTokens(point.totalTokens)}</div></div></div>)}</div><div className="mt-2 flex justify-between text-[11px] text-muted-foreground"><span>{points[0]?.label}</span>{points.length > 2 && <span>{points[Math.floor(points.length / 2)]?.label}</span>}<span>{points.at(-1)?.label}</span></div></div>
+  const safePoints = points.map(point => ({ ...point, totalTokens: Number.isFinite(point.totalTokens) ? Math.max(0, point.totalTokens) : 0 }))
+  const max = Math.max(1, ...safePoints.map(point => point.totalTokens))
+  const chartPoints = safePoints.map((point, index) => ({
+    ...point,
+    x: safePoints.length === 1 ? 50 : (index / (safePoints.length - 1)) * 100,
+    y: 10 + (1 - point.totalTokens / max) * 78,
+  }))
+  const linePath = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+  const areaPath = `${linePath} L ${chartPoints.at(-1)?.x ?? 100} 90 L ${chartPoints[0]?.x ?? 0} 90 Z`
+
+  return <div className="p-5">
+    <div className="relative h-44 border-b border-border/60" role="img" aria-label={safePoints.map(point => `${point.label}: ${formatTokens(point.totalTokens)}`).join(', ')}>
+      <div className="pointer-events-none absolute inset-x-0 top-[10%] border-t border-dashed border-border/40" />
+      <div className="pointer-events-none absolute inset-x-0 top-1/2 border-t border-dashed border-border/30" />
+      <svg className="pointer-events-none absolute inset-0 size-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="daily-usage-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.28" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill="url(#daily-usage-area)" />
+        <path d={linePath} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      {chartPoints.map((point, index) => {
+        const tooltipSide = index === 0 ? 'left-0' : index === chartPoints.length - 1 ? 'right-0' : 'left-1/2 -translate-x-1/2'
+        const tooltipPosition = point.y < 32 ? 'top-full mt-2' : 'bottom-full mb-2'
+        return <div key={point.key} className="group absolute z-10 size-5 -translate-x-1/2 -translate-y-1/2 outline-none" style={{ left: `${point.x}%`, top: `${point.y}%` }} tabIndex={0} aria-label={`${point.label}: ${formatTokens(point.totalTokens)}`}>
+          <span className="absolute left-1/2 top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background bg-accent shadow-xs transition-transform group-hover:scale-125 group-focus-visible:scale-125" />
+          <span className={cn('pointer-events-none absolute hidden whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-modal-small group-hover:block group-focus-visible:block', tooltipSide, tooltipPosition)}>
+            <span className="block">{point.label}</span><span className="block font-semibold tabular-nums">{formatTokens(point.totalTokens)}</span>
+          </span>
+        </div>
+      })}
+    </div>
+    <div className="mt-2 flex justify-between text-[11px] text-muted-foreground"><span>{safePoints[0]?.label}</span>{safePoints.length > 2 && <span>{safePoints[Math.floor(safePoints.length / 2)]?.label}</span>}<span>{safePoints.at(-1)?.label}</span></div>
+  </div>
 }
 function UsageBars({ points, empty }: { points: TokenNestUsagePoint[]; empty: string }) {
   const max = Math.max(1, ...points.map(point => point.totalTokens))
   if (!points.length) return <EmptyChart text={empty} />
-  return <div className="space-y-4 p-5">{points.map((point, index) => <div key={point.key} className="space-y-1.5"><div className="flex items-center gap-3 text-xs"><span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold text-muted-foreground">{index + 1}</span><span className="min-w-0 flex-1 truncate font-medium" title={point.label}>{point.label}</span><span className="shrink-0 font-semibold tabular-nums">{formatTokens(point.totalTokens)}</span></div><div className="ml-8 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary/80" style={{ width: `${Math.max(2, point.totalTokens / max * 100)}%` }} /></div></div>)}</div>
+  return <div className="space-y-4 p-5">{points.map((point, index) => <div key={point.key} className="space-y-1.5"><div className="flex items-center gap-3 text-xs"><span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold text-muted-foreground">{index + 1}</span><span className="min-w-0 flex-1 truncate font-medium" title={point.label}>{point.label}</span><span className="shrink-0 font-semibold tabular-nums">{formatTokens(point.totalTokens)}</span></div><div className="ml-8 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-accent/80" style={{ width: `${Math.max(2, point.totalTokens / max * 100)}%` }} /></div></div>)}</div>
 }
 function UsageRecord({ title, subtitle, tokens, cost }: { title: string; subtitle: string; tokens: number; cost: string }) { return <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3.5 text-sm transition-colors hover:bg-muted/30"><div className="flex size-9 items-center justify-center rounded-full bg-muted/70 text-muted-foreground"><BarChart3 className="size-4" /></div><div className="min-w-0"><div className="truncate font-medium">{title}</div><div className="truncate text-xs text-muted-foreground">{subtitle}</div></div><div className="text-right"><div className="font-medium tabular-nums">{formatTokens(tokens)}</div><div className="text-xs text-muted-foreground">{cost}</div></div></div> }
 function EmptyChart({ text }: { text: string }) { return <div className="flex min-h-48 flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground"><CalendarDays className="size-6 opacity-50" />{text}</div> }
 function EmptyRecords({ text }: { text: string }) { return <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-sm text-muted-foreground"><Inbox className="size-6 opacity-50" />{text}</div> }
 
-const metricTones = { primary: 'bg-primary/10 text-primary', blue: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', violet: 'bg-violet-500/10 text-violet-600 dark:text-violet-400', emerald: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' }
+const metricTones = { primary: 'bg-accent/10 text-accent', blue: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', violet: 'bg-violet-500/10 text-violet-600 dark:text-violet-400', emerald: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' }
 function Metric({ icon: Icon, label, value, tone }: { icon: typeof Coins; label: string; value: string; tone: keyof typeof metricTones }) { return <div className="rounded-xl border border-border/60 bg-background p-4 shadow-xs"><div className={cn('flex size-9 items-center justify-center rounded-lg', metricTones[tone])}><Icon className="size-4" /></div><div className="mt-4 text-xs text-muted-foreground">{label}</div><div className="mt-1 text-xl font-semibold tracking-tight tabular-nums">{value}</div></div> }
