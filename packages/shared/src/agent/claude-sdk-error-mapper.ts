@@ -1,5 +1,5 @@
 import type { SDKAssistantMessageError } from '@anthropic-ai/claude-agent-sdk';
-import type { AgentError } from './errors.ts';
+import { isContentPolicyBlocked, type AgentError } from './errors.ts';
 import type { LastApiError } from '../interceptor-common.ts';
 import { getProviderMetadata, getProviderDisplayName } from '../config/provider-metadata.ts';
 
@@ -219,6 +219,22 @@ export function mapClaudeSdkAssistantError(
   ) ?? undefined;
 
   const retryAction = [{ key: 'r', label: 'Retry', action: 'retry' as const }];
+
+  if (isContentPolicyBlocked([
+    context.capturedApiError?.message,
+    context.actualError?.errorType,
+    context.actualError?.message,
+  ].filter(Boolean).join(' '))) {
+    return {
+      code: 'content_policy_blocked',
+      title: 'Request Blocked by Usage Policy',
+      message: 'Your request violates the AI provider\'s usage policy, so it was blocked. Please revise the request before trying again.',
+      details: apiDetails,
+      actions: [],
+      canRetry: false,
+      providerInfo,
+    };
+  }
 
   const providerError: AgentError = {
     code: 'provider_error',

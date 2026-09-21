@@ -150,6 +150,8 @@
   "chat.connectionDefault": "この接続のデフォルト",
   "chat.connectionUnavailable": "接続を利用できません",
   "chat.connectionUnavailableDescription": "このセッションで使用していた接続は削除されました。続行するには新しいセッションを作成してください。",
+  "chat.contentPolicyBlockedMessage": "リクエストが AI プロバイダーの利用ポリシーに違反したため、ブロックされました。内容を修正してから再試行してください。",
+  "chat.contentPolicyBlockedTitle": "利用ポリシーによりリクエストがブロックされました",
   "chat.context": "コンテキスト",
   "chat.contextBadge": "コンテキストバッジ",
   "chat.contextUsagePercent": "コンテキストを {{percent}}% 使用",

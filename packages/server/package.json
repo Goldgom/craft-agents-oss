@@ -1,6 +1,6 @@
 {
   "name": "@craft-agent/server",
-  "version": "26.9.20",
+  "version": "26.9.21",
   "description": "Standalone headless TokenBird server (Bun runtime)",
   "type": "module",
   "main": "src/index.ts",

@@ -197,6 +197,12 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
     ],
     canRetry: false,
   },
+  content_policy_blocked: {
+    title: 'Request Blocked by Usage Policy',
+    message: 'Your request violates the AI provider\'s usage policy, so it was blocked. Please revise the request before trying again.',
+    actions: [],
+    canRetry: false,
+  },
   invalid_request: {
     title: 'Invalid Request',
     message: 'The API rejected this request.',
@@ -377,6 +383,24 @@ function buildProxyErrorMessage(errorMessage: string, fullErrorText: string): st
 }
 
 /**
+ * Detect provider moderation responses without treating every generic 400 as a
+ * policy violation. Providers use several wire formats for the same outcome.
+ */
+export function isContentPolicyBlocked(value: unknown): boolean {
+  const text = (typeof value === 'string' ? value : extractErrorMessages(value)).toLowerCase();
+  return (
+    text.includes('prompt_blocked') ||
+    text.includes('request blocked by content moderation') ||
+    text.includes('blocked by content moderation') ||
+    text.includes('content_policy_violation') ||
+    text.includes('content policy violation') ||
+    text.includes('responsible_ai_policy_violation') ||
+    text.includes('responsible ai policy violation') ||
+    text.includes('content_filter')
+  );
+}
+
+/**
  * Parse an error and return a typed AgentError with user-friendly info
  */
 export function parseError(
@@ -391,8 +415,12 @@ export function parseError(
   // Detect error type from message/status
   let code: ErrorCode = 'unknown_error';
 
+  // Provider moderation blocks are user-actionable and must not fall through to
+  // a generic invalid_request whose raw JSON becomes the primary UI message.
+  if (isContentPolicyBlocked(fullErrorText)) {
+    code = 'content_policy_blocked';
   // Check for OpenRouter data policy errors first (these contain "no endpoints" which could confuse other checks)
-  if (lowerMessage.includes('data policy') || lowerMessage.includes('privacy')) {
+  } else if (lowerMessage.includes('data policy') || lowerMessage.includes('privacy')) {
     code = 'data_policy_error';
   // Check for model-specific errors (OpenRouter, etc.)
   // Tool support errors must be checked BEFORE model errors since tool errors often contain "model"

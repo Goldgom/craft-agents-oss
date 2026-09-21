@@ -150,6 +150,8 @@
   "chat.connectionDefault": "Domyślne dla tego połączenia",
   "chat.connectionUnavailable": "Połączenie niedostępne",
   "chat.connectionUnavailableDescription": "Połączenie używane przez tę sesję zostało usunięte. Utwórz nową sesję, aby kontynuować.",
+  "chat.contentPolicyBlockedMessage": "Żądanie narusza zasady użytkowania dostawcy AI, dlatego zostało zablokowane. Zmień treść żądania przed ponowną próbą.",
+  "chat.contentPolicyBlockedTitle": "Żądanie zablokowane przez zasady użytkowania",
   "chat.context": "Kontekst",
   "chat.contextBadge": "Odznaka kontekstu",
   "chat.contextUsagePercent": "Wykorzystano {{percent}}% kontekstu",

@@ -150,6 +150,8 @@
   "chat.connectionDefault": "Connection default",
   "chat.connectionUnavailable": "Connection Unavailable",
   "chat.connectionUnavailableDescription": "The connection used by this session has been removed. Create a new session to continue.",
+  "chat.contentPolicyBlockedMessage": "Your request violates the AI provider's usage policy, so it was blocked. Please revise the request before trying again.",
+  "chat.contentPolicyBlockedTitle": "Request blocked by usage policy",
   "chat.context": "Context",
   "chat.contextBadge": "Context badge",
   "chat.contextUsagePercent": "{{percent}}% context used",

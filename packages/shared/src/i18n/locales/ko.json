@@ -150,6 +150,8 @@
   "chat.connectionDefault": "연결 기본값",
   "chat.connectionUnavailable": "연결할 수 없음",
   "chat.connectionUnavailableDescription": "이 세션에서 사용된 연결이 제거되었습니다. 계속하려면 새 세션을 만드세요.",
+  "chat.contentPolicyBlockedMessage": "요청이 AI 제공업체의 사용 정책을 위반하여 차단되었습니다. 요청을 수정한 후 다시 시도하세요.",
+  "chat.contentPolicyBlockedTitle": "사용 정책에 의해 요청이 차단됨",
   "chat.context": "맥락",
   "chat.contextBadge": "컨텍스트 배지",
   "chat.contextUsagePercent": "{{percent}}% 컨텍스트 사용됨",

@@ -9,7 +9,7 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
-import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
+import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@craft-agent/shared/agent'
 import {
   resolveSessionConnection,
   createBackendFromConnection,
@@ -6936,21 +6936,40 @@ export class SessionManager implements ISessionManager {
 
             if (apiError && apiError.status === 400) {
               const isImageError = apiError.message?.includes('image exceeds')
+              const isPolicyBlocked = isContentPolicyBlocked(apiError.message)
+              const errorCode = isImageError
+                ? 'image_too_large' as const
+                : isPolicyBlocked
+                  ? 'content_policy_blocked' as const
+                  : 'invalid_request' as const
+              const errorTitle = isImageError
+                ? 'Image Too Large'
+                : isPolicyBlocked
+                  ? 'Request Blocked by Usage Policy'
+                  : 'Invalid Request'
+              const userMessage = isImageError
+                ? `Image Too Large: ${apiError.message}`
+                : isPolicyBlocked
+                  ? 'Your request violates the AI provider\'s usage policy, so it was blocked. Please revise the request before trying again.'
+                  : `Request Error: ${apiError.message}`
 
               const errorMessage: Message = {
                 id: generateMessageId(),
                 role: 'error',
-                content: isImageError
-                  ? `Image Too Large: ${apiError.message}`
-                  : `Request Error: ${apiError.message}`,
+                content: userMessage,
                 timestamp: this.monotonic(),
-                errorCode: isImageError ? 'image_too_large' : 'invalid_request',
-                errorTitle: isImageError ? 'Image Too Large' : 'Invalid Request',
+                errorCode,
+                errorTitle,
                 errorDetails: isImageError
                   ? ['An image in the conversation exceeds the 5 MB API limit.',
                      'This session cannot recover — the image is embedded in the history.',
                      'Please start a new session to continue.']
-                  : [apiError.message],
+                  : isPolicyBlocked
+                    ? [
+                        `Status: ${apiError.status}${apiError.statusText ? ` ${apiError.statusText}` : ''}`,
+                        `API message: ${apiError.message}`,
+                      ]
+                    : [apiError.message],
                 errorCanRetry: false,
               }
               managed.messages.push(errorMessage)
@@ -6958,9 +6977,9 @@ export class SessionManager implements ISessionManager {
                 type: 'typed_error',
                 sessionId,
                 error: {
-                  code: isImageError ? 'image_too_large' as const : 'invalid_request' as const,
+                  code: errorCode,
                   title: errorMessage.errorTitle!,
-                  message: apiError.message,
+                  message: isPolicyBlocked ? userMessage : apiError.message,
                   actions: [],
                   canRetry: false,
                   details: errorMessage.errorDetails,

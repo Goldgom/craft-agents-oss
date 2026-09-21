@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'bun:test'
 import { parseError } from '../errors.ts'
 
+describe('parseError content-policy handling', () => {
+  it('maps prompt_blocked moderation responses to a user-friendly policy error', () => {
+    const raw = '400: {"message":"request blocked by content moderation (request id: req_123)","type":"new_api_error","code":"prompt_blocked"}'
+    const parsed = parseError(new Error(raw))
+
+    expect(parsed.code).toBe('content_policy_blocked')
+    expect(parsed.title).toBe('Request Blocked by Usage Policy')
+    expect(parsed.message).toContain('usage policy')
+    expect(parsed.canRetry).toBe(false)
+    expect(parsed.actions).toEqual([])
+    expect(parsed.originalError).toBe(raw)
+  })
+
+  it('does not classify an unrelated bad request as a policy block', () => {
+    const parsed = parseError(new Error('400 invalid_request_error: malformed tools payload'))
+    expect(parsed.code).toBe('invalid_request')
+  })
+})
+
 describe('parseError proxy interception handling', () => {
   it('maps interceptor proxy marker message to proxy_error', () => {
     const message = 'Received an unexpected HTML error page (HTTP 400) instead of a JSON API response. This may be caused by your network proxy (http://example.com:8080). Check your proxy settings in Settings > Network.'

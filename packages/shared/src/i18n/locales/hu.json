@@ -150,6 +150,8 @@
   "chat.connectionDefault": "A kapcsolat alapértelmezése",
   "chat.connectionUnavailable": "Kapcsolat nem érhető el",
   "chat.connectionUnavailableDescription": "A munkamenet által használt kapcsolatot eltávolították. A folytatáshoz hozz létre egy új munkamenetet.",
+  "chat.contentPolicyBlockedMessage": "A kérés sérti az AI-szolgáltató használati szabályzatát, ezért le lett tiltva. Módosítsa a kérést, mielőtt újra próbálkozna.",
+  "chat.contentPolicyBlockedTitle": "A kérést a használati szabályzat letiltotta",
   "chat.context": "Kontextus",
   "chat.contextBadge": "Kontextus jelvény",
   "chat.contextUsagePercent": "{{percent}}% kontextus felhasználva",

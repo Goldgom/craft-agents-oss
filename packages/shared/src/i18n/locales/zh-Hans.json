@@ -150,6 +150,8 @@
   "chat.connectionDefault": "此连接的默认值",
   "chat.connectionUnavailable": "连接不可用",
   "chat.connectionUnavailableDescription": "此会话使用的连接已被删除。请创建一个新会话以继续。",
+  "chat.contentPolicyBlockedMessage": "你的请求违反了 AI 服务提供商的使用政策，因此已被拦截。请修改请求内容后再试。",
+  "chat.contentPolicyBlockedTitle": "请求因违反使用政策被拦截",
   "chat.context": "上下文",
   "chat.contextBadge": "上下文标记",
   "chat.contextUsagePercent": "已使用 {{percent}}% 上下文",

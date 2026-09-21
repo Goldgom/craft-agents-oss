@@ -2148,6 +2148,9 @@ interface MessageBubbleProps {
  */
 function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Message; onOpenUrl?: (url: string) => void; sessionId?: string; onRetry?: () => void }) {
   const { t } = useTranslation()
+  const isContentPolicyBlocked = message.errorCode === 'content_policy_blocked'
+  const displayTitle = isContentPolicyBlocked ? t('chat.contentPolicyBlockedTitle') : (message.errorTitle || t('common.error'))
+  const displayMessage = isContentPolicyBlocked ? t('chat.contentPolicyBlockedMessage') : message.content
   const hasDetails = (message.errorDetails && message.errorDetails.length > 0) || message.errorOriginal
   const [detailsOpen, setDetailsOpen] = React.useState(false)
   const actions = message.errorActions?.filter(a => {
@@ -2157,18 +2160,22 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
 
   return (
     <div className="flex justify-start mt-4">
-      {/* Subtle bg (3% opacity) + tinted shadow for softer error appearance */}
+      {/* Policy blocks use a stronger red treatment; other errors stay subtle. */}
       <div
-        className="max-w-[80%] shadow-tinted rounded-[8px] pl-5 pr-4 pt-2 pb-2.5 break-words"
+        className={cn(
+          "max-w-[80%] shadow-tinted rounded-[8px] pl-5 pr-4 pt-2 pb-2.5 break-words",
+          isContentPolicyBlocked && "border border-destructive/35"
+        )}
         style={{
-          backgroundColor: 'oklch(from var(--destructive) l c h / 0.03)',
+          backgroundColor: `oklch(from var(--destructive) l c h / ${isContentPolicyBlocked ? '0.09' : '0.03'})`,
           '--shadow-color': 'var(--destructive-rgb)',
         } as React.CSSProperties}
       >
-        <div className="text-xs text-destructive/50 mb-0.5 font-semibold">
-          {message.errorTitle || t('common.error')}
+        <div className={cn("flex items-center gap-1.5 font-semibold", isContentPolicyBlocked ? "text-sm text-destructive mb-1" : "text-xs text-destructive/50 mb-0.5")}>
+          {isContentPolicyBlocked && <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />}
+          <span>{displayTitle}</span>
         </div>
-        <p className="text-sm text-destructive">{message.content}</p>
+        <p className="text-sm text-destructive">{displayMessage}</p>
 
         {/* Action buttons */}
         {actions && actions.length > 0 && (

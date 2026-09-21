@@ -150,6 +150,8 @@
   "chat.connectionDefault": "Predeterminado de esta conexión",
   "chat.connectionUnavailable": "Conexión no disponible",
   "chat.connectionUnavailableDescription": "La conexión usada por esta sesión se ha eliminado. Crea una nueva sesión para continuar.",
+  "chat.contentPolicyBlockedMessage": "Tu solicitud infringe la política de uso del proveedor de IA, por lo que fue bloqueada. Modifica la solicitud antes de volver a intentarlo.",
+  "chat.contentPolicyBlockedTitle": "Solicitud bloqueada por la política de uso",
   "chat.context": "Contexto",
   "chat.contextBadge": "Insignia de contexto",
   "chat.contextUsagePercent": "{{percent}} % de contexto utilizado",

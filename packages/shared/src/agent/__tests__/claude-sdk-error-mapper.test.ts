@@ -7,6 +7,24 @@ const baseContext = {
 } as const;
 
 describe('mapClaudeSdkAssistantError', () => {
+  it('maps captured prompt moderation blocks to a non-retryable policy error', () => {
+    const error = mapClaudeSdkAssistantError('invalid_request', {
+      ...baseContext,
+      capturedApiError: {
+        status: 400,
+        statusText: 'Bad Request',
+        message: 'request blocked by content moderation (request id: req_123); code=prompt_blocked',
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(error.code).toBe('content_policy_blocked');
+    expect(error.title).toBe('Request Blocked by Usage Policy');
+    expect(error.canRetry).toBe(false);
+    expect(error.actions).toEqual([]);
+    expect(error.details?.some(detail => detail.includes('req_123'))).toBe(true);
+  });
+
   it('maps server_error to provider_error', () => {
     const error = mapClaudeSdkAssistantError('server_error', baseContext);
 

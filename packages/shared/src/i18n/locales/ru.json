@@ -150,6 +150,8 @@
   "chat.connectionDefault": "Соединение по умолчанию",
   "chat.connectionUnavailable": "Соединение недоступно",
   "chat.connectionUnavailableDescription": "Соединение, используемое этим сеансом, было удалено. Создайте новый сеанс, чтобы продолжить.",
+  "chat.contentPolicyBlockedMessage": "Ваш запрос нарушает правила использования поставщика ИИ, поэтому он был заблокирован. Измените запрос перед повторной попыткой.",
+  "chat.contentPolicyBlockedTitle": "Запрос заблокирован правилами использования",
   "chat.context": "Контекст",
   "chat.contextBadge": "Значок контекста",
   "chat.contextUsagePercent": "Использовано {{percent}}% контекста",

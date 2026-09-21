@@ -150,6 +150,8 @@
   "chat.connectionDefault": "Standard dieser Verbindung",
   "chat.connectionUnavailable": "Verbindung nicht verfügbar",
   "chat.connectionUnavailableDescription": "Die von dieser Sitzung verwendete Verbindung wurde entfernt. Erstellen Sie eine neue Sitzung, um fortzufahren.",
+  "chat.contentPolicyBlockedMessage": "Ihre Anfrage verstößt gegen die Nutzungsrichtlinien des KI-Anbieters und wurde daher blockiert. Bitte überarbeiten Sie die Anfrage, bevor Sie es erneut versuchen.",
+  "chat.contentPolicyBlockedTitle": "Anfrage durch Nutzungsrichtlinie blockiert",
   "chat.context": "Kontext",
   "chat.contextBadge": "Kontext-Badge",
   "chat.contextUsagePercent": "{{percent}} % Kontext verwendet",

@@ -150,6 +150,8 @@
   "chat.connectionDefault": "Connexion par défaut",
   "chat.connectionUnavailable": "Connexion indisponible",
   "chat.connectionUnavailableDescription": "La connexion utilisée par cette session a été supprimée.",
+  "chat.contentPolicyBlockedMessage": "Votre demande enfreint la politique d'utilisation du fournisseur d'IA et a donc été bloquée. Modifiez-la avant de réessayer.",
+  "chat.contentPolicyBlockedTitle": "Demande bloquée par la politique d'utilisation",
   "chat.context": "Contexte",
   "chat.contextBadge": "Insigne de contexte",
   "chat.contextUsagePercent": "{{percent}} % du contexte utilisé",
