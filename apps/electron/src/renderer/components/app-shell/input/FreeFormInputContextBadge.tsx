@@ -13,6 +13,8 @@ export interface FreeFormInputContextBadgeProps {
   isExpanded?: boolean
   /** Whether there's an active selection (affects collapsed state styling and shows label) */
   hasSelection?: boolean
+  /** Keep the trigger icon-only even when a selection is active (mobile toolbars). */
+  hideLabel?: boolean
   /** Show chevron indicator (for dropdowns) - only visible in expanded state */
   showChevron?: boolean
   /** Click handler */
@@ -47,6 +49,7 @@ export const FreeFormInputContextBadge = React.forwardRef<HTMLButtonElement, Fre
       label,
       isExpanded = false,
       hasSelection = false,
+      hideLabel = false,
       showChevron = false,
       onClick,
       tooltip,
@@ -62,7 +65,7 @@ export const FreeFormInputContextBadge = React.forwardRef<HTMLButtonElement, Fre
     const mergedRef = buttonRef || ref
 
     // Show label in expanded state OR in collapsed state with selection
-    const showLabel = isExpanded || hasSelection
+    const showLabel = !hideLabel && (isExpanded || hasSelection)
 
     const button = (
       <button

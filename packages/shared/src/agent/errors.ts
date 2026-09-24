@@ -387,7 +387,12 @@ function buildProxyErrorMessage(errorMessage: string, fullErrorText: string): st
  * policy violation. Providers use several wire formats for the same outcome.
  */
 export function isContentPolicyBlocked(value: unknown): boolean {
-  const text = (typeof value === 'string' ? value : extractErrorMessages(value)).toLowerCase();
+  // Some gateways pass the provider JSON through Markdown escaping before it
+  // reaches the adapter (for example `prompt\_blocked`). Normalize those
+  // escapes so the wire spelling and the rendered spelling classify equally.
+  const text = (typeof value === 'string' ? value : extractErrorMessages(value))
+    .toLowerCase()
+    .replace(/\\([_*-])/g, '$1');
   return (
     text.includes('prompt_blocked') ||
     text.includes('request blocked by content moderation') ||
@@ -448,7 +453,16 @@ export function parseError(
   } else if (isLikelyProxyInterception(lowerMessage)) {
     code = 'proxy_error';
   // Check for specific HTTP status codes or patterns
-  } else if (lowerMessage.includes('402') || lowerMessage.includes('payment required')) {
+  } else if (
+    lowerMessage.includes('402') ||
+    lowerMessage.includes('payment required') ||
+    lowerMessage.includes('insufficient_quota') ||
+    lowerMessage.includes('insufficient quota') ||
+    lowerMessage.includes('credit balance') ||
+    lowerMessage.includes('credit_balance') ||
+    lowerMessage.includes('quota exceeded') ||
+    lowerMessage.includes('quota_exceeded')
+  ) {
     code = 'billing_error';
   } else if (lowerMessage.includes('401') || lowerMessage.includes('unauthorized') || lowerMessage.includes('invalid api key') || lowerMessage.includes('invalid x-api-key') || lowerMessage.includes('authentication failed') || lowerMessage.includes('token is expired') || lowerMessage.includes('token expired')) {
     // Distinguish between API key and OAuth errors

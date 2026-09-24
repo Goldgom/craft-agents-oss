@@ -49,8 +49,10 @@ export function normalizeCustomEndpointModelEntry(model: CustomEndpointModelConf
 /**
  * Build a synthetic model definition for a custom endpoint.
  * Uses reasonable defaults for context window and max tokens since we can't
- * query the endpoint for its actual capabilities. Image support must be
- * explicitly enabled either at the connection level or per-model.
+ * query the endpoint for its actual capabilities. Image support defaults on
+ * so GPT, DeepSeek, and other compatible models can receive images without
+ * extra setup, while explicit connection/per-model `false` values remain
+ * authoritative for text-only models.
  *
  * For `openai-completions` endpoints we set `compat.supportsStore = false` so the
  * pi-ai driver omits the OpenAI-platform-specific `store` param entirely. Third-party
@@ -63,7 +65,7 @@ export function buildCustomEndpointModelDef(
   overrides?: CustomEndpointModelOverrides,
   api?: CustomEndpointApi,
 ) {
-  const supportsImages = overrides?.supportsImages ?? defaults?.supportsImages ?? false
+  const supportsImages = overrides?.supportsImages ?? defaults?.supportsImages ?? true
   const input: CustomEndpointInput[] = supportsImages ? ['text', 'image'] : ['text']
 
   return {

@@ -143,7 +143,7 @@ export type CustomEndpointApi = 'openai-completions' | 'anthropic-messages';
  */
 export interface CustomEndpointConfig {
   api: CustomEndpointApi;
-  /** Explicit capability hint for arbitrary endpoints — never guessed automatically. */
+  /** Explicit capability hint for arbitrary endpoints. Overrides the default-on image capability. */
   supportsImages?: boolean;
 }
 
@@ -624,7 +624,7 @@ export function setModelSupportsImages(
  * by Pi's `buildCustomEndpointModelDef`:
  *   per-model `supportsImages` override
  *   ?? connection-level `customEndpoint.supportsImages` default
- *   ?? false
+ *   ?? true
  *
  * For non-`pi_compat` connections the renderer doesn't own the catalog — Pi SDK's
  * bundled provider definitions and Anthropic's API do. This helper conservatively
@@ -644,7 +644,12 @@ export function modelSupportsImages(
   if (entry && typeof entry !== 'string' && typeof entry.supportsImages === 'boolean') {
     return entry.supportsImages;
   }
-  return connection.customEndpoint?.supportsImages ?? false;
+  return connection.customEndpoint?.supportsImages ?? true;
+}
+
+/** Image generation models are exposed through Studio, not the Agent model picker. */
+export function isImageGenerationModelId(modelId: string): boolean {
+  return /image|dall-e|flux|ideogram|recraft|imagen/i.test(modelId);
 }
 
 /**

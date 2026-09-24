@@ -14,6 +14,25 @@ describe('parseError content-policy handling', () => {
     expect(parsed.originalError).toBe(raw)
   })
 
+  it('maps Markdown-escaped prompt_blocked responses from gateways', () => {
+    const raw = String.raw`400: {"message":"request blocked by content moderation (request id: req_escaped)","type":"new\_api\_error","code":"prompt\_blocked"}`
+    const parsed = parseError(new Error(raw))
+
+    expect(parsed.code).toBe('content_policy_blocked')
+    expect(parsed.message).toContain('usage policy')
+    expect(parsed.originalError).toBe(raw)
+  })
+
+  it('classifies exhausted credit and quota as a billing error', () => {
+    for (const raw of [
+      '429 insufficient_quota: You exceeded your current quota',
+      '403 credit_balance_exhausted: credit balance is insufficient',
+      '400 quota exceeded',
+    ]) {
+      expect(parseError(new Error(raw)).code).toBe('billing_error')
+    }
+  })
+
   it('does not classify an unrelated bad request as a policy block', () => {
     const parsed = parseError(new Error('400 invalid_request_error: malformed tools payload'))
     expect(parsed.code).toBe('invalid_request')

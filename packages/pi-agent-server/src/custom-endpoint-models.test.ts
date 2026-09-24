@@ -45,9 +45,9 @@ describe('normalizeCustomEndpointModelEntry', () => {
 })
 
 describe('buildCustomEndpointModelDef', () => {
-  it('defaults custom endpoint models to text-only input', () => {
+  it('defaults custom endpoint models to image-capable input', () => {
     const model = buildCustomEndpointModelDef('my-model')
-    expect(model.input).toEqual(['text'])
+    expect(model.input).toEqual(['text', 'image'])
   })
 
   it('enables image input when the connection explicitly opts in', () => {
@@ -57,6 +57,11 @@ describe('buildCustomEndpointModelDef', () => {
 
   it('lets per-model overrides disable image input even when the connection default is enabled', () => {
     const model = buildCustomEndpointModelDef('text-only-model', { supportsImages: true }, { supportsImages: false })
+    expect(model.input).toEqual(['text'])
+  })
+
+  it('lets the connection default disable image input', () => {
+    const model = buildCustomEndpointModelDef('deepseek-v3', { supportsImages: false })
     expect(model.input).toEqual(['text'])
   })
 

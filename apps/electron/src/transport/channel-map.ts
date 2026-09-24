@@ -345,6 +345,8 @@ export const CHANNEL_MAP = {
   setSendMessageKey: invoke(RPC_CHANNELS.input.SET_SEND_MESSAGE_KEY),
   getSpellCheck: invoke(RPC_CHANNELS.input.GET_SPELL_CHECK),
   setSpellCheck: invoke(RPC_CHANNELS.input.SET_SPELL_CHECK),
+  getCompressImagesBeforeUpload: invoke(RPC_CHANNELS.input.GET_COMPRESS_IMAGES),
+  setCompressImagesBeforeUpload: invoke(RPC_CHANNELS.input.SET_COMPRESS_IMAGES),
 
   // Power settings
   getKeepAwakeWhileRunning: invoke(RPC_CHANNELS.power.GET_KEEP_AWAKE),
@@ -426,6 +428,9 @@ export const CHANNEL_MAP = {
 
   // LLM Connections
   listLlmConnections: invoke(RPC_CHANNELS.llmConnections.LIST),
+  generateStudioImage: invoke(RPC_CHANNELS.studio.GENERATE_IMAGE),
+  generateStudioMindMap: invoke(RPC_CHANNELS.studio.GENERATE_MIND_MAP),
+  exportStudioVisio: invoke(RPC_CHANNELS.studio.EXPORT_VISIO),
   listLlmConnectionsWithStatus: invoke(RPC_CHANNELS.llmConnections.LIST_WITH_STATUS),
   getLlmConnection: invoke(RPC_CHANNELS.llmConnections.GET),
   getLlmConnectionApiKey: invoke(RPC_CHANNELS.llmConnections.GET_API_KEY),

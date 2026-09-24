@@ -1,5 +1,5 @@
 import { RPC_CHANNELS, type LlmConnectionSetup, type ListCustomModelsParams, type ListCustomModelsResult, type TokenNestUsagePoint, type TokenNestUsageRecordDto, type TokenNestUsageSnapshot } from '@craft-agent/shared/protocol'
-import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
+import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, isImageGenerationModelId, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { setSetupDeferred } from '@craft-agent/shared/config/storage'
 import {
@@ -22,6 +22,14 @@ let copilotOAuthAbort: AbortController | null = null
 const CUSTOM_MODELS_REQUEST_TIMEOUT_MS = 15_000
 const BALANCE_CACHE_TTL_MS = 60_000
 const balanceCache = new Map<string, { value: LlmConnectionBalance | null; expiresAt: number }>()
+
+function preferredTokenNestGroup(groups: NonNullable<LlmConnection['channelGroups']>, current?: string): string | undefined {
+  const chatGroups = groups.filter(group => !group.models?.length || group.models.some(model => !isImageGenerationModelId(model)))
+  return chatGroups.find(group => group.id === current)?.id
+    ?? chatGroups.find(group => /^(tokenbird|token-bird)$/i.test(group.id) || /^TokenBird$/i.test(group.name))?.id
+    ?? chatGroups[0]?.id
+    ?? groups[0]?.id
+}
 
 /** Resolve the provider's conventional model-list endpoint from the configured base URL. */
 export function resolveCustomModelsUrl(baseUrl: string, api: ListCustomModelsParams['api']): string {
@@ -159,6 +167,75 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.pi.GET_PROVIDER_BASE_URL,
   RPC_CHANNELS.pi.GET_PROVIDER_MODELS,
 ] as const
+
+export async function refreshConnectionModels(slug: string, deps: HandlerDeps): Promise<{ success: boolean; error?: string }> {
+  try {
+    const connection = getLlmConnection(slug)
+    if (!connection) {
+      return { success: false, error: 'Connection not found' }
+    }
+
+    if (connection.oauthProvider === 'tokennest') {
+      const { getValidTokenNestCredentials, fetchTokenNestChannelGroups, TOKENNEST_OAUTH_CONFIG } = await import('@craft-agent/shared/auth')
+      const credentialManager = getCredentialManager()
+      let credentials = await getValidTokenNestCredentials(slug, credentialManager)
+      if (!credentials) return { success: false, error: 'TokenNest authentication has expired. Please sign in again.' }
+      let discovered = await listCustomModels({
+        baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
+        apiKey: credentials.accessToken,
+        api: 'openai-completions',
+      })
+      if (!discovered.models.length && /\b401\b/.test(discovered.error ?? '')) {
+        credentials = await getValidTokenNestCredentials(slug, credentialManager, true)
+        if (!credentials) return { success: false, error: 'TokenNest authentication has expired. Please sign in again.' }
+        discovered = await listCustomModels({
+          baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
+          apiKey: credentials.accessToken,
+          api: 'openai-completions',
+        })
+      }
+      if (!discovered.models.length) return { success: false, error: discovered.error || 'TokenNest returned no available models' }
+      const channelGroups = await fetchTokenNestChannelGroups(credentials.accessToken)
+      const models = [...new Set([
+        ...discovered.models.map(model => model.id),
+        ...channelGroups.flatMap(group => group.models ?? []),
+      ])]
+      const channelGroup = preferredTokenNestGroup(channelGroups, connection.channelGroup)
+      const groupModels = channelGroups.find(group => group.id === channelGroup)?.models
+      const selectableModels = (groupModels?.length ? groupModels : models).filter(model => !isImageGenerationModelId(model))
+      const defaultModel = connection.defaultModel && selectableModels.includes(connection.defaultModel)
+        ? connection.defaultModel
+        : selectableModels[0] ?? models.find(model => !isImageGenerationModelId(model)) ?? models[0]
+      const updated = updateLlmConnection(slug, {
+        models,
+        channelGroups,
+        channelGroup,
+        defaultModel,
+      })
+      if (!updated) return { success: false, error: 'Failed to save refreshed TokenNest models' }
+      await deps.sessionManager.reinitializeAuth(slug)
+    } else {
+      await getModelRefreshService().refreshNow(slug)
+    }
+    return { success: true }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : 'Unknown error'
+    deps.platform.logger?.error(`Failed to refresh models for ${slug}: ${msg}`)
+    return { success: false, error: msg }
+  }
+}
+
+/** Refresh each TokenNest account once after server startup, without delaying readiness. */
+export function refreshTokenNestModelsAtStartup(deps: HandlerDeps): void {
+  for (const connection of getLlmConnections()) {
+    if (connection.oauthProvider !== 'tokennest') continue
+    void refreshConnectionModels(connection.slug, deps).then(result => {
+      if (!result.success) {
+        deps.platform.logger?.warn(`Startup TokenNest model refresh failed for ${connection.slug}: ${result.error}`)
+      }
+    })
+  }
+}
 
 export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager } = deps
@@ -789,63 +866,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
 
   // Refresh available models for a connection (dynamic model discovery)
   server.handle(RPC_CHANNELS.llmConnections.REFRESH_MODELS, async (_ctx, slug: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const connection = getLlmConnection(slug)
-      if (!connection) {
-        return { success: false, error: 'Connection not found' }
-      }
-
-      if (connection.oauthProvider === 'tokennest') {
-        const { getValidTokenNestCredentials, fetchTokenNestChannelGroups, TOKENNEST_OAUTH_CONFIG } = await import('@craft-agent/shared/auth')
-        const credentialManager = getCredentialManager()
-        let credentials = await getValidTokenNestCredentials(slug, credentialManager)
-        if (!credentials) return { success: false, error: 'TokenNest authentication has expired. Please sign in again.' }
-        let discovered = await listCustomModels({
-          baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
-          apiKey: credentials.accessToken,
-          api: 'openai-completions',
-        })
-        if (!discovered.models.length && /\b401\b/.test(discovered.error ?? '')) {
-          credentials = await getValidTokenNestCredentials(slug, credentialManager, true)
-          if (!credentials) return { success: false, error: 'TokenNest authentication has expired. Please sign in again.' }
-          discovered = await listCustomModels({
-            baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
-            apiKey: credentials.accessToken,
-            api: 'openai-completions',
-          })
-        }
-        if (!discovered.models.length) return { success: false, error: discovered.error || 'TokenNest returned no available models' }
-        const refreshedGroups = await fetchTokenNestChannelGroups(credentials.accessToken)
-        const channelGroups = refreshedGroups.length > 0 ? refreshedGroups : connection.channelGroups ?? []
-        const models = [...new Set([
-          ...discovered.models.map(model => model.id),
-          ...channelGroups.flatMap(group => group.models ?? []),
-        ])]
-        const channelGroup = channelGroups.some(group => group.id === connection.channelGroup)
-          ? connection.channelGroup
-          : channelGroups[0]?.id
-        const groupModels = channelGroups.find(group => group.id === channelGroup)?.models
-        const selectableModels = groupModels?.length ? groupModels : models
-        const defaultModel = connection.defaultModel && selectableModels.includes(connection.defaultModel)
-          ? connection.defaultModel
-          : selectableModels[0] ?? models[0]
-        const updated = updateLlmConnection(slug, {
-          models,
-          channelGroups,
-          channelGroup,
-          defaultModel,
-        })
-        if (!updated) return { success: false, error: 'Failed to save refreshed TokenNest models' }
-        await sessionManager.reinitializeAuth(slug)
-      } else {
-        await getModelRefreshService().refreshNow(slug)
-      }
-      return { success: true }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Unknown error'
-      deps.platform.logger?.error(`Failed to refresh models for ${slug}: ${msg}`)
-      return { success: false, error: msg }
-    }
+    return refreshConnectionModels(slug, deps)
   })
 
   server.handle(RPC_CHANNELS.tokennest.GET_USAGE, async (_ctx, args: {
@@ -1021,12 +1042,18 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
         throw new Error(discovered.error || 'TokenNest returned no available models')
       }
 
-      const channelGroups = await fetchTokenNestChannelGroups(tokens.accessToken).catch(() => [])
+      const channelGroups = await fetchTokenNestChannelGroups(tokens.accessToken).catch(async error => {
+        await revokeTokenNestToken(tokens.accessToken).catch(() => {})
+        throw error
+      })
       const models = [...new Set([
         ...discovered.models.map(model => model.id),
         ...channelGroups.flatMap(group => group.models ?? []),
       ])]
       const existing = getLlmConnection(flow.connectionSlug)
+      const channelGroup = preferredTokenNestGroup(channelGroups, existing?.channelGroup)
+      const groupModels = channelGroups.find(group => group.id === channelGroup)?.models
+      const selectableModels = (groupModels?.length ? groupModels : models).filter(model => !isImageGenerationModelId(model))
       const connection: LlmConnection = {
         ...(existing ?? {
           slug: flow.connectionSlug,
@@ -1040,14 +1067,12 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
         baseUrl: TOKENNEST_OAUTH_CONFIG.apiBaseUrl,
         customEndpoint: { api: 'openai-completions' },
         models,
-        defaultModel: existing?.defaultModel && models.includes(existing.defaultModel)
+        defaultModel: existing?.defaultModel && selectableModels.includes(existing.defaultModel)
           ? existing.defaultModel
-          : models[0],
+          : selectableModels[0] ?? models.find(model => !isImageGenerationModelId(model)) ?? models[0],
         modelSelectionMode: 'automaticallySyncedFromProvider',
-        channelGroups: channelGroups.length > 0 ? channelGroups : existing?.channelGroups,
-        channelGroup: channelGroups.some(group => group.id === existing?.channelGroup)
-          ? existing?.channelGroup
-          : channelGroups[0]?.id ?? existing?.channelGroup,
+        channelGroups,
+        channelGroup,
       }
 
       await credentialManager.setLlmOAuth(flow.connectionSlug, tokens)

@@ -8868,6 +8868,7 @@ export class SessionManager implements ISessionManager {
           errorDetails: event.error.details,
           errorOriginal: event.error.originalError,
           errorCanRetry: event.error.canRetry,
+          errorActions: event.error.actions,
         }
         managed.messages.push(typedErrorMessage)
         // Send typed_error event with full structure for renderer to handle

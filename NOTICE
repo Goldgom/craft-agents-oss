@@ -10,6 +10,14 @@ https://craft.do
 
 ---
 
+Bundled draw.io web editor
+Copyright JGraph Holdings Ltd and draw.io AG.
+https://github.com/jgraph/drawio
+Licensed under Apache License 2.0. The bundled license and version are in
+apps/studio-assets/drawio/.
+
+---
+
 This project uses the Claude Agent SDK, which is subject to Anthropic's
 Commercial Terms of Service: https://www.anthropic.com/legal/commercial-terms
 

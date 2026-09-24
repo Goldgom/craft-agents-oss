@@ -28,6 +28,13 @@ export interface TokenNestChannelGroup {
   models?: string[];
 }
 
+export class TokenNestGroupsScopeError extends Error {
+  constructor() {
+    super('TokenNest authorization is missing groups:read; please sign in again')
+    this.name = 'TokenNestGroupsScopeError'
+  }
+}
+
 export interface TokenNestUsageSummary {
   startTimestamp: number;
   endTimestamp: number;
@@ -161,7 +168,12 @@ export async function fetchTokenNestChannelGroups(accessToken: string): Promise<
   const response = await fetch(TOKENNEST_OAUTH_CONFIG.groupsUrl, {
     headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
   });
-  if (!response.ok) return [];
+  if (response.status === 403) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    if (payload?.error === 'insufficient_scope') throw new TokenNestGroupsScopeError();
+  }
+    if (response.status === 404) return [];
+    if (!response.ok) throw new TokenNestRequestError(`TokenNest group discovery failed (HTTP ${response.status})`, response.status);
   const payload = await response.json() as unknown;
   const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : root;

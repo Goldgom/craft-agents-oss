@@ -18,6 +18,8 @@ import {
   EVENT_BUFFER_MAX_SIZE,
   EVENT_BUFFER_TTL_MS,
   DISCONNECTED_CLIENT_TTL_MS,
+  RPC_CHANNELS,
+  STUDIO_IMAGE_HANDLER_TIMEOUT_MS,
   isErrorCode,
   type MessageEnvelope,
   type PushTarget,
@@ -737,10 +739,14 @@ export class WsRpcServer implements RpcServer {
     const handlerTimeoutPromise = new Promise<never>((_, reject) => {
       rejectHandlerTimeout = reject
     })
+    const handlerTimeoutMs = channel === RPC_CHANNELS.studio.GENERATE_IMAGE
+      ? STUDIO_IMAGE_HANDLER_TIMEOUT_MS
+      : WsRpcServer.HANDLER_TIMEOUT_MS
     const handlerTimeout = {
+      // Image providers may need several minutes; ordinary RPCs retain the 60s limit.
       timer: setTimeout(
-        () => rejectHandlerTimeout(new Error(`Handler timeout: ${channel} (${WsRpcServer.HANDLER_TIMEOUT_MS}ms)`)),
-        WsRpcServer.HANDLER_TIMEOUT_MS,
+        () => rejectHandlerTimeout(new Error(`Handler timeout: ${channel} (${handlerTimeoutMs}ms)`)),
+        handlerTimeoutMs,
       ),
       reject: rejectHandlerTimeout,
     }

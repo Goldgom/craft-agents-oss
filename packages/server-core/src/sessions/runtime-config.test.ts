@@ -92,6 +92,17 @@ describe('filterAttachmentsForModelInput', () => {
     expect(result.attachments).toEqual([imageAttachment])
   })
 
+  it('keeps images by default for custom endpoint models without an override', () => {
+    const result = filterAttachmentsForModelInput(
+      [imageAttachment],
+      { ...baseCompat, customEndpoint: { api: 'openai-completions' }, models: ['deepseek-v3'] },
+      'deepseek-v3',
+    )
+
+    expect(result.omittedImages).toHaveLength(0)
+    expect(result.attachments).toEqual([imageAttachment])
+  })
+
   it('treats explicit supportsImages=false as overriding endpoint-level true', () => {
     const result = filterAttachmentsForModelInput(
       [imageAttachment],

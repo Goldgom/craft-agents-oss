@@ -170,6 +170,9 @@ import { dispatchFocusInputEvent } from "./input/focus-input-events"
  * 3. Use via useAppShellContext() hook in child components
  */
 interface AppShellProps {
+  studioMode: 'agent' | 'canvas' | 'mindmap'
+  onStudioModeChange: (mode: 'agent' | 'canvas' | 'mindmap') => void
+  studioContent?: React.ReactNode
   /** All data and callbacks - passed directly to AppShellProvider */
   contextValue: AppShellContextType
   /** UI-specific props */
@@ -508,6 +511,9 @@ export function AppShell(props: AppShellProps) {
  */
 function AppShellContent({
   contextValue,
+  studioMode,
+  onStudioModeChange,
+  studioContent,
   defaultLayout = [20, 32, 48],
   defaultCollapsed = false,
   menuNewChatTrigger,
@@ -2382,6 +2388,8 @@ function AppShellContent({
     <AppShellProvider value={appShellContextValue}>
         {/* === TOP BAR === */}
         <TopBar
+          studioMode={studioMode}
+          onStudioModeChange={onStudioModeChange}
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
           onSelectWorkspace={onSelectWorkspace}
@@ -2406,11 +2414,16 @@ function AppShellContent({
           isCompact={isAutoCompact}
         />
 
+      <div className={studioMode === 'agent' ? 'hidden' : 'h-full min-h-0'}>
+        {studioContent}
+      </div>
+
       {/* === OUTER LAYOUT: Unified Panel Stack | Right Sidebar === */}
       <div
         ref={shellRef}
         className="flex items-stretch relative"
         style={{
+          display: studioMode === 'agent' ? 'flex' : 'none',
           height: '100%',
           paddingRight: isAutoCompact ? 0 : PANEL_EDGE_INSET,
           paddingBottom: isAutoCompact ? 0 : PANEL_EDGE_INSET,

@@ -41,6 +41,8 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.input.SET_SEND_MESSAGE_KEY,
   RPC_CHANNELS.input.GET_SPELL_CHECK,
   RPC_CHANNELS.input.SET_SPELL_CHECK,
+  RPC_CHANNELS.input.GET_COMPRESS_IMAGES,
+  RPC_CHANNELS.input.SET_COMPRESS_IMAGES,
   RPC_CHANNELS.power.GET_KEEP_AWAKE,
   RPC_CHANNELS.appearance.GET_RICH_TOOL_DESCRIPTIONS,
   RPC_CHANNELS.appearance.SET_RICH_TOOL_DESCRIPTIONS,
@@ -375,6 +377,18 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   server.handle(RPC_CHANNELS.input.SET_SPELL_CHECK, async (_ctx, enabled: boolean) => {
     const { setSpellCheck } = await import('@craft-agent/shared/config/storage')
     setSpellCheck(enabled)
+  })
+
+  // Get image compression setting
+  server.handle(RPC_CHANNELS.input.GET_COMPRESS_IMAGES, async () => {
+    const { getCompressImagesBeforeUpload } = await import('@craft-agent/shared/config/storage')
+    return getCompressImagesBeforeUpload()
+  })
+
+  // Set image compression setting
+  server.handle(RPC_CHANNELS.input.SET_COMPRESS_IMAGES, async (_ctx, enabled: boolean) => {
+    const { setCompressImagesBeforeUpload } = await import('@craft-agent/shared/config/storage')
+    setCompressImagesBeforeUpload(enabled)
   })
 
   // ============================================================

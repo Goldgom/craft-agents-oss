@@ -302,6 +302,8 @@ export const mockElectronAPI = {
 
   // FreeFormInput required mocks
   getAutoCapitalisation: async () => false,
+  getCompressImagesBeforeUpload: async () => true,
+  setCompressImagesBeforeUpload: async () => {},
 
   getPendingPlanExecution: async (sessionId: string) => {
     console.log('[Playground] getPendingPlanExecution called:', sessionId)

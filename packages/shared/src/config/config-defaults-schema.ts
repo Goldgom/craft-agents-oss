@@ -17,6 +17,7 @@ export interface ConfigDefaults {
     autoCapitalisation: boolean;
     sendMessageKey: 'enter' | 'cmd-enter';
     spellCheck: boolean;
+    compressImagesBeforeUpload: boolean;
     keepAwakeWhileRunning: boolean;
     richToolDescriptions: boolean;
     extendedPromptCache: boolean;

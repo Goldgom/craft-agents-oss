@@ -112,6 +112,29 @@ import { LLM_QUERY_TIMEOUT_MS, type LLMQueryRequest, type LLMQueryResult } from 
 import { executeBrowserToolCommand } from './browser-tool-runtime.ts';
 import { saveBinaryResponse } from '../utils/binary-detection.ts';
 
+const OAUTH_REFRESH_AHEAD_MS = 15 * 60_000;
+
+class OAuthReauthenticationRequiredError extends Error {
+  constructor() {
+    super('Your login has expired. Please sign in again to continue.');
+    this.name = 'OAuthReauthenticationRequiredError';
+  }
+}
+
+function refreshFailureRequiresReauthentication(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('invalid_grant') ||
+    (normalized.includes('refresh token') && (
+      normalized.includes('expired') ||
+      normalized.includes('revoked') ||
+      normalized.includes('invalid') ||
+      normalized.includes('unavailable')
+    )) ||
+    /token refresh failed:\s*(400|401)\b/.test(normalized)
+  );
+}
+
 // ============================================================
 // PiAgent Implementation
 // ============================================================
@@ -379,7 +402,7 @@ export class PiAgent extends BaseAgent {
     this._supportsBranching = true;
 
     this.piSessionId = config.session?.sdkSessionId || null;
-    this.adapter = new PiEventAdapter();
+    this.adapter = new PiEventAdapter({ oauthAuth: config.authType === 'oauth' });
     if (modelDef?.contextWindow) {
       this.adapter.setContextWindow(modelDef.contextWindow);
     }
@@ -512,17 +535,9 @@ export class PiAgent extends BaseAgent {
     // Resolve credentials before spawning so we can derive AWS env vars
     // from the same fetch that produces piAuth (single source of truth).
 
-    // For short-lived OAuth credentials, preemptively refresh before fetching
-    // credentials so getPiAuth() picks up a fresh token.
-    // refreshAndPushTokens guards this.subprocess internally — safe to call pre-spawn.
-    if (this.config.authType === 'oauth' && (runtime.piAuthProvider === 'github-copilot' || runtime.oauthProvider === 'tokennest')) {
-      const slug = this.config.connectionSlug || 'pi';
-      const stored = await getCredentialManager().getLlmOAuth(slug);
-      if (stored?.refreshToken && (!stored.expiresAt || stored.expiresAt < Date.now() + 5 * 60_000)) {
-        this.debug('OAuth token expired or expiring soon — refreshing before session start');
-        await this.refreshAndPushTokens();
-      }
-    }
+    // Renew short-lived OAuth credentials before a remote custom endpoint can
+    // be registered with an empty key. This is also run at each turn boundary.
+    await this.ensureOAuthCredentialsFresh();
 
     // Retrieve auth credentials for the subprocess.
     // Custom endpoint mode must NOT fall back to global API keys — keyless local endpoints
@@ -770,6 +785,8 @@ export class PiAgent extends BaseAgent {
             credential: { type: 'api_key', key: oauth.accessToken },
           };
         }
+        this.debug(`OAuth credentials unavailable for Pi provider: ${piAuthProvider}`);
+        throw new OAuthReauthenticationRequiredError();
       } else if (this.config.authType === 'iam_credentials') {
         // AWS IAM credentials — pass structured fields so the subprocess can
         // identify the credential type. Actual AWS env var injection happens
@@ -806,6 +823,7 @@ export class PiAgent extends BaseAgent {
       this.debug(`No credentials found for Pi provider: ${piAuthProvider}`);
       return null;
     } catch (error) {
+      if (error instanceof OAuthReauthenticationRequiredError) throw error;
       this.debug(`Failed to retrieve Pi auth: ${error}`);
       return null;
     }
@@ -881,8 +899,7 @@ export class PiAgent extends BaseAgent {
 
       if (!stored?.refreshToken) {
         this.debug('No refresh token available — re-auth required');
-        this.onBackendAuthRequired?.('No refresh token — please sign in again');
-        return;
+        throw new OAuthReauthenticationRequiredError();
       }
 
       try {
@@ -922,7 +939,10 @@ export class PiAgent extends BaseAgent {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         this.debug(`Token refresh failed: ${msg}`);
-        this.onBackendAuthRequired?.(`Token refresh failed: ${msg}`);
+        if (error instanceof OAuthReauthenticationRequiredError || refreshFailureRequiresReauthentication(msg)) {
+          throw new OAuthReauthenticationRequiredError();
+        }
+        throw error;
       }
     })();
 
@@ -939,6 +959,40 @@ export class PiAgent extends BaseAgent {
         PiAgent.globalRefreshMutex.delete(slug);
       }
     }
+  }
+
+  /**
+   * Refresh OAuth credentials before each active turn. This keeps a long-lived
+   * session usable and turns a lost grant into an explicit re-login request
+   * before the Pi SDK can expose its internal API-key assertion.
+   */
+  private async ensureOAuthCredentialsFresh(): Promise<void> {
+    if (this.config.authType !== 'oauth') return;
+
+    const runtime = getBackendRuntime(this.config);
+    const supportsRefresh = runtime.oauthProvider === 'tokennest' ||
+      runtime.piAuthProvider === 'github-copilot' ||
+      runtime.piAuthProvider === 'openai-codex';
+    const slug = this.config.connectionSlug || 'pi';
+    const stored = await getCredentialManager().getLlmOAuth(slug);
+
+    if (!stored?.accessToken) {
+      if (stored?.refreshToken && supportsRefresh) {
+        this.debug('OAuth access token unavailable — recovering from the stored refresh token');
+        await this.refreshAndPushTokens();
+        return;
+      }
+      throw new OAuthReauthenticationRequiredError();
+    }
+
+    const expiring = !stored.expiresAt || stored.expiresAt <= Date.now() + OAUTH_REFRESH_AHEAD_MS;
+    if (!expiring) return;
+    if (!stored.refreshToken || !supportsRefresh) {
+      throw new OAuthReauthenticationRequiredError();
+    }
+
+    this.debug('OAuth token expires soon — refreshing before the next request');
+    await this.refreshAndPushTokens();
   }
 
   /**
@@ -2146,6 +2200,10 @@ export class PiAgent extends BaseAgent {
     }
 
     try {
+      // A running subprocess can outlive a short access token. Renew at the
+      // turn boundary and push rotated credentials before sending the prompt.
+      await this.ensureOAuthCredentialsFresh();
+
       // Ensure subprocess is spawned and ready
       try {
         await this.ensureSubprocess();
@@ -2820,13 +2878,21 @@ export class PiAgent extends BaseAgent {
       errorMessage.includes('api key') ||
       errorMessage.includes('unauthorized') ||
       errorMessage.includes('401') ||
-      errorMessage.includes('authentication')
+      errorMessage.includes('authentication') ||
+      errorMessage.includes('login has expired') ||
+      errorMessage.includes('sign in again')
     ) {
-      // For OAuth connections, attempt token refresh before giving up
       if (this.config.authType === 'oauth') {
-        this.refreshAndPushTokens().catch(err => {
-          this.debug(`Token refresh from parsePiError failed: ${err}`);
-        });
+        return {
+          code: 'expired_oauth_token',
+          title: 'Login Expired',
+          message: 'Your login has expired. Please sign in again to continue.',
+          actions: [
+            { key: 'r', label: 'Sign in again', action: 'reauth' },
+          ],
+          canRetry: false,
+          originalError: error.message,
+        };
       }
 
       return {
@@ -2836,7 +2902,7 @@ export class PiAgent extends BaseAgent {
         actions: [
           { key: 's', label: 'Update API key', command: '/settings', action: 'settings' },
         ],
-        canRetry: this.config.authType === 'oauth',
+        canRetry: false,
         originalError: error.message,
       };
     }

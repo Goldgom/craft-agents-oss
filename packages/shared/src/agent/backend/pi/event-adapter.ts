@@ -85,6 +85,7 @@ type PiEvent = PiAgentEvent | AgentSessionEvent;
  * - queue_update / agent_settled / entry_appended / summarization_retry_* → ignored
  */
 export class PiEventAdapter extends BaseEventAdapter {
+  private readonly oauthAuth: boolean;
   // Track tool names from execution_start for proper tool_result correlation
   private toolNames: Map<string, string> = new Map();
 
@@ -162,8 +163,9 @@ export class PiEventAdapter extends BaseEventAdapter {
   private onFallbackEvent: ((event: CraftAgentEvent) => void) | null = null;
   private onFallbackComplete: (() => void) | null = null;
 
-  constructor() {
+  constructor(options: { oauthAuth?: boolean } = {}) {
     super('pi-event');
+    this.oauthAuth = options.oauthAuth === true;
   }
 
   /**
@@ -277,6 +279,22 @@ export class PiEventAdapter extends BaseEventAdapter {
    */
   private classifyAssistantError(message: AssistantMessage, errorMessage: string): CraftAgentEvent {
     const parsed = parseError(new Error(errorMessage));
+    const normalizedError = errorMessage.toLowerCase();
+    const missingResolvedApiKey = normalizedError.includes('authheader requires a resolved api key') ||
+      normalizedError.includes('requires a resolved api key');
+    if (this.oauthAuth && (parsed.code === 'invalid_api_key' || missingResolvedApiKey)) {
+      return {
+        type: 'typed_error',
+        error: {
+          code: 'expired_oauth_token',
+          title: 'Login Expired',
+          message: 'Your login has expired. Please sign in again to continue.',
+          actions: [{ key: 'r', label: 'Sign in again', action: 'reauth' }],
+          canRetry: false,
+          originalError: errorMessage,
+        },
+      };
+    }
     if (parsed.code !== 'unknown_error') {
       return { type: 'typed_error', error: parsed };
     }
@@ -284,7 +302,10 @@ export class PiEventAdapter extends BaseEventAdapter {
       const code = RETRYABLE_PROVIDER_SIDE_PATTERN.test(errorMessage) ? 'service_error' : 'network_error';
       return { type: 'typed_error', error: createAgentError(code, errorMessage) };
     }
-    return { type: 'error', message: errorMessage };
+    // Keep unknown provider text available for diagnostics, but never surface
+    // it as the primary chat message. The renderer presents a friendly unknown
+    // error card and places this value behind Technical details.
+    return { type: 'typed_error', error: parsed };
   }
 
   /** Short human-readable label for the retry status line. */

@@ -39,14 +39,24 @@ describe('modelSupportsImages — pi_compat precedence', () => {
     expect(modelSupportsImages(conn, 'plain')).toBe(true)
   })
 
-  it('returns false when neither per-model override nor connection default is set', () => {
+  it('defaults image support on when neither per-model override nor connection default is set', () => {
     const conn: LlmConnection = { ...BASE_COMPAT, models: ['plain'] }
-    expect(modelSupportsImages(conn, 'plain')).toBe(false)
+    expect(modelSupportsImages(conn, 'plain')).toBe(true)
   })
 
-  it('returns false when the model is not in models[] (matches Pi default)', () => {
+  it('defaults image support on when the model is not in models[]', () => {
     const conn: LlmConnection = { ...BASE_COMPAT, models: ['plain'] }
-    expect(modelSupportsImages(conn, 'unknown')).toBe(false)
+    expect(modelSupportsImages(conn, 'unknown')).toBe(true)
+  })
+
+  it('lets the connection explicitly disable image input by default', () => {
+    const conn: LlmConnection = {
+      ...BASE_COMPAT,
+      customEndpoint: { api: 'openai-completions', supportsImages: false },
+      models: ['gpt-5', 'deepseek-v3'],
+    }
+    expect(modelSupportsImages(conn, 'gpt-5')).toBe(false)
+    expect(modelSupportsImages(conn, 'deepseek-v3')).toBe(false)
   })
 
   it('returns connection default when the model is missing but connection default is true', () => {

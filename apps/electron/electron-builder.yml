@@ -17,6 +17,7 @@ directories:
 
 files:
   - dist/**/*
+  - "!release/**/*"
   - "!dist/renderer/src/**"
   - "!**/*.map"
   - package.json
@@ -170,6 +171,11 @@ win:
   # Use predictable naming: TokenBird-x64.exe
   artifactName: "TokenBird-${arch}.${ext}"
   files:
+    # An exclusion-only platform list makes electron-builder start from **/*,
+    # which also copies previous release installers into the next installer.
+    # Keep the shared files list above authoritative for app contents.
+    - package.json
+    - "!release{,/**/*}"
     # Exclude binaries for other platforms
     - "!**/resources/bin/darwin-*/**"
     - "!**/resources/bin/linux-*/**"
@@ -188,6 +194,11 @@ win:
       to: app/node_modules/@anthropic-ai/claude-agent-sdk-binary
     - from: node_modules/@vscode/ripgrep
       to: app/node_modules/@vscode/ripgrep
+    # sharp's JavaScript is bundled into dist/main.cjs, but its runtime-selected
+    # Windows native addon cannot be bundled by esbuild. Keep the package layout
+    # so sharp can resolve @img/sharp-win32-x64/sharp.node at startup.
+    - from: ../../node_modules/@img/sharp-win32-x64
+      to: app/node_modules/@img/sharp-win32-x64
     - from: vendor/bun/bun.exe
       to: vendor/bun/bun.exe
     # Complete PortableGit runtime. The main process prefers its bin/bash.exe

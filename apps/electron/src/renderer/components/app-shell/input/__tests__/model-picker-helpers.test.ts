@@ -9,6 +9,8 @@ import { describe, test, expect } from 'bun:test'
 import type { LlmConnection } from '@craft-agent/shared/config/llm-connections'
 import {
   formatTokenCount,
+  getAgentChannelGroups,
+  getAgentModelsForConnection,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
 } from '../model-picker-helpers'
@@ -92,6 +94,27 @@ function conn(
     ...extras,
   }
 }
+
+describe('Agent model visibility', () => {
+  test('hides image models and image-only groups from the Agent picker', () => {
+    const connection = conn('tokennest', 'pi_compat', {
+      authType: 'oauth', oauthProvider: 'tokennest', channelGroup: 'tokenbird',
+      models: ['gpt-image-2.5', 'gpt-6-astra', 'dall-e-3'],
+      channelGroups: [
+        { id: 'drawing', name: 'GPT图片生成渠道', models: ['gpt-image-2.5', 'dall-e-3'] },
+        { id: 'tokenbird', name: 'TokenBird', models: ['gpt-image-2.5', 'gpt-6-astra'] },
+      ],
+    })
+    expect(getAgentModelsForConnection(connection)).toEqual(['gpt-6-astra'])
+    expect(getAgentChannelGroups(connection).map(group => group.id)).toEqual(['tokenbird'])
+  })
+
+  test('filters image models from a direct official key as well', () => {
+    expect(getAgentModelsForConnection(conn('openai', 'pi', {
+      models: ['gpt-image-1', 'gpt-6-astra'],
+    }))).toEqual(['gpt-6-astra'])
+  })
+})
 
 describe('groupConnectionsByProvider', () => {
   test('returns empty array for empty input', () => {

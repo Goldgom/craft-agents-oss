@@ -132,6 +132,25 @@ describe('updateLlmConnection – agentRuntime', () => {
   })
 })
 
+describe('updateLlmConnection – TokenNest channel groups', () => {
+  it('persists discovered image groups on reauthorization and preserves them on later updates', () => {
+    const { runUpdate, readConnection } = setup([makeConnection({
+      slug: 'tokennest', authType: 'oauth', oauthProvider: 'tokennest',
+      channelGroup: 'Normal', channelGroups: [{ id: 'Normal', name: 'Normal', models: ['gpt-6-astra'] }],
+    })])
+    const channelGroups = [
+      { id: 'Normal', name: 'Normal', models: ['gpt-6-astra'] },
+      { id: 'drawing', name: 'GPT图片生成渠道', models: ['gpt-image-2.5'] },
+    ]
+
+    expect(runUpdate('tokennest', { channelGroup: 'Normal', channelGroups })).toBe(true)
+    expect(readConnection('tokennest').channelGroups).toEqual(channelGroups)
+    expect(runUpdate('tokennest', { name: 'TokenNest' })).toBe(true)
+    expect(readConnection('tokennest').channelGroup).toBe('Normal')
+    expect(readConnection('tokennest').channelGroups).toEqual(channelGroups)
+  })
+})
+
 describe('updateLlmConnection – Anthropic OAuth identity (issue #838)', () => {
   const identity = {
     oauthAccountUuid: 'acct-uuid-123',

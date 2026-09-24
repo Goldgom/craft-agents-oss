@@ -414,7 +414,11 @@ export interface ElectronAPI {
   /** Re-read a user-attached file by absolute path (bypasses workspace-dir validation).
    *  Used only by draft hydration for paths the user explicitly picked via OS dialog / drag. */
   readUserAttachment(path: string): Promise<FileAttachment | null>
-  storeAttachment(sessionId: string, attachment: FileAttachment): Promise<import('../../../../packages/core/src/types/index.ts').StoredAttachment>
+  storeAttachment(
+    sessionId: string,
+    attachment: FileAttachment,
+    options?: { compressImagesBeforeUpload?: boolean },
+  ): Promise<import('../../../../packages/core/src/types/index.ts').StoredAttachment>
   generateThumbnail(base64: string, mimeType: string): Promise<string | null>
   /** Returns the absolute filesystem path for a File (only works for file-picker / OS-drag Files). */
   getFilePath(file: File): string | null
@@ -701,6 +705,8 @@ export interface ElectronAPI {
   setSendMessageKey(key: 'enter' | 'cmd-enter'): Promise<void>
   getSpellCheck(): Promise<boolean>
   setSpellCheck(enabled: boolean): Promise<void>
+  getCompressImagesBeforeUpload(): Promise<boolean>
+  setCompressImagesBeforeUpload(enabled: boolean): Promise<void>
 
   // Power settings
   getKeepAwakeWhileRunning(): Promise<boolean>
@@ -814,6 +820,9 @@ export interface ElectronAPI {
 
   // LLM Connections (provider configurations)
   listLlmConnections(): Promise<LlmConnection[]>
+  generateStudioImage(input: { connectionSlug: string; model: string; prompt: string; channelGroup?: string; imageBase64?: string; maskBase64?: string; size?: string; count?: number; transparentBackground?: boolean }): Promise<{ imageBase64: string; mimeType: string; images: Array<{ imageBase64: string; mimeType: string }> }>
+  generateStudioMindMap(input: { connectionSlug: string; model: string; prompt: string; currentXml?: string; priorRequests?: string[] }): Promise<{ xml: string; summary: string }>
+  exportStudioVisio(xml: string): Promise<{ base64: string }>
   listLlmConnectionsWithStatus(): Promise<LlmConnectionWithStatus[]>
   getLlmConnection(slug: string): Promise<LlmConnection | null>
   getLlmConnectionApiKey(slug: string): Promise<string | null>

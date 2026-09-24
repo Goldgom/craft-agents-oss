@@ -2148,10 +2148,43 @@ interface MessageBubbleProps {
  */
 function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Message; onOpenUrl?: (url: string) => void; sessionId?: string; onRetry?: () => void }) {
   const { t } = useTranslation()
-  const isContentPolicyBlocked = message.errorCode === 'content_policy_blocked'
-  const displayTitle = isContentPolicyBlocked ? t('chat.contentPolicyBlockedTitle') : (message.errorTitle || t('common.error'))
-  const displayMessage = isContentPolicyBlocked ? t('chat.contentPolicyBlockedMessage') : message.content
-  const hasDetails = (message.errorDetails && message.errorDetails.length > 0) || message.errorOriginal
+  const friendlyCopy = (() => {
+    switch (message.errorCode) {
+      case 'content_policy_blocked':
+        return { title: t('chat.contentPolicyBlockedTitle'), description: t('chat.contentPolicyBlockedMessage') }
+      case 'billing_error':
+        return { title: t('chat.billingErrorTitle'), description: t('chat.billingErrorMessage') }
+      case 'invalid_api_key':
+      case 'invalid_credentials':
+      case 'mcp_auth_required':
+      case 'token_expired':
+        return { title: t('chat.credentialsErrorTitle'), description: t('chat.credentialsErrorMessage') }
+      case 'expired_oauth_token':
+        return { title: t('chat.loginExpiredTitle'), description: t('chat.loginExpiredMessage') }
+      case 'rate_limited':
+        return { title: t('chat.rateLimitedTitle'), description: t('chat.rateLimitedMessage') }
+      case 'service_error':
+      case 'service_unavailable':
+      case 'provider_error':
+        return { title: t('chat.serviceErrorTitle'), description: t('chat.serviceErrorMessage') }
+      case 'network_error':
+      case 'proxy_error':
+      case 'mcp_unreachable':
+        return { title: t('chat.networkErrorTitle'), description: t('chat.networkErrorMessage') }
+      case 'invalid_request':
+        return { title: t('chat.invalidRequestTitle'), description: t('chat.invalidRequestMessage') }
+      case 'unknown_error':
+      case undefined:
+        return { title: t('chat.unknownErrorTitle'), description: t('chat.unknownErrorMessage') }
+      default:
+        return { title: message.errorTitle || t('common.error'), description: message.content }
+    }
+  })()
+  const rawContentDetail = !message.errorOriginal && !message.errorDetails?.length &&
+    (!message.errorCode || message.errorCode === 'invalid_request')
+      ? message.content
+      : undefined
+  const hasDetails = Boolean(message.errorDetails?.length || message.errorOriginal || rawContentDetail)
   const [detailsOpen, setDetailsOpen] = React.useState(false)
   const actions = message.errorActions?.filter(a => {
     if (a.action === 'open_url') return !!a.url && !!onOpenUrl
@@ -2160,22 +2193,20 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
 
   return (
     <div className="flex justify-start mt-4">
-      {/* Policy blocks use a stronger red treatment; other errors stay subtle. */}
       <div
-        className={cn(
-          "max-w-[80%] shadow-tinted rounded-[8px] pl-5 pr-4 pt-2 pb-2.5 break-words",
-          isContentPolicyBlocked && "border border-destructive/35"
-        )}
+        className="max-w-[80%] shadow-tinted rounded-[10px] border border-destructive/35 pl-5 pr-4 pt-3 pb-3 break-words"
         style={{
-          backgroundColor: `oklch(from var(--destructive) l c h / ${isContentPolicyBlocked ? '0.09' : '0.03'})`,
+          backgroundColor: 'oklch(from var(--destructive) l c h / 0.09)',
           '--shadow-color': 'var(--destructive-rgb)',
         } as React.CSSProperties}
       >
-        <div className={cn("flex items-center gap-1.5 font-semibold", isContentPolicyBlocked ? "text-sm text-destructive mb-1" : "text-xs text-destructive/50 mb-0.5")}>
-          {isContentPolicyBlocked && <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />}
-          <span>{displayTitle}</span>
+        <div className="flex items-center gap-2 text-sm font-semibold text-destructive mb-1.5">
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+            <AlertTriangle className="size-3.5" aria-hidden="true" />
+          </span>
+          <span>{friendlyCopy.title}</span>
         </div>
-        <p className="text-sm text-destructive">{displayMessage}</p>
+        <p className="pl-8 text-sm leading-5 text-destructive/90">{friendlyCopy.description}</p>
 
         {/* Action buttons */}
         {actions && actions.length > 0 && (
@@ -2192,7 +2223,7 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
                 }}
                 className="text-xs px-2 py-0.5 rounded border border-destructive/20 text-destructive/70 hover:text-destructive hover:border-destructive/40 transition-colors"
               >
-                {action.label}{action.action === 'open_url' ? ' ↗' : ''}
+                {action.action === 'reauth' ? t('chat.signInAgain') : action.label}{action.action === 'open_url' ? ' ↗' : ''}
               </button>
             ))}
           </div>
@@ -2210,12 +2241,15 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
             </button>
 
             <AnimatedCollapsibleContent isOpen={detailsOpen} className="overflow-hidden">
-              <div className="mt-2 pt-2 border-t border-destructive/20 text-xs text-destructive/60 font-mono space-y-0.5">
+              <div className="mt-2 pt-2 border-t border-destructive/20 text-xs text-destructive/60 font-mono space-y-0.5 whitespace-pre-wrap break-all">
                 {message.errorDetails?.map((detail, i) => (
                   <div key={i}>{detail}</div>
                 ))}
                 {message.errorOriginal && !message.errorDetails?.some(d => d.includes('Raw error:')) && (
-                  <div className="mt-1">Raw: {message.errorOriginal.slice(0, 200)}{message.errorOriginal.length > 200 ? '...' : ''}</div>
+                  <div className="mt-1">Raw: {message.errorOriginal}</div>
+                )}
+                {rawContentDetail && (
+                  <div className="mt-1">Raw: {rawContentDetail}</div>
                 )}
               </div>
             </AnimatedCollapsibleContent>

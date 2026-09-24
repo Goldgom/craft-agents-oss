@@ -12,6 +12,8 @@
 import {
   PROTOCOL_VERSION,
   REQUEST_TIMEOUT_MS,
+  RPC_CHANNELS,
+  STUDIO_IMAGE_REQUEST_TIMEOUT_MS,
   SEQUENCE_ACK_INTERVAL_MS,
   CLIENT_HEARTBEAT_INTERVAL_MS,
   CLIENT_HEARTBEAT_TIMEOUT_MS,
@@ -202,10 +204,13 @@ export class WsRpcClient implements RpcClient {
       }
 
       const id = crypto.randomUUID()
+      const timeoutMs = channel === RPC_CHANNELS.studio.GENERATE_IMAGE
+        ? Math.max(this.requestTimeout, STUDIO_IMAGE_REQUEST_TIMEOUT_MS)
+        : this.requestTimeout
       const timeout = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Request timeout: ${channel} (${this.requestTimeout}ms)`))
-      }, this.requestTimeout)
+        reject(new Error(`Request timeout: ${channel} (${timeoutMs}ms)`))
+      }, timeoutMs)
 
       this.pending.set(id, { resolve, reject, timeout })
 

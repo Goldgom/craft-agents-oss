@@ -1,9 +1,12 @@
 import { BrowserWindow, dialog, type WebContents } from 'electron'
+import { Marked, Renderer } from 'marked'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import sharp from 'sharp'
 
 export type ChatExportFormat = 'markdown' | 'docx' | 'pdf' | 'png'
+export type ChatExportMode = 'chat' | 'full'
 
 export interface ChatExportMessage {
   role: 'user' | 'assistant' | 'tool' | 'error' | 'status' | 'info' | 'warning' | 'plan' | 'auth-request'
@@ -18,6 +21,7 @@ export interface ChatExportMessage {
 
 export interface ChatExportRequest {
   format: ChatExportFormat
+  mode?: ChatExportMode
   title: string
   exportedAt: string
   messages: ChatExportMessage[]
@@ -66,6 +70,19 @@ function escapeHtml(value: string): string {
   return escapeXml(value)
 }
 
+const markdownRenderer = new Renderer()
+markdownRenderer.html = ({ text }) => escapeHtml(text)
+const markdownParser = new Marked({
+  breaks: true,
+  gfm: true,
+  renderer: markdownRenderer,
+})
+
+export function renderMarkdownHtml(value: string): string {
+  const rendered = markdownParser.parse(value, { async: false })
+  return typeof rendered === 'string' ? rendered : escapeHtml(value)
+}
+
 function timestampText(timestamp?: number): string {
   if (!timestamp || !Number.isFinite(timestamp)) return ''
   try {
@@ -77,9 +94,13 @@ function timestampText(timestamp?: number): string {
 
 function visibleMessages(request: ChatExportRequest): ChatExportMessage[] {
   return request.messages.filter(message => {
-    if (message.hidden || message.role === 'status' || message.role === 'auth-request') return false
+    if (request.mode !== 'full' && (message.hidden || (message.role !== 'user' && message.role !== 'assistant'))) return false
     return Boolean(message.content?.trim() || message.toolResult?.trim() || message.toolInput || message.attachments?.length)
   })
+}
+
+function includeToolDetails(request: ChatExportRequest): boolean {
+  return request.mode === 'full'
 }
 
 function safeJson(value: unknown): string {
@@ -104,10 +125,10 @@ export function buildChatMarkdown(request: ChatExportRequest): string {
     if (message.attachments?.length) {
       lines.push(`**${escapeMarkdown(request.labels.attachments)}:** ${message.attachments.map(item => escapeMarkdown(item.name)).join(', ')}`, '')
     }
-    if (message.toolInput) {
+    if (includeToolDetails(request) && message.toolInput) {
       lines.push(`**${escapeMarkdown(request.labels.toolInput)}**`, '', '```json', safeJson(message.toolInput), '```', '')
     }
-    if (message.toolResult?.trim()) {
+    if (includeToolDetails(request) && message.toolResult?.trim()) {
       lines.push(`**${escapeMarkdown(request.labels.toolResult)}**`, '', '```text', message.toolResult.trim(), '```', '')
     }
   }
@@ -115,20 +136,20 @@ export function buildChatMarkdown(request: ChatExportRequest): string {
   return `${lines.join('\n').trimEnd()}\n`
 }
 
-function buildChatHtml(request: ChatExportRequest): string {
+export function buildChatHtml(request: ChatExportRequest): string {
   const messages = visibleMessages(request).map(message => {
     const role = message.role === 'tool' && message.toolName
       ? `${request.labels.roles.tool}: ${message.toolName}`
       : request.labels.roles[message.role]
     const details: string[] = []
-    if (message.content?.trim()) details.push(`<div class="content">${escapeHtml(message.content.trim())}</div>`)
+    if (message.content?.trim()) details.push(`<div class="content">${renderMarkdownHtml(message.content.trim())}</div>`)
     if (message.attachments?.length) {
       details.push(`<div class="meta"><strong>${escapeHtml(request.labels.attachments)}:</strong> ${message.attachments.map(item => escapeHtml(item.name)).join(', ')}</div>`)
     }
-    if (message.toolInput) {
+    if (includeToolDetails(request) && message.toolInput) {
       details.push(`<div class="meta"><strong>${escapeHtml(request.labels.toolInput)}</strong></div><pre>${escapeHtml(safeJson(message.toolInput))}</pre>`)
     }
-    if (message.toolResult?.trim()) {
+    if (includeToolDetails(request) && message.toolResult?.trim()) {
       details.push(`<div class="meta"><strong>${escapeHtml(request.labels.toolResult)}</strong></div><pre>${escapeHtml(message.toolResult.trim())}</pre>`)
     }
     return `<section class="message ${message.role}"><header><strong>${escapeHtml(role)}</strong><time>${escapeHtml(timestampText(message.timestamp))}</time></header>${details.join('')}</section>`
@@ -148,7 +169,21 @@ function buildChatHtml(request: ChatExportRequest): string {
     .message.tool { background: #f8fafc; }
     header { display: flex; justify-content: space-between; gap: 20px; margin-bottom: 9px; color: #334155; }
     time { color: #94a3b8; font-size: 12px; white-space: nowrap; }
-    .content, pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+    .content { overflow-wrap: anywhere; word-break: break-word; }
+    .content > :first-child { margin-top: 0; }
+    .content > :last-child { margin-bottom: 0; }
+    .content h1, .content h2, .content h3, .content h4 { margin: 1em 0 0.45em; line-height: 1.3; }
+    .content h1 { font-size: 1.55em; }
+    .content h2 { font-size: 1.35em; }
+    .content h3 { font-size: 1.18em; }
+    .content p, .content ul, .content ol, .content blockquote, .content table { margin: 0.65em 0; }
+    .content ul, .content ol { padding-left: 1.6em; }
+    .content blockquote { padding: 0.1em 0 0.1em 1em; border-left: 3px solid #cbd5e1; color: #475569; }
+    .content table { width: 100%; border-collapse: collapse; }
+    .content th, .content td { padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; }
+    .content code { padding: 0.12em 0.35em; background: #e2e8f0; border-radius: 4px; font: 0.88em Consolas, "SFMono-Regular", monospace; }
+    .content pre, pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+    .content pre code { padding: 0; background: transparent; color: inherit; }
     .meta { margin-top: 10px; color: #475569; font-size: 13px; }
     pre { margin: 8px 0 0; padding: 12px; background: #0f172a; color: #e2e8f0; border-radius: 8px; font: 12px/1.55 Consolas, "SFMono-Regular", monospace; }
   </style></head><body><main><h1>${escapeHtml(request.title)}</h1><div class="exported">${escapeHtml(request.labels.exportedAt)}: ${escapeHtml(request.exportedAt)}</div>${messages}</main></body></html>`
@@ -223,8 +258,8 @@ export function buildChatDocx(request: ChatExportRequest): Buffer {
     body.push(wordParagraph(`${role}${time ? ` · ${time}` : ''}`, 'Heading1'))
     if (message.content?.trim()) body.push(wordParagraph(message.content.trim()))
     if (message.attachments?.length) body.push(wordParagraph(`${request.labels.attachments}: ${message.attachments.map(item => item.name).join(', ')}`))
-    if (message.toolInput) body.push(wordParagraph(`${request.labels.toolInput}\n${safeJson(message.toolInput)}`))
-    if (message.toolResult?.trim()) body.push(wordParagraph(`${request.labels.toolResult}\n${message.toolResult.trim()}`))
+    if (includeToolDetails(request) && message.toolInput) body.push(wordParagraph(`${request.labels.toolInput}\n${safeJson(message.toolInput)}`))
+    if (includeToolDetails(request) && message.toolResult?.trim()) body.push(wordParagraph(`${request.labels.toolResult}\n${message.toolResult.trim()}`))
   }
   body.push('<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>')
 
@@ -284,20 +319,25 @@ export async function renderChatPng(request: ChatExportRequest): Promise<Buffer>
   const html = buildChatHtml(request)
   const { win, cleanup } = await loadExportWindow(html)
   try {
-    let height = await pageHeight(win.webContents)
-    const maxHeight = 30000
-    if (height > maxHeight) {
-      const zoom = Math.max(0.5, maxHeight / height)
-      await win.webContents.executeJavaScript(`document.documentElement.style.zoom = ${JSON.stringify(zoom)}`)
-      height = await pageHeight(win.webContents)
+    const height = Math.max(1, await pageHeight(win.webContents))
+    const width = 1100
+    const tileHeight = 12000
+    const tiles: Array<{ input: Buffer; top: number; left: number }> = []
+
+    for (let y = 0; y < height; y += tileHeight) {
+      const currentHeight = Math.min(tileHeight, height - y)
+      const image = await win.webContents.capturePage(
+        { x: 0, y, width, height: currentHeight },
+        { stayHidden: true, stayAwake: true },
+      )
+      if (image.isEmpty()) throw new Error('Failed to render conversation image')
+      tiles.push({ input: image.toPNG(), top: y, left: 0 })
     }
-    if (height > maxHeight) throw new Error('Conversation is too long for a single image; export it as PDF instead')
-    const image = await win.webContents.capturePage(
-      { x: 0, y: 0, width: 1100, height: Math.max(1, height) },
-      { stayHidden: true, stayAwake: true },
-    )
-    if (image.isEmpty()) throw new Error('Failed to render conversation image')
-    return image.toPNG()
+
+    if (tiles.length === 1) return tiles[0].input
+    return await sharp({
+      create: { width, height, channels: 4, background: '#ffffff' },
+    }).composite(tiles).png({ compressionLevel: 9 }).toBuffer()
   } finally {
     await cleanup()
   }
@@ -306,6 +346,7 @@ export async function renderChatPng(request: ChatExportRequest): Promise<Buffer>
 export async function exportChatTranscript(owner: BrowserWindow | null, request: ChatExportRequest): Promise<ChatExportResult> {
   const option = FORMAT_OPTIONS[request.format]
   if (!option || !Array.isArray(request.messages)) return { success: false, error: 'Invalid export request' }
+  if (request.mode === 'full' && request.format !== 'pdf') return { success: false, error: 'Full export is only available as PDF' }
 
   const defaultPath = `${sanitizeFileName(request.title)}.${option.extension}`
   const result = owner

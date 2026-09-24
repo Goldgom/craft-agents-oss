@@ -493,7 +493,7 @@ describe('PiEventAdapter', () => {
   // ============================================================
 
   describe('error surfacing', () => {
-    it('should emit plain error for unclassified error messages', () => {
+    it('keeps unclassified provider failures behind a typed unknown error', () => {
       const events = collect(adapter.adaptEvent({
         type: 'message_end',
         message: {
@@ -504,10 +504,10 @@ describe('PiEventAdapter', () => {
       } as any));
 
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        type: 'error',
-        message: 'Something went wrong internally',
-      });
+      expect(events[0].type).toBe('typed_error');
+      expect(events[0].error.code).toBe('unknown_error');
+      expect(events[0].error.originalError).toBe('Something went wrong internally');
+      expect(events[0].error.message).not.toContain('internally');
     });
 
     it('should emit typed_error for raw HTML proxy pages', () => {
@@ -539,6 +539,24 @@ describe('PiEventAdapter', () => {
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('typed_error');
       expect(events[0].error.code).toBe('expired_oauth_token');
+    });
+
+    it('maps missing resolved API key to login expiry for OAuth connections', () => {
+      const oauthAdapter = new PiEventAdapter({ oauthAuth: true });
+      const events = collect(oauthAdapter.adaptEvent({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          stopReason: 'error',
+          errorMessage: 'API key auth failed for provider custom-endpoint: authHeader requires a resolved API key',
+        },
+      } as any));
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('typed_error');
+      expect(events[0].error.code).toBe('expired_oauth_token');
+      expect(events[0].error.message).toContain('sign in again');
+      expect(events[0].error.originalError).toContain('resolved API key');
     });
 
     it('should emit typed_error for 401 unauthorized errors', () => {

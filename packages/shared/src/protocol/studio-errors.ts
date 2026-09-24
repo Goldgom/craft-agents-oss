@@ -1,0 +1,3 @@
+/** Stable RPC error markers used by the Studio connection recovery dialog. */
+export const STUDIO_TOKENNEST_REAUTH_REQUIRED = 'STUDIO_TOKENNEST_REAUTH_REQUIRED'
+export const STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE = 'STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE'

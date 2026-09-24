@@ -14,6 +14,8 @@ import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { requestClientOpenFileDialog } from '@craft-agent/server-core/transport'
 
+const IMAGE_UPLOAD_TARGET_BYTES = 100 * 1024
+
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.file.READ,
   RPC_CHANNELS.file.READ_DATA_URL,
@@ -211,7 +213,12 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
   // Store an attachment to disk and generate thumbnail/markdown conversion
   // This is the core of the persistent file attachment system
-  server.handle(RPC_CHANNELS.file.STORE_ATTACHMENT, async (ctx, sessionId: string, attachment: FileAttachment): Promise<StoredAttachment> => {
+  server.handle(RPC_CHANNELS.file.STORE_ATTACHMENT, async (
+    ctx,
+    sessionId: string,
+    attachment: FileAttachment,
+    options?: { compressImagesBeforeUpload?: boolean },
+  ): Promise<StoredAttachment> => {
     // Track files we've written for cleanup on error
     const filesToCleanup: string[] = []
 
@@ -244,12 +251,13 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
       const id = randomUUID()
       const safeName = sanitizeFilename(attachment.name)
       const storedFileName = `${id}_${safeName}`
-      const storedPath = join(attachmentsDir, storedFileName)
+      let storedPath = join(attachmentsDir, storedFileName)
 
       // Track if image was resized (for return value)
       let wasResized = false
       let finalSize = attachment.size
       let resizedBase64: string | undefined
+      let finalMimeType = attachment.mimeType
 
       // 1. Save the file (with image validation and resizing)
       if (attachment.base64) {
@@ -262,6 +270,9 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
         // For images: validate and resize if needed for Claude API compatibility
         if (attachment.type === 'image') {
+          // The preference is local UI state, so the renderer sends it with
+          // each upload. This also preserves the choice for remote workspaces.
+          const compressBeforeUpload = options?.compressImagesBeforeUpload ?? true
           const imageInspection = await inspectImageBuffer(decoded, deps.platform.imageProcessor)
           const imageSize = imageInspection.status === 'ok'
             ? { width: imageInspection.width, height: imageInspection.height }
@@ -269,7 +280,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
           // Determine if we should resize
           let shouldResize = false
-          let targetSize: { width: number; height: number } | undefined
+          let resizeRequiredForApi = false
 
           if (imageInspection.status === 'processor_unavailable') {
             deps.platform.logger.warn('Image processing unavailable while validating attachment:', imageInspection.error?.message ?? 'unknown error')
@@ -282,74 +293,83 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
             // Validate image for Claude API
             const validation = validateImageForClaudeAPI(decoded.length, imageSize!.width, imageSize!.height)
 
-            shouldResize = validation.needsResize ?? false
-            targetSize = validation.suggestedSize
-
             if (!validation.valid && validation.errorCode === 'dimension_exceeded') {
-              // Image exceeds 8000px limit - calculate resize to fit within limits
-              const maxDim = IMAGE_LIMITS.MAX_DIMENSION
-              const scale = Math.min(maxDim / imageSize!.width, maxDim / imageSize!.height)
-              targetSize = {
-                width: Math.floor(imageSize!.width * scale),
-                height: Math.floor(imageSize!.height * scale),
-              }
               shouldResize = true
-              deps.platform.logger.info(`Image exceeds ${maxDim}px limit (${imageSize!.width}x${imageSize!.height}), will resize to ${targetSize.width}x${targetSize.height}`)
+              resizeRequiredForApi = true
+              deps.platform.logger.info(`Image exceeds ${IMAGE_LIMITS.MAX_DIMENSION}px limit (${imageSize!.width}x${imageSize!.height}), will resize`)
             } else if (!validation.valid && validation.errorCode === 'size_exceeded') {
               // File >5MB — try resize+compress instead of rejecting
               shouldResize = true
+              resizeRequiredForApi = true
               deps.platform.logger.info(`Image exceeds 5MB (${(decoded.length / 1024 / 1024).toFixed(1)}MB), will attempt resize`)
             } else if (!validation.valid) {
               throw new Error(validation.error)
+            } else if (compressBeforeUpload && (decoded.length > IMAGE_UPLOAD_TARGET_BYTES || validation.needsResize)) {
+              shouldResize = true
             }
           }
 
-          // If resize is needed (either recommended or required), do it now
+          // Optional upload compression aims for 100KB. Hard API-limit resizing
+          // remains active even when the user disables the optional setting.
           if (shouldResize) {
             const isPhoto = attachment.mimeType === 'image/jpeg'
+            const originalDecoded = decoded
+            const targetBytes = compressBeforeUpload
+              ? IMAGE_UPLOAD_TARGET_BYTES
+              : IMAGE_LIMITS.MAX_SIZE
 
-            if (targetSize) {
-              // Dimension-exceeded: resize to specific target dimensions
-              deps.platform.logger.info(`Resizing image from ${imageSize!.width}x${imageSize!.height} to ${targetSize.width}x${targetSize.height}`)
-              try {
-                decoded = await deps.platform.imageProcessor.process(decoded, {
-                  resize: { width: targetSize.width, height: targetSize.height },
-                  format: isPhoto ? 'jpeg' : 'png',
-                  quality: isPhoto ? IMAGE_LIMITS.JPEG_QUALITY_HIGH : undefined,
-                })
+            try {
+              const result = await resizeImageForAPI(decoded, {
+                isPhoto,
+                maxSizeBytes: targetBytes,
+                bestEffort: compressBeforeUpload,
+              })
+              if (!result) {
+                throw new Error(`Image could not be compressed below ${(targetBytes / 1024 / 1024).toFixed(1)}MB`)
+              }
+
+              // Do not replace a valid optional upload with a larger encoding.
+              // Mandatory API-limit resizing must use the processed dimensions.
+              if (resizeRequiredForApi || result.buffer.length < originalDecoded.length) {
+                decoded = result.buffer
                 wasResized = true
                 finalSize = decoded.length
+                finalMimeType = result.format === 'jpeg' ? 'image/jpeg' : 'image/png'
+              }
 
-                // Re-validate final size after resize
-                if (decoded.length > IMAGE_LIMITS.MAX_SIZE) {
-                  decoded = await deps.platform.imageProcessor.process(decoded, { format: 'jpeg', quality: IMAGE_LIMITS.JPEG_QUALITY_FALLBACK })
-                  finalSize = decoded.length
-                  if (decoded.length > IMAGE_LIMITS.MAX_SIZE) {
-                    throw new Error(`Image still too large after resize (${(decoded.length / 1024 / 1024).toFixed(1)}MB). Please use a smaller image.`)
-                  }
-                }
-              } catch (resizeError) {
-                deps.platform.logger.error('Image resize failed:', resizeError)
-                const reason = resizeError instanceof Error ? resizeError.message : String(resizeError)
-                throw new Error(`Image too large (${imageSize!.width}x${imageSize!.height}) and automatic resize failed: ${reason}. Please manually resize it before attaching.`)
+              if (decoded.length > IMAGE_LIMITS.MAX_SIZE) {
+                throw new Error(`Image still too large after resize (${(decoded.length / 1024 / 1024).toFixed(1)}MB)`)
               }
-            } else {
-              // Size-exceeded or optimal resize — use shared utility for full pipeline
-              const result = await resizeImageForAPI(decoded, { isPhoto })
-              if (!result) {
-                throw new Error(`Image too large (${(decoded.length / 1024 / 1024).toFixed(1)}MB) and could not be compressed enough. Please use a smaller image.`)
+            } catch (resizeError) {
+              deps.platform.logger.error('Image resize failed:', resizeError)
+              const reason = resizeError instanceof Error ? resizeError.message : String(resizeError)
+              if (resizeRequiredForApi) {
+                throw new Error(`Image exceeds API limits and automatic resize failed: ${reason}. Please manually resize it before attaching.`)
               }
-              decoded = result.buffer
-              wasResized = true
+              // The 100KB target is deliberately best-effort. If processing is
+              // unavailable, keep the original valid image instead of blocking send.
+              decoded = originalDecoded
               finalSize = decoded.length
+              wasResized = false
+              finalMimeType = attachment.mimeType
+              deps.platform.logger.warn(`Optional image compression skipped: ${reason}`)
             }
 
-            deps.platform.logger.info(`Image resized: ${attachment.size} -> ${finalSize} bytes (${Math.round((1 - finalSize / attachment.size) * 100)}% reduction)`)
+            if (wasResized) {
+              deps.platform.logger.info(`Image compressed: ${attachment.size} -> ${finalSize} bytes (${Math.round((1 - finalSize / attachment.size) * 100)}% reduction; target ${IMAGE_UPLOAD_TARGET_BYTES} bytes)`)
 
-            // Store resized base64 to return to renderer
-            // This is used when sending to Claude API instead of original large base64
-            resizedBase64 = decoded.toString('base64')
+              // Store resized base64 to return to the renderer for model upload.
+              resizedBase64 = decoded.toString('base64')
+            }
           }
+        }
+
+        // Keep the stored extension aligned with the encoded bytes. Native
+        // Codex sends image paths directly, so a PNG-named JPEG is unsafe.
+        if (attachment.type === 'image' && finalMimeType !== attachment.mimeType) {
+          const parsed = parsePath(storedPath)
+          const extension = finalMimeType === 'image/jpeg' ? '.jpg' : '.png'
+          storedPath = join(parsed.dir, `${parsed.name}${extension}`)
         }
 
         await writeFile(storedPath, decoded)
@@ -417,7 +437,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
         id,
         type: attachment.type,
         name: attachment.name,
-        mimeType: attachment.mimeType,
+        mimeType: finalMimeType,
         size: finalSize, // Use final size (may differ if resized)
         originalSize: wasResized ? attachment.size : undefined, // Track original if resized
         storedPath,

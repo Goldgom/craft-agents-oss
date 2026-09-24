@@ -112,6 +112,16 @@ describe('TokenNest OAuth', () => {
     await expect(fetchTokenNestChannelGroups('oauth-access')).resolves.toEqual([]);
   });
 
+  test('requires reauthorization when an older grant lacks group-reading scope', async () => {
+    globalThis.fetch = (async () => Response.json({ error: 'insufficient_scope' }, { status: 403 })) as unknown as typeof fetch;
+    await expect(fetchTokenNestChannelGroups('oauth-access')).rejects.toThrow('groups:read');
+  });
+
+  test('reports group discovery failures instead of hiding them', async () => {
+    globalThis.fetch = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
+    await expect(fetchTokenNestChannelGroups('oauth-access')).rejects.toThrow('HTTP 503');
+  });
+
   test('normalizes provider-authoritative usage summary and records', async () => {
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = new URL(String(input));

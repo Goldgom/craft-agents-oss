@@ -8,7 +8,7 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { WebSocket } from 'ws'
-import { EVENT_BUFFER_MAX_SIZE, type MessageEnvelope } from '@craft-agent/shared/protocol'
+import { EVENT_BUFFER_MAX_SIZE, RPC_CHANNELS, type MessageEnvelope } from '@craft-agent/shared/protocol'
 import { WsRpcServer } from '../transport/server'
 import { WsRpcClient } from '../transport/client'
 import { serializeEnvelope } from '../transport/codec'
@@ -232,6 +232,22 @@ describe('RPC', () => {
     expect(r1).toBe('first')
     expect(r2).toBe('second')
     expect(r3).toBe('third')
+  })
+
+  test('waits for image generation beyond the normal RPC timeout', async () => {
+    const { server, client } = await createPair({}, { requestTimeout: 20 })
+    server.handle(RPC_CHANNELS.studio.GENERATE_IMAGE, async () => {
+      await new Promise(resolve => setTimeout(resolve, 80))
+      return { imageBase64: 'image-data', mimeType: 'image/png' }
+    })
+    server.handle('test:slow', async () => {
+      await new Promise(resolve => setTimeout(resolve, 80))
+      return 'late'
+    })
+
+    const image = client.invoke(RPC_CHANNELS.studio.GENERATE_IMAGE)
+    await expect(client.invoke('test:slow')).rejects.toThrow('Request timeout: test:slow (20ms)')
+    await expect(image).resolves.toEqual({ imageBase64: 'image-data', mimeType: 'image/png' })
   })
 
   test('Uint8Array response payload roundtrips intact', async () => {

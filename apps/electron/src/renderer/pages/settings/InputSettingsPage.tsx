@@ -44,6 +44,9 @@ export default function InputSettingsPage() {
   // Spell check state (default off)
   const [spellCheck, setSpellCheck] = useState(false)
 
+  // Image attachments are compressed by default to reduce upload failures.
+  const [compressImagesBeforeUpload, setCompressImagesBeforeUpload] = useState(true)
+
   // Send message key state
   const [sendMessageKey, setSendMessageKey] = useState<'enter' | 'cmd-enter'>('enter')
 
@@ -52,13 +55,15 @@ export default function InputSettingsPage() {
     const loadSettings = async () => {
       if (!window.electronAPI) return
       try {
-        const [autoCapEnabled, spellCheckEnabled, sendKey] = await Promise.all([
+        const [autoCapEnabled, spellCheckEnabled, compressImagesEnabled, sendKey] = await Promise.all([
           window.electronAPI.getAutoCapitalisation(),
           window.electronAPI.getSpellCheck(),
+          window.electronAPI.getCompressImagesBeforeUpload(),
           window.electronAPI.getSendMessageKey(),
         ])
         setAutoCapitalisation(autoCapEnabled)
         setSpellCheck(spellCheckEnabled)
+        setCompressImagesBeforeUpload(compressImagesEnabled)
         setSendMessageKey(sendKey)
       } catch (error) {
         console.error('Failed to load input settings:', error)
@@ -76,6 +81,11 @@ export default function InputSettingsPage() {
   const handleSpellCheckChange = useCallback(async (enabled: boolean) => {
     setSpellCheck(enabled)
     await window.electronAPI.setSpellCheck(enabled)
+  }, [])
+
+  const handleCompressImagesChange = useCallback(async (enabled: boolean) => {
+    setCompressImagesBeforeUpload(enabled)
+    await window.electronAPI.setCompressImagesBeforeUpload(enabled)
   }, [])
 
   const handleSendMessageKeyChange = useCallback((value: string) => {
@@ -105,6 +115,18 @@ export default function InputSettingsPage() {
                     description={t("settings.input.spellCheckDesc")}
                     checked={spellCheck}
                     onCheckedChange={handleSpellCheckChange}
+                  />
+                </SettingsCard>
+              </SettingsSection>
+
+              {/* Attachments */}
+              <SettingsSection title={t("settings.input.attachments")} description={t("settings.input.attachmentsDesc")}>
+                <SettingsCard>
+                  <SettingsToggle
+                    label={t("settings.input.compressImages")}
+                    description={t("settings.input.compressImagesDesc")}
+                    checked={compressImagesBeforeUpload}
+                    onCheckedChange={handleCompressImagesChange}
                   />
                 </SettingsCard>
               </SettingsSection>

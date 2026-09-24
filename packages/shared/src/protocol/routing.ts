@@ -156,6 +156,8 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
   RPC_CHANNELS.input.SET_SEND_MESSAGE_KEY,
   RPC_CHANNELS.input.GET_SPELL_CHECK,
   RPC_CHANNELS.input.SET_SPELL_CHECK,
+  RPC_CHANNELS.input.GET_COMPRESS_IMAGES,
+  RPC_CHANNELS.input.SET_COMPRESS_IMAGES,
 
   // power — local power management
   RPC_CHANNELS.power.GET_KEEP_AWAKE,
@@ -357,6 +359,9 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES,
   RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES,
   RPC_CHANNELS.llmConnections.CHANGED,
+  RPC_CHANNELS.studio.GENERATE_IMAGE,
+  RPC_CHANNELS.studio.GENERATE_MIND_MAP,
+  RPC_CHANNELS.studio.EXPORT_VISIO,
 
   // chatgpt — OAuth via capability passthrough
   RPC_CHANNELS.chatgpt.START_OAUTH,

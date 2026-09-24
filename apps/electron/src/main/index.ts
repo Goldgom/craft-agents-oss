@@ -91,7 +91,7 @@ import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
 import { PageThumbnailer } from './page-thumbnailer'
 import { registerAllRpcHandlers } from './handlers/index'
-import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient } from '@craft-agent/server-core/handlers/rpc'
+import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient, refreshTokenNestModelsAtStartup } from '@craft-agent/server-core/handlers/rpc'
 import type { PlatformServices } from '../runtime/platform'
 import { createElectronPlatform } from './platform'
 import type { HandlerDeps } from './handlers/handler-deps'
@@ -127,6 +127,7 @@ import { handleDeepLink } from './deep-link'
 import { BrowserPaneManager } from './browser-pane-manager'
 import { OAuthFlowStore } from '@craft-agent/shared/auth'
 import { registerThumbnailScheme, registerThumbnailHandler } from './thumbnail-protocol'
+import { registerStudioScheme, registerStudioHandler } from './studio-protocol'
 import log, { isDebugMode, mainLog, getLogFilePath, getMessagingGatewayLogFilePath, messagingGatewayLog, autoUpdateLog } from './logger'
 import { setPerfEnabled, enableDebug } from '@craft-agent/shared/utils'
 import { registerPiModelResolver } from '@craft-agent/shared/config'
@@ -597,6 +598,7 @@ if (process.env.CRAFT_SERVER_URL) {
 // Register thumbnail:// custom protocol for file preview thumbnails in the sidebar.
 // Must happen before app.whenReady() — Electron requires early scheme registration.
 registerThumbnailScheme()
+registerStudioScheme()
 
 // Handle deeplink on macOS (when app is already running)
 app.on('open-url', (event, url) => {
@@ -739,6 +741,7 @@ app.whenReady().then(async () => {
 
   // Register thumbnail:// protocol handler (scheme was registered earlier, before app.whenReady)
   registerThumbnailHandler()
+  registerStudioHandler()
 
   // Re-apply proxy settings now that Electron sessions are available
   // (first call before app.whenReady only configured Node-level proxy)
@@ -1113,6 +1116,7 @@ app.whenReady().then(async () => {
           : registerAllRpcHandlers,
         setSessionEventSink: (sm, sink) => sm.setEventSink(sink),
         initializeSessionManager: (sm) => sm.initialize(),
+        refreshStartupModels: refreshTokenNestModelsAtStartup,
         initModelRefreshService: () => initModelRefreshService(async (slug: string) => {
           const { getCredentialManager } = await import('@craft-agent/shared/credentials')
           const manager = getCredentialManager()

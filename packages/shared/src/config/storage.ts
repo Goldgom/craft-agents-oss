@@ -71,6 +71,7 @@ export interface StoredConfig {
   autoCapitalisation?: boolean;  // Auto-capitalize first letter when typing (default: true)
   sendMessageKey?: 'enter' | 'cmd-enter';  // Key to send messages (default: 'enter')
   spellCheck?: boolean;  // Enable spell check in input (default: false)
+  compressImagesBeforeUpload?: boolean;  // Aim image attachments at 100KB before upload (default: true)
   // Power settings
   keepAwakeWhileRunning?: boolean;  // Prevent screen sleep while sessions are running (default: false)
   // Tool metadata
@@ -128,6 +129,7 @@ const FALLBACK_CONFIG_DEFAULTS: ConfigDefaults = {
     autoCapitalisation: true,
     sendMessageKey: 'enter',
     spellCheck: false,
+    compressImagesBeforeUpload: true,
     keepAwakeWhileRunning: false,
     richToolDescriptions: true,
     extendedPromptCache: false,
@@ -653,6 +655,27 @@ export function clearGitBashPath(): void {
   const config = loadStoredConfig();
   if (!config || !config.gitBashPath) return;
   delete config.gitBashPath;
+  saveConfig(config);
+}
+
+/**
+ * Get whether image attachments should be compressed before upload.
+ * Defaults to true to reduce provider-side upload failures.
+ */
+export function getCompressImagesBeforeUpload(): boolean {
+  const config = loadStoredConfig();
+  if (config?.compressImagesBeforeUpload !== undefined) {
+    return config.compressImagesBeforeUpload;
+  }
+  const defaults = loadConfigDefaults();
+  return defaults.defaults.compressImagesBeforeUpload;
+}
+
+/** Set whether image attachments should be compressed before upload. */
+export function setCompressImagesBeforeUpload(enabled: boolean): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  config.compressImagesBeforeUpload = enabled;
   saveConfig(config);
 }
 
@@ -2845,6 +2868,8 @@ export function updateLlmConnection(slug: string, updates: Partial<Omit<LlmConne
     models: updates.models !== undefined ? updates.models : existing.models,
     defaultModel: updates.defaultModel !== undefined ? updates.defaultModel : existing.defaultModel,
     modelSelectionMode: updates.modelSelectionMode !== undefined ? updates.modelSelectionMode : existing.modelSelectionMode,
+    channelGroup: updates.channelGroup !== undefined ? updates.channelGroup : existing.channelGroup,
+    channelGroups: updates.channelGroups !== undefined ? updates.channelGroups : existing.channelGroups,
     // Pi auth provider
     piAuthProvider: updates.piAuthProvider !== undefined ? updates.piAuthProvider : existing.piAuthProvider,
     // Custom endpoint protocol (Anthropic/OpenAI compatible)

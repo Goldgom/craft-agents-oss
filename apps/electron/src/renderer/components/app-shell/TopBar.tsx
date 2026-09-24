@@ -37,6 +37,8 @@ const RIGHT_SLOT_FULL_BADGES_THRESHOLD = 420
 const RIGHT_SLOT_TWO_BADGES_THRESHOLD = 300
 
 interface TopBarProps {
+  studioMode: 'agent' | 'canvas' | 'mindmap'
+  onStudioModeChange: (mode: 'agent' | 'canvas' | 'mindmap') => void
   workspaces: Workspace[]
   activeWorkspaceId: string | null
   onSelectWorkspace: (workspaceId: string, openInNewWindow?: boolean) => void | Promise<void>
@@ -63,6 +65,8 @@ interface TopBarProps {
 }
 
 export function TopBar({
+  studioMode,
+  onStudioModeChange,
   workspaces,
   activeWorkspaceId,
   onSelectWorkspace,
@@ -136,6 +140,27 @@ export function TopBar({
   // above every page and duplicate the Android navigation affordances.
   if (androidEmbedded) return null
 
+  if (studioMode !== 'agent') {
+    return (
+      <div
+        className="fixed top-0 left-0 right-0 z-panel titlebar-drag-region flex items-center gap-3 border-b border-border bg-background pr-4"
+        style={{ height: 'var(--topbar-height)', paddingLeft: menuLeftPadding }}
+      >
+        <span className="text-sm font-semibold text-foreground">词元鸟</span>
+        <select
+          className="titlebar-no-drag rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+          aria-label="功能切换"
+          value={studioMode}
+          onChange={event => onStudioModeChange(event.target.value as 'agent' | 'canvas' | 'mindmap')}
+        >
+          <option value="agent">Agent</option>
+          <option value="canvas">画布</option>
+          <option value="mindmap">思维导图</option>
+        </select>
+      </div>
+    )
+  }
+
   return (
     <div
       className="fixed top-0 left-0 right-0 z-panel titlebar-drag-region"
@@ -176,6 +201,17 @@ export function TopBar({
 
         {/* Server switcher — 当前运行服务端 (本机服务器 / 远程服务) */}
         <ServerSwitcher />
+
+        <select
+          className="titlebar-no-drag ml-1 max-w-24 rounded-md border border-border bg-background px-1.5 py-1 text-xs text-foreground"
+          aria-label="功能切换"
+          value={studioMode}
+          onChange={event => onStudioModeChange(event.target.value as 'agent' | 'canvas' | 'mindmap')}
+        >
+          <option value="agent">Agent</option>
+          <option value="canvas">画布</option>
+          <option value="mindmap">思维导图</option>
+        </select>
 
         {/* Back / Forward / Workspace selector (moved from center).
             In compact mode the back/forward buttons are dropped — the iOS-style

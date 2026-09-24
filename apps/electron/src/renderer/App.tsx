@@ -98,6 +98,8 @@ import { resolveAuthGatedAppState } from '@/lib/app-startup'
 const PDFPreviewOverlay = React.lazy(() =>
   import('@craft-agent/ui/overlay/PDFPreviewOverlay').then(module => ({ default: module.PDFPreviewOverlay }))
 )
+const StudioCanvas = React.lazy(() => import('./pages/studio/StudioCanvas'))
+const StudioMindMap = React.lazy(() => import('./pages/studio/StudioMindMap'))
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'server-picker' | 'ready'
 
@@ -292,6 +294,8 @@ function SessionLoadErrorScreen({
 
 export default function App() {
   const { t } = useTranslation()
+  const [studioMode, setStudioMode] = useState<'agent' | 'canvas' | 'mindmap'>('agent')
+  const [studioVisited, setStudioVisited] = useState({ canvas: false, mindmap: false })
   const isAndroidEmbedded = useMemo(
     () => new URLSearchParams(window.location.search).get('embedded') === 'android',
     [],
@@ -1396,10 +1400,13 @@ export default function App() {
       let processedAttachments: FileAttachment[] | undefined
 
       if (attachments?.length) {
+        const compressImagesBeforeUpload = await window.electronAPI
+          .getCompressImagesBeforeUpload()
+          .catch(() => true)
         // Store each attachment to disk (generates thumbnails, converts Office→markdown)
         // Use allSettled so one failure doesn't kill all attachments
         const storeResults = await Promise.allSettled(
-          attachments.map(a => window.electronAPI.storeAttachment(sessionId, a))
+          attachments.map(a => window.electronAPI.storeAttachment(sessionId, a, { compressImagesBeforeUpload }))
         )
 
         // Filter successful stores, warn about failures
@@ -1454,6 +1461,9 @@ export default function App() {
               markdownPath: stored.markdownPath,
               // Use resized base64 if available (for images that exceeded size limits)
               base64: stored.resizedBase64 ?? att.base64,
+              // Compression may convert PNG/WebP to JPEG to reach the upload target.
+              mimeType: stored.mimeType,
+              size: stored.size,
             }
           })
         )
@@ -2217,14 +2227,33 @@ export default function App() {
                 onRetry={handleReconnectTransport}
               />
             )}
-            <div className="flex-1 min-h-0">
-              {sessionLoadError ? (
+            <div className="relative flex-1 min-h-0">
+              {sessionLoadError && studioMode === 'agent' ? (
                 <SessionLoadErrorScreen
                   message={sessionLoadError}
                   onRetry={() => { void loadSessionsFromServer() }}
                 />
               ) : (
                 <AppShell
+                  studioMode={studioMode}
+                  onStudioModeChange={mode => {
+                    setStudioMode(mode)
+                    if (mode !== 'agent') setStudioVisited(previous => ({ ...previous, [mode]: true }))
+                  }}
+                  studioContent={(
+                    <>
+                      {studioVisited.canvas && (
+                        <div className={studioMode === 'canvas' ? 'h-full' : 'hidden'}>
+                          <React.Suspense fallback={null}><StudioCanvas active={studioMode === 'canvas'} onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }} /></React.Suspense>
+                        </div>
+                      )}
+                      {studioVisited.mindmap && (
+                        <div className={studioMode === 'mindmap' ? 'h-full' : 'hidden'}>
+                          <React.Suspense fallback={null}><StudioMindMap /></React.Suspense>
+                        </div>
+                      )}
+                    </>
+                  )}
                   contextValue={appShellContextValue}
                   defaultLayout={[20, 32, 48]}
                   menuNewChatTrigger={menuNewChatTrigger}

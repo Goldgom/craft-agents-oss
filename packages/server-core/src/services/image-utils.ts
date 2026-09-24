@@ -115,6 +115,8 @@ export async function resizeImageForAPI(
     maxSizeBytes?: number
     /** Prefer JPEG output (for photos). Default: false */
     isPhoto?: boolean
+    /** Return the smallest candidate when the requested target cannot be reached. */
+    bestEffort?: boolean
   },
 ): Promise<ImageResizeResult | null> {
   const maxSize = options?.maxSizeBytes ?? IMAGE_LIMITS.MAX_SIZE
@@ -137,7 +139,9 @@ export async function resizeImageForAPI(
 
   const needsResize = outWidth !== metadata.width || outHeight !== metadata.height
 
-  // Step 2: Encode — try preferred format first
+  // Step 2: Encode — try preferred format first. Keep the smallest candidate
+  // so optional upload compression can remain best-effort instead of rejecting
+  // an otherwise valid image.
   let output: Buffer
   let format: 'png' | 'jpeg'
 
@@ -156,25 +160,38 @@ export async function resizeImageForAPI(
     format = 'png'
   }
 
-  // Step 3-4: Fallback to JPEG compression if still too large
-  if (output.length > maxSize) {
-    output = await imageProcessor.process(buffer, {
-      resize: { width: outWidth, height: outHeight },
+  let best: ImageResizeResult = { buffer: output, width: outWidth, height: outHeight, format }
+  if (output.length <= maxSize) return best
+
+  // Step 3-4: progressively lower JPEG quality and dimensions. A 100KB upload
+  // target often needs both; the old two-quality pass could not get large phone
+  // screenshots close enough to the target.
+  const qualities = [85, 72, 60, 48, 36, 28]
+  let width = outWidth
+  let height = outHeight
+  for (let index = 0; index < qualities.length; index += 1) {
+    if (index > 0) {
+      width = Math.max(320, Math.round(width * 0.78))
+      height = Math.max(240, Math.round(height * 0.78))
+    }
+
+    const candidate = await imageProcessor.process(buffer, {
+      resize: { width, height },
+      fit: 'inside',
       format: 'jpeg',
-      quality: IMAGE_LIMITS.JPEG_QUALITY_HIGH,
+      quality: qualities[index],
     })
-    format = 'jpeg'
-  }
-  if (output.length > maxSize) {
-    output = await imageProcessor.process(buffer, {
-      resize: { width: outWidth, height: outHeight },
-      format: 'jpeg',
-      quality: IMAGE_LIMITS.JPEG_QUALITY_FALLBACK,
-    })
+    if (candidate.length < best.buffer.length) {
+      best = { buffer: candidate, width, height, format: 'jpeg' }
+    }
+    if (candidate.length <= maxSize) {
+      return { buffer: candidate, width, height, format: 'jpeg' }
+    }
+
+    if (width === 320 && height === 240) break
   }
 
-  // Step 5: Give up
-  if (output.length > maxSize) return null
-
-  return { buffer: output, width: outWidth, height: outHeight, format }
+  // Step 5: Mandatory API-limit callers still fail closed. Optional upload
+  // compression callers keep the smallest safe candidate they could produce.
+  return options?.bestEffort ? best : null
 }

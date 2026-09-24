@@ -40,6 +40,8 @@ export interface ServerBootstrapOptions<TSessionManager, THandlerDeps> {
    */
   bindRpcServer?: (sessionManager: TSessionManager, server: RpcServer) => void
   initModelRefreshService: () => ModelRefreshServiceLike
+  /** Runs after session initialization; should start any network work asynchronously. */
+  refreshStartupModels?: (deps: THandlerDeps) => void
   cleanupSessionManager?: (sessionManager: TSessionManager) => Promise<void> | void
   cleanupClientResources?: (clientId: string) => void
   onClientConnected?: (info: { clientId: string; webContentsId: number | null; workspaceId: string | null; capabilities: string[] }) => void
@@ -425,6 +427,7 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
   await options.initializeSessionManager(sessionManager)
 
   modelRefreshService.startAll()
+  options.refreshStartupModels?.(deps)
 
   platform.logger.info(`TokenBird server listening on ${wsServer.protocol}://${rpcHost}:${wsServer.port}`)
 

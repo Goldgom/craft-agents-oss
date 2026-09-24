@@ -7,6 +7,7 @@ import { registerCatalogHandlers } from './catalog'
 import { registerFilesHandlers } from './files'
 import { registerLabelsHandlers } from './labels'
 import { registerLlmConnectionsHandlers } from './llm-connections'
+export { refreshTokenNestModelsAtStartup } from './llm-connections'
 import { registerOAuthHandlers } from './oauth'
 import { registerResourcesHandlers } from './resources'
 import { registerOnboardingHandlers } from './onboarding'
@@ -29,6 +30,7 @@ import { registerWorkspaceCoreHandlers } from './workspace'
 import { registerMessagingHandlers } from './messaging'
 import { registerAgentsHandlers } from './agents'
 import { registerCollaborationHandlers } from './collaborations'
+import { registerStudioHandlers } from './studio'
 
 export function registerCoreRpcHandlers(
   server: RpcServer,
@@ -40,6 +42,7 @@ export function registerCoreRpcHandlers(
   registerAgentsHandlers(server, deps)
   registerCatalogHandlers(server, deps)
   registerCollaborationHandlers(server, deps)
+  registerStudioHandlers(server)
   registerFilesHandlers(server, deps)
   registerLabelsHandlers(server, deps)
   registerLlmConnectionsHandlers(server, deps)

@@ -39,6 +39,8 @@ import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import { derivePickerMode } from './picker-mode'
 import {
   formatTokenCount,
+  getAgentChannelGroups,
+  getAgentModelsForConnection,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
@@ -118,7 +120,8 @@ export function CompactModelSelector({
     const conn = effectiveConnectionDetails
     if (!conn) return null
     if (!isCompatProvider(conn.providerType)) return null
-    if (conn.models && conn.models.length > 1) return null
+    const models = getAgentModelsForConnection(conn)
+    if (models.length > 1 || !models.some(model => (typeof model === 'string' ? model : model.id) === conn.defaultModel)) return null
     return conn.defaultModel ?? null
   }, [effectiveConnectionDetails])
 
@@ -132,11 +135,7 @@ export function CompactModelSelector({
   const availableModels = React.useMemo(() => {
     if (connectionUnavailable) return []
     if (!effectiveConnectionDetails) return ANTHROPIC_MODELS
-    const models = effectiveConnectionDetails.models || ANTHROPIC_MODELS
-    const selectedGroup = effectiveConnectionDetails.channelGroups?.find(group => group.id === effectiveConnectionDetails.channelGroup)
-    if (!selectedGroup?.models?.length) return models
-    const allowed = new Set(selectedGroup.models)
-    return models.filter(model => allowed.has(typeof model === 'string' ? model : model.id))
+    return getAgentModelsForConnection(effectiveConnectionDetails)
   }, [effectiveConnectionDetails, connectionUnavailable])
 
   const currentModelDisplayName = React.useMemo(() => {
@@ -215,9 +214,9 @@ export function CompactModelSelector({
     const result = await window.electronAPI.saveLlmConnection({ ...connectionData, channelGroup })
     if (result.success) {
       await appShellCtx?.refreshLlmConnections?.()
-      const group = connection.channelGroups?.find(item => item.id === channelGroup)
-      if (group?.models?.length && !group.models.includes(currentModel)) {
-        onModelChange(group.models[0], connection.slug)
+      const models = getAgentModelsForConnection({ ...connection, channelGroup })
+      if (models.length && !models.some(model => (typeof model === 'string' ? model : model.id) === currentModel)) {
+        onModelChange(typeof models[0] === 'string' ? models[0] : models[0].id, connection.slug)
       }
       setOpen(false)
     }
@@ -350,7 +349,7 @@ export function CompactModelSelector({
                       </button>
                       {isAuthenticated && isExpanded && (
                         <div className="pl-6 flex flex-col gap-0.5">
-                          {(conn.models || ANTHROPIC_MODELS).map(model => {
+                          {getAgentModelsForConnection(conn).map(model => {
                             const modelId = typeof model === 'string' ? model : model.id
                             const modelName = typeof model === 'string'
                               ? stripPiPrefixForDisplay(getModelShortName(model))
@@ -469,7 +468,7 @@ export function CompactModelSelector({
               <div className="px-3 pt-4 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
                 {t('chat.modelPicker.channelGroupSection')}
               </div>
-              {effectiveConnectionDetails.channelGroups!.map(group => {
+              {getAgentChannelGroups(effectiveConnectionDetails).map(group => {
                 const isSelected = effectiveConnectionDetails.channelGroup === group.id
                 return (
                   <button

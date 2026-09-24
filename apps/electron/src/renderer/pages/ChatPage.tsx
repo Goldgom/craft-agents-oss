@@ -17,8 +17,8 @@ import { SessionInfoPopover } from '@/components/app-shell/SessionInfoPopover'
 import { RenameDialog } from '@/components/ui/rename-dialog'
 import { toast } from 'sonner'
 import { PanelHeaderCenterButton } from '@/components/ui/PanelHeaderCenterButton'
-import { DropdownMenu, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { StyledDropdownMenuContent, StyledDropdownMenuItem, StyledDropdownMenuSeparator } from '@/components/ui/styled-dropdown'
+import { DropdownMenu, DropdownMenuSub, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { StyledDropdownMenuContent, StyledDropdownMenuItem, StyledDropdownMenuSubContent, StyledDropdownMenuSubTrigger } from '@/components/ui/styled-dropdown'
 import { useAppShellContext, usePendingPermission, usePendingCredential, useSessionOptionsFor, useSession as useSessionData } from '@/context/AppShellContext'
 import { rendererPerf } from '@/lib/perf'
 import { isAbsolutePath } from '@/lib/drafts'
@@ -520,7 +520,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   }, [sessionId])
 
   const [isExporting, setIsExporting] = React.useState(false)
-  const handleExport = React.useCallback(async (format: 'markdown' | 'docx' | 'pdf' | 'png') => {
+  const handleExport = React.useCallback(async (format: 'markdown' | 'docx' | 'pdf' | 'png', mode: 'chat' | 'full' = 'chat') => {
     if (!session?.messages?.length) {
       toast.error(t('chat.exportNoMessages'))
       return
@@ -529,6 +529,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     try {
       const result = await window.electronAPI.exportChatTranscript({
         format,
+        mode,
         title: displayTitle,
         exportedAt: new Date().toLocaleString(),
         messages: session.messages.map(message => ({
@@ -577,22 +578,33 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         />
       </DropdownMenuTrigger>
       <StyledDropdownMenuContent align="end" sideOffset={8}>
-        <StyledDropdownMenuItem onClick={() => void handleExport('png')}>
-          <FileImage className="h-3.5 w-3.5" />
-          <span className="flex-1">{t('chat.exportImage')}</span>
-        </StyledDropdownMenuItem>
-        <StyledDropdownMenuItem onClick={() => void handleExport('pdf')}>
+        <DropdownMenuSub>
+          <StyledDropdownMenuSubTrigger>
+            <Download className="h-3.5 w-3.5" />
+            <span className="flex-1">{t('chat.exportStandard')}</span>
+          </StyledDropdownMenuSubTrigger>
+          <StyledDropdownMenuSubContent minWidth="min-w-[180px]">
+            <StyledDropdownMenuItem onClick={() => void handleExport('png')}>
+              <FileImage className="h-3.5 w-3.5" />
+              <span className="flex-1">{t('chat.exportImage')}</span>
+            </StyledDropdownMenuItem>
+            <StyledDropdownMenuItem onClick={() => void handleExport('pdf')}>
+              <FileText className="h-3.5 w-3.5" />
+              <span className="flex-1">{t('chat.exportPdf')}</span>
+            </StyledDropdownMenuItem>
+            <StyledDropdownMenuItem onClick={() => void handleExport('docx')}>
+              <FileType2 className="h-3.5 w-3.5" />
+              <span className="flex-1">{t('chat.exportWord')}</span>
+            </StyledDropdownMenuItem>
+            <StyledDropdownMenuItem onClick={() => void handleExport('markdown')}>
+              <FileText className="h-3.5 w-3.5" />
+              <span className="flex-1">{t('chat.exportMarkdown')}</span>
+            </StyledDropdownMenuItem>
+          </StyledDropdownMenuSubContent>
+        </DropdownMenuSub>
+        <StyledDropdownMenuItem onClick={() => void handleExport('pdf', 'full')}>
           <FileText className="h-3.5 w-3.5" />
-          <span className="flex-1">{t('chat.exportPdf')}</span>
-        </StyledDropdownMenuItem>
-        <StyledDropdownMenuItem onClick={() => void handleExport('docx')}>
-          <FileType2 className="h-3.5 w-3.5" />
-          <span className="flex-1">{t('chat.exportWord')}</span>
-        </StyledDropdownMenuItem>
-        <StyledDropdownMenuSeparator />
-        <StyledDropdownMenuItem onClick={() => void handleExport('markdown')}>
-          <FileText className="h-3.5 w-3.5" />
-          <span className="flex-1">{t('chat.exportMarkdown')}</span>
+          <span className="flex-1">{t('chat.exportFullPdf')}</span>
         </StyledDropdownMenuItem>
       </StyledDropdownMenuContent>
     </DropdownMenu>

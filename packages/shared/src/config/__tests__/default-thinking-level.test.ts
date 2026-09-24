@@ -45,6 +45,7 @@ function setupWorkspaceConfigDir() {
         notificationsEnabled: true,
         colorTheme: 'default',
         autoCapitalisation: true,
+        compressImagesBeforeUpload: true,
         sendMessageKey: 'enter',
         spellCheck: false,
         keepAwakeWhileRunning: false,
@@ -67,7 +68,7 @@ function runEval(configDir: string, code: string): string {
   const run = Bun.spawnSync([
     process.execPath,
     '--eval',
-    `import { getDefaultThinkingLevel, setDefaultThinkingLevel } from '${STORAGE_MODULE_PATH}'; ${code}`,
+    `import { getCompressImagesBeforeUpload, getDefaultThinkingLevel, setCompressImagesBeforeUpload, setDefaultThinkingLevel } from '${STORAGE_MODULE_PATH}'; ${code}`,
   ], {
     env: { ...process.env, TOKENBIRD_CONFIG_DIR: configDir },
     stdout: 'pipe',
@@ -130,5 +131,21 @@ describe('default thinking level storage', () => {
 
     const output = runEval(configDir, "console.log(String(getDefaultThinkingLevel()))")
     expect(output).toBe('medium')
+  })
+})
+
+describe('image upload compression storage', () => {
+  it('defaults to enabled', () => {
+    const { configDir } = setupWorkspaceConfigDir()
+    expect(runEval(configDir, 'console.log(String(getCompressImagesBeforeUpload()))')).toBe('true')
+  })
+
+  it('persists an explicit disabled value', () => {
+    const { configDir, configPath } = setupWorkspaceConfigDir()
+    runEval(configDir, 'setCompressImagesBeforeUpload(false)')
+
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'))
+    expect(config.compressImagesBeforeUpload).toBe(false)
+    expect(runEval(configDir, 'console.log(String(getCompressImagesBeforeUpload()))')).toBe('false')
   })
 })

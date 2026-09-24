@@ -1,7 +1,26 @@
 import {
+  isImageGenerationModelId,
   isLocalConnection,
   type LlmConnection,
 } from '@config/llm-connections'
+import { ANTHROPIC_MODELS, type ModelDefinition } from '@config/models'
+
+/** Keep image generation in Studio while respecting an OAuth connection's active group. */
+export function getAgentModelsForConnection(connection: LlmConnection): Array<ModelDefinition | string> {
+  const models = connection.models || ANTHROPIC_MODELS
+  const group = connection.oauthProvider === 'tokennest'
+    ? connection.channelGroups?.find(item => item.id === connection.channelGroup)
+    : undefined
+  const allowed = group?.models?.length ? new Set(group.models) : null
+  return models.filter(model => {
+    const id = typeof model === 'string' ? model : model.id
+    return !isImageGenerationModelId(id) && (!allowed || allowed.has(id))
+  })
+}
+
+export function getAgentChannelGroups(connection: LlmConnection) {
+  return connection.channelGroups?.filter(group => !group.models?.length || group.models.some(model => !isImageGenerationModelId(model))) ?? []
+}
 
 /**
  * Format token count for display (e.g., 1500 -> "1.5k", 200000 -> "200k").

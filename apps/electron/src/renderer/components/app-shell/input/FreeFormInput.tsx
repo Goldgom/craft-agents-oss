@@ -89,6 +89,7 @@ import { CompactModelSelector } from './CompactModelSelector'
 import { SftpToolbarButton } from './SftpToolbarButton'
 import {
   formatTokenCount,
+  getAgentModelsForConnection,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
@@ -338,7 +339,8 @@ export function FreeFormInput({
     if (!conn) return null
     if (!isCompatProvider(conn.providerType)) return null
     // Allow model switching when connection has multiple models
-    if (conn.models && conn.models.length > 1) return null
+    const models = getAgentModelsForConnection(conn)
+    if (models.length > 1 || !models.some(model => (typeof model === 'string' ? model : model.id) === conn.defaultModel)) return null
     return conn.defaultModel ?? null
   }, [currentConnection, workspaceDefaultConnection, llmConnections])
 
@@ -366,7 +368,7 @@ export function FreeFormInput({
       return ANTHROPIC_MODELS // Safety net — shouldn't happen
     }
 
-    return connection.models || ANTHROPIC_MODELS
+    return getAgentModelsForConnection(connection)
   }, [llmConnections, currentConnection, workspaceDefaultConnection, connectionUnavailable])
 
   const availableThinkingLevels = THINKING_LEVELS
@@ -1580,6 +1582,10 @@ export function FreeFormInput({
     && !!effectiveConnectionDetails
     && isCompatProvider(effectiveConnectionDetails.providerType)
     && !modelSupportsImages(effectiveConnectionDetails, currentModel)
+  // ChatPage enables the compact model picker only for the real mobile/auto-
+  // compact surface. EditPopover also uses compactMode, but keeps the original
+  // single-row toolbar because its model picker is intentionally disabled.
+  const mobileToolbarLayout = compactMode && enableCompactModelPicker
 
   return (
     <form onSubmit={handleSubmit}>
@@ -1801,7 +1807,12 @@ export function FreeFormInput({
             sessionId={sessionId}
           />
 
-          <div className={cn("flex items-center gap-1 px-2 py-2", !compactMode && "border-t border-border/50")}>
+          <div className={cn(
+            mobileToolbarLayout
+              ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 px-2 py-2"
+              : "flex items-center gap-1 px-2 py-2",
+            !compactMode && "border-t border-border/50",
+          )}>
           {/* Hidden file input for attach button (shared by compact and desktop) */}
           <input
             ref={fileInputRef}
@@ -1816,7 +1827,12 @@ export function FreeFormInput({
               anchored to the right (craft-agents-oss#798). overflow-hidden is safe — Radix Drawer /
               dropdowns inside render via portals, so they aren't clipped. */}
           {compactMode && (
-          <div className="flex items-center gap-1 min-w-0 shrink overflow-hidden">
+          <div className={cn(
+            mobileToolbarLayout ? "contents" : "flex items-center gap-1 min-w-0 shrink overflow-hidden",
+          )}>
+          <div className={cn(
+            mobileToolbarLayout ? "col-span-2 row-start-1 flex min-w-0 items-center gap-1 overflow-hidden" : "contents",
+          )}>
           {onPermissionModeChange && (
             <CompactPermissionModeSelector
               permissionMode={permissionMode}
@@ -1836,6 +1852,10 @@ export function FreeFormInput({
               contextStatus={contextStatus}
             />
           )}
+          </div>
+          <div className={cn(
+            mobileToolbarLayout ? "col-start-1 row-start-2 flex min-w-0 items-center gap-1" : "contents",
+          )}>
           <FreeFormInputContextBadge
             icon={<Paperclip className="h-4 w-4" />}
             label={attachments.length > 0
@@ -1844,6 +1864,7 @@ export function FreeFormInput({
             }
             isExpanded={false}
             hasSelection={attachments.length > 0}
+            hideLabel={mobileToolbarLayout}
             showChevron={false}
             onClick={handleAttachClick}
             tooltip={t("chat.attachFilesTooltip")}
@@ -1898,6 +1919,7 @@ export function FreeFormInput({
                 }
                 isExpanded={false}
                 hasSelection={optimisticSourceSlugs.length > 0}
+                hideLabel={mobileToolbarLayout}
                 showChevron={false}
                 isOpen={sourceDropdownOpen}
                 disabled={disabled}
@@ -1927,9 +1949,11 @@ export function FreeFormInput({
               sessionFolderPath={sessionFolderPath}
               isEmptySession={false}
               workspaceId={workspaceId}
+              hideLabel={mobileToolbarLayout}
             />
           )}
           <SftpToolbarButton compactMode disabled={disabled} />
+          </div>
           </div>
           )}
 
@@ -2051,16 +2075,22 @@ export function FreeFormInput({
               onClick={onRequestExpand}
               onMouseEnter={onRequestExpand}
               aria-label={t('chat.tapToType')}
-              className="flex-1 h-7 mx-1 flex items-center justify-center text-foreground/30 hover:text-foreground/60 transition-colors cursor-pointer rounded-[6px] hover:bg-foreground/5 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className={cn(
+                "flex-1 h-7 mx-1 flex items-center justify-center text-foreground/30 hover:text-foreground/60 transition-colors cursor-pointer rounded-[6px] hover:bg-foreground/5 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                mobileToolbarLayout && "col-span-2 row-start-3 w-full mx-0",
+              )}
             >
               <ChevronUp className="h-4 w-4" />
             </button>
           ) : (
-            <div className="flex-1" />
+            <div className={cn("flex-1", mobileToolbarLayout && "hidden")} />
           )}
 
           {/* Right side: Model + Send - never shrink so they're always visible */}
-          <div className="flex items-center shrink-0">
+          <div className={cn(
+            "flex items-center shrink-0",
+            mobileToolbarLayout && "col-start-2 row-start-2",
+          )}>
           {/* 5. Model/Connection Selector - Hidden in compact mode (EditPopover embedding) */}
           {!compactMode && (
           <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
@@ -2198,7 +2228,7 @@ export function FreeFormInput({
                           {isAuthenticated && (
                             <StyledDropdownMenuSubContent className="min-w-[220px]">
                               {/* Show models for this connection - use provider-specific models as fallback */}
-                              {(conn.models || ANTHROPIC_MODELS).map((model) => {
+                              {getAgentModelsForConnection(conn).map((model) => {
                                 const modelId = typeof model === 'string' ? model : model.id
                                 const modelName = typeof model === 'string'
                                   ? stripPiPrefixForDisplay(getModelShortName(model))
@@ -2478,7 +2508,10 @@ export function FreeFormInput({
               size="icon"
               variant="secondary"
               aria-label={t('chat.stopResponse')}
-              className="send-btn h-7 w-7 rounded-full shrink-0 hover:bg-foreground/15 active:bg-foreground/20 ml-2"
+              className={cn(
+                "send-btn h-7 w-7 rounded-full shrink-0 hover:bg-foreground/15 active:bg-foreground/20",
+                !mobileToolbarLayout && "ml-2",
+              )}
               onClick={() => handleStop(false)}
             >
               <Square className="h-3 w-3 fill-current" />
@@ -2488,7 +2521,10 @@ export function FreeFormInput({
               type="submit"
               size="icon"
               aria-label={t('shortcuts.sendMessage')}
-              className="send-btn h-7 w-7 rounded-full shrink-0 ml-2"
+              className={cn(
+                "send-btn h-7 w-7 rounded-full shrink-0",
+                !mobileToolbarLayout && "ml-2",
+              )}
               disabled={!hasContent || disabled || disableSend}
               data-tutorial="send-button"
             >

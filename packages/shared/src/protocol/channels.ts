@@ -246,6 +246,11 @@ export const RPC_CHANNELS = {
     SET_SHOW_BALANCES: 'LLM_Connection:setShowBalances',
     CHANGED: 'LLM_Connection:changed',
   },
+  studio: {
+    GENERATE_IMAGE: 'studio:generateImage',
+    GENERATE_MIND_MAP: 'studio:generateMindMap',
+    EXPORT_VISIO: 'studio:exportVisio',
+  },
   chatgpt: {
     START_OAUTH: 'chatgpt:startOAuth',
     COMPLETE_OAUTH: 'chatgpt:completeOAuth',
@@ -385,6 +390,8 @@ export const RPC_CHANNELS = {
     SET_SEND_MESSAGE_KEY: 'input:setSendMessageKey',
     GET_SPELL_CHECK: 'input:getSpellCheck',
     SET_SPELL_CHECK: 'input:setSpellCheck',
+    GET_COMPRESS_IMAGES: 'input:getCompressImages',
+    SET_COMPRESS_IMAGES: 'input:setCompressImages',
   },
   power: {
     GET_KEEP_AWAKE: 'power:getKeepAwake',

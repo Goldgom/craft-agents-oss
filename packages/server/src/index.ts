@@ -38,7 +38,7 @@ import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import type { MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
 
 import type { WsRpcTlsOptions } from '@craft-agent/server-core/transport'
-import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient } from '@craft-agent/server-core/handlers/rpc'
+import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient, refreshTokenNestModelsAtStartup } from '@craft-agent/server-core/handlers/rpc'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
 import { initModelRefreshService, setFetcherPlatform } from '@craft-agent/server-core/model-fetchers'
 import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/services'
@@ -285,6 +285,7 @@ const instance = await (async () => {
       initializeSessionManager: async (sessionManager) => {
         await sessionManager.initialize()
       },
+      refreshStartupModels: refreshTokenNestModelsAtStartup,
       cleanupSessionManager: async (sessionManager) => {
         try {
           await sessionManager.flushAllSessions()

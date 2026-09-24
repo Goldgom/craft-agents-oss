@@ -156,9 +156,13 @@ public final class MainActivity extends Activity {
         buildUi();
         registerBackHandler();
 
-        // Always ask which mode should be used on a fresh launch. This avoids
-        // trapping older devices in a remembered local-server startup failure.
-        showServerConfiguration(false);
+        ServerMode savedMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
+        if (savedMode == null
+                || (savedMode == ServerMode.LOCAL && !LocalAgentServer.isSupportedOnThisDevice())) {
+            showServerConfiguration(false);
+        } else {
+            connect(savedMode);
+        }
     }
 
     private void migrateLegacyServerProfile() {

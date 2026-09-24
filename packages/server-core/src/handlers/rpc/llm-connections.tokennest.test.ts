@@ -4,7 +4,7 @@ import * as credentials from '@craft-agent/shared/credentials'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type { HandlerFn, RequestContext, RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
-import { registerLlmConnectionsHandlers } from './llm-connections'
+import { registerLlmConnectionsHandlers, refreshTokenNestModelsAtStartup } from './llm-connections'
 
 const originalFetch = globalThis.fetch
 
@@ -66,7 +66,7 @@ function stubStorage(existing: config.LlmConnection | null = null) {
   return { add, update, setDefault, getLlmOAuth, setLlmOAuth, deleteLlmCredentials }
 }
 
-function stubTokenNestFetch(options?: { models?: string[]; modelStatus?: number }) {
+function stubTokenNestFetch(options?: { models?: string[]; modelStatus?: number; groupStatus?: number; groups?: Record<string, { desc: string; ratio: number; models: string[] }> }) {
   const requests: Array<{ url: string; method: string; authorization?: string }> = []
   const models = options?.models ?? ['gpt-5', 'gpt-4.1']
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
@@ -86,9 +86,9 @@ function stubTokenNestFetch(options?: { models?: string[]; modelStatus?: number 
       const status = options?.modelStatus ?? 200
       return Response.json({ data: models.map(id => ({ id })) }, { status })
     }
-    if (url.endsWith('/api/oauth2/groups')) return Response.json({ data: {
+    if (url.endsWith('/api/oauth2/groups')) return Response.json({ data: options?.groups ?? {
       default: { desc: 'Default', ratio: 1, models },
-    } })
+    } }, { status: options?.groupStatus ?? 200 })
     if (url.endsWith('/api/oauth2/revoke')) return new Response(null, { status: 200 })
     throw new Error(`Unexpected request: ${method} ${url}`)
   }) as unknown as typeof fetch
@@ -106,6 +106,23 @@ async function startAndComplete(harness: ReturnType<typeof createHarness>, conne
 }
 
 describe('TokenNest OAuth RPC handlers', () => {
+  it('defaults the Agent connection to the TokenBird group and a text model', async () => {
+    const storage = stubStorage()
+    stubTokenNestFetch({
+      models: ['gpt-image-2.5', 'gpt-6-astra'],
+      groups: {
+        drawing: { desc: 'GPT图片生成渠道', ratio: 1, models: ['gpt-image-2.5'] },
+        tokenbird: { desc: 'TokenBird', ratio: 1, models: ['gpt-6-astra'] },
+      },
+    })
+    const harness = createHarness()
+
+    await expect(startAndComplete(harness)).resolves.toEqual({ success: true })
+    expect(storage.add).toHaveBeenCalledWith(expect.objectContaining({
+      channelGroup: 'tokenbird', defaultModel: 'gpt-6-astra',
+    }))
+  })
+
   it('creates a ready-to-use connection after OAuth and model discovery', async () => {
     const storage = stubStorage()
     const requests = stubTokenNestFetch()
@@ -181,12 +198,30 @@ describe('TokenNest OAuth RPC handlers', () => {
     expect(harness.reinitializeAuth).toHaveBeenCalledWith(existing.slug)
   })
 
+  it('keeps the existing connection when group discovery fails during reauthorization', async () => {
+    const existing = {
+      slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
+      oauthProvider: 'tokennest', createdAt: 1,
+      channelGroup: 'Normal', channelGroups: [{ id: 'Normal', name: 'Normal' }],
+    } as config.LlmConnection
+    const storage = stubStorage(existing)
+    const requests = stubTokenNestFetch({ groupStatus: 503 })
+
+    const result = await startAndComplete(createHarness()) as { success: boolean; error?: string }
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('HTTP 503')
+    expect(storage.setLlmOAuth).not.toHaveBeenCalled()
+    expect(storage.update).not.toHaveBeenCalled()
+    expect(requests.some(request => request.url.endsWith('/api/oauth2/revoke'))).toBe(true)
+  })
+
   it('refreshes TokenNest models and groups with automatically renewed credentials', async () => {
     const existing: config.LlmConnection = {
       slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
       oauthProvider: 'tokennest', piAuthProvider: 'openai', baseUrl: 'https://openai.goldgom.top/v1',
       customEndpoint: { api: 'openai-completions' }, models: ['old-model'], defaultModel: 'old-model',
       modelSelectionMode: 'automaticallySyncedFromProvider', createdAt: 1,
+      channelGroup: 'Normal', channelGroups: [{ id: 'Normal', name: 'Normal', models: ['gpt-image-2.5'] }],
     }
     const storage = stubStorage(existing)
     stubTokenNestFetch({ models: ['gpt-5.6-sol', 'gpt-5.6-terra'] })
@@ -202,6 +237,31 @@ describe('TokenNest OAuth RPC handlers', () => {
       channelGroups: [{ id: 'default', name: 'Default', ratio: 1, models: ['gpt-5.6-sol', 'gpt-5.6-terra'] }],
     }))
     expect(harness.reinitializeAuth).toHaveBeenCalledWith(existing.slug)
+  })
+
+  it('refreshes TokenNest connections once at startup and skips other providers', async () => {
+    const existing: config.LlmConnection = {
+      slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
+      oauthProvider: 'tokennest', piAuthProvider: 'openai', baseUrl: 'https://openai.goldgom.top/v1',
+      customEndpoint: { api: 'openai-completions' }, models: ['old-model'], defaultModel: 'old-model',
+      modelSelectionMode: 'automaticallySyncedFromProvider', createdAt: 1,
+    }
+    const storage = stubStorage(existing)
+    spyOn(config, 'getLlmConnections').mockReturnValue([existing, {
+      ...existing, slug: 'other', oauthProvider: undefined,
+    }])
+    const requests = stubTokenNestFetch({ models: ['gpt-5.6-sol'] })
+    const harness = createHarness()
+
+    refreshTokenNestModelsAtStartup({
+      sessionManager: { reinitializeAuth: harness.reinitializeAuth },
+      platform: { logger: { info() {}, warn() {}, error() {}, debug() {} } },
+    } as unknown as HandlerDeps)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(requests.filter(request => request.url.endsWith('/v1/models'))).toHaveLength(1)
+    expect(storage.update).toHaveBeenCalledWith('tokennest', expect.objectContaining({ models: ['gpt-5.6-sol'] }))
+    expect(harness.reinitializeAuth).toHaveBeenCalledWith('tokennest')
   })
 
   it('returns provider-authoritative daily and model usage aggregates', async () => {

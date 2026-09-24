@@ -22,6 +22,8 @@ export interface CompactWorkingDirectorySelectorProps {
   sessionFolderPath?: string
   isEmptySession?: boolean
   workspaceId?: string
+  /** Keep the toolbar trigger icon-only while retaining its selected state. */
+  hideLabel?: boolean
 }
 
 /**
@@ -41,6 +43,7 @@ export function CompactWorkingDirectorySelector({
   sessionFolderPath,
   isEmptySession = false,
   workspaceId,
+  hideLabel = false,
 }: CompactWorkingDirectorySelectorProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
@@ -95,6 +98,7 @@ export function CompactWorkingDirectorySelector({
         label={displayFolderName}
         isExpanded={isEmptySession}
         hasSelection={hasFolder}
+        hideLabel={hideLabel}
         showChevron={true}
         isOpen={open}
         onClick={() => setOpen((prev) => !prev)}

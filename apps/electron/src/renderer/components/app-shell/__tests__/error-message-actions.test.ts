@@ -65,4 +65,17 @@ describe('handleErrorMessageAction', () => {
 
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
+
+  it('opens the reauthentication flow for reauth actions', () => {
+    const onReauthenticate = mock(() => {})
+    const action: ErrorMessageAction = {
+      key: 'r',
+      label: 'Sign in again',
+      action: 'reauth',
+    }
+
+    handleErrorMessageAction(action, { onReauthenticate })
+
+    expect(onReauthenticate).toHaveBeenCalledTimes(1)
+  })
 })
