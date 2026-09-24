@@ -18,7 +18,7 @@ type ImageInput = {
   transparentBackground?: boolean
 }
 
-type MindMapRequest = { connectionSlug: string; model: string; prompt: string; currentXml?: string; priorRequests?: string[] }
+type MindMapRequest = { connectionSlug: string; model: string; channelGroup?: string; prompt: string; currentXml?: string; priorRequests?: string[] }
 
 function requireText(value: unknown, label: string, max = 4000): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max) {
@@ -73,7 +73,7 @@ async function post(
   path: string,
   body: (token: string) => string | FormData,
   contentType?: string,
-  imageGroup?: string,
+  requestedGroup?: string,
   timeoutMs = 120_000,
 ): Promise<Record<string, any>> {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -83,8 +83,8 @@ async function post(
       headers: {
         Authorization: `Bearer ${token}`,
         ...(contentType ? { 'Content-Type': contentType } : {}),
-        ...(connection.oauthProvider === 'tokennest' && (imageGroup || connection.channelGroup)
-          ? { 'X-TokenNest-Group': tokenNestGroupHeaderValue(imageGroup || connection.channelGroup!) } : {}),
+        ...(connection.oauthProvider === 'tokennest' && (requestedGroup || connection.channelGroup)
+          ? { 'X-TokenNest-Group': tokenNestGroupHeaderValue(requestedGroup || connection.channelGroup!) } : {}),
       },
       body: body(token),
       signal: AbortSignal.timeout(timeoutMs),
@@ -214,6 +214,14 @@ export function registerStudioHandlers(server: RpcServer): void {
     const { connection, baseUrl } = resolveConnection(input.connectionSlug)
     const model = requireText(input.model, 'Text model', 120)
     const prompt = requireText(input.prompt, 'Prompt', 4000)
+    const matchingGroups = connection.oauthProvider === 'tokennest'
+      ? (connection.channelGroups ?? []).filter(group => group.models?.includes(model)) : []
+    const textGroup = input.channelGroup
+      ? matchingGroups.find(group => group.id === input.channelGroup)?.id
+      : matchingGroups.find(group => group.id === connection.channelGroup)?.id ?? matchingGroups[0]?.id
+    if (connection.oauthProvider === 'tokennest' && connection.channelGroups?.length && !textGroup) {
+      throw new Error(`${STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE}: 当前账户没有可用于 ${model} 的文本分组，请刷新连接`)
+    }
     const normalizedXml = input.currentXml ? requireDrawioXml(uncompressDrawio(input.currentXml)) : undefined
     // draw.io opens a new session with root cells only; those are editor scaffolding,
     // not user content for the model to preserve.
@@ -227,7 +235,7 @@ export function registerStudioHandlers(server: RpcServer): void {
         { role: 'system', content: 'You edit an editable draw.io mind map. Return only JSON with {"xml":"<mxfile ...>...</mxfile>","summary":"brief Chinese summary"}. The XML must contain one uncompressed mxGraphModel with root cells id 0 and 1, mxCell vertices with mxGeometry, and connected edges. Escape XML attribute values. For an existing diagram, keep unchanged node IDs, positions, styles and relationships unless the instruction requires changing them. Preserve all unrelated content. For a new diagram, create clear hierarchy and readable spacing. Do not include scripts, external links, or markdown.' },
         { role: 'user', content: JSON.stringify({ instruction: prompt, priorRequests, currentXml: currentXml ?? null }) },
       ],
-    }), 'application/json')
+    }), 'application/json', textGroup)
     const content = payload.choices?.[0]?.message?.content
     if (typeof content !== 'string') throw new Error('AI returned no mind map')
     return parseMindMapReply(content)

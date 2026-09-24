@@ -821,7 +821,7 @@ export interface ElectronAPI {
   // LLM Connections (provider configurations)
   listLlmConnections(): Promise<LlmConnection[]>
   generateStudioImage(input: { connectionSlug: string; model: string; prompt: string; channelGroup?: string; imageBase64?: string; maskBase64?: string; size?: string; count?: number; transparentBackground?: boolean }): Promise<{ imageBase64: string; mimeType: string; images: Array<{ imageBase64: string; mimeType: string }> }>
-  generateStudioMindMap(input: { connectionSlug: string; model: string; prompt: string; currentXml?: string; priorRequests?: string[] }): Promise<{ xml: string; summary: string }>
+  generateStudioMindMap(input: { connectionSlug: string; model: string; channelGroup?: string; prompt: string; currentXml?: string; priorRequests?: string[] }): Promise<{ xml: string; summary: string }>
   exportStudioVisio(xml: string): Promise<{ base64: string }>
   listLlmConnectionsWithStatus(): Promise<LlmConnectionWithStatus[]>
   getLlmConnection(slug: string): Promise<LlmConnection | null>

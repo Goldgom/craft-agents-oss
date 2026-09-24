@@ -196,6 +196,30 @@ describe('Studio server requests', () => {
     expect(JSON.parse(body!.messages[1].content)).toEqual({ instruction: 'Rename topic', priorRequests: ['Create a plan'], currentXml })
   })
 
+  it('routes a mind map model through its TokenNest text group', async () => {
+    spyOn(config, 'getLlmConnection').mockReturnValue({
+      slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
+      oauthProvider: 'tokennest', channelGroup: 'astra', createdAt: 1,
+      channelGroups: [
+        { id: 'astra', name: 'Astra', models: ['gpt-6-astra'] },
+        { id: 'text', name: '文本', models: ['gpt-6-sol'] },
+      ],
+    } as never)
+    spyOn(credentials, 'getCredentialManager').mockReturnValue({} as never)
+    spyOn(auth, 'getValidTokenNestCredentials').mockResolvedValue({ accessToken: 'oauth-access' } as never)
+    const xml = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>'
+    let request: RequestInit | undefined
+    globalThis.fetch = mock(async (_url, init) => { request = init; return Response.json({ choices: [{ message: { content: xml } }] }) }) as unknown as typeof fetch
+
+    await harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
+      connectionSlug: 'tokennest', model: 'gpt-6-sol', channelGroup: 'text', prompt: 'Make a plan',
+    })
+    expect(new Headers(request?.headers).get('X-TokenNest-Group')).toBe('text')
+    await expect(harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
+      connectionSlug: 'tokennest', model: 'gpt-6-sol', channelGroup: 'astra', prompt: 'Make a plan',
+    })).rejects.toThrow('STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE')
+  })
+
   it('expands compressed draw.io input before asking the model to edit it', async () => {
     connection()
     const graph = '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="topic" value="Plan" vertex="1" parent="1"/></root></mxGraphModel>'

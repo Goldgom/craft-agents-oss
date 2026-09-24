@@ -78,7 +78,7 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
-  const { connections, connection, connectionSlug, setConnectionSlug, model, setModel, loginTokenNest } = useStudioConnections()
+  const { connections, connection, connectionSlug, setConnectionSlug, model, setModel, modelChannelGroup, loginTokenNest } = useStudioConnections()
 
   const persist = useCallback(async () => {
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null }
@@ -228,7 +228,8 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
       if (!beforeXml) throw new Error('无法读取当前导图')
       xmlRef.current = beforeXml
       const result = await window.electronAPI.generateStudioMindMap({
-        connectionSlug, model: model.trim(), prompt: instruction, currentXml: beforeXml, priorRequests,
+        connectionSlug, model: model.trim(), channelGroup: modelChannelGroup || undefined,
+        prompt: instruction, currentXml: beforeXml, priorRequests,
       })
       validateDrawioDocument(result.xml)
       load(result.xml)

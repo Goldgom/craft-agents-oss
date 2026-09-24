@@ -1,20 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
-import { isImageGenerationModelId } from '@config/llm-connections'
 import { imageGroups, imageModels, isImageConnection, preferredImageGroup } from './image-connections'
+import { mindMapGroupForModel, mindMapTextModels } from './mindmap-models'
 import { useAppShellContext } from '@/context/AppShellContext'
 
 const IMAGE_CONNECTION_KEY = 'tokenbird.studio.imageConnection'
 const MINDMAP_CONNECTION_KEY = 'tokenbird.studio.mindmapConnection'
-
-function textModels(connection: LlmConnectionWithStatus): string[] {
-  const models = (connection.models?.length ? connection.models.map(item => typeof item === 'string' ? item : item.id) : connection.defaultModel ? [connection.defaultModel] : [])
-  const group = connection.oauthProvider === 'tokennest'
-    ? connection.channelGroups?.find(item => item.id === connection.channelGroup)
-    : undefined
-  const allowed = group?.models?.length ? new Set(group.models) : null
-  return models.filter(id => !isImageGenerationModelId(id) && (!allowed || allowed.has(id)))
-}
 
 function supportsMindMap(connection: LlmConnectionWithStatus): boolean {
   return connection.oauthProvider === 'tokennest' || connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint'
@@ -38,9 +29,9 @@ export function useStudioConnections(options: { image?: boolean } = {}) {
           setConnectionSlug(current => {
             if (items.some(item => item.slug === current && supportsMindMap(item))) return current
             const compatible = items.filter(supportsMindMap)
-            return (compatible.find(item => item.slug === workspaceDefaultLlmConnection && textModels(item).length)
-              ?? compatible.find(item => item.isDefault && textModels(item).length)
-              ?? compatible.find(item => textModels(item).length)
+            return (compatible.find(item => item.slug === workspaceDefaultLlmConnection && mindMapTextModels(item).length)
+              ?? compatible.find(item => item.isDefault && mindMapTextModels(item).length)
+              ?? compatible.find(item => mindMapTextModels(item).length)
               ?? compatible[0])?.slug ?? ''
           })
         }
@@ -55,8 +46,9 @@ export function useStudioConnections(options: { image?: boolean } = {}) {
   const groups = useMemo(() => connection && options.image ? imageGroups(connection) : [], [connection, options.image])
   const selectedGroup = groups.some(group => group.id === channelGroup) ? channelGroup : connection && options.image ? preferredImageGroup(connection) : ''
   const availableModels = useMemo(() => connection
-    ? options.image ? imageModels(connection, selectedGroup) : textModels(connection)
+    ? options.image ? imageModels(connection, selectedGroup) : mindMapTextModels(connection)
     : [], [connection, options.image, selectedGroup])
+  const modelChannelGroup = connection && !options.image ? mindMapGroupForModel(connection, model) : ''
 
   useEffect(() => {
     if (!connection) return
@@ -96,7 +88,7 @@ export function useStudioConnections(options: { image?: boolean } = {}) {
     setConnections(await window.electronAPI.listLlmConnectionsWithStatus())
   }
 
-  return { connections, connection, connectionSlug, setConnectionSlug: chooseConnection, model, setModel, channelGroup: selectedGroup, setChannelGroup, availableModels, groups, loaded, loginTokenNest, refresh }
+  return { connections, connection, connectionSlug, setConnectionSlug: chooseConnection, model, setModel, modelChannelGroup, channelGroup: selectedGroup, setChannelGroup, availableModels, groups, loaded, loginTokenNest, refresh }
 }
 
 export function StudioConnectionPicker({
@@ -112,7 +104,7 @@ export function StudioConnectionPicker({
   setChannelGroup?: (value: string) => void
 }) {
   const selected = connections.find(item => item.slug === connectionSlug)
-  const suggested = selected ? image ? imageModels(selected, channelGroup) : textModels(selected) : []
+  const suggested = selected ? image ? imageModels(selected, channelGroup) : mindMapTextModels(selected) : []
   const groups = image && selected ? imageGroups(selected) : []
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -124,7 +116,7 @@ export function StudioConnectionPicker({
       {groups.length > 0 && <select className="min-w-32 rounded border border-border bg-background px-2 py-1.5 text-sm" value={channelGroup} onChange={event => { setChannelGroup?.(event.target.value); setModel('') }} aria-label="图片生成分组">
         {groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
       </select>}
-      {image && suggested.length > 0 ? <select className="min-w-36 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" value={model} onChange={event => setModel(event.target.value)} aria-label="图像模型">
+      {suggested.length > 0 ? <select className="min-w-36 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" value={model} onChange={event => setModel(event.target.value)} aria-label={image ? '图像模型' : '文本模型'}>
         {suggested.map(id => <option key={id} value={id}>{id}</option>)}
       </select> : <input className="min-w-36 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" value={model} onChange={event => setModel(event.target.value)} list={image ? 'studio-image-models' : 'studio-text-models'} placeholder={image ? '先在设置中配置图像模型' : '文本模型'} aria-label="Model" />}
       <datalist id={image ? 'studio-image-models' : 'studio-text-models'}>{suggested.map(id => <option key={id} value={id} />)}</datalist>
