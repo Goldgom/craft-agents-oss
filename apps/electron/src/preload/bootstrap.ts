@@ -18,6 +18,8 @@
 
 import '@sentry/electron/preload'
 import { contextBridge, ipcRenderer, shell, webUtils } from 'electron'
+import { readFile, writeFile } from 'node:fs/promises'
+import { extname, isAbsolute } from 'node:path'
 import { WsRpcClient, type TransportConnectionState } from '../transport/client'
 import { RoutedClient } from '../transport/routed-client'
 import { buildClientApi } from '../transport/build-api'
@@ -33,6 +35,7 @@ import {
   CLIENT_OPEN_FILE_DIALOG,
   CLIENT_SAVE_FILE_DIALOG,
   CLIENT_BROWSER_INVOKE,
+  CLIENT_CANVAS_INVOKE,
   CLIENT_RUN_SHELL,
   CLIENT_SFTP_TRANSFER,
   LOCAL_CLIENT_CAPABILITIES,
@@ -96,6 +99,7 @@ if (isPickerMode) {
     'invokeOnServer',
     'transferSessionToWorkspace',
     'isChannelAvailable',
+    'onStudioCanvasRequest',
   ]
   for (const key of new Set([...Object.keys(CHANNEL_MAP), ...extraKeys])) {
     if (pickerApi[key] !== undefined) continue
@@ -244,6 +248,35 @@ client.handleCapability(CLIENT_BROWSER_INVOKE, async (req: BrowserCapabilityRequ
   return await ipcRenderer.invoke('__browser:invoke', req)
 })
 
+let canvasRequestHandler: ((request: Record<string, unknown>) => Promise<unknown>) | null = null
+client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unknown>) => {
+  if (!canvasRequestHandler) throw new Error('Canvas editor is not ready in the desktop client')
+  const input = { ...request }
+  if (input.action === 'import_image' && typeof input.imagePath === 'string') {
+    if (!isAbsolute(input.imagePath)) throw new Error('imagePath must be absolute')
+    const bytes = await readFile(input.imagePath)
+    if (bytes.length > 30_000_000) throw new Error('Image exceeds 30 MB')
+    input.imageBase64 = bytes.toString('base64')
+    input.imageName = input.imagePath.split(/[\\/]/).pop() || '导入图片'
+  }
+  if (input.action === 'open_project' && typeof input.projectPath === 'string') {
+    if (!isAbsolute(input.projectPath)) throw new Error('projectPath must be absolute')
+    const bytes = await readFile(input.projectPath)
+    if (bytes.length > 150_000_000) throw new Error('Project exceeds 150 MB')
+    input.projectText = bytes.toString('utf8')
+  }
+  const result = await canvasRequestHandler(input) as Record<string, unknown>
+  if ((input.action === 'export_png' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
+    if (!isAbsolute(input.outputPath)) throw new Error('outputPath must be absolute')
+    const extension = extname(input.outputPath).toLowerCase()
+    if (extension !== (input.action === 'save_project' ? '.tbcanvas' : '.png')) throw new Error('Output path has the wrong file extension')
+    const bytes = Buffer.from(result.base64, 'base64')
+    await writeFile(input.outputPath, bytes, { flag: 'wx' })
+    return { saved: true, outputPath: input.outputPath, bytes: bytes.length }
+  }
+  return result
+})
+
 // `localbash` — the remote server asks THIS machine to run a shell command on
 // behalf of the agent (remote-mode local execution bridge).
 client.handleCapability(CLIENT_RUN_SHELL, async (req: { command: string; cwd?: string; timeoutMs?: number }) => {
@@ -259,6 +292,10 @@ client.handleCapability(CLIENT_SFTP_TRANSFER, async (req: { direction: 'upload' 
 // ---------------------------------------------------------------------------
 
 const api = buildClientApi(client, CHANNEL_MAP, (ch) => client.isChannelAvailable(ch))
+;(api as ElectronAPI).onStudioCanvasRequest = (handler) => {
+  canvasRequestHandler = handler
+  return () => { if (canvasRequestHandler === handler) canvasRequestHandler = null }
+}
 
 ;(api as any).getRuntimeEnvironment = (): 'electron' | 'web' => 'electron'
 
@@ -626,6 +663,11 @@ if (isClientOnly) {
 ;(api as ElectronAPI).getSystemTheme = () => ipcRenderer.invoke('__client:get-system-theme')
 ;(api as ElectronAPI).isDebugMode = () => ipcRenderer.invoke('__client:is-debug-mode')
 ;(api as ElectronAPI).openFileDialog = () => ipcRenderer.invoke('__client:open-file-dialog')
+;(api as ElectronAPI).pickStudioMindMapDirectory = (defaultPath?: string) => ipcRenderer.invoke('__studio:mindmap:pick-directory', defaultPath)
+;(api as ElectronAPI).readStudioMindMapSession = (directory: string, id: string) => ipcRenderer.invoke('__studio:mindmap:read', directory, id)
+;(api as ElectronAPI).writeStudioMindMapSession = (directory: string, id: string, data: string) => ipcRenderer.invoke('__studio:mindmap:write', directory, id, data)
+;(api as ElectronAPI).deleteStudioMindMapSession = (directory: string, id: string) => ipcRenderer.invoke('__studio:mindmap:delete', directory, id)
+;(api as ElectronAPI).getStudioMindMapWorkspaceContext = (directory: string) => ipcRenderer.invoke('__studio:mindmap:context', directory)
 ;(api as ElectronAPI).getUpdateInfo = () => ipcRenderer.invoke('__client:get-update-info')
 ;(api as ElectronAPI).checkForUpdates = () => ipcRenderer.invoke('__client:check-for-updates')
 ;(api as ElectronAPI).installUpdate = () => ipcRenderer.invoke('__client:install-update')

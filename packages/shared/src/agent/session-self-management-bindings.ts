@@ -56,6 +56,14 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'canvasToolFn', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.canvasToolFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   Object.defineProperty(context, 'transferSftpFileFn', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.transferSftpFileFn;

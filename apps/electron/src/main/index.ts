@@ -12,6 +12,7 @@ import { redactSensitiveHeadersInPlace, redactSensitiveKeysInPlace } from '@craf
 import { getLocalizedProductName } from '@craft-agent/shared/branding'
 import { applyRuntimeToolEnvironment } from './runtime-toolchains'
 import { exportChatTranscript } from './chat-export'
+import { deleteMindMapSession, mindMapWorkspaceContext, readMindMapSession, writeMindMapSession } from './studio-mindmap-files'
 
 // Keep Electron-managed state separate from every Craft Agents installation,
 // including development launches where Electron would otherwise derive the
@@ -441,6 +442,15 @@ ipcMain.handle('__client:open-file-dialog', async (event) => {
   const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] })
   return result.filePaths
 })
+ipcMain.handle('__studio:mindmap:pick-directory', async (event, defaultPath?: string) => {
+  const win = BrowserWindow.fromWebContents(event.sender) || BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+  const result = await dialog.showOpenDialog(win, { title: '选择思维导图工作目录', defaultPath, properties: ['openDirectory', 'createDirectory'] })
+  return result.canceled ? null : result.filePaths[0] ?? null
+})
+ipcMain.handle('__studio:mindmap:read', (_event, directory: string, id: string) => readMindMapSession(directory, id))
+ipcMain.handle('__studio:mindmap:write', (_event, directory: string, id: string, data: string) => writeMindMapSession(directory, id, data))
+ipcMain.handle('__studio:mindmap:delete', (_event, directory: string, id: string) => deleteMindMapSession(directory, id))
+ipcMain.handle('__studio:mindmap:context', (_event, directory: string) => mindMapWorkspaceContext(directory))
 ipcMain.handle('__client:get-update-info', async () => {
   const { getUpdateInfo } = await import('./auto-update')
   return getUpdateInfo()
@@ -1562,6 +1572,12 @@ app.whenReady().then(async () => {
       checkForUpdatesOnLaunch().catch(err => {
         mainLog.error('[auto-update] Launch check failed:', err)
       })
+      const updateTimer = setInterval(() => {
+        checkForUpdatesOnLaunch().catch(err => {
+          mainLog.error('[auto-update] Periodic check failed:', err)
+        })
+      }, 6 * 60 * 60 * 1000)
+      updateTimer.unref()
     } else {
       mainLog.info('[auto-update] Skipping auto-update in dev mode')
     }

@@ -111,6 +111,15 @@ describe('Pi session self-management regression (#511)', () => {
 // ============================================================
 
 describe('attachSessionSelfManagementBindings', () => {
+  it('exposes a late desktop canvas callback to session tools', async () => {
+    const sessionId = 'canvas-bridge-test'
+    const context = createBaseContext(sessionId)
+    attachSessionSelfManagementBindings(context, sessionId)
+    expect(context.canvasToolFn).toBeUndefined()
+    mergeSessionScopedToolCallbacks(sessionId, { canvasToolFn: async args => ({ action: args.action, sessionId }) })
+    expect(await context.canvasToolFn?.({ action: 'list_sessions' })).toEqual({ action: 'list_sessions', sessionId })
+    unregisterSessionScopedToolCallbacks(sessionId)
+  })
   const sessionId = 'test-bindings-unit';
 
   beforeEach(() => {

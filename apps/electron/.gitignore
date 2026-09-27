@@ -2,6 +2,9 @@
 vendor/
 packages/
 release/
+.git-bash-download-temp/
+.toolchains-download-temp/
+release-new*/
 node_modules/@anthropic-ai/
 
 # Platform-specific uv binaries (downloaded during build)

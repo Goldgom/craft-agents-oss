@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Download, FileUp, LoaderCircle, PanelRightClose, PanelRightOpen, RotateCcw, Send, Sparkles } from 'lucide-react'
+import { ArrowUp, Clipboard, Download, FileUp, LoaderCircle, MessageCircle, PanelRightClose, PanelRightOpen, RotateCcw, Sparkles } from 'lucide-react'
 import { StudioConnectionPicker, useStudioConnections } from './useStudioConnections'
 import { jpegToPdf } from './studio-pdf'
 import { isWebUI } from '@/lib/platform'
 import { useTheme } from '@/context/ThemeContext'
 import { StudioSessionWorkspace, type StudioSessionEditorProps } from './StudioSessionWorkspace'
+import { Markdown } from '@/components/markdown'
+import { StudioThinkingPicker, studioThinkingLevel, type StudioThinkingLevel } from './StudioThinkingPicker'
+import { StudioExecutionModePicker, studioExecutionMode, type StudioExecutionMode } from './StudioExecutionModePicker'
 
 const EMPTY_DRAWIO = '<mxfile host="TokenBird"><diagram name="Mind Map"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>'
 
@@ -18,7 +21,7 @@ function download(data: Blob | string, name: string) {
 type DrawioMessage = { event?: string; xml?: string; data?: string; format?: string; message?: { requestId?: string } }
 
 type MindMapMessage = { id: string; role: 'user' | 'assistant'; content: string; createdAt: number; beforeXml?: string; failed?: boolean }
-type MindMapSessionData = { xml: string; prompt: string; messages: MindMapMessage[] }
+type MindMapSessionData = { xml: string; prompt: string; thinkingLevel?: StudioThinkingLevel; mode?: StudioExecutionMode; messages: MindMapMessage[] }
 
 function readSessionData(raw: string): MindMapSessionData {
   if (raw) {
@@ -27,13 +30,15 @@ function readSessionData(raw: string): MindMapSessionData {
       if (typeof value.xml === 'string' && /<(?:mxfile|mxGraphModel)\b/.test(value.xml)) return {
         xml: value.xml,
         prompt: typeof value.prompt === 'string' ? value.prompt : '',
+        thinkingLevel: studioThinkingLevel(value.thinkingLevel),
+        mode: studioExecutionMode(value.mode),
         messages: Array.isArray(value.messages) ? value.messages.filter((item): item is MindMapMessage =>
           !!item && typeof item.id === 'string' && (item.role === 'user' || item.role === 'assistant')
           && typeof item.content === 'string' && Number.isFinite(item.createdAt)).slice(-100) : [],
       }
     } catch { /* A new session starts with an empty diagram. */ }
   }
-  return { xml: EMPTY_DRAWIO, prompt: '', messages: [] }
+  return { xml: EMPTY_DRAWIO, prompt: '', thinkingLevel: 'auto', mode: 'execute', messages: [] }
 }
 
 function validateDrawioDocument(xml: string, allowCompressed = false): void {
@@ -59,7 +64,7 @@ export default function StudioMindMap() {
   return <StudioSessionWorkspace mode="mindmap">{sessionProps => <MindMapEditor key={sessionProps.session.id} {...sessionProps} />}</StudioSessionWorkspace>
 }
 
-function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, suggestTitle }: StudioSessionEditorProps) {
+function MindMapEditor({ session, onSave, createSession, bindWorkDirectory, flushRef, setLocked, suggestTitle }: StudioSessionEditorProps) {
   const { isDark } = useTheme()
   const initial = useRef(readSessionData(session.data))
   const frameRef = useRef<HTMLIFrameElement>(null)
@@ -70,10 +75,15 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
   const [frameDark, setFrameDark] = useState(isDark)
   const [chatOpen, setChatOpen] = useState(true)
   const [prompt, setPrompt] = useState(initial.current.prompt)
+  const [thinkingLevel, setThinkingLevel] = useState<StudioThinkingLevel>(studioThinkingLevel(initial.current.thinkingLevel))
+  const [mode, setMode] = useState<StudioExecutionMode>(studioExecutionMode(initial.current.mode))
   const promptRef = useRef(prompt); promptRef.current = prompt
+  const thinkingLevelRef = useRef(thinkingLevel); thinkingLevelRef.current = thinkingLevel
+  const modeRef = useRef(mode); modeRef.current = mode
   const [messages, setMessages] = useState<MindMapMessage[]>(initial.current.messages)
   const messagesRef = useRef(messages); messagesRef.current = messages
-  const transcriptEndRef = useRef<HTMLDivElement>(null)
+  const transcriptRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -82,7 +92,7 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
 
   const persist = useCallback(async () => {
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null }
-    await onSave(JSON.stringify({ xml: xmlRef.current, prompt: promptRef.current, messages: messagesRef.current }))
+    await onSave(JSON.stringify({ xml: xmlRef.current, prompt: promptRef.current, thinkingLevel: thinkingLevelRef.current, mode: modeRef.current, messages: messagesRef.current }))
   }, [onSave])
   const schedulePersist = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -101,8 +111,8 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
     flushRef.current = flush
     return () => { if (flushRef.current === flush) flushRef.current = null }
   })
-  useEffect(() => { schedulePersist(); return () => { if (saveTimer.current) clearTimeout(saveTimer.current) } }, [prompt, messages, schedulePersist])
-  useEffect(() => { transcriptEndRef.current?.scrollIntoView({ block: 'end' }) }, [messages.length, chatOpen])
+  useEffect(() => { schedulePersist(); return () => { if (saveTimer.current) clearTimeout(saveTimer.current) } }, [prompt, thinkingLevel, mode, messages, schedulePersist])
+  useEffect(() => { if (transcriptRef.current) transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight }, [messages.length, chatOpen, busy])
   useEffect(() => { setLocked(busy); return () => setLocked(false) }, [busy, setLocked])
 
   const query = `?embed=1&proto=json&offline=1&ui=atlas&dark=${frameDark ? '1' : '0'}&spin=1&libraries=0`
@@ -214,12 +224,16 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
-  async function generate() {
-    const instruction = prompt.trim()
+  async function generate(retryInstruction?: string) {
+    const instruction = (retryInstruction ?? prompt).trim()
     if (!ready || !connectionSlug || !model.trim() || !instruction) { setError('请等待编辑器就绪，并选择连接、模型和填写修改要求'); return }
-    const priorRequests = messagesRef.current.filter(message => message.role === 'user').map(message => message.content).slice(-8)
+    if (busy) return
+    const previous = messagesRef.current
+    const retry = !!retryInstruction && previous.at(-1)?.failed && previous.at(-2)?.role === 'user' && previous.at(-2)?.content === instruction
+    const conversation = retry ? previous.slice(0, -2) : previous
+    const history = conversation.filter(message => !message.failed).slice(-16).map(message => ({ role: message.role, text: message.content }))
     const userMessage: MindMapMessage = { id: crypto.randomUUID(), role: 'user', content: instruction, createdAt: Date.now() }
-    setMessages(current => [...current, userMessage].slice(-100))
+    setMessages([...conversation, userMessage].slice(-100))
     setPrompt('')
     setBusy(true); setError('')
     try {
@@ -227,10 +241,16 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
       const beforeXml = latest.xml || xmlRef.current
       if (!beforeXml) throw new Error('无法读取当前导图')
       xmlRef.current = beforeXml
+      const workspaceContext = session.workspaceDir
+        ? await window.electronAPI.getStudioMindMapWorkspaceContext(session.workspaceDir) : undefined
       const result = await window.electronAPI.generateStudioMindMap({
         connectionSlug, model: model.trim(), channelGroup: modelChannelGroup || undefined,
-        prompt: instruction, currentXml: beforeXml, priorRequests,
+        prompt: instruction, currentXml: beforeXml, workspaceContext, history, thinkingLevel, mode,
       })
+      if (result.mode === 'ask') {
+        setMessages(current => [...current, { id: crypto.randomUUID(), role: 'assistant' as const, content: result.summary, createdAt: Date.now() }].slice(-100))
+        return
+      }
       validateDrawioDocument(result.xml)
       load(result.xml)
       setMessages(current => [...current, { id: crypto.randomUUID(), role: 'assistant' as const, content: result.summary, createdAt: Date.now(), beforeXml }].slice(-100))
@@ -248,6 +268,8 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex min-h-12 flex-wrap items-center gap-1.5 border-b border-border/70 bg-background px-3 py-2 text-xs">
         <strong className="mr-2 flex items-center gap-2 text-sm"><Sparkles className="size-4 text-primary" />思维导图</strong>
+        <span className="max-w-[38vw] truncate text-xs text-muted-foreground" title={session.workspaceDir || '旧会话未设置工作目录'}>当前目录：{session.workspaceDir || '未设置'}</span>
+        {!session.workspaceDir && <button className="rounded-md px-2 py-1 text-xs text-primary hover:bg-accent" title="设置目录后，AI 会读取其中部分文本文件，导图内容会迁移到该目录的 .tokenbird/mindmaps" onClick={() => void bindWorkDirectory()}>设置工作目录</button>}
         <button className="rounded-md px-2.5 py-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => void createSession()}>新建</button>
         <button className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => fileRef.current?.click()}><FileUp className="size-3.5" />导入</button>
         <input ref={fileRef} hidden type="file" accept=".drawio,.xml,text/xml" onChange={async event => { const file = event.target.files?.[0]; if (!file) return; try { const xml = await file.text(); validateDrawioDocument(xml, true); load(xml); setError('') } catch (cause) { setError(String(cause)) } event.target.value = '' }} />
@@ -260,25 +282,40 @@ function MindMapEditor({ session, onSave, createSession, flushRef, setLocked, su
       </div>
       <div className="relative flex min-h-0 flex-1">
         <iframe key={frameDark ? 'dark' : 'light'} ref={frameRef} title="draw.io mind map editor" src={frameUrl} className="min-h-0 min-w-0 flex-1 border-0 bg-background" />
-        {chatOpen && <aside className="flex w-80 min-w-0 shrink-0 flex-col border-l border-border/70 bg-background max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-20 max-md:shadow-strong">
-          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/70 px-4"><div><h2 className="text-sm font-semibold">AI 修改记录</h2><p className="text-[11px] text-muted-foreground">描述新导图，或继续修改当前内容</p></div><button className="rounded p-1 text-muted-foreground hover:bg-accent" title="收起修改记录" aria-label="收起修改记录" onClick={() => setChatOpen(false)}><PanelRightClose className="size-4" /></button></div>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4" aria-label="导图修改记录">
-            {messages.length === 0 && <div className="rounded-xl border border-dashed border-border/80 bg-muted/30 p-4 text-xs leading-5 text-muted-foreground">先描述想要的思维导图，例如“生成一个产品规划图，分为目标、功能和时间线”。之后可以继续要求添加节点、调整层级或改变样式。</div>}
-            {messages.map(message => <div key={message.id} className={`flex flex-col ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-full whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-xs leading-5 ${message.role === 'user' ? 'bg-primary text-primary-foreground' : message.failed ? 'bg-destructive/10 text-destructive' : 'bg-muted text-foreground'}`}>{message.content}</div>
-              {message.role === 'assistant' && message.beforeXml && <button disabled={busy || !ready} className="mt-1 flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40" onClick={() => { load(message.beforeXml!); setError('') }}><RotateCcw className="size-3" />恢复到这次修改前</button>}
-            </div>)}
-            {busy && <div className="flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" />正在修改导图…</div>}
-            <div ref={transcriptEndRef} />
+        {chatOpen && <aside className="flex w-[min(420px,40vw)] min-w-[300px] shrink-0 flex-col border-l border-border/70 bg-background max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-20 max-md:w-[min(420px,100vw)] max-md:shadow-strong">
+          <header className="shrink-0 border-b border-border/70 px-4 py-3">
+            <div className="flex items-center gap-2"><MessageCircle className="size-4 text-primary" /><h2 className="text-sm font-semibold">AI 思维导图助手</h2><span className="ml-auto text-[11px] text-muted-foreground">{messages.length ? `${messages.length} 条消息` : '新对话'}</span><button type="button" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="收起对话" aria-label="收起对话" onClick={() => setChatOpen(false)}><PanelRightClose className="size-4" /></button></div>
+            <p className="mt-1 truncate text-[11px] text-muted-foreground" title={session.title}>当前导图 · {session.title}</p>
+            <div className="mt-3"><StudioConnectionPicker connections={connections} connectionSlug={connectionSlug} setConnectionSlug={setConnectionSlug} model={model} setModel={setModel} /></div>
+            {connection?.oauthProvider === 'tokennest' && !connection.isAuthenticated && <button className="mt-2 text-xs text-primary underline" onClick={() => void loginTokenNest().catch(cause => setError(String(cause)))}>登录 TokenNest</button>}
+          </header>
+          <div ref={transcriptRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5" role="log" aria-label="思维导图助手对话" aria-live="polite">
+            {messages.length === 0 && <div className="flex h-full flex-col items-center justify-center text-center">
+              <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Sparkles className="size-6" /></div>
+              <h3 className="text-sm font-medium">和 AI 一起整理思路</h3>
+              <p className="mt-2 max-w-[280px] text-xs leading-5 text-muted-foreground">描述想要的导图，或继续要求添加节点、调整层级和样式。每次修改都会保存在这段对话中。</p>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">{['创建一个产品规划导图', '按目标、功能和时间线整理'].map(example => <button key={example} type="button" className="rounded-lg border border-border px-3 py-2 text-left text-xs hover:bg-accent" onClick={() => { setPrompt(example); inputRef.current?.focus() }}>{example}</button>)}</div>
+            </div>}
+            {messages.map((message, index) => <article key={message.id} className={message.role === 'user' ? 'ml-5 rounded-2xl rounded-tr-md bg-muted/60 px-3.5 py-3' : ''}>
+              <div className="mb-2 flex items-center gap-2 text-muted-foreground">
+                {message.role === 'assistant' && <span className="flex size-5 items-center justify-center rounded-md bg-primary/10 text-primary" aria-label="助手回复"><Sparkles className="size-3" /></span>}
+                <button type="button" className="ml-auto rounded p-1 hover:bg-accent hover:text-foreground" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard.writeText(message.content)}><Clipboard className="size-3" /></button>
+              </div>
+              {message.role === 'assistant' ? <Markdown className={`break-words text-xs leading-5 ${message.failed ? 'text-destructive' : ''}`}>{message.content}</Markdown> : <div className="whitespace-pre-wrap break-words text-xs leading-5">{message.content}</div>}
+              {message.role === 'assistant' && message.beforeXml && <div className="mt-3 rounded-xl border border-border bg-muted/30 p-3">
+                <div className="flex items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-primary" />已应用到导图</div>
+                <button type="button" disabled={busy || !ready} className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs hover:bg-accent disabled:opacity-40" onClick={() => { load(message.beforeXml!); setError('') }}><RotateCcw className="size-3.5" />恢复到此次修改前</button>
+              </div>}
+              {message.failed && index === messages.length - 1 && messages[index - 1]?.role === 'user' && <button type="button" disabled={busy || !ready} className="mt-2 flex items-center gap-1 text-xs text-primary underline disabled:opacity-40" onClick={() => void generate(messages[index - 1].content)}><RotateCcw className="size-3" />重试</button>}
+            </article>)}
+            {busy && <div className="flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" />AI 正在修改导图…</div>}
+            {error && !messages.at(-1)?.failed && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">{error}</div>}
           </div>
-          <div className="shrink-0 space-y-2 border-t border-border/70 p-3">
-            <StudioConnectionPicker connections={connections} connectionSlug={connectionSlug} setConnectionSlug={setConnectionSlug} model={model} setModel={setModel} />
-            {connection?.oauthProvider === 'tokennest' && !connection.isAuthenticated && <button className="text-xs text-primary underline" onClick={() => void loginTokenNest().catch(cause => setError(String(cause)))}>登录 TokenNest</button>}
-            <div className="rounded-xl border border-border bg-muted/20 p-2 focus-within:border-primary/60">
-              <textarea className="max-h-40 min-h-20 w-full resize-y bg-transparent p-1 text-xs leading-5 outline-none" aria-label="导图修改要求" placeholder="描述新导图或输入修改要求…" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void generate() } }} />
-              <div className="flex items-center justify-between"><span className="text-[10px] text-muted-foreground">Ctrl + Enter 发送</span><button disabled={busy || !ready || !prompt.trim()} className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-40" onClick={() => void generate()}><Send className="size-3.5" />发送</button></div>
+          <div className="shrink-0 border-t border-border/70 bg-background p-3">
+            <div className="rounded-xl border border-border bg-muted/20 focus-within:border-primary/50">
+              <textarea ref={inputRef} className="min-h-24 max-h-56 w-full resize-y bg-transparent px-3 pt-3 text-xs leading-5 outline-none placeholder:text-muted-foreground" aria-label="导图修改要求" placeholder="描述新导图或继续修改当前内容…" maxLength={4000} value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void generate() } }} />
+              <div className="flex items-center gap-2 px-2 pb-2"><StudioExecutionModePicker value={mode} onChange={setMode} /><StudioThinkingPicker value={thinkingLevel} onChange={setThinkingLevel} /><span className="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground">{ready ? '附带当前导图' : '正在加载编辑器…'}</span><button type="button" disabled={busy || !ready || !prompt.trim()} className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground disabled:opacity-40" aria-label="发送消息" onClick={() => void generate()}>{busy ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}</button></div>
             </div>
-            {error && <p role="alert" className="break-words text-xs text-destructive">{error}</p>}
           </div>
         </aside>}
       </div>

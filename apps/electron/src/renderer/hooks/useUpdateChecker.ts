@@ -5,7 +5,7 @@
  * - Listens for update availability broadcasts from main process
  * - Tracks download progress
  * - Provides methods to check for updates and install
- * - Shows toast notification when update is ready
+ * - Shows an update prompt when a newer release is detected
  * - Persistent dismissal across app restarts (per version)
  */
 
@@ -29,45 +29,28 @@ interface UseUpdateCheckerResult {
   checkForUpdates: () => Promise<void>
   /** Install the downloaded update and restart */
   installUpdate: () => Promise<void>
+  /** Version currently shown in the update prompt. */
+  promptVersion: string | null
+  dismissPrompt: () => Promise<void>
 }
 
-// Toast ID for update notification (allows dismiss/update)
-const UPDATE_TOAST_ID = 'update-available'
-
-export function useUpdateChecker(): UseUpdateCheckerResult {
+export function useUpdateChecker(showPrompt = false): UseUpdateCheckerResult {
   const { t } = useTranslation()
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
-  // Track if we've shown the toast for this version to avoid duplicates
-  const shownToastVersionRef = useRef<string | null>(null)
+  const [promptVersion, setPromptVersion] = useState<string | null>(null)
+  const dismissedVersionRef = useRef<string | null>(null)
 
-  // Show toast notification when update is ready
-  const showUpdateToast = useCallback((version: string, onInstall: () => void) => {
-    // Don't show if already shown for this version in this session
-    if (shownToastVersionRef.current === version) {
-      return
-    }
-    shownToastVersionRef.current = version
-
-    toast.info(t('toast.updateReady', { version }), {
-      id: UPDATE_TOAST_ID,
-      description: t('toast.restartToApply'),
-      duration: 10000, // 10 seconds, then auto-dismiss
-      action: {
-        label: t('toast.restart'),
-        onClick: onInstall,
-      },
-      onDismiss: () => {
-        // Persist dismissal so we don't show again after app restart
-        window.electronAPI.dismissUpdate(version)
-      },
-    })
-  }, [t])
+  const dismissPrompt = useCallback(async () => {
+    if (!promptVersion) return
+    dismissedVersionRef.current = promptVersion
+    setPromptVersion(null)
+    await window.electronAPI.dismissUpdate(promptVersion)
+  }, [promptVersion])
 
   // Install the update
   const installUpdate = useCallback(async () => {
     try {
-      // Dismiss the update toast first
-      toast.dismiss(UPDATE_TOAST_ID)
+      setPromptVersion(null)
       toast.info(t('toast.installingUpdate'), {
         description: t('toast.appWillRestart'),
         duration: 5000,
@@ -79,13 +62,13 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
         description: error instanceof Error ? error.message : 'Unknown error',
       })
     }
-  }, [])
+  }, [t])
 
-  // Load initial state and check if update ready
+  // Load initial state and prompt as soon as a newer release is detected.
   useEffect(() => {
     const checkAndNotify = async (info: UpdateInfo) => {
-      if (!info.available || !info.latestVersion) return
-      if (info.downloadState !== 'ready') return
+      if (!showPrompt || !info.available || !info.latestVersion) return
+      if (dismissedVersionRef.current === info.latestVersion) return
 
       // Check if this version was dismissed
       const dismissedVersion = await window.electronAPI.getDismissedUpdateVersion()
@@ -93,8 +76,7 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
         return
       }
 
-      // Show toast for ready update
-      showUpdateToast(info.latestVersion, installUpdate)
+      setPromptVersion(info.latestVersion)
     }
 
     // Get initial update info
@@ -118,7 +100,7 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
       cleanupAvailable()
       cleanupProgress()
     }
-  }, [showUpdateToast, installUpdate])
+  }, [showPrompt])
 
   // Check for updates manually
   const checkForUpdates = useCallback(async () => {
@@ -126,15 +108,13 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
       const info = await window.electronAPI.checkForUpdates()
       setUpdateInfo(info)
 
-      if (!info.available) {
+      if (info.downloadState === 'error') {
+        toast.error(t('toast.failedToCheckUpdates'), { description: info.error })
+      } else if (!info.available) {
         toast.success(t('toast.upToDate'), {
           description: t('toast.versionIsLatest', { version: info.currentVersion }),
           duration: 3000,
         })
-      } else if (info.downloadState === 'ready' && info.latestVersion) {
-        // If already ready, show toast (clear any previous dismissal since user explicitly checked)
-        shownToastVersionRef.current = null // Reset so toast can show again
-        showUpdateToast(info.latestVersion, installUpdate)
       }
     } catch (error) {
       console.error('[useUpdateChecker] Check failed:', error)
@@ -142,7 +122,7 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
         description: error instanceof Error ? error.message : 'Unknown error',
       })
     }
-  }, [showUpdateToast, installUpdate])
+  }, [t])
 
   return {
     updateInfo,
@@ -152,5 +132,7 @@ export function useUpdateChecker(): UseUpdateCheckerResult {
     downloadProgress: updateInfo?.downloadProgress ?? 0,
     checkForUpdates,
     installUpdate,
+    promptVersion,
+    dismissPrompt,
   }
 }

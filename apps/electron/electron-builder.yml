@@ -78,7 +78,8 @@ files:
 extraMetadata:
   main: dist/main.cjs
 
-# Auto-update: electron-updater fetches from this URL for update manifests (.yml files)
+# Default feed for macOS/Linux. Windows overrides it at runtime with the latest
+# GitCode Release after checking that release's assets.
 publish:
   provider: generic
   url: https://openai.goldgom.top/tokenbird/electron/latest

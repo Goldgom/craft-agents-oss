@@ -25,6 +25,64 @@ function connection() {
 }
 
 describe('Studio server requests', () => {
+  it('asks GPT about one canvas session and validates the suggested adjustment', async () => {
+    connection()
+    let body: any
+    globalThis.fetch = mock(async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ reply: '可以增强对比度', operation: 'adjust', adjustments: { contrast: 999, blur: -2, style: 'noir' } }) } }] })
+    }) as unknown as typeof fetch
+    const result = await harness()(RPC_CHANNELS.studio.ASSIST_CANVAS, {
+      connectionSlug: 'gptimage', model: 'gpt-4.1', sessionId: 'canvas-123', sessionTitle: '海边日落',
+      question: '如何更有电影感？', imageBase64: 'iVBORw0KGgo=', selection: { x: 10, y: 20, width: 100, height: 80 },
+    })
+    expect(result).toEqual({ reply: '可以增强对比度', operation: 'adjust', adjustments: { contrast: 200, blur: 0, style: 'noir' } })
+    expect(body.messages[1].content[0].text).toContain('canvas-123')
+    expect(body.messages[1].content[1].image_url.url.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  it('treats a plain GPT answer as advice without an automatic canvas edit', async () => {
+    connection()
+    globalThis.fetch = mock(async () => Response.json({ choices: [{ message: { content: '可以让主体更突出。' } }] })) as unknown as typeof fetch
+    expect(await harness()(RPC_CHANNELS.studio.ASSIST_CANVAS, {
+      connectionSlug: 'gptimage', model: 'gpt-4.1', sessionId: 'canvas-123', sessionTitle: '海边日落', question: '点评画面',
+    })).toEqual({ reply: '可以让主体更突出。', operation: 'none' })
+  })
+
+  it('includes both sides of the canvas conversation in a follow-up request', async () => {
+    connection()
+    let body: { messages: Array<{ role: string; content: unknown }> } | undefined
+    globalThis.fetch = mock(async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ message: { content: '{"reply":"可以调低亮度","operation":"none"}' } }] })
+    }) as unknown as typeof fetch
+    await harness()(RPC_CHANNELS.studio.ASSIST_CANVAS, {
+      connectionSlug: 'gptimage', model: 'gpt-4.1', sessionId: 'canvas-123', sessionTitle: 'Portrait',
+      question: '那现在应该怎么改？',
+      history: [{ role: 'user', text: '想要电影感' }, { role: 'assistant', text: '可以降低亮度并增加对比度' }],
+    })
+    expect(body?.messages.slice(1, 3)).toEqual([
+      { role: 'user', content: '想要电影感' },
+      { role: 'assistant', content: '可以降低亮度并增加对比度' },
+    ])
+    expect((body?.messages.at(-1)?.content as Array<{ text: string }>)[0].text).toContain('那现在应该怎么改？')
+  })
+
+  it('passes the selected canvas thinking level to the text model', async () => {
+    connection()
+    let body: { reasoning_effort?: string } | undefined
+    globalThis.fetch = mock(async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ message: { content: '{"reply":"可以提高对比度","operation":"none"}' } }] })
+    }) as unknown as typeof fetch
+    await harness()(RPC_CHANNELS.studio.ASSIST_CANVAS, {
+      connectionSlug: 'gptimage', model: 'gpt-6-sol', sessionId: 'canvas-123', sessionTitle: 'Portrait',
+      question: '如何调整？', thinkingLevel: 'high',
+    })
+    expect(body?.reasoning_effort).toBe('high')
+    expect(body).toHaveProperty('stream', true)
+  })
+
   it('uses the server-owned API key for GPT Image generation', async () => {
     connection()
     let request: RequestInit | undefined
@@ -196,6 +254,41 @@ describe('Studio server requests', () => {
     expect(JSON.parse(body!.messages[1].content)).toEqual({ instruction: 'Rename topic', priorRequests: ['Create a plan'], currentXml })
   })
 
+  it('includes both sides of the mind map conversation in follow-up requests', async () => {
+    connection()
+    const xml = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>'
+    const revisedXml = xml.replace('</root>', '<mxCell id="risk" value="Risk" vertex="1" parent="1"/></root>')
+    let body: { messages: Array<{ role: string; content: string }> } | undefined
+    globalThis.fetch = mock(async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ xml: revisedXml, summary: '已添加节点' }) } }] })
+    }) as unknown as typeof fetch
+    await harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
+      connectionSlug: 'gptimage', model: 'gpt-4.1', prompt: '再添加风险节点', currentXml: xml,
+      history: [{ role: 'user', text: '创建项目计划' }, { role: 'assistant', text: '已创建目标和里程碑' }],
+    })
+    expect(body?.messages.slice(1, 3)).toEqual([
+      { role: 'user', content: '创建项目计划' },
+      { role: 'assistant', content: '已创建目标和里程碑' },
+    ])
+    expect(JSON.parse(body!.messages[3].content).instruction).toBe('再添加风险节点')
+  })
+
+  it('maps the mind map thinking setting and leaves automatic effort to the model', async () => {
+    connection()
+    const xml = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="topic" value="Plan" vertex="1" parent="1"/></root></mxGraphModel></diagram></mxfile>'
+    const bodies: Array<{ reasoning_effort?: string }> = []
+    globalThis.fetch = mock(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)))
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ xml, summary: '已更新' }) } }] })
+    }) as unknown as typeof fetch
+    const invoke = harness()
+    await invoke(RPC_CHANNELS.studio.GENERATE_MIND_MAP, { connectionSlug: 'gptimage', model: 'gpt-6-sol', prompt: '添加节点', thinkingLevel: 'off' })
+    await invoke(RPC_CHANNELS.studio.GENERATE_MIND_MAP, { connectionSlug: 'gptimage', model: 'gpt-6-sol', prompt: '添加节点', thinkingLevel: 'auto' })
+    expect(bodies[0]?.reasoning_effort).toBe('none')
+    expect(bodies[1]).not.toHaveProperty('reasoning_effort')
+  })
+
   it('routes a mind map model through its TokenNest text group', async () => {
     spyOn(config, 'getLlmConnection').mockReturnValue({
       slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
@@ -207,14 +300,23 @@ describe('Studio server requests', () => {
     } as never)
     spyOn(credentials, 'getCredentialManager').mockReturnValue({} as never)
     spyOn(auth, 'getValidTokenNestCredentials').mockResolvedValue({ accessToken: 'oauth-access' } as never)
-    const xml = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>'
+    const xml = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="topic" value="Plan" vertex="1" parent="1"/></root></mxGraphModel></diagram></mxfile>'
     let request: RequestInit | undefined
-    globalThis.fetch = mock(async (_url, init) => { request = init; return Response.json({ choices: [{ message: { content: xml } }] }) }) as unknown as typeof fetch
+    globalThis.fetch = mock(async (_url, init) => {
+      request = init
+      const reply = JSON.stringify({ xml, summary: '已生成导图' })
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: reply.slice(0, 40) } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: reply.slice(40) } }] })}\n\n`,
+        'data: [DONE]\n\n',
+      ].join(''), { headers: { 'Content-Type': 'text/event-stream' } })
+    }) as unknown as typeof fetch
 
-    await harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
+    expect(await harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
       connectionSlug: 'tokennest', model: 'gpt-6-sol', channelGroup: 'text', prompt: 'Make a plan',
-    })
+    })).toEqual({ xml, summary: '已生成导图' })
     expect(new Headers(request?.headers).get('X-TokenNest-Group')).toBe('text')
+    expect(JSON.parse(String(request?.body)).stream).toBe(true)
     await expect(harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
       connectionSlug: 'tokennest', model: 'gpt-6-sol', channelGroup: 'astra', prompt: 'Make a plan',
     })).rejects.toThrow('STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE')
@@ -227,7 +329,7 @@ describe('Studio server requests', () => {
     let body: { messages: { content: string }[] } | undefined
     globalThis.fetch = mock(async (_url, init) => {
       body = JSON.parse(String(init?.body))
-      return Response.json({ choices: [{ message: { content: `<mxfile><diagram>${graph}</diagram></mxfile>` } }] })
+      return Response.json({ choices: [{ message: { content: `<mxfile><diagram>${graph.replace('value="Plan"', 'value="Updated"')}</diagram></mxfile>` } }] })
     }) as unknown as typeof fetch
     await harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, { connectionSlug: 'gptimage', model: 'gpt-4.1', prompt: 'Change color', currentXml: `<mxfile><diagram>${compressed}</diagram></mxfile>` })
     expect(JSON.parse(body!.messages[1].content).currentXml).toContain('id="topic"')
@@ -237,12 +339,36 @@ describe('Studio server requests', () => {
     connection()
     let body: { messages: { content: string }[] } | undefined
     const xml = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>'
+    const generatedXml = xml.replace('</root>', '<mxCell id="topic" value="Plan" vertex="1" parent="1"/></root>')
     globalThis.fetch = mock(async (_url, init) => {
       body = JSON.parse(String(init?.body))
-      return Response.json({ choices: [{ message: { content: xml } }] })
+      return Response.json({ choices: [{ message: { content: generatedXml } }] })
     }) as unknown as typeof fetch
     await harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, { connectionSlug: 'gptimage', model: 'gpt-4.1', prompt: 'New plan', currentXml: xml })
     expect(JSON.parse(body!.messages[1].content).currentXml).toBeNull()
+  })
+
+  it('does not report an empty or unchanged mind map as applied', async () => {
+    connection()
+    const empty = '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>'
+    globalThis.fetch = mock(async () => Response.json({ choices: [{ message: { content: JSON.stringify({ xml: empty, summary: '无法读取项目' }) } }] })) as unknown as typeof fetch
+    await expect(harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
+      connectionSlug: 'gptimage', model: 'gpt-6-sol', prompt: '生成 ER 图', currentXml: empty,
+    })).rejects.toThrow('did not create any editable mind map nodes')
+
+    const existing = empty.replace('</root>', '<mxCell id="topic" value="Plan" vertex="1" parent="1"/></root>')
+    globalThis.fetch = mock(async () => Response.json({ choices: [{ message: { content: JSON.stringify({ xml: existing, summary: '已修改' }) } }] })) as unknown as typeof fetch
+    await expect(harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
+      connectionSlug: 'gptimage', model: 'gpt-6-sol', prompt: '修改导图', currentXml: existing,
+    })).rejects.toThrow('without changes')
+  })
+
+  it('answers mind map questions without returning an applied edit', async () => {
+    connection()
+    globalThis.fetch = mock(async () => Response.json({ choices: [{ message: { content: '当前导图包含项目计划节点。' } }] })) as unknown as typeof fetch
+    expect(await harness()(RPC_CHANNELS.studio.GENERATE_MIND_MAP, {
+      connectionSlug: 'gptimage', model: 'gpt-6-sol', prompt: '这个导图是什么？', mode: 'ask',
+    })).toEqual({ mode: 'ask', summary: '当前导图包含项目计划节点。' })
   })
 
   it('rejects an invalid mind map response', async () => {

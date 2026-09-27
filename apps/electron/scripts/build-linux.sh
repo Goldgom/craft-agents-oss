@@ -189,9 +189,19 @@ bun run electron:build
 echo "Packaging app with electron-builder..."
 cd "$ELECTRON_DIR"
 
-# Run electron-builder
-# Note: electron-builder may build both archs due to config, but we only use the requested one
-npx electron-builder --linux --${ARCH}
+# Reuse the Electron binary installed by bun install for a native build.
+# This avoids downloading the same archive a second time, which can produce
+# a corrupt ZIP when a proxy interrupts electron-builder's range requests.
+ELECTRON_DIST="$ROOT_DIR/node_modules/electron/dist"
+HOST_ARCH="$(uname -m)"
+if [ -f "$ELECTRON_DIST/version" ] && {
+    { [ "$ARCH" = "x64" ] && [ "$HOST_ARCH" = "x86_64" ]; } ||
+    { [ "$ARCH" = "arm64" ] && [ "$HOST_ARCH" = "aarch64" ]; }
+}; then
+    npx electron-builder --linux --${ARCH} --config.electronDist="$ELECTRON_DIST"
+else
+    npx electron-builder --linux --${ARCH}
+fi
 
 # 8. Verify the AppImage was built
 # electron-builder uses Linux-style arch names: x86_64 for x64, aarch64 for arm64

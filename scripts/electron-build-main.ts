@@ -21,6 +21,8 @@ const PI_AGENT_SERVER_OUTPUT = join(PI_AGENT_SERVER_DIR, "dist/index.js");
 const WA_WORKER_DIR = join(ROOT_DIR, "packages/messaging-whatsapp-worker");
 const WA_WORKER_SOURCE = join(WA_WORKER_DIR, "src/worker.ts");
 const WA_WORKER_OUTPUT = join(WA_WORKER_DIR, "dist/worker.cjs");
+const QQ_WORKER_SOURCE = join(ROOT_DIR, "packages/messaging-qqbot-worker/src/worker.ts");
+const QQ_WORKER_OUTPUT = join(ROOT_DIR, "packages/messaging-qqbot-worker/dist/worker.cjs");
 
 // Load .env file if it exists
 function loadEnvFile(): void {
@@ -306,6 +308,20 @@ async function buildWhatsAppWorker(): Promise<void> {
   console.log("✅ WhatsApp worker built successfully");
 }
 
+async function buildQQBotWorker(): Promise<void> {
+  if (!existsSync(QQ_WORKER_SOURCE)) return;
+  console.log("Building QQ Bot worker...");
+  const proc = spawn({
+    cmd: ["bun", "run", "scripts/build-qqbot-worker.ts"],
+    cwd: ROOT_DIR,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  if (await proc.exited !== 0 || !existsSync(QQ_WORKER_OUTPUT)) {
+    throw new Error(`QQ Bot worker build failed: ${QQ_WORKER_OUTPUT}`);
+  }
+}
+
 async function main(): Promise<void> {
   loadEnvFile();
 
@@ -329,6 +345,7 @@ async function main(): Promise<void> {
 
   // Build WhatsApp worker (Baileys subprocess — optional package)
   await buildWhatsAppWorker();
+  await buildQQBotWorker();
 
   const buildDefines = getBuildDefines();
 

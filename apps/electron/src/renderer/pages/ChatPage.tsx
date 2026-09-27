@@ -22,6 +22,7 @@ import { StyledDropdownMenuContent, StyledDropdownMenuItem, StyledDropdownMenuSu
 import { useAppShellContext, usePendingPermission, usePendingCredential, useSessionOptionsFor, useSession as useSessionData } from '@/context/AppShellContext'
 import { rendererPerf } from '@/lib/perf'
 import { isAbsolutePath } from '@/lib/drafts'
+import { findSessionDataLink, workspaceDataRelativePath } from '@/lib/session-data-link'
 import { navigate, routes } from '@/lib/navigate'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
@@ -377,29 +378,46 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         if (lastSlash > 0 && lastSlash < resolved.length - 1) {
           const parentDir = resolved.slice(0, lastSlash)
           const fileName = resolved.slice(lastSlash + 1)
+          let files: Awaited<ReturnType<typeof window.electronAPI.searchFiles>> = []
           try {
             const matches = await window.electronAPI.searchFiles(parentDir, fileName)
-            const files = matches.filter((m) => m.type === 'file' && m.name === fileName)
-            const exact = files.find((m) => m.path === resolved)
-            if (exact) {
-              onOpenFile(exact.path)
-              return
-            }
+            files = matches.filter((m) => m.type === 'file' && m.name === fileName)
+          } catch {
+            // A missing parent directory is common for malformed generated links.
+          }
+          const exact = files.find((m) => m.path === resolved)
+          if (exact) {
+            onOpenFile(exact.path)
+            return
+          }
 
-            if (files.length === 1) {
-              onOpenFile(files[0].path)
-              toast.info(t('chat.openedClosestMatch', { path: files[0].relativePath }))
-              return
+          // Some generated links omit sessions/<id> even though the file was
+          // written to this session's data directory. Resolve against the
+          // actual session file tree before trying a loose basename match.
+          try {
+            if (activeWorkspace?.rootPath && workspaceDataRelativePath(resolved, activeWorkspace.rootPath)) {
+              const sessionFiles = await window.electronAPI.getSessionFiles(sessionId)
+              const sessionDataPath = findSessionDataLink(resolved, activeWorkspace.rootPath, sessionFiles)
+              if (sessionDataPath) {
+                onOpenFile(sessionDataPath)
+                return
+              }
             }
           } catch {
-            // Search fallback is best-effort; proceed with original resolved path.
+            // Session file lookup is best-effort.
+          }
+
+          if (files.length === 1) {
+            onOpenFile(files[0].path)
+            toast.info(t('chat.openedClosestMatch', { path: files[0].relativePath }))
+            return
           }
         }
       }
 
       onOpenFile(resolved)
     },
-    [onOpenFile, workingDirectory, activeWorkspace?.rootPath]
+    [onOpenFile, workingDirectory, activeWorkspace?.rootPath, sessionId]
   )
 
   const handleOpenUrl = React.useCallback(

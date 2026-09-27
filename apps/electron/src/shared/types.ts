@@ -410,6 +410,11 @@ export interface ElectronAPI {
   /** Read an image file as a size-bounded preview data URL for lightweight thumbnail rendering. */
   readFilePreviewDataUrl(path: string, maxSize?: number): Promise<string>
   openFileDialog(): Promise<string[]>
+  pickStudioMindMapDirectory(defaultPath?: string): Promise<string | null>
+  readStudioMindMapSession(directory: string, id: string): Promise<string>
+  writeStudioMindMapSession(directory: string, id: string, data: string): Promise<void>
+  deleteStudioMindMapSession(directory: string, id: string): Promise<void>
+  getStudioMindMapWorkspaceContext(directory: string): Promise<string>
   readFileAttachment(path: string): Promise<FileAttachment | null>
   /** Re-read a user-attached file by absolute path (bypasses workspace-dir validation).
    *  Used only by draft hydration for paths the user explicitly picked via OS dialog / drag. */
@@ -821,7 +826,9 @@ export interface ElectronAPI {
   // LLM Connections (provider configurations)
   listLlmConnections(): Promise<LlmConnection[]>
   generateStudioImage(input: { connectionSlug: string; model: string; prompt: string; channelGroup?: string; imageBase64?: string; maskBase64?: string; size?: string; count?: number; transparentBackground?: boolean }): Promise<{ imageBase64: string; mimeType: string; images: Array<{ imageBase64: string; mimeType: string }> }>
-  generateStudioMindMap(input: { connectionSlug: string; model: string; channelGroup?: string; prompt: string; currentXml?: string; priorRequests?: string[] }): Promise<{ xml: string; summary: string }>
+  assistStudioCanvas(input: { connectionSlug: string; model: string; channelGroup?: string; sessionId: string; sessionTitle: string; question: string; imageBase64?: string; selection?: { x: number; y: number; width: number; height: number }; priorQuestions?: string[]; history?: Array<{ role: 'user' | 'assistant'; text: string }>; thinkingLevel?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }): Promise<{ reply: string; operation: 'none' | 'generate' | 'inpaint' | 'outpaint' | 'adjust'; prompt?: string; adjustments?: { brightness?: number; contrast?: number; saturation?: number; hue?: number; temperature?: number; blur?: number; style?: 'none' | 'grayscale' | 'sepia' | 'vintage' | 'noir' } }>
+  onStudioCanvasRequest(handler: (request: Record<string, unknown>) => Promise<unknown>): () => void
+  generateStudioMindMap(input: { connectionSlug: string; model: string; channelGroup?: string; prompt: string; currentXml?: string; workspaceContext?: string; priorRequests?: string[]; history?: Array<{ role: 'user' | 'assistant'; text: string }>; thinkingLevel?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; mode?: 'execute' | 'ask' }): Promise<{ xml: string; summary: string; mode?: 'execute' } | { summary: string; mode: 'ask' }>
   exportStudioVisio(xml: string): Promise<{ base64: string }>
   listLlmConnectionsWithStatus(): Promise<LlmConnectionWithStatus[]>
   getLlmConnection(slug: string): Promise<LlmConnection | null>

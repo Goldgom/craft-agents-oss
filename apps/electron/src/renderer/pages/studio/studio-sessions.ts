@@ -1,5 +1,5 @@
 export type StudioSessionMode = 'canvas' | 'mindmap'
-export type StudioSessionMeta = { id: string; mode: StudioSessionMode; title: string; updatedAt: number }
+export type StudioSessionMeta = { id: string; mode: StudioSessionMode; title: string; updatedAt: number; workspaceDir?: string }
 
 const DB_NAME = 'tokenbird-studio-sessions'
 const ACTIVE_PREFIX = 'tokenbird.studio.active.'
@@ -40,6 +40,8 @@ export async function listStudioSessions(mode: StudioSessionMode): Promise<Studi
 }
 
 export async function loadStudioSession(id: string): Promise<string> {
+  const meta = await transact<StudioSessionMeta | undefined>('meta', 'readonly', store => store.get(id))
+  if (meta?.mode === 'mindmap' && meta.workspaceDir) return window.electronAPI.readStudioMindMapSession(meta.workspaceDir, id)
   return await transact<string | undefined>('data', 'readonly', store => store.get(id)) ?? ''
 }
 
@@ -50,7 +52,11 @@ export async function putStudioSession(meta: StudioSessionMeta, data: string): P
 
 export function saveStudioSessionData(id: string, data: string): Promise<void> {
   const previous = writes.get(id) ?? Promise.resolve()
-  const next = previous.catch(() => {}).then(async () => { await transact('data', 'readwrite', store => store.put(data, id)) })
+  const next = previous.catch(() => {}).then(async () => {
+    const meta = await transact<StudioSessionMeta | undefined>('meta', 'readonly', store => store.get(id))
+    if (meta?.mode === 'mindmap' && meta.workspaceDir) await window.electronAPI.writeStudioMindMapSession(meta.workspaceDir, id, data)
+    else await transact('data', 'readwrite', store => store.put(data, id))
+  })
   writes.set(id, next)
   void next.finally(() => { if (writes.get(id) === next) writes.delete(id) }).catch(() => {})
   return next
@@ -60,8 +66,20 @@ export async function updateStudioSessionMeta(meta: StudioSessionMeta): Promise<
   await transact('meta', 'readwrite', store => store.put(meta))
 }
 
+export async function moveMindMapSessionToDirectory(meta: StudioSessionMeta, directory: string): Promise<StudioSessionMeta> {
+  if (meta.mode !== 'mindmap' || meta.workspaceDir) throw new Error('只有未设置工作目录的导图会话可以迁移')
+  const data = await loadStudioSession(meta.id)
+  await window.electronAPI.writeStudioMindMapSession(directory, meta.id, data)
+  const next = { ...meta, workspaceDir: directory, updatedAt: Date.now() }
+  await updateStudioSessionMeta(next)
+  await transact('data', 'readwrite', store => store.delete(meta.id))
+  return next
+}
+
 export async function deleteStudioSession(id: string): Promise<void> {
   await (writes.get(id) ?? Promise.resolve()).catch(() => {})
+  const meta = await transact<StudioSessionMeta | undefined>('meta', 'readonly', store => store.get(id))
+  if (meta?.mode === 'mindmap' && meta.workspaceDir) await window.electronAPI.deleteStudioMindMapSession(meta.workspaceDir, id)
   await transact('data', 'readwrite', store => store.delete(id))
   await transact('meta', 'readwrite', store => store.delete(id))
 }

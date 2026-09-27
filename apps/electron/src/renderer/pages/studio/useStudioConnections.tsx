@@ -6,16 +6,17 @@ import { useAppShellContext } from '@/context/AppShellContext'
 
 const IMAGE_CONNECTION_KEY = 'tokenbird.studio.imageConnection'
 const MINDMAP_CONNECTION_KEY = 'tokenbird.studio.mindmapConnection'
+const CANVAS_ASSISTANT_CONNECTION_KEY = 'tokenbird.studio.canvasAssistantConnection'
 
 function supportsMindMap(connection: LlmConnectionWithStatus): boolean {
   return connection.oauthProvider === 'tokennest' || connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint'
 }
 
-export function useStudioConnections(options: { image?: boolean } = {}) {
+export function useStudioConnections(options: { image?: boolean; assistant?: boolean } = {}) {
   const { workspaceDefaultLlmConnection } = useAppShellContext()
   const [connections, setConnections] = useState<LlmConnectionWithStatus[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [connectionSlug, setConnectionSlug] = useState(() => localStorage.getItem(options.image ? IMAGE_CONNECTION_KEY : MINDMAP_CONNECTION_KEY) ?? '')
+  const [connectionSlug, setConnectionSlug] = useState(() => localStorage.getItem(options.image ? IMAGE_CONNECTION_KEY : options.assistant ? CANVAS_ASSISTANT_CONNECTION_KEY : MINDMAP_CONNECTION_KEY) ?? '')
   const [channelGroup, setChannelGroup] = useState('')
   const [model, setModel] = useState('')
 
@@ -40,7 +41,7 @@ export function useStudioConnections(options: { image?: boolean } = {}) {
     void load().catch(() => {})
     const stop = window.electronAPI.onLlmConnectionsChanged(() => { void load().catch(() => {}) })
     return () => { alive = false; stop() }
-  }, [options.image, workspaceDefaultLlmConnection])
+  }, [options.image, options.assistant, workspaceDefaultLlmConnection])
 
   const connection = useMemo(() => connections.find(item => item.slug === connectionSlug), [connections, connectionSlug])
   const groups = useMemo(() => connection && options.image ? imageGroups(connection) : [], [connection, options.image])
@@ -61,7 +62,7 @@ export function useStudioConnections(options: { image?: boolean } = {}) {
     setConnectionSlug(slug)
     setChannelGroup('')
     setModel('')
-    const key = options.image ? IMAGE_CONNECTION_KEY : MINDMAP_CONNECTION_KEY
+    const key = options.image ? IMAGE_CONNECTION_KEY : options.assistant ? CANVAS_ASSISTANT_CONNECTION_KEY : MINDMAP_CONNECTION_KEY
     if (slug) localStorage.setItem(key, slug)
     else localStorage.removeItem(key)
   }

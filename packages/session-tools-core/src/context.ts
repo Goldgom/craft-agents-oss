@@ -209,6 +209,9 @@ export interface SessionToolContext {
    */
   runLocalShellFn?: (args: import('./shell.ts').ShellExecArgs) => Promise<import('./shell.ts').ShellExecResult>;
 
+  /** Invoke the desktop canvas editor that owns the Studio IndexedDB projects. */
+  canvasToolFn?: (args: Record<string, unknown>) => Promise<unknown>;
+
   /** Transfer files through the connected desktop client's configured SFTP profile. */
   transferSftpFileFn?: (args: SftpTransferArgs) => Promise<SftpTransferResult>;
 

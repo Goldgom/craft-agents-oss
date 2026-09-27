@@ -2,8 +2,8 @@
  * Auto-update module using electron-updater
  *
  * Handles checking for updates, downloading, and installing via the standard
- * electron-updater library. Updates are served from https://openai.goldgom.top/tokenbird/electron/latest
- * using the generic provider (YAML manifests + binaries on R2/S3).
+ * electron-updater library. On Windows the latest GitCode Release supplies
+ * latest.yml and the NSIS installer. Other platforms retain their configured feed.
  *
  * Platform behavior:
  * - macOS: Downloads zip, extracts and swaps app bundle atomically
@@ -28,6 +28,7 @@ import {
 import { readJsonFileSync } from '@craft-agent/shared/utils/files'
 import { RPC_CHANNELS, type UpdateInfo } from '../shared/types'
 import type { EventSink } from '@craft-agent/server-core/transport'
+import { getGitCodeUpdateFeed } from './gitcode-release'
 
 // Platform detection
 const PLATFORM = platform()
@@ -157,8 +158,8 @@ function broadcastDownloadProgress(progress: number): void {
 // Auto-download updates in the background after detection
 autoUpdater.autoDownload = true
 
-// Install on app quit (if update is downloaded but user hasn't clicked "Restart")
-autoUpdater.autoInstallOnAppQuit = true
+// Windows installation is an explicit user action from the update prompt or settings.
+autoUpdater.autoInstallOnAppQuit = !IS_WINDOWS
 
 // Use the logger for electron-updater internal logging
 autoUpdater.logger = {
@@ -179,7 +180,7 @@ autoUpdater.on('update-available', (info) => {
 
   // First, check electron-updater's internal state (most reliable)
   const internalState = checkElectronUpdaterState()
-  if (internalState.ready) {
+  if (internalState.ready && internalState.version === info.version) {
     mainLog.info(`[auto-update] electron-updater reports download ready`)
     updateInfo = {
       ...updateInfo,
@@ -193,7 +194,7 @@ autoUpdater.on('update-available', (info) => {
   }
 
   // Fallback: check if file exists in cache directory
-  const existing = checkForExistingDownload()
+  const existing = checkForExistingDownload(info.version)
   if (existing.exists) {
     mainLog.info(`[auto-update] Update already downloaded (file check), setting state to ready`)
     updateInfo = {
@@ -301,7 +302,7 @@ interface CheckOptions {
  * Check if a downloaded update already exists in the cache directory.
  * This helps detect updates that were downloaded in a previous session.
  */
-function checkForExistingDownload(): { exists: boolean; version?: string } {
+function checkForExistingDownload(expectedVersion: string): { exists: boolean; version?: string } {
   try {
     const cacheDir = getUpdateCacheDir()
     mainLog.info(`[auto-update] Checking cache directory: ${cacheDir}`)
@@ -323,23 +324,10 @@ function checkForExistingDownload(): { exists: boolean; version?: string } {
 
       // electron-updater uses 'fileName' (not 'path') in update-info.json
       const fileName = (info?.fileName || info?.path) as string | undefined
-      if (fileName && fs.existsSync(path.join(cacheDir, fileName))) {
+      if (info?.version === expectedVersion && fileName && fs.existsSync(path.join(cacheDir, fileName))) {
         mainLog.info(`[auto-update] Found existing download via update-info.json: ${fileName}`)
         return { exists: true, version: info?.version as string }
       }
-    }
-
-    // Fallback: check for any installer/zip/dmg file
-    const downloadFile = files.find(f =>
-      f.endsWith('.zip') ||
-      f.endsWith('.exe') ||
-      f.endsWith('.AppImage') ||
-      f.endsWith('.dmg') ||
-      f.endsWith('.nupkg')
-    )
-    if (downloadFile) {
-      mainLog.info(`[auto-update] Found existing download file: ${downloadFile}`)
-      return { exists: true }
     }
 
     mainLog.info(`[auto-update] No existing download found in cache`)
@@ -356,7 +344,17 @@ function checkForExistingDownload(): { exists: boolean; version?: string } {
  *
  * @param options.autoDownload - If false, only checks without downloading (for manual "Check Now")
  */
-export async function checkForUpdates(options: CheckOptions = {}): Promise<UpdateInfo> {
+let activeCheck: Promise<UpdateInfo> | null = null
+
+export function checkForUpdates(options: CheckOptions = {}): Promise<UpdateInfo> {
+  if (activeCheck) return activeCheck
+  const check = performUpdateCheck(options)
+  activeCheck = check
+  void check.finally(() => { if (activeCheck === check) activeCheck = null })
+  return check
+}
+
+async function performUpdateCheck(options: CheckOptions): Promise<UpdateInfo> {
   const { autoDownload = true } = options
 
   // Temporarily override autoDownload for this check if needed
@@ -365,6 +363,24 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
   autoUpdater.autoDownload = autoDownload
 
   try {
+    if (IS_WINDOWS && app.isPackaged) {
+      const release = await getGitCodeUpdateFeed(updateInfo.currentVersion)
+      if (!release.feedUrl) {
+        updateInfo = {
+          ...updateInfo,
+          available: false,
+          latestVersion: release.version,
+          downloadState: 'idle',
+          downloadProgress: 0,
+          error: undefined,
+        }
+        broadcastUpdateInfo()
+        return getUpdateInfo()
+      }
+      autoUpdater.setFeedURL({ provider: 'generic', url: release.feedUrl })
+      mainLog.info(`[auto-update] GitCode release feed: ${release.feedUrl}`)
+    }
+
     // Check for updates - this returns a promise that resolves with the check result
     const result = await autoUpdater.checkForUpdates()
 
@@ -376,7 +392,7 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
 
       // Double-check: if we're still showing 'downloading' but file exists, update state
       if (updateInfo.downloadState === 'downloading') {
-        const existing = checkForExistingDownload()
+        const existing = checkForExistingDownload(updateInfo.latestVersion ?? '')
         if (existing.exists) {
           mainLog.info('[auto-update] Update already downloaded, updating state to ready')
           updateInfo = {
@@ -395,6 +411,7 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
       downloadState: 'error',
       error: error instanceof Error ? error.message : 'Check failed',
     }
+    broadcastUpdateInfo()
   } finally {
     // Restore previous autoDownload setting
     autoUpdater.autoDownload = previousAutoDownload

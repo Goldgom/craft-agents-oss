@@ -224,6 +224,7 @@ export {
   SubmitPlanSchema,
   ConfigValidateSchema,
   SkillValidateSchema,
+  CanvasToolSchema,
   MermaidValidateSchema,
   SourceTestSchema,
   SourceOAuthTriggerSchema,

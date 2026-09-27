@@ -248,6 +248,7 @@ export const RPC_CHANNELS = {
   },
   studio: {
     GENERATE_IMAGE: 'studio:generateImage',
+    ASSIST_CANVAS: 'studio:assistCanvas',
     GENERATE_MIND_MAP: 'studio:generateMindMap',
     EXPORT_VISIO: 'studio:exportVisio',
   },

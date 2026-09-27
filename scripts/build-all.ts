@@ -2,12 +2,15 @@
 /** Build every supported distribution and collect the results under dist/. */
 
 import { existsSync, cpSync, mkdirSync, readdirSync, rmSync } from 'fs';
-import { join, resolve } from 'path';
+import { isAbsolute, join, relative, resolve } from 'path';
 import { spawn, spawnSync } from 'child_process';
 
 const root = resolve(import.meta.dir, '..');
 const dist = join(root, 'dist');
-const staging = join(root, '.build-all');
+// Each invocation gets fresh headless output. Old staging files can be held open
+// by Windows antivirus or Explorer, so a new build must not depend on deleting them.
+const stagingRelative = `.build-all/runs/${Date.now()}-${process.pid}`;
+const staging = join(root, stagingRelative);
 const allTargets = ['win', 'linux', 'android', 'linux-headless', 'win-headless', 'mac-headless'] as const;
 type Target = typeof allTargets[number];
 
@@ -71,7 +74,21 @@ async function buildDesktop(target: 'win' | 'linux'): Promise<void> {
     }
     await run('bash', ['apps/electron/scripts/build-linux.sh', process.arch === 'arm64' ? 'arm64' : 'x64']);
   }
+  const unpackedResources = join(root, 'apps', 'electron', 'release', target === 'win' ? 'win-unpacked' : 'linux-unpacked', 'resources');
+  for (const worker of ['messaging-whatsapp-worker', 'messaging-qqbot-worker']) {
+    const workerPath = join(unpackedResources, worker, 'worker.cjs');
+    if (!existsSync(workerPath)) throw new Error(`Packaged worker missing: ${workerPath}`);
+  }
   collectRelease(target);
+}
+
+function removeTargetOutput(target: Target): void {
+  const destination = resolve(dist, target);
+  const relativeToDist = relative(dist, destination);
+  if (!relativeToDist || relativeToDist.startsWith('..') || isAbsolute(relativeToDist)) {
+    throw new Error(`Refusing to remove output outside dist: ${destination}`);
+  }
+  rmSync(destination, { recursive: true, force: true, maxRetries: 8, retryDelay: 500 });
 }
 
 async function buildHeadless(target: 'linux-headless' | 'win-headless' | 'mac-headless'): Promise<void> {
@@ -79,18 +96,21 @@ async function buildHeadless(target: 'linux-headless' | 'win-headless' | 'mac-he
   const output = join(staging, target);
   // build-server resolves --output relative to the repository root. Passing an
   // absolute Windows path would make it concatenate root + absolute path.
-  const relativeOutput = `.build-all/${target}`;
+  const relativeOutput = `${stagingRelative}/${target}`;
   await run('bun', ['run', 'scripts/build-server.ts', `--platform=${platform}`, '--arch=x64', `--output=${relativeOutput}`, '--compress']);
   const destination = join(dist, target);
   mkdirSync(destination, { recursive: true });
-  cpSync(output, join(destination, 'server'), { recursive: true });
+  // Copy over the previous unpacked tree: Windows can keep old files open for a
+  // long time, while the archive beside it is always built from fresh staging.
+  // Materialize workspace symlinks so the copy needs no symlink privileges.
+  cpSync(output, join(destination, 'server'), { recursive: true, dereference: true });
   const archive = readdirSync(staging).find((file) => file.startsWith(`tokenbird-server-`) && file.includes(`-${platform}-x64`) && file.endsWith('.tar.gz'));
   if (archive) cpSync(join(staging, archive), join(destination, archive));
 }
 
 async function main(): Promise<void> {
-  rmSync(staging, { recursive: true, force: true });
-  rmSync(dist, { recursive: true, force: true });
+  // Keep other targets intact. Full builds also skip targets unsupported on this
+  // host, so deleting all of dist would erase artifacts built elsewhere.
   mkdirSync(dist, { recursive: true });
 
   const built: Target[] = [];
@@ -102,6 +122,7 @@ async function main(): Promise<void> {
       skipped.push({ target, reason });
       continue;
     }
+    if (!target.endsWith('-headless')) removeTargetOutput(target);
     if (target === 'win' || target === 'linux') await buildDesktop(target);
     else if (target === 'android') {
       const androidArgs = ['-ExecutionPolicy', 'Bypass', '-File', 'apps/android/build.ps1'];

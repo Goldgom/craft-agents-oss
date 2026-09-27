@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { Check, FileImage, GitBranch, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   activeStudioSessionId, deleteStudioSession, listStudioSessions, loadStudioSession,
-  putStudioSession, saveStudioSessionData, setActiveStudioSessionId, updateStudioSessionMeta,
+  moveMindMapSessionToDirectory, putStudioSession, saveStudioSessionData, setActiveStudioSessionId, updateStudioSessionMeta,
   type StudioSessionMeta, type StudioSessionMode,
 } from './studio-sessions'
 
@@ -10,6 +11,10 @@ export type StudioSessionEditorProps = {
   session: StudioSessionMeta & { data: string }
   onSave: (data: string) => Promise<void>
   createSession: () => Promise<void>
+  bindWorkDirectory: () => Promise<void>
+  selectSession: (id: string) => Promise<void>
+  renameSession: (id: string, title: string) => Promise<void>
+  deleteSession: (id: string, confirmed?: boolean) => Promise<void>
   flushRef: MutableRefObject<(() => Promise<void>) | null>
   setLocked: (locked: boolean) => void
   suggestTitle: (title: string) => void
@@ -28,6 +33,9 @@ export function StudioSessionWorkspace({ mode, children }: {
   const [editing, setEditing] = useState('')
   const [draft, setDraft] = useState('')
   const [collapsed, setCollapsed] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [workDirectory, setWorkDirectory] = useState('')
+  const createResolve = useRef<(() => void) | null>(null)
   const flushRef = useRef<(() => Promise<void>) | null>(null)
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions
   const defaultTitle = mode === 'canvas' ? '未命名画布' : '未命名导图'
@@ -38,6 +46,7 @@ export function StudioSessionWorkspace({ mode, children }: {
       const items = await listStudioSessions(mode)
       if (!alive) return
       if (!items.length) {
+        if (mode === 'mindmap') { setSessions([]); setCurrent(null); return }
         const meta = { id: `studio-${mode}-first`, mode, title: defaultTitle, updatedAt: Date.now() }
         await putStudioSession(meta, '')
         if (!alive) return
@@ -76,16 +85,38 @@ export function StudioSessionWorkspace({ mode, children }: {
     } catch (cause) { setError(`切换会话失败：${String(cause)}`) }
   }
 
-  async function create() {
+  async function finishCreate(workspaceDir?: string) {
     if (locked) return
     try {
       setError(''); await flush()
-      const meta = { id: crypto.randomUUID(), mode, title: defaultTitle, updatedAt: Date.now() }
+      const meta: StudioSessionMeta = { id: crypto.randomUUID(), mode, title: defaultTitle, updatedAt: Date.now(), ...(workspaceDir ? { workspaceDir } : {}) }
       await putStudioSession(meta, '')
       flushRef.current = null
       setSessions(items => [meta, ...items]); setCurrent({ ...meta, data: '' }); setActiveStudioSessionId(mode, meta.id)
+      setCreating(false); createResolve.current?.(); createResolve.current = null
     } catch (cause) { setError(`新建会话失败：${String(cause)}`) }
   }
+  async function create() {
+    if (locked) return
+    if (mode === 'canvas') return finishCreate()
+    if (creating) return
+    setWorkDirectory(current?.workspaceDir ?? '')
+    setCreating(true)
+    return new Promise<void>(resolve => { createResolve.current = resolve })
+  }
+  async function bindWorkDirectory() {
+    if (locked || !current || current.mode !== 'mindmap' || current.workspaceDir) return
+    try {
+      const directory = await window.electronAPI.pickStudioMindMapDirectory()
+      if (!directory) return
+      await flush()
+      const next = await moveMindMapSessionToDirectory(current, directory)
+      setSessions(items => items.map(item => item.id === next.id ? next : item))
+      setCurrent(item => item ? { ...item, ...next } : item)
+      setError('')
+    } catch (cause) { setError(`设置工作目录失败：${String(cause)}`) }
+  }
+  function cancelCreate() { setCreating(false); createResolve.current?.(); createResolve.current = null }
 
   async function rename(id: string, title: string) {
     const meta = sessions.find(item => item.id === id)
@@ -100,8 +131,8 @@ export function StudioSessionWorkspace({ mode, children }: {
     } catch (cause) { setError(`重命名失败：${String(cause)}`) }
   }
 
-  async function remove(id: string) {
-    if (locked || !window.confirm('删除这个会话及其中的内容？此操作无法撤销。')) return
+  async function remove(id: string, confirmed = false) {
+    if (locked || (!confirmed && !window.confirm('删除这个会话及其中的内容？此操作无法撤销。'))) return
     try {
       setError('')
       if (id === current?.id) await flush()
@@ -116,6 +147,10 @@ export function StudioSessionWorkspace({ mode, children }: {
           setCurrent({ ...next, data }); setActiveStudioSessionId(mode, next.id)
         }
       } else {
+        if (mode === 'mindmap') {
+          setSessions([]); setCurrent(null); flushRef.current = null
+          return
+        }
         const meta = { id: crypto.randomUUID(), mode, title: defaultTitle, updatedAt: Date.now() }
         await putStudioSession(meta, '')
         flushRef.current = null
@@ -146,6 +181,13 @@ export function StudioSessionWorkspace({ mode, children }: {
       {error && <div role="alert" className="border-t border-border px-3 py-2 text-xs text-destructive">{error}</div>}
       </>}
     </aside>
-    <div className="min-w-0 flex-1">{current ? children({ session: current, onSave: save, createSession: create, flushRef, setLocked, suggestTitle }) : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{loading ? '正在加载会话…' : '无法打开会话'}</div>}</div>
+    <div className="min-w-0 flex-1">{current ? children({ session: current, onSave: save, createSession: create, bindWorkDirectory, selectSession: select, renameSession: rename, deleteSession: remove, flushRef, setLocked, suggestTitle }) : <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">{loading ? '正在加载会话…' : mode === 'mindmap' ? <><span>选择工作目录后创建思维导图</span><button className="rounded-md bg-primary px-3 py-2 text-primary-foreground" onClick={() => void create()}>新建思维导图</button></> : '无法打开会话'}</div>}</div>
+    <Dialog open={creating} onOpenChange={open => { if (!open) cancelCreate() }}>
+      <DialogContent><DialogHeader><DialogTitle>选择思维导图工作目录</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">AI 会读取当前目录中可读取的部分文本文件（最多 30 个、总计约 30 KB），并根据这些内容分析和修改思维导图。导图会话内容保存在该目录的 .tokenbird/mindmaps 中。</p>
+        <button type="button" className="min-h-10 rounded-md border border-border px-3 text-left text-sm hover:bg-accent" onClick={async () => { try { const selected = await window.electronAPI.pickStudioMindMapDirectory(workDirectory || undefined); if (selected) setWorkDirectory(selected) } catch (cause) { setError(String(cause)) } }}>{workDirectory || '点击选择目录…'}</button>
+        <div className="flex justify-end gap-2"><button className="rounded-md px-3 py-2 text-sm hover:bg-accent" onClick={cancelCreate}>取消</button><button disabled={!workDirectory} className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40" onClick={() => void finishCreate(workDirectory)}>创建</button></div>
+      </DialogContent>
+    </Dialog>
   </div>
 }

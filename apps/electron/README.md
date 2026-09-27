@@ -169,6 +169,12 @@ bun run electron:build:resources # Copy icons
 bun run electron:build           # All of the above
 ```
 
+### Windows updates through GitCode
+
+Packaged Windows clients check `Goldgom/craft-agents-oss` on GitCode at startup and every six hours. The repository can be overridden with `TOKENBIRD_GITCODE_REPO=owner/repository` in the desktop process environment. A newer stable Release opens an update dialog, downloads the installer in the background, and installs it when the user clicks **Restart and update**. Closing the dialog remembers that version. **Check for updates** in Settings still checks the channel manually.
+
+For each Windows Release, build with `bun run dist:win` from `apps/electron`, then attach **both** `release/TokenBird-x64.exe` and `release/latest.yml` to the same GitCode Release. Its tag must match `apps/electron/package.json`'s version (for example `26.9.25`). Keep the names unchanged. `latest.yml` contains the installer checksum that `electron-updater` verifies before installing. Do not publish the Release as latest until both attachments are available.
+
 ## Brand Icons
 
 Run `bun run scripts/generate-brand-icons.ts` from the repository root after changing the transparent brand masters in `docs/branding`. The script regenerates the Electron PNG, Windows ICO, macOS ICNS, Android launcher icon, renderer assets, and WebUI favicons.

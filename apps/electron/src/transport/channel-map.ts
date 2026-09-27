@@ -429,6 +429,7 @@ export const CHANNEL_MAP = {
   // LLM Connections
   listLlmConnections: invoke(RPC_CHANNELS.llmConnections.LIST),
   generateStudioImage: invoke(RPC_CHANNELS.studio.GENERATE_IMAGE),
+  assistStudioCanvas: invoke(RPC_CHANNELS.studio.ASSIST_CANVAS),
   generateStudioMindMap: invoke(RPC_CHANNELS.studio.GENERATE_MIND_MAP),
   exportStudioVisio: invoke(RPC_CHANNELS.studio.EXPORT_VISIO),
   listLlmConnectionsWithStatus: invoke(RPC_CHANNELS.llmConnections.LIST_WITH_STATUS),

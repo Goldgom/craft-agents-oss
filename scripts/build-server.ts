@@ -46,6 +46,7 @@ import {
   writeFileSync,
   chmodSync,
   symlinkSync,
+  renameSync,
 } from 'fs';
 import { $ } from 'bun';
 import {
@@ -61,6 +62,7 @@ import {
   getBunDownloadName,
   getUvDownloadName,
 } from './build/common';
+import { createServerArchive } from './build/server-archive';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -555,6 +557,68 @@ function copyMinimalRuntimeDeps(config: ServerBuildConfig): void {
     copyDependencyTree(dep, rootDir, srcModules, destModules, copied);
   }
   console.log(`  Minimal runtime dependencies: ${copied.size} packages`);
+}
+
+/** Fetch native packages that Bun omits when assembling for another host OS. */
+async function ensureCrossPlatformNativeDeps(config: ServerBuildConfig): Promise<void> {
+  const { rootDir, outputDir, platform, arch } = config;
+  if (platform === process.platform && arch === process.arch) return;
+
+  const rootPackage = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
+  const sharpPackage = JSON.parse(readFileSync(join(rootDir, 'node_modules', 'sharp', 'package.json'), 'utf8'));
+  const nativeDeps = [
+    `@img/sharp-${platform}-${arch}`,
+    ...(platform === 'win32' ? [] : [`@img/sharp-libvips-${platform}-${arch}`]),
+    `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`,
+  ];
+  const destModules = join(outputDir, 'node_modules');
+  const cacheDir = join(rootDir, '.build', 'native-packages');
+  mkdirSync(cacheDir, { recursive: true });
+
+  for (const dep of nativeDeps) {
+    const destination = join(destModules, dep);
+    if (existsSync(destination)) continue;
+    const version = rootPackage.optionalDependencies?.[dep]
+      ?? sharpPackage.optionalDependencies?.[dep]
+      ?? (dep.startsWith('@anthropic-ai/') ? rootPackage.dependencies['@anthropic-ai/claude-agent-sdk'] : undefined);
+    if (!version) throw new Error(`No pinned version found for cross-platform dependency ${dep}`);
+
+    console.log(`  Fetching ${dep}@${version} for ${platform}-${arch}...`);
+    const packOutput = await $`npm pack ${`${dep}@${version}`} --json --pack-destination ${cacheDir}`.cwd(rootDir).text();
+    const [{ filename }] = JSON.parse(packOutput) as Array<{ filename: string }>;
+    mkdirSync(destination, { recursive: true });
+    await $`tar -xzf ${join(cacheDir, filename)} -C ${destination} --strip-components=1`;
+    if (!existsSync(join(destination, 'package.json'))) {
+      throw new Error(`Native package extraction failed: ${dep}`);
+    }
+  }
+
+  const ripgrepDir = join(destModules, '@vscode', 'ripgrep');
+  if (!existsSync(join(ripgrepDir, 'package.json'))) throw new Error('@vscode/ripgrep is missing from the server package');
+  const ripgrepTarget = platform === 'win32'
+    ? (arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc')
+    : platform === 'darwin'
+      ? (arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin')
+      : (arch === 'arm64' ? 'aarch64-unknown-linux-musl' : 'x86_64-unknown-linux-musl');
+  const ripgrepPostinstall = readFileSync(join(rootDir, 'node_modules', '@vscode', 'ripgrep', 'lib', 'postinstall.js'), 'utf8');
+  const ripgrepVersion = ripgrepPostinstall.match(/const VERSION = '([^']+)'/)?.[1];
+  if (!ripgrepVersion) throw new Error('Could not determine the pinned ripgrep binary version');
+  const archiveName = `ripgrep-${ripgrepVersion}-${ripgrepTarget}.${platform === 'win32' ? 'zip' : 'tar.gz'}`;
+  const archivePath = join(cacheDir, archiveName);
+  if (!existsSync(archivePath)) {
+    const url = `https://github.com/microsoft/ripgrep-prebuilt/releases/download/${ripgrepVersion}/${archiveName}`;
+    console.log(`  Fetching ripgrep for ${platform}-${arch}...`);
+    const downloadPath = `${archivePath}.download`;
+    rmSync(downloadPath, { force: true });
+    await $`curl -fL --retry 3 -o ${downloadPath} ${url}`;
+    renameSync(downloadPath, archivePath);
+  }
+  const ripgrepBin = join(ripgrepDir, 'bin');
+  rmSync(ripgrepBin, { recursive: true, force: true });
+  mkdirSync(ripgrepBin, { recursive: true });
+  await $`tar -xf ${archivePath} -C ${ripgrepBin}`;
+  const binary = join(ripgrepBin, platform === 'win32' ? 'rg.exe' : 'rg');
+  if (!existsSync(binary)) throw new Error(`Cross-platform ripgrep binary not found at ${binary}`);
 }
 
 function getDirSize(dir: string): number {
@@ -1101,6 +1165,7 @@ async function main(): Promise<void> {
   console.log('\n[6/8] Copying production dependencies...');
   if (minimal) copyMinimalRuntimeDeps(config);
   else copyProductionDeps(config);
+  await ensureCrossPlatformNativeDeps(config);
 
   // Step 7: Copy workspace packages
   console.log('\n[7/8] Copying workspace packages...');
@@ -1121,7 +1186,7 @@ async function main(): Promise<void> {
     const archiveName = `tokenbird-${minimal ? 'cli' : 'server'}-${version}-${platform}-${arch}.tar.gz`;
     const archivePath = join(dirname(outputDir), archiveName);
     console.log(`\nCompressing to ${archiveName}...`);
-    await $`tar -czf ${archivePath} -C ${outputDir} .`;
+    await createServerArchive(outputDir, archivePath, platform);
     const archiveSize = lstatSync(archivePath).size;
     console.log(`  Archive: ${(archiveSize / 1024 / 1024).toFixed(0)} MB`);
     console.log(`  Path: ${archivePath}`);

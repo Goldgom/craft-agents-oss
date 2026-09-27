@@ -17,6 +17,7 @@ import { WorkspacePicker } from '@/components/workspace'
 import ServerPickerPage from './pages/ServerPickerPage'
 import { ResetConfirmationDialog } from '@/components/ResetConfirmationDialog'
 import { DeleteSessionConfirmationDialog } from '@/components/DeleteSessionConfirmationDialog'
+import { UpdatePrompt } from '@/components/UpdatePrompt'
 import { SplashScreen } from '@/components/SplashScreen'
 import { GettingStartedGuide } from '@/components/GettingStartedGuide'
 import { TooltipProvider } from '@craft-agent/ui'
@@ -295,7 +296,7 @@ function SessionLoadErrorScreen({
 export default function App() {
   const { t } = useTranslation()
   const [studioMode, setStudioMode] = useState<'agent' | 'canvas' | 'mindmap'>('agent')
-  const [studioVisited, setStudioVisited] = useState({ canvas: false, mindmap: false })
+  const [studioVisited, setStudioVisited] = useState({ canvas: true, mindmap: false })
   const isAndroidEmbedded = useMemo(
     () => new URLSearchParams(window.location.search).get('embedded') === 'android',
     [],
@@ -439,7 +440,7 @@ export default function App() {
   }, [])
 
   // Auto-update state
-  const updateChecker = useUpdateChecker()
+  const updateChecker = useUpdateChecker(true)
 
   // Splash screen state - tracks when app is fully ready (all data loaded)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
@@ -2270,6 +2271,12 @@ export default function App() {
               sessionName={deleteSessionConfirmationName}
               onConfirm={() => resolveDeleteSessionConfirmation(true)}
               onCancel={() => resolveDeleteSessionConfirmation(false)}
+            />
+            <UpdatePrompt
+              info={updateChecker.updateInfo}
+              version={updateChecker.promptVersion}
+              onInstall={() => { void updateChecker.installUpdate() }}
+              onDismiss={() => { void updateChecker.dismissPrompt() }}
             />
           </div>
 

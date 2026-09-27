@@ -27,6 +27,8 @@ export const CLIENT_SAVE_FILE_DIALOG = 'client:saveFileDialog'
 
 /** Capability: drive a local `BrowserPaneManager` instance for a remote agent. */
 export const CLIENT_BROWSER_INVOKE = 'client:browser:invoke'
+/** Invoke the mounted canvas editor, whose projects live in client IndexedDB. */
+export const CLIENT_CANVAS_INVOKE = 'client:canvas:invoke'
 
 /**
  * Capability: run a shell command on the CLIENT machine on behalf of the
@@ -110,6 +112,7 @@ export const LOCAL_CLIENT_CAPABILITIES: readonly string[] = [
   CLIENT_OPEN_FILE_DIALOG,
   CLIENT_SAVE_FILE_DIALOG,
   CLIENT_BROWSER_INVOKE,
+  CLIENT_CANVAS_INVOKE,
   CLIENT_RUN_SHELL,
   CLIENT_SFTP_TRANSFER,
 ]

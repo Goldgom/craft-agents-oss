@@ -35,10 +35,35 @@ import { AppMenu } from "../AppMenu"
 
 const RIGHT_SLOT_FULL_BADGES_THRESHOLD = 420
 const RIGHT_SLOT_TWO_BADGES_THRESHOLD = 300
+type StudioMode = 'agent' | 'canvas' | 'mindmap'
+
+const STUDIO_MODES = [
+  { value: 'agent', label: '智能体', Icon: Icons.Bot },
+  { value: 'canvas', label: '绘画', Icon: Icons.Paintbrush },
+  { value: 'mindmap', label: '思维导图', Icon: Icons.Network },
+] as const
+
+function StudioModeSwitcher({ value, onChange, compact = false }: {
+  value: StudioMode
+  onChange: (mode: StudioMode) => void
+  compact?: boolean
+}) {
+  return <div role="group" aria-label="功能切换" className="titlebar-no-drag inline-flex h-9 shrink-0 items-center gap-0.5 rounded-xl border border-border/70 bg-muted/60 p-1">
+    {STUDIO_MODES.map(({ value: mode, label, Icon }) => {
+      const active = value === mode
+      return <button key={mode} type="button" aria-label={label} aria-pressed={active} title={label}
+        onClick={() => onChange(mode)}
+        className={cn('inline-flex h-7 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
+          active ? 'bg-background text-foreground shadow-xs ring-1 ring-border/70' : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+          compact && 'px-2')}
+      ><Icon className={cn('size-3.5 shrink-0', active && 'text-primary')} strokeWidth={1.8} /><span className={compact ? 'sr-only' : ''}>{label}</span></button>
+    })}
+  </div>
+}
 
 interface TopBarProps {
-  studioMode: 'agent' | 'canvas' | 'mindmap'
-  onStudioModeChange: (mode: 'agent' | 'canvas' | 'mindmap') => void
+  studioMode: StudioMode
+  onStudioModeChange: (mode: StudioMode) => void
   workspaces: Workspace[]
   activeWorkspaceId: string | null
   onSelectWorkspace: (workspaceId: string, openInNewWindow?: boolean) => void | Promise<void>
@@ -147,16 +172,8 @@ export function TopBar({
         style={{ height: 'var(--topbar-height)', paddingLeft: menuLeftPadding }}
       >
         <span className="text-sm font-semibold text-foreground">词元鸟</span>
-        <select
-          className="titlebar-no-drag rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
-          aria-label="功能切换"
-          value={studioMode}
-          onChange={event => onStudioModeChange(event.target.value as 'agent' | 'canvas' | 'mindmap')}
-        >
-          <option value="agent">Agent</option>
-          <option value="canvas">画布</option>
-          <option value="mindmap">思维导图</option>
-        </select>
+        <span className="h-5 w-px bg-border/80" />
+        <StudioModeSwitcher value={studioMode} onChange={onStudioModeChange} compact={isCompact} />
       </div>
     )
   }
@@ -202,16 +219,7 @@ export function TopBar({
         {/* Server switcher — 当前运行服务端 (本机服务器 / 远程服务) */}
         <ServerSwitcher />
 
-        <select
-          className="titlebar-no-drag ml-1 max-w-24 rounded-md border border-border bg-background px-1.5 py-1 text-xs text-foreground"
-          aria-label="功能切换"
-          value={studioMode}
-          onChange={event => onStudioModeChange(event.target.value as 'agent' | 'canvas' | 'mindmap')}
-        >
-          <option value="agent">Agent</option>
-          <option value="canvas">画布</option>
-          <option value="mindmap">思维导图</option>
-        </select>
+        <div className="ml-1"><StudioModeSwitcher value={studioMode} onChange={onStudioModeChange} compact={isCompact} /></div>
 
         {/* Back / Forward / Workspace selector (moved from center).
             In compact mode the back/forward buttons are dropped — the iOS-style

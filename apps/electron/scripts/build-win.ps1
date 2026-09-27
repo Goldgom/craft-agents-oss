@@ -254,6 +254,18 @@ foreach ($dep in @("interceptor-common.ts", "feature-flags.ts", "interceptor-req
     }
 }
 
+# Build the two worker subprocesses shipped through electron-builder extraResources.
+Write-Host "Building messaging workers..."
+Push-Location $RootDir
+try {
+    & bun run build:wa-worker
+    if ($LASTEXITCODE -ne 0) { throw "WhatsApp worker build failed" }
+    & bun run scripts/build-qqbot-worker.ts
+    if ($LASTEXITCODE -ne 0) { throw "QQ Bot worker build failed" }
+} finally {
+    Pop-Location
+}
+
 # 6. Build Electron app
 Write-Host "Building Electron app..."
 

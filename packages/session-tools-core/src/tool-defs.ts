@@ -58,6 +58,7 @@ import { handleCollaborationFile } from './handlers/collaboration-file.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel, handleSendMessagingMedia, handleSendMessagingTemplateCard } from './handlers/messaging.ts';
 import { handleExportResources } from './handlers/export-resources.ts';
 import { handleImportResources } from './handlers/import-resources.ts';
+import { handleCanvasTool } from './handlers/canvas-tool.ts';
 
 // ============================================================
 // Canonical Zod Schemas
@@ -75,6 +76,52 @@ export const ConfigValidateSchema = z.object({
 
 export const SkillValidateSchema = z.object({
   skillSlug: z.string().describe('The slug of the skill to validate'),
+});
+
+export const CanvasToolSchema = z.object({
+  action: z.enum([
+    'list_sessions', 'create_session', 'select_session', 'rename_session', 'delete_session', 'get_state',
+    'import_image', 'open_project', 'export_png', 'save_project', 'set_selection', 'clear_selection',
+    'add_layer', 'duplicate_layer', 'remove_layer', 'move_layer', 'set_layer', 'transform_layer', 'merge_down',
+    'paint', 'erase', 'extract_selection', 'clear_selection_pixels', 'cutout', 'adjust', 'set_parameters',
+    'generate', 'choose_candidate', 'download_candidate', 'dismiss_candidates',
+    'list_history', 'add_history', 'delete_history', 'download_history', 'reuse_prompt',
+    'ask_gpt', 'undo', 'redo', 'fit_view', 'zoom', 'set_view',
+  ]).describe('Canvas operation to perform'),
+  sessionId: z.string().optional().describe('Target drawing session ID; select it first when editing another session'),
+  title: z.string().optional().describe('Session title for rename'),
+  confirm: z.boolean().optional().describe('Required true for permanent session deletion'),
+  imagePath: z.string().optional().describe('Image path on the connected desktop client'),
+  imageBase64: z.string().optional().describe('PNG/JPEG/WebP image bytes as base64'),
+  projectPath: z.string().optional().describe('Canvas project path on the connected desktop client'),
+  outputPath: z.string().optional().describe('Where to save an exported PNG or .tbcanvas on the connected desktop client'),
+  layerId: z.string().optional(),
+  name: z.string().optional(),
+  visible: z.boolean().optional(),
+  opacity: z.number().min(0).max(100).optional().describe('Layer opacity percent'),
+  direction: z.enum(['up', 'down']).optional(),
+  transform: z.enum(['flip-x', 'flip-y', 'rotate']).optional(),
+  x: z.number().optional(), y: z.number().optional(), width: z.number().optional(), height: z.number().optional(),
+  toX: z.number().optional(), toY: z.number().optional(),
+  points: z.array(z.object({ x: z.number(), y: z.number() })).min(1).max(2000).optional().describe('Optional freehand stroke path in canvas coordinates'),
+  color: z.string().optional(), brush: z.number().min(1).max(160).optional(),
+  tolerance: z.number().min(0).max(100).optional(),
+  cut: z.boolean().optional(),
+  zoom: z.number().min(0.1).max(4).optional(),
+  prompt: z.string().optional(),
+  mode: z.enum(['generate', 'inpaint', 'outpaint', 'cutout']).optional(),
+  count: z.number().int().min(1).max(4).optional(),
+  connectionSlug: z.string().optional(), model: z.string().optional(), channelGroup: z.string().optional(),
+  assistantConnectionSlug: z.string().optional(), assistantModel: z.string().optional(),
+  question: z.string().optional().describe('Question for the GPT canvas assistant'),
+  candidateIndex: z.number().int().min(0).optional(), generationId: z.string().optional(),
+  limit: z.number().int().min(1).max(100).optional(), beforeCreatedAt: z.number().optional(), beforeId: z.string().optional(),
+  adjustments: z.object({
+    brightness: z.number().min(0).max(200).optional(), contrast: z.number().min(0).max(200).optional(),
+    saturation: z.number().min(0).max(200).optional(), hue: z.number().min(-180).max(180).optional(),
+    temperature: z.number().min(-100).max(100).optional(), blur: z.number().min(0).max(24).optional(),
+    style: z.enum(['none', 'grayscale', 'sepia', 'vintage', 'noir']).optional(),
+  }).optional(),
 });
 
 export const MermaidValidateSchema = z.object({
@@ -404,6 +451,7 @@ export const ImportResourcesSchema = z.object({
 // ============================================================
 
 export const TOOL_DESCRIPTIONS = {
+  canvas_tool: `Operate TokenBird drawing sessions through the connected desktop client. Start with list_sessions or get_state. Use sessionId to target a specific drawing session; select_session switches the editor to it. Supports session CRUD, importing images/projects, PNG/project export, selections, layers, painting/erasing, cutout, color/style/blur adjustments, AI image generation, GPT canvas questions, undo/redo and view controls. Image/project/output paths refer to the connected desktop machine. Destructive delete_session requires confirm=true. For AI generation, set image connection/model first with set_parameters; inpaint/outpaint require a selection.`,
   SubmitPlan: `Submit a plan for user review.
 
 Call this after you have written your plan to a markdown file using the Write tool.
@@ -840,6 +888,7 @@ export type SessionToolDef = RegistrySessionToolDef | BackendSessionToolDef;
 // ============================================================
 
 export const SESSION_TOOL_DEFS: SessionToolDef[] = [
+  { name: 'canvas_tool', description: TOOL_DESCRIPTIONS.canvas_tool, inputSchema: CanvasToolSchema, executionMode: 'registry', safeMode: 'allow', handler: handleCanvasTool },
   { name: 'SubmitPlan', description: TOOL_DESCRIPTIONS.SubmitPlan, inputSchema: SubmitPlanSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSubmitPlan },
   { name: 'config_validate', description: TOOL_DESCRIPTIONS.config_validate, inputSchema: ConfigValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleConfigValidate },
   { name: 'skill_validate', description: TOOL_DESCRIPTIONS.skill_validate, inputSchema: SkillValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleSkillValidate },

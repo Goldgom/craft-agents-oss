@@ -1,5 +1,5 @@
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
-import { CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
+import { CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_CANVAS_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
 import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
@@ -550,6 +550,7 @@ async function resolveToolDisplayMeta(
           'update_user_preferences': 'Update Preferences',
           'send_developer_feedback': 'Send Feedback',
           'browser_tool': 'Browser',
+          'canvas_tool': 'Canvas',
         },
       }
 
@@ -4716,6 +4717,13 @@ export class SessionManager implements ISessionManager {
 
       // Wire up session self-management tools (set_session_labels, set_session_status, etc.)
       mergeSessionScopedToolCallbacks(managed.id, {
+        canvasToolFn: async (args: Record<string, unknown>): Promise<unknown> => {
+          if (!this.rpcServer) throw new Error('Canvas requires a connected desktop client')
+          const candidates = this.rpcServer.findClientsWithCapability(CLIENT_CANVAS_INVOKE, { workspaceId: managed.workspace.id })
+          const clientId = candidates[0]
+          if (!clientId) throw new Error('No connected desktop client provides the canvas editor')
+          return await this.rpcServer.invokeClientWithTimeout!(clientId, CLIENT_CANVAS_INVOKE, 360_000, args)
+        },
         // localbash — execute a shell command on the CLIENT machine when one
         // is connected (remote mode). Falls back to this host (embedded/local
         // server shares the client's machine) so local sessions keep working.
