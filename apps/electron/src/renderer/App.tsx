@@ -17,6 +17,8 @@ import { WorkspacePicker } from '@/components/workspace'
 import ServerPickerPage from './pages/ServerPickerPage'
 import { ResetConfirmationDialog } from '@/components/ResetConfirmationDialog'
 import { DeleteSessionConfirmationDialog } from '@/components/DeleteSessionConfirmationDialog'
+import { TokenNestReauthDialog } from '@/components/TokenNestReauthDialog'
+import type { TokenNestAuthorizationIssue } from '@craft-agent/shared/auth'
 import { UpdatePrompt } from '@/components/UpdatePrompt'
 import { SplashScreen } from '@/components/SplashScreen'
 import { GettingStartedGuide } from '@/components/GettingStartedGuide'
@@ -414,6 +416,10 @@ export default function App() {
   const [appTheme, setAppTheme] = useState<ThemeOverrides | null>(null)
   // Reset confirmation dialog
   const [showResetDialog, setShowResetDialog] = useState(false)
+  const [tokenNestAuthIssues, setTokenNestAuthIssues] = useState<TokenNestAuthorizationIssue[]>([])
+  const [tokenNestSigningIn, setTokenNestSigningIn] = useState(false)
+  const [tokenNestSignInError, setTokenNestSignInError] = useState<string | null>(null)
+  const tokenNestAuthCheckedRef = useRef(false)
   // Promise-backed delete confirmation keeps the async session action API while
   // rendering an app-styled dialog in both Electron and the Web UI.
   const [deleteSessionConfirmationName, setDeleteSessionConfirmationName] = useState<string | null>(null)
@@ -774,6 +780,35 @@ export default function App() {
     }
   }, [resolveDefaultConnectionSlug, windowWorkspaceId])
 
+  const dismissTokenNestReauth = useCallback(() => {
+    if (tokenNestSigningIn) return
+    setTokenNestSignInError(null)
+    setTokenNestAuthIssues(issues => issues.slice(1))
+  }, [tokenNestSigningIn])
+
+  const signInToTokenNestAgain = useCallback(async () => {
+    const issue = tokenNestAuthIssues[0]
+    if (!issue || tokenNestSigningIn) return
+    setTokenNestSigningIn(true)
+    setTokenNestSignInError(null)
+    try {
+      const result = await window.electronAPI.startTokenNestOAuth(issue.connectionSlug)
+      if (!result.success) throw new Error(result.error || t('settings.ai.tokenNestSignInFailed'))
+      await refreshLlmConnections()
+      const updated = (await window.electronAPI.checkTokenNestAuth())
+        .find(item => item.connectionSlug === issue.connectionSlug)
+      setTokenNestAuthIssues(issues => issues.flatMap(item =>
+        item.connectionSlug === issue.connectionSlug ? (updated ? [updated] : []) : [item]
+      ))
+      if (updated) setTokenNestSignInError(t(updated.reason === 'expired'
+        ? 'dialog.tokenNestReauth.expired' : 'dialog.tokenNestReauth.missingScopes'))
+    } catch (error) {
+      setTokenNestSignInError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setTokenNestSigningIn(false)
+    }
+  }, [refreshLlmConnections, t, tokenNestAuthIssues, tokenNestSigningIn])
+
   // Handle onboarding completion
   const handleOnboardingComplete = useCallback(async () => {
     let nextWorkspaceId: string | null = null
@@ -871,6 +906,13 @@ export default function App() {
   // Load workspaces, sessions, model, notifications setting, and drafts when app is ready
   useEffect(() => {
     if (appState !== 'ready') return
+
+    if (!tokenNestAuthCheckedRef.current) {
+      tokenNestAuthCheckedRef.current = true
+      window.electronAPI.checkTokenNestAuth()
+        .then(setTokenNestAuthIssues)
+        .catch(error => rendererLog.warn('[App] TokenNest startup authorization check failed:', error))
+    }
 
     window.electronAPI.getWorkspaces().then(applyAndSetWorkspaces)
     window.electronAPI.getNotificationsEnabled().then(setNotificationsEnabled).catch(() => {})
@@ -2271,6 +2313,13 @@ export default function App() {
               sessionName={deleteSessionConfirmationName}
               onConfirm={() => resolveDeleteSessionConfirmation(true)}
               onCancel={() => resolveDeleteSessionConfirmation(false)}
+            />
+            <TokenNestReauthDialog
+              issue={tokenNestAuthIssues[0] ?? null}
+              signingIn={tokenNestSigningIn}
+              error={tokenNestSignInError}
+              onDismiss={dismissTokenNestReauth}
+              onSignIn={() => { void signInToTokenNestAgain() }}
             />
             <UpdatePrompt
               info={updateChecker.updateInfo}

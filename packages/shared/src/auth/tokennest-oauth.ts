@@ -68,7 +68,7 @@ export interface TokenNestUsageRecordsPage {
 }
 
 export class TokenNestRequestError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(message: string, public readonly status: number, public readonly code?: string) {
     super(message);
     this.name = 'TokenNestRequestError';
   }
@@ -92,7 +92,10 @@ async function tokenNestJson(accessToken: string, url: URL | string): Promise<Re
       : typeof root.message === 'string'
         ? root.message
         : typeof root.error === 'string' ? root.error : `HTTP ${response.status}`;
-    throw new TokenNestRequestError(`TokenNest request failed: ${detail.slice(0, 300)}`, response.status);
+    const code = typeof root.error === 'string' ? root.error
+      : root.error && typeof root.error === 'object' && 'code' in root.error && typeof root.error.code === 'string'
+        ? root.error.code : undefined;
+    throw new TokenNestRequestError(`TokenNest request failed: ${detail.slice(0, 300)}`, response.status, code);
   }
   const data = root.data;
   return data && typeof data === 'object' ? data as Record<string, unknown> : root;
@@ -169,8 +172,11 @@ export async function fetchTokenNestChannelGroups(accessToken: string): Promise<
     headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
   });
   if (response.status === 403) {
-    const payload = await response.json().catch(() => null) as { error?: string } | null;
-    if (payload?.error === 'insufficient_scope') throw new TokenNestGroupsScopeError();
+    const payload = await response.json().catch(() => null) as { error?: string | { code?: string } } | null;
+    if (payload?.error === 'insufficient_scope' ||
+      (typeof payload?.error === 'object' && payload.error?.code === 'insufficient_scope')) {
+      throw new TokenNestGroupsScopeError();
+    }
   }
     if (response.status === 404) return [];
     if (!response.ok) throw new TokenNestRequestError(`TokenNest group discovery failed (HTTP ${response.status})`, response.status);
@@ -276,7 +282,7 @@ async function requestTokens(params: URLSearchParams, operation: 'exchange' | 'r
     } catch {
       // Keep the provider response as a bounded diagnostic below.
     }
-    throw new Error(`TokenNest token ${operation} failed: ${response.status} - ${detail.slice(0, 300)}`);
+    throw new TokenNestRequestError(`TokenNest token ${operation} failed: ${response.status} - ${detail.slice(0, 300)}`, response.status);
   }
 
   const data = await response.json() as {
@@ -359,9 +365,85 @@ export async function getValidTokenNestCredentials(
       return latest;
     }
     const tokens = await refreshTokenNestTokens(latest.refreshToken);
-    await credentialManager.setLlmOAuth(connectionSlug, tokens);
-    return tokens;
+    const updated = { ...tokens, scope: tokens.scope || latest.scope };
+    await credentialManager.setLlmOAuth(connectionSlug, updated);
+    return updated;
   })().finally(() => credentialRefreshes.delete(connectionSlug));
   credentialRefreshes.set(connectionSlug, refresh);
   return refresh;
+}
+
+export type TokenNestAuthorizationIssue = {
+  connectionSlug: string;
+  reason: 'missing_scopes' | 'expired';
+  missingScopes?: string[];
+};
+
+/** Check a saved grant without treating temporary provider failures as a sign-in problem. */
+export async function checkTokenNestAuthorization(
+  connectionSlug: string,
+  credentialManager: CredentialManager,
+): Promise<TokenNestAuthorizationIssue | null> {
+  const saved = await credentialManager.getLlmOAuth(connectionSlug);
+  // A deliberately disconnected account is handled by normal connection setup.
+  if (!saved?.accessToken) return null;
+
+  const requiredScopes = TOKENNEST_OAUTH_CONFIG.scopes.split(/\s+/);
+  if (saved.scope) {
+    const granted = new Set(saved.scope.split(/\s+/));
+    const missingScopes = requiredScopes.filter(scope => !granted.has(scope));
+    if (missingScopes.length) return { connectionSlug, reason: 'missing_scopes', missingScopes };
+  }
+
+  try {
+    let credentials = await getValidTokenNestCredentials(connectionSlug, credentialManager);
+    if (!credentials) return { connectionSlug, reason: 'expired' };
+    const checkAccess = async (accessToken: string): Promise<TokenNestAuthorizationIssue | null> => {
+      try {
+        await fetchTokenNestChannelGroups(accessToken);
+      } catch (error) {
+        if (error instanceof TokenNestGroupsScopeError) throw error;
+        if (error instanceof TokenNestRequestError && error.status === 401) throw error;
+        // Other endpoint failures do not establish that the grant is incomplete.
+      }
+      const now = Date.now();
+      const capabilities = [
+        { url: TOKENNEST_OAUTH_CONFIG.balanceUrl, scope: 'balance:read' },
+        { url: new URL(`${TOKENNEST_OAUTH_CONFIG.usageSummaryUrl}?start_timestamp=${now - 86_400_000}&end_timestamp=${now}`), scope: 'usage:read' },
+      ];
+      for (const capability of capabilities) {
+        try {
+          await tokenNestJson(accessToken, capability.url);
+        } catch (error) {
+          if (error instanceof TokenNestRequestError && error.status === 403 && error.code === 'insufficient_scope') {
+            return { connectionSlug, reason: 'missing_scopes', missingScopes: [capability.scope] };
+          }
+          // Older TokenNest servers may not implement these optional endpoints.
+          if (error instanceof TokenNestRequestError && error.status === 404) continue;
+          if (error instanceof TokenNestRequestError && error.status === 401) throw error;
+          // Keep probing other capabilities after a temporary or unrelated error.
+        }
+      }
+      return null;
+    };
+    try {
+      return await checkAccess(credentials.accessToken);
+    } catch (error) {
+      if (!(error instanceof TokenNestRequestError) || error.status !== 401) throw error;
+      credentials = await getValidTokenNestCredentials(connectionSlug, credentialManager, true);
+      if (!credentials) return { connectionSlug, reason: 'expired' };
+      return await checkAccess(credentials.accessToken);
+    }
+  } catch (error) {
+    if (error instanceof TokenNestGroupsScopeError) {
+      return { connectionSlug, reason: 'missing_scopes', missingScopes: ['groups:read'] };
+    }
+    if (error instanceof TokenNestRequestError && (
+      error.status === 401 || (error.status === 400 && error.message.startsWith('TokenNest token refresh failed'))
+    )) {
+      return { connectionSlug, reason: 'expired' };
+    }
+    // Offline, server error, or a temporarily unavailable extension endpoint.
+    return null;
+  }
 }

@@ -263,6 +263,7 @@ export const RPC_CHANNELS = {
     START_OAUTH: 'tokennest:startOAuth',
     COMPLETE_OAUTH: 'tokennest:completeOAuth',
     CANCEL_OAUTH: 'tokennest:cancelOAuth',
+    CHECK_AUTH: 'tokennest:checkAuth',
     GET_USAGE: 'tokennest:getUsage',
   },
   copilot: {

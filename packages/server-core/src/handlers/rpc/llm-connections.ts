@@ -155,6 +155,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.tokennest.START_OAUTH,
   RPC_CHANNELS.tokennest.COMPLETE_OAUTH,
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
+  RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
@@ -973,6 +974,16 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // ============================================================
   // TokenNest OAuth (OpenAI-compatible API via public-client PKCE)
   // ============================================================
+
+  server.handle(RPC_CHANNELS.tokennest.CHECK_AUTH, async () => {
+    const { checkTokenNestAuthorization } = await import('@craft-agent/shared/auth')
+    const credentialManager = getCredentialManager()
+    const accounts = getLlmConnections().filter(connection => connection.oauthProvider === 'tokennest')
+    const results = await Promise.all(accounts.map(connection =>
+      checkTokenNestAuthorization(connection.slug, credentialManager)
+    ))
+    return results.filter((result): result is NonNullable<typeof result> => result !== null)
+  })
 
   interface PendingTokenNestFlow {
     flowId: string

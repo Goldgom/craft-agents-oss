@@ -528,6 +528,7 @@ export interface ElectronAPI {
 
   // TokenNest OAuth (PKCE through the user's system browser)
   startTokenNestOAuth(connectionSlug?: string): Promise<{ success: boolean; error?: string }>
+  checkTokenNestAuth(): Promise<import('@craft-agent/shared/auth').TokenNestAuthorizationIssue[]>
 
   // GitHub Copilot OAuth
   startCopilotOAuth(connectionSlug: string): Promise<{ success: boolean; error?: string }>

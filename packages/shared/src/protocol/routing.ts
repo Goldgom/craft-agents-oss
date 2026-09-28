@@ -375,6 +375,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.tokennest.START_OAUTH,
   RPC_CHANNELS.tokennest.COMPLETE_OAUTH,
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
+  RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
 
   // copilot — OAuth via capability passthrough

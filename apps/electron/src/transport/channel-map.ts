@@ -150,6 +150,7 @@ export const CHANNEL_MAP = {
 
   // TokenNest OAuth (desktop preload supplies the loopback callback URL)
   startTokenNestOAuth: invoke(RPC_CHANNELS.tokennest.START_OAUTH),
+  checkTokenNestAuth: invoke(RPC_CHANNELS.tokennest.CHECK_AUTH),
 
   // GitHub Copilot OAuth
   startCopilotOAuth: invoke(RPC_CHANNELS.copilot.START_OAUTH),

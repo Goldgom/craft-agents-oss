@@ -357,6 +357,7 @@ export class CredentialManager {
     accessToken: string;
     refreshToken?: string;
     expiresAt?: number;
+    scope?: string;
     /** OIDC id_token (used by OpenAI/Codex) */
     idToken?: string;
   } | null> {
@@ -366,6 +367,7 @@ export class CredentialManager {
       accessToken: cred.value,
       refreshToken: cred.refreshToken,
       expiresAt: cred.expiresAt,
+      scope: cred.scope,
       idToken: cred.idToken,
     };
   }
@@ -379,6 +381,7 @@ export class CredentialManager {
     accessToken: string;
     refreshToken?: string;
     expiresAt?: number;
+    scope?: string;
     /** OIDC id_token (used by OpenAI/Codex) */
     idToken?: string;
   }): Promise<void> {
@@ -386,6 +389,7 @@ export class CredentialManager {
       value: credentials.accessToken,
       refreshToken: credentials.refreshToken,
       expiresAt: credentials.expiresAt,
+      scope: credentials.scope,
       idToken: credentials.idToken,
     });
   }
