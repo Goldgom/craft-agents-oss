@@ -78,7 +78,7 @@ const ADAPTERS: Record<string, BalanceAdapter> = {
       return remaining === undefined ? null : {
         connectionSlug,
         remaining,
-        currency: 'USD',
+        currency: 'CNY',
         updatedAt,
       }
     },

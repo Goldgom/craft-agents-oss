@@ -1128,7 +1128,7 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
           onAddToCanvas={addGenerationToCanvas}
           onReusePrompt={value => { setTool('ai'); setPrompt(value); setNotice('已将历史提示词填入输入框') }} />}
         {tool === 'assist' && <StudioCanvasChat
-          sessionTitle={session.title} selectionLabel={selected && selection ? `附带选区 ${Math.round(selection.width)} × ${Math.round(selection.height)} px` : '附带当前画布预览'}
+          sessionTitle={session.title} selectionLabel={selected && selection ? `附带选区 ${Math.round(selection.width)} × ${Math.round(selection.height)} px` : contentBounds(layers) ? '附带当前画布预览' : '空白画布，可直接提问'}
           messages={assistantHistory} draft={assistantQuestion} onDraftChange={setAssistantQuestion}
           thinkingLevel={assistantThinking} onThinkingLevelChange={setAssistantThinking}
           mode={assistantMode} onModeChange={setAssistantMode}

@@ -159,6 +159,24 @@ bash scripts/build-dmg.sh arm64 --upload --latest
 ARM64 Linux 目前不是受支持的发布目标。使用 WSL2 时，建议把仓库 clone 到 WSL 的 Linux
 文件系统（例如 `~/src`），不要直接使用 Windows 的 `/mnt/c/...` 工作区。
 
+### 从 Windows 一键调用本机 WSL
+
+在 Windows PowerShell 的仓库根目录运行：
+
+```powershell
+bun run build:linux:wsl --check
+bun run build:linux:wsl
+```
+
+若默认 WSL 发行版不是用于构建的 Linux，可指定名称，例如
+`bun run build:linux:wsl --distro Ubuntu`。脚本会复制当前工作区（包括未提交的代码修改，
+不包括 `node_modules` 和旧产物）到 WSL 的 Linux 文件系统，在那里安装 Linux 依赖并构建，
+最后将 AppImage 复制到 Windows 仓库的 `dist/linux/TokenBird-x64.AppImage`，并更新
+`dist/SHA256SUMS.txt`。临时工作区在构建结束后清理。
+
+WSL 内需预先安装 Bun、Node.js/npm、curl、unzip 等工具；`--check` 可检查主要依赖。
+首次构建仍需访问 npm registry、GitHub 和 Electron 下载源，并为源码、依赖和打包过程预留磁盘空间。
+
 ### 全新拉取后的完整步骤
 
 ```bash

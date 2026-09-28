@@ -101,6 +101,7 @@
     "docs:preview": "cd apps/docs-site && bun run preview",
     "build": "bun run build:all",
     "build:all": "bun run scripts/build-all.ts",
+    "build:linux:wsl": "bun run scripts/build-linux-wsl.ts",
     "release": "bun run scripts/release.ts",
     "check-version": "bun run scripts/check-version.ts",
     "oss:sync": "bun run scripts/oss-sync.ts",

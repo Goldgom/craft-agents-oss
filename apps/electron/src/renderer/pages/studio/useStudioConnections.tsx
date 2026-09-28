@@ -28,9 +28,13 @@ export function useStudioConnections(options: { image?: boolean; assistant?: boo
         setConnections(items); setLoaded(true)
         if (!options.image) {
           setConnectionSlug(current => {
-            if (items.some(item => item.slug === current && supportsMindMap(item))) return current
             const compatible = items.filter(supportsMindMap)
-            return (compatible.find(item => item.slug === workspaceDefaultLlmConnection && mindMapTextModels(item).length)
+            if (compatible.some(item => item.slug === current && item.isAuthenticated && mindMapTextModels(item).length)) return current
+            return (compatible.find(item => item.slug === workspaceDefaultLlmConnection && item.isAuthenticated && mindMapTextModels(item).length)
+              ?? compatible.find(item => item.isDefault && item.isAuthenticated && mindMapTextModels(item).length)
+              ?? compatible.find(item => item.isAuthenticated && mindMapTextModels(item).length)
+              ?? compatible.find(item => item.slug === current)
+              ?? compatible.find(item => item.slug === workspaceDefaultLlmConnection && mindMapTextModels(item).length)
               ?? compatible.find(item => item.isDefault && mindMapTextModels(item).length)
               ?? compatible.find(item => mindMapTextModels(item).length)
               ?? compatible[0])?.slug ?? ''

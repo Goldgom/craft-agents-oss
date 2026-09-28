@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Download, History, ImagePlus, LoaderCircle, RotateCcw, Trash2 } from 'lucide-react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   deleteStudioGeneration, listStudioGenerations,
   type StudioGeneration,
@@ -47,6 +48,7 @@ export function StudioGenerationHistory({ revision, sessionId, disabled, onAddTo
   const [selectedId, setSelectedId] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const selected = records.find(record => record.id === selectedId) ?? records[0]
 
   useEffect(() => {
@@ -77,7 +79,6 @@ export function StudioGenerationHistory({ revision, sessionId, disabled, onAddTo
   }
 
   async function remove(record: StudioGeneration) {
-    if (!window.confirm('删除这条本地生成记录及图片？此操作无法撤销。')) return
     setBusy(true)
     try {
       await deleteStudioGeneration(record.id)
@@ -86,7 +87,7 @@ export function StudioGenerationHistory({ revision, sessionId, disabled, onAddTo
       setSelectedId(current => current === record.id || !remaining.some(item => item.id === current) ? remaining[0]?.id ?? '' : current)
       setError('')
     } catch (cause) { setError(`删除生成历史失败：${String(cause)}`) }
-    finally { setBusy(false) }
+    finally { setBusy(false); setPendingDeleteId(null) }
   }
 
   async function addToCanvas(record: StudioGeneration) {
@@ -122,10 +123,22 @@ export function StudioGenerationHistory({ revision, sessionId, disabled, onAddTo
           {selected ? <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
             <div className="flex min-h-48 flex-1 items-center justify-center overflow-hidden rounded-xl border border-border/70 bg-[linear-gradient(45deg,#e5e5e5_25%,transparent_25%),linear-gradient(-45deg,#e5e5e5_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#e5e5e5_75%),linear-gradient(-45deg,transparent_75%,#e5e5e5_75%)] bg-[length:20px_20px] bg-[position:0_0,0_10px,10px_-10px,-10px_0] dark:bg-muted/30"><GenerationImage record={selected} className="max-h-[48vh] max-w-full object-contain" /></div>
             <div className="space-y-1 text-xs"><p className="whitespace-pre-wrap break-words font-medium">{selected.prompt}</p><p className="text-muted-foreground">{kindName[selected.kind]} · {selected.model} · {selected.width} × {selected.height} · {time(selected.createdAt)}</p><p className="text-muted-foreground">{selected.connectionName}{selected.channelGroup ? ` · ${selected.channelGroup}` : ''} · {selected.sessionId === sessionId ? '当前画布' : selected.sessionTitle}</p></div>
-            <div className="flex flex-wrap gap-2 border-t border-border/70 pt-3"><button className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50" disabled={busy || disabled} onClick={() => void addToCanvas(selected)}><ImagePlus className="size-3.5" />导入完整图片为新图层</button><button className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs hover:bg-accent" onClick={() => { onReusePrompt(selected.prompt); setOpen(false) }}><RotateCcw className="size-3.5" />复用提示词</button><button className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs hover:bg-accent" onClick={() => download(selected)}><Download className="size-3.5" />下载 PNG</button><button className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg border border-destructive/30 px-3 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50" disabled={busy || loadingMore} onClick={() => void remove(selected)}><Trash2 className="size-3.5" />删除</button></div>
+            <div className="flex flex-wrap gap-2 border-t border-border/70 pt-3"><button className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50" disabled={busy || disabled} onClick={() => void addToCanvas(selected)}><ImagePlus className="size-3.5" />导入完整图片为新图层</button><button className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs hover:bg-accent" onClick={() => { onReusePrompt(selected.prompt); setOpen(false) }}><RotateCcw className="size-3.5" />复用提示词</button><button className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs hover:bg-accent" onClick={() => download(selected)}><Download className="size-3.5" />下载 PNG</button><button className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg border border-destructive/30 px-3 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50" disabled={busy || loadingMore} onClick={() => setPendingDeleteId(selected.id)}><Trash2 className="size-3.5" />删除</button></div>
           </div> : <div className="flex items-center justify-center text-xs text-muted-foreground">暂无生成记录</div>}
         </div>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      </DialogContent>
+    </Dialog>
+    <Dialog open={pendingDeleteId !== null} onOpenChange={nextOpen => { if (!nextOpen && !busy) setPendingDeleteId(null) }}>
+      <DialogContent className="sm:max-w-md" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>删除生成记录</DialogTitle>
+          <DialogDescription>确定删除这条本地生成记录及图片吗？此操作无法撤销。</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={() => setPendingDeleteId(null)}>取消</Button>
+          <Button variant="destructive" disabled={busy} onClick={() => { const record = records.find(item => item.id === pendingDeleteId); if (record) void remove(record) }}>{busy ? '删除中…' : '删除'}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   </>

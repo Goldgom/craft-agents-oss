@@ -58,7 +58,7 @@ describe('API balance providers', () => {
     expect(supportsApiBalance(connection({ piAuthProvider: 'anthropic' }))).toBe(false)
   })
 
-  test('reads TokenNest OAuth balance in USD', async () => {
+  test('reads TokenNest OAuth balance in CNY', async () => {
     let endpoint = ''
     globalThis.fetch = (async (input: string | URL | Request) => {
       endpoint = String(input)
@@ -67,7 +67,7 @@ describe('API balance providers', () => {
 
     await expect(fetchApiBalance(connection({ authType: 'oauth', oauthProvider: 'tokennest' }), 'oauth-token')).resolves.toMatchObject({
       remaining: 5,
-      currency: 'USD',
+      currency: 'CNY',
     })
     expect(endpoint).toBe('https://openai.goldgom.top/api/oauth2/balance')
   })

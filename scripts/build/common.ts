@@ -29,6 +29,8 @@ export interface BuildConfig {
   uploadScript: boolean;
   rootDir: string;
   electronDir: string;
+  /** Optional platform-specific Bun cache used by cross-platform server builds. */
+  bunVendorDir?: string;
 }
 
 /**
@@ -178,7 +180,7 @@ export function githubUrl(url: string): string {
 export async function downloadBun(config: BuildConfig): Promise<void> {
   const { platform, arch, electronDir } = config;
   const bunDownload = getBunDownloadName(platform, arch);
-  const vendorDir = join(electronDir, 'vendor', 'bun');
+  const vendorDir = config.bunVendorDir ?? join(electronDir, 'vendor', 'bun');
   const bunBinary = platform === 'win32' ? 'bun.exe' : 'bun';
 
   // Skip when already provisioned (offline builds: pre-seed + --skip-download)

@@ -278,7 +278,8 @@ async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
   const runtimeDir = join(outputDir, 'vendor', 'bun');
   const bunName = platform === 'win32' ? 'bun.exe' : 'bun';
   const bunDest = join(runtimeDir, bunName);
-  const electronBunPath = join(config.electronDir, 'vendor', 'bun', bunName);
+  const bunVendorDir = join(config.electronDir, 'vendor', 'server-bun', `${platform}-${arch}`);
+  const electronBunPath = join(bunVendorDir, bunName);
 
   if (skipDownload) {
     // --skip-download is authoritative: never hit the network.
@@ -302,6 +303,7 @@ async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
       uploadScript: false,
       rootDir: config.rootDir,
       electronDir: config.electronDir,
+      bunVendorDir,
     };
     await downloadBun(buildConfig);
   }
@@ -309,6 +311,11 @@ async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
   if (!existsSync(electronBunPath)) {
     throw new Error(`Bun binary not found after download at ${electronBunPath}`);
   }
+  const header = Buffer.from(await Bun.file(electronBunPath).slice(0, 4).arrayBuffer());
+  const validHeader = platform === 'win32' ? header[0] === 0x4d && header[1] === 0x5a
+    : platform === 'linux' ? header[0] === 0x7f && header.toString('ascii', 1) === 'ELF'
+      : ['cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'].includes(header.toString('hex'));
+  if (!validHeader) throw new Error(`Cached Bun runtime does not match ${platform}-${arch}: ${electronBunPath}`);
 
   mkdirSync(runtimeDir, { recursive: true });
   copyFileSync(electronBunPath, bunDest);

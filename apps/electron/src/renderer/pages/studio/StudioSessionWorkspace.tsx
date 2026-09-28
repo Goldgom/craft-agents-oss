@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { Check, FileImage, GitBranch, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { DeleteSessionConfirmationDialog } from '@/components/DeleteSessionConfirmationDialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   activeStudioSessionId, deleteStudioSession, listStudioSessions, loadStudioSession,
@@ -35,6 +36,7 @@ export function StudioSessionWorkspace({ mode, children }: {
   const [collapsed, setCollapsed] = useState(false)
   const [creating, setCreating] = useState(false)
   const [workDirectory, setWorkDirectory] = useState('')
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const createResolve = useRef<(() => void) | null>(null)
   const flushRef = useRef<(() => Promise<void>) | null>(null)
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions
@@ -132,7 +134,8 @@ export function StudioSessionWorkspace({ mode, children }: {
   }
 
   async function remove(id: string, confirmed = false) {
-    if (locked || (!confirmed && !window.confirm('删除这个会话及其中的内容？此操作无法撤销。'))) return
+    if (locked) return
+    if (!confirmed) { setPendingDeleteId(id); return }
     try {
       setError('')
       if (id === current?.id) await flush()
@@ -182,6 +185,11 @@ export function StudioSessionWorkspace({ mode, children }: {
       </>}
     </aside>
     <div className="min-w-0 flex-1">{current ? children({ session: current, onSave: save, createSession: create, bindWorkDirectory, selectSession: select, renameSession: rename, deleteSession: remove, flushRef, setLocked, suggestTitle }) : <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">{loading ? '正在加载会话…' : mode === 'mindmap' ? <><span>选择工作目录后创建思维导图</span><button className="rounded-md bg-primary px-3 py-2 text-primary-foreground" onClick={() => void create()}>新建思维导图</button></> : '无法打开会话'}</div>}</div>
+    <DeleteSessionConfirmationDialog
+      sessionName={sessions.find(item => item.id === pendingDeleteId)?.title ?? null}
+      onCancel={() => setPendingDeleteId(null)}
+      onConfirm={() => { const id = pendingDeleteId; setPendingDeleteId(null); if (id) void remove(id, true) }}
+    />
     <Dialog open={creating} onOpenChange={open => { if (!open) cancelCreate() }}>
       <DialogContent><DialogHeader><DialogTitle>选择思维导图工作目录</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground">AI 会读取当前目录中可读取的部分文本文件（最多 30 个、总计约 30 KB），并根据这些内容分析和修改思维导图。导图会话内容保存在该目录的 .tokenbird/mindmaps 中。</p>

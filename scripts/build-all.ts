@@ -1,22 +1,25 @@
 #!/usr/bin/env bun
 /** Build every supported distribution and collect the results under dist/. */
 
-import { existsSync, cpSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { existsSync, cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { isAbsolute, join, relative, resolve } from 'path';
 import { spawn, spawnSync } from 'child_process';
+import { createHash } from 'crypto';
+import { createReadStream } from 'fs';
 
 const root = resolve(import.meta.dir, '..');
 const dist = join(root, 'dist');
 // Each invocation gets fresh headless output. Old staging files can be held open
 // by Windows antivirus or Explorer, so a new build must not depend on deleting them.
-const stagingRelative = `.build-all/runs/${Date.now()}-${process.pid}`;
+const runId = `${Date.now()}-${process.pid}`;
+const stagingRelative = `.build-all/runs/${runId}`;
 const staging = join(root, stagingRelative);
 const allTargets = ['win', 'linux', 'android', 'linux-headless', 'win-headless', 'mac-headless'] as const;
 type Target = typeof allTargets[number];
 
 const args = new Set(process.argv.slice(2));
 if (args.has('--help') || args.has('-h')) {
-  console.log('Usage: bun run build:all [targets...] [--release]');
+  console.log('Usage: bun run build:all [targets...] [--release] [--checksums-only]');
   console.log(`Targets: ${allTargets.join(', ')}`);
   process.exit(0);
 }
@@ -82,6 +85,27 @@ async function buildDesktop(target: 'win' | 'linux'): Promise<void> {
   collectRelease(target);
 }
 
+async function writeChecksums(): Promise<void> {
+  const artifacts: string[] = [];
+  for (const target of allTargets) {
+    const directory = join(dist, target);
+    if (!existsSync(directory)) continue;
+    for (const file of readdirSync(directory, { withFileTypes: true })) {
+      if (file.isFile() && /\.(?:exe|msi|AppImage|dmg|zip|apk|tar\.gz)$/i.test(file.name)) {
+        artifacts.push(`${target}/${file.name}`);
+      }
+    }
+  }
+  const lines: string[] = [];
+  for (const artifact of artifacts.sort()) {
+    const hash = createHash('sha256');
+    const stream = createReadStream(join(dist, artifact));
+    for await (const chunk of stream) hash.update(chunk);
+    lines.push(`${hash.digest('hex')}  ${artifact}`);
+  }
+  writeFileSync(join(dist, 'SHA256SUMS.txt'), `${lines.join('\n')}\n`);
+}
+
 function removeTargetOutput(target: Target): void {
   const destination = resolve(dist, target);
   const relativeToDist = relative(dist, destination);
@@ -100,12 +124,15 @@ async function buildHeadless(target: 'linux-headless' | 'win-headless' | 'mac-he
   await run('bun', ['run', 'scripts/build-server.ts', `--platform=${platform}`, '--arch=x64', `--output=${relativeOutput}`, '--compress']);
   const destination = join(dist, target);
   mkdirSync(destination, { recursive: true });
-  // Copy over the previous unpacked tree: Windows can keep old files open for a
-  // long time, while the archive beside it is always built from fresh staging.
-  // Materialize workspace symlinks so the copy needs no symlink privileges.
-  cpSync(output, join(destination, 'server'), { recursive: true, dereference: true });
+  // Use a fresh unpacked path for every run. Even copying over an existing tree
+  // can fail when Windows holds a single dependency file open.
+  const unpacked = `server-${runId}`;
+  cpSync(output, join(destination, unpacked), { recursive: true, dereference: true });
   const archive = readdirSync(staging).find((file) => file.startsWith(`tokenbird-server-`) && file.includes(`-${platform}-x64`) && file.endsWith('.tar.gz'));
-  if (archive) cpSync(join(staging, archive), join(destination, archive));
+  if (!archive) throw new Error(`Server archive missing for ${target}`);
+  const collectedArchive = `${runId}-${archive}`;
+  cpSync(join(staging, archive), join(destination, collectedArchive));
+  writeFileSync(join(destination, 'latest.json'), JSON.stringify({ archive: collectedArchive, unpacked }, null, 2) + '\n');
 }
 
 async function main(): Promise<void> {
@@ -132,9 +159,11 @@ async function main(): Promise<void> {
     } else await buildHeadless(target);
     built.push(target);
   }
+  await writeChecksums();
   console.log(`\nBuilds completed. Built: ${built.length ? built.join(', ') : 'none'}`);
   if (skipped.length) console.log(`Skipped: ${skipped.map(({ target }) => target).join(', ')}`);
   console.log(`Artifacts: ${dist}`);
 }
 
-main().catch((error) => { console.error(`\nBuild-all failed: ${error instanceof Error ? error.message : error}`); process.exit(1); });
+const task = args.has('--checksums-only') ? writeChecksums() : main();
+task.catch((error) => { console.error(`\nBuild-all failed: ${error instanceof Error ? error.message : error}`); process.exit(1); });
