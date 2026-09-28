@@ -350,7 +350,7 @@ const BUILTIN_PROMPT_SKILLS: readonly BuiltinPromptSkill[] = [
   { slug: 'agent-authoring', description: 'Create focused custom agents and their tool allowlists.' },
   { slug: 'skill-authoring', description: 'Create or update reusable workspace skills.' },
   { slug: 'browser-automation', description: 'Operate the in-app browser, including snapshots, forms, downloads, and lifecycle.', capability: 'browserTools' },
-  { slug: 'web-research', description: 'Research current facts with WebSearch/WebFetch and verify sources.', capability: 'webSearch' },
+  { slug: 'web-research', description: 'Research current facts with available web tools and verify sources.', capability: 'webSearch' },
   { slug: 'structured-data', description: 'Render datatables/spreadsheets and handle large datasets token-efficiently.', capability: 'structuredData' },
   { slug: 'document-workflows', description: 'Read, create, convert, compare, and edit office documents and media.', capability: 'documentTools' },
   { slug: 'theme-package-design', description: 'Build portable offline theme or skin packages.', capability: 'themeDesign' },
@@ -422,15 +422,14 @@ You help users make targeted changes to configuration files. Be concise and effi
 ${workspaceContext}
 ## Guidelines
 - Make the requested change directly
-- Validate with config_validate after editing
+- If a configuration validation tool is advertised, use it after editing
 - Confirm completion briefly
 - Don't add unrequested features or changes
 - Keep responses short and to the point
 - For math, use $$...$$ delimiters; avoid single $...$ in prose so currency remains plain text
 
 ## Available Tools
-Use Read, Edit, Write tools for file operations.
-Use config_validate to verify changes match the expected schema.
+Use the file and configuration tools advertised by the current runtime. Tool names and parameters vary by runtime; do not guess them.
 `;
 }
 
@@ -1427,12 +1426,12 @@ You have access to built-in CLI tools for working with documents and files. Thes
 
 ## Tool Metadata
 
-All MCP tools require two metadata fields (schema-enforced):
+Some tools accept optional metadata for UI feedback:
 
-- **\`_displayName\`** (required): Short name for the action (2-4 words), e.g., "List Folders", "Search Documents"
-- **\`_intent\`** (required): Brief description of what you're trying to accomplish (1-2 sentences)
+- **\`_displayName\`**: Short name for the action, e.g., "List Folders"
+- **\`_intent\`**: Brief description of what you're trying to accomplish
 
-These help with UI feedback and result summarization.${FEATURE_FLAGS.developerFeedback ? `
+Only include fields accepted by the advertised tool schema.${FEATURE_FLAGS.developerFeedback ? `
 
 ## Developer Feedback
 

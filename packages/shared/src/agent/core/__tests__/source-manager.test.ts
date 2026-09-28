@@ -5,6 +5,7 @@
  * ClaudeAgent and PiAgent.
  */
 import { describe, it, expect, beforeEach } from 'bun:test';
+import { join } from 'node:path';
 import { SourceManager } from '../source-manager.ts';
 import type { LoadedSource } from '../../../sources/types.ts';
 
@@ -224,6 +225,18 @@ describe('SourceManager', () => {
 
       sourceManager.setToolCatalog({});
       expect(sourceManager.formatSourceState()).not.toContain('github: create_issue');
+    });
+
+    it('keeps active guide paths visible after the source introduction', () => {
+      const github = createMockSource('github');
+      github.guide = { raw: '# GitHub guide' };
+      sourceManager.setAllSources([github]);
+      sourceManager.updateActiveState(['github'], [], ['github']);
+
+      sourceManager.formatSourceState();
+      const later = sourceManager.formatSourceState();
+      expect(later).toContain(join(github.folderPath, 'guide.md'));
+      expect(later).not.toContain('Tool calls WILL BE REJECTED');
     });
   });
 

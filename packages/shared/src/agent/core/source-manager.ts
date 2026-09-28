@@ -235,7 +235,10 @@ export class SourceManager {
       (s) => s.guide?.raw && !GUIDE_EXEMPT_SLUGS.has(s.config.slug)
     );
     if (getRequireSourceGuide() && activeSourcesWithGuides.length > 0) {
-      parts.push('Read each source\'s guide.md before first tool use — calls are blocked until guide is read.');
+      parts.push('Read the source guide before first tool use:');
+      for (const source of activeSourcesWithGuides) {
+        parts.push(`- ${source.config.slug}: ${join(source.folderPath, 'guide.md')}`);
+      }
     }
 
     // Source descriptions (shown once per session when first introduced)
@@ -257,7 +260,7 @@ export class SourceManager {
       }
       if (getRequireSourceGuide() && hasGuides) {
         parts.push('');
-        parts.push('IMPORTANT: You MUST read a source\'s guide with the Read tool BEFORE using any of its tools. Tool calls WILL BE REJECTED if the guide has not been read first.');
+        parts.push('Read each listed source guide with an available file-reading tool before first tool use.');
       }
     }
 
@@ -276,13 +279,13 @@ export class SourceManager {
       const authTool = this.getAuthToolName(s);
       if (authTool) {
         output += `\n\nThis source requires re-authentication. The user may have revoked access or the token expired.`;
-        output += `\nTo fix: Re-authenticate using ${authTool}.`;
+        output += `\nTo fix: Re-authenticate with the advertised session tool for ${authTool}; use its exact runtime name and schema.`;
       } else if (s.config.mcp?.transport === 'stdio') {
         output += `\n\nThis is a local MCP server that is not responding. The server process may need to be restarted.`;
         output += `\nTo fix: Check if the server command/path is correct and the process can start.`;
       } else {
         output += `\n\nThis source's server is unreachable. It may be down or the URL may have changed.`;
-        output += `\nTo fix: Check the server URL and network connectivity. Use WebSearch to verify the endpoint is correct.`;
+        output += `\nTo fix: Check the server URL and network connectivity. If a web search tool is available, use it to verify the endpoint.`;
       }
       output += `\n</source_issue>`;
     }

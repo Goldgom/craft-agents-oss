@@ -17,11 +17,12 @@ import type {
   AgentSessionEvent,
 } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage, AssistantMessageEvent } from '@earendil-works/pi-ai';
-import { isContextOverflow, isRetryableAssistantError } from '@earendil-works/pi-ai';
+import { isContextOverflow } from '@earendil-works/pi-ai';
 import { BaseEventAdapter } from '../base-event-adapter.ts';
 import { PI_TOOL_NAME_MAP } from './constants.ts';
 import { toolMetadataStore } from '../../../interceptor-common.ts';
 import { createAgentError, parseError } from '../../errors.ts';
+import { isCraftRetryableAssistantError } from './retry-policy.ts';
 
 function finiteNumberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -300,7 +301,7 @@ export class PiEventAdapter extends BaseEventAdapter {
     if (parsed.code !== 'unknown_error') {
       return { type: 'typed_error', error: parsed };
     }
-    if (isRetryableAssistantError(message)) {
+    if (isCraftRetryableAssistantError(message)) {
       const code = RETRYABLE_PROVIDER_SIDE_PATTERN.test(errorMessage) ? 'service_error' : 'network_error';
       return { type: 'typed_error', error: createAgentError(code, errorMessage) };
     }
@@ -585,14 +586,14 @@ export class PiEventAdapter extends BaseEventAdapter {
           const errorEvent = this.classifyAssistantError(event.message as AssistantMessage, msg.errorMessage);
 
           // Transient provider/transport errors: the SDK's retry loop uses the
-          // same `isRetryableAssistantError` classifier, so it will retry
+          // same Craft classifier, so it will retry
           // unless retries are disabled or exhausted — and the following
           // agent_end { willRetry } tells us which. Park the error instead of
           // showing it now; agent_end either releases it or holds the queue
           // open for the retried run.
           if (
             (this.retryState === 'none' || this.retryState === 'recovering') &&
-            isRetryableAssistantError(event.message as AssistantMessage)
+            isCraftRetryableAssistantError(event.message as AssistantMessage)
           ) {
             this.retryState = 'held';
             this.heldRetryError = errorEvent;

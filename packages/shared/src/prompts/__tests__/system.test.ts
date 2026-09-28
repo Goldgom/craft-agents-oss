@@ -112,6 +112,16 @@ describe('system prompt guidance', () => {
     expect(prompt).toContain('## Subagent Collaboration')
     expect(prompt).toContain('## Connected Sources and MCP Tools')
   })
+
+  it('uses advertised tool schemas in core and mini prompts', () => {
+    const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+    const mini = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', 'mini')
+
+    expect(prompt).toContain('Only include fields accepted by the advertised tool schema.')
+    expect(prompt).not.toContain('All MCP tools require two metadata fields')
+    expect(mini).toContain('Tool names and parameters vary by runtime')
+    expect(mini).not.toContain('Use Read, Edit, Write tools')
+  })
 })
 
 describe('runtime-specific prompt documents', () => {

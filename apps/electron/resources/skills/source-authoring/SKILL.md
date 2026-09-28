@@ -7,7 +7,7 @@ description: Use, create, authenticate, and validate API, MCP, and local-folder 
 
 Use this skill for using, creating, or changing a source. Read `~/.tokenbird/docs/sources.md` before editing source configuration.
 
-For an existing source, read its `config.json` and `guide.md`, then call the requested source tool directly. Do not recreate it, scan the workspace for examples, or substitute `source_test` for the requested action.
+For an existing source, read its `config.json` and its `guide.md` if present, then call the requested source tool directly. Do not recreate it, scan the workspace for examples, or substitute `source_test` for the requested action.
 
 First choose the source type that matches the integration: API for a direct HTTP service, MCP for a tool server, or Local Folder for an explicitly scoped directory. Preserve credentials and never place secret values into guide files, prompts, or logs.
 

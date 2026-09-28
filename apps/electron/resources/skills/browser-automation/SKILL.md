@@ -9,7 +9,7 @@ Use this skill only when `browser_tool` is present. Read `~/.tokenbird/docs/brow
 
 Prefer connected sources for repeatable integrations and automations. Use the browser for one-off UI work, login-protected or dynamic pages, and gaps in API coverage.
 
-Start with `browser_tool open`, navigate, then take a `snapshot`. Interact through fresh `@eN` references and snapshot again after navigation or major DOM changes. Run `browser_tool --help` when syntax is uncertain. Commands can be batched with semicolons, but a batch stops after navigation.
+Call the `browser_tool` function with `command: "open"` to start, navigate, then take a `snapshot`. Interact through fresh `@eN` references and snapshot again after navigation or major DOM changes. Pass `command: "--help"` to that same tool when syntax is uncertain; do not run these commands in a shell. Commands can be batched with semicolons, but a batch stops after navigation.
 
 Useful advanced operations include `find`, `click-at`, `drag`, `type`, `key`, clipboard/paste, console and network inspection, explicit waits, annotated or region screenshots, deterministic resizing, downloads, scrolling, and JavaScript evaluation.
 

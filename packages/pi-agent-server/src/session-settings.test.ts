@@ -15,6 +15,7 @@ describe('createCraftSettingsManager', () => {
   it('pins the agent-level auto-retry policy', () => {
     const settings = createCraftSettingsManager();
     expect(settings.getRetryEnabled()).toBe(true);
+    expect(CRAFT_PI_RETRY_SETTINGS.maxRetries).toBe(5);
     expect(settings.getRetrySettings()).toEqual({
       enabled: true,
       maxRetries: CRAFT_PI_RETRY_SETTINGS.maxRetries,
@@ -22,14 +23,12 @@ describe('createCraftSettingsManager', () => {
     });
   });
 
-  it('enables provider-level (pre-stream) retries that the SDK leaves off by default', () => {
+  it('disables provider-level retries so the total main-chat budget stays at five', () => {
     const settings = createCraftSettingsManager();
     expect(settings.getProviderRetrySettings()).toMatchObject({
-      maxRetries: CRAFT_PI_RETRY_SETTINGS.provider.maxRetries,
+      maxRetries: 0,
       maxRetryDelayMs: CRAFT_PI_RETRY_SETTINGS.provider.maxRetryDelayMs,
     });
-    // Documents the SDK default this policy overrides. If a future SDK turns
-    // provider retries on by itself, this assertion is the cue to revisit.
     expect(SettingsManager.inMemory().getProviderRetrySettings().maxRetries).toBeUndefined();
   });
 
@@ -44,7 +43,7 @@ describe('createCraftSettingsManager', () => {
       maxRetries: CRAFT_PI_EPHEMERAL_RETRY_SETTINGS.provider.maxRetries,
       maxRetryDelayMs: CRAFT_PI_EPHEMERAL_RETRY_SETTINGS.provider.maxRetryDelayMs,
     });
-    expect(CRAFT_PI_EPHEMERAL_MAX_BACKOFF_MS).toBe(66_000);
+    expect(CRAFT_PI_EPHEMERAL_MAX_BACKOFF_MS).toBe(6_000);
     expect(CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS).toBe(115_000);
     expect(CRAFT_PI_EPHEMERAL_MAX_BACKOFF_MS).toBeLessThan(
       CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS,

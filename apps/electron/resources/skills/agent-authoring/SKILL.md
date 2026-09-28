@@ -5,7 +5,7 @@ description: Design reusable, isolated subagents with a narrow purpose, independ
 
 # Agent authoring
 
-Use this skill to create or edit `agents.json`. A custom agent is an independent worker the main conversation can delegate bounded side work to; it is not a replacement for the main conversation.
+Use this skill to create or edit `agents.json`. Read `~/.tokenbird/docs/agents.md` before changing the configuration. A custom agent is an independent worker the main conversation can delegate bounded side work to; it is not a replacement for the main conversation.
 
 Each agent needs a stable lowercase-hyphenated `id`, a clear name, a description explaining when the main agent should use it, and an independent `prompt`. Optional `tools` are an allowlist; omit it only when inheriting the parent set is deliberate. `model` is optional and should normally inherit unless the work has a clear cost or capability requirement.
 

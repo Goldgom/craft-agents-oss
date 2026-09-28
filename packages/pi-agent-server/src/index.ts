@@ -92,6 +92,7 @@ import { getSessionPlansPath, getSessionPath } from '../../shared/src/sessions/s
 import { buildCallLlmRequest } from '../../shared/src/agent/llm-tool.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
+import { installCraftPiRetryClassifier } from '../../shared/src/agent/backend/pi/retry-policy.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
 import { resolveBashShellPath } from './bash-shell-path.ts';
 import { createWebFetchTool } from './tools/web-fetch.ts';
@@ -752,6 +753,7 @@ async function ensureSession(): Promise<AgentSession> {
 
   // Create the session — tools flow through customTools + allowlist (see comment above).
   const { session } = await createAgentSession(sessionOptions);
+  installCraftPiRetryClassifier(session);
   piSession = session;
 
   toolsChanged = false;
@@ -1043,6 +1045,7 @@ async function queryLlm(
     };
 
     const { session: ephemeralSession } = await createAgentSession(ephemeralOptions);
+    installCraftPiRetryClassifier(ephemeralSession);
     const resource: EphemeralQueryResource = {
       abort: () => ephemeralSession.abort(),
       dispose: () => ephemeralSession.dispose(),

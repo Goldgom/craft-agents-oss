@@ -33,18 +33,17 @@ export const CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS = LLM_QUERY_TIMEOUT_MS - 5_000
  *
  * Agent-level (`AgentSession._prepareRetry`, classifier `isRetryableAssistantError`
  * in pi-ai): re-runs a failed assistant turn with exponential backoff
- * `baseDelayMs * 2^(attempt-1)`. Four retries wait 2 s + 4 s + 8 s + 16 s ≈ 30 s.
+ * `baseDelayMs * 2^(attempt-1)`. Five retries wait 2 + 4 + 8 + 16 + 32 s.
  *
- * Provider-level (`retryProviderRequest` in pi-ai): pre-stream retries for
- * 408/409/429/5xx honoring `retry-after` up to `maxRetryDelayMs`, mirroring the
- * OpenAI/Anthropic SDK default of 2. (Pi SDK default: 0.)
+ * Disable provider-level retries in main chats so the total retry count stays
+ * bounded at five and a risk-control 429 reaches the agent classifier at once.
  */
 export const CRAFT_PI_RETRY_SETTINGS = {
   enabled: true,
-  maxRetries: 4,
+  maxRetries: 5,
   baseDelayMs: 2_000,
   provider: {
-    maxRetries: 2,
+    maxRetries: 0,
     maxRetryDelayMs: 60_000,
   },
 } as const;
@@ -53,17 +52,15 @@ export const CRAFT_PI_RETRY_SETTINGS = {
  * Smaller retry budget for utility sessions (`call_llm`, titles, summaries).
  *
  * These calls have an end-to-end 120-second RPC budget and a 115-second child
- * deadline. In the worst configured case, provider-directed sleeps consume at
- * most 60 seconds (two 10-second sleeps in each of three agent attempts) and
- * agent backoff consumes another 6 seconds, leaving headroom for request and
- * cleanup latency.
+ * deadline. Agent backoff consumes at most 6 seconds, leaving headroom for
+ * request and cleanup latency.
  */
 export const CRAFT_PI_EPHEMERAL_RETRY_SETTINGS = {
   enabled: true,
   maxRetries: 2,
   baseDelayMs: 2_000,
   provider: {
-    maxRetries: 2,
+    maxRetries: 0,
     maxRetryDelayMs: 10_000,
   },
 } as const;

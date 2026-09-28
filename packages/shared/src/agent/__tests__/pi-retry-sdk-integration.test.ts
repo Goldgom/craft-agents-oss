@@ -25,6 +25,7 @@ import {
   type StopReason,
 } from '@earendil-works/pi-ai';
 import { PiEventAdapter } from '../backend/pi/event-adapter.ts';
+import { installCraftPiRetryClassifier } from '../backend/pi/retry-policy.ts';
 
 const TEST_MODEL: Model<'openai-responses'> = {
   id: 'retry-integration-model',
@@ -177,12 +178,12 @@ function requireTurnIds(events: Array<{ turnId?: string }>): string[] {
 
 async function runScenario(
   attempts: Attempt[],
-  options: { cancelOnFirstBackoff?: boolean } = {},
+  options: { cancelOnFirstBackoff?: boolean; maxRetries?: number } = {},
 ): Promise<ScenarioResult> {
   const settingsManager = SettingsManager.inMemory({
     retry: {
       enabled: true,
-      maxRetries: 2,
+      maxRetries: options.maxRetries ?? 2,
       // Real SDK timers exercise the actual continuation path while keeping the
       // complete three-attempt exhaustion case below 20 ms of configured waits.
       baseDelayMs: 5,
@@ -198,6 +199,7 @@ async function runScenario(
     sessionManager: SessionManager.inMemory(import.meta.dir),
     tools: [],
   });
+  installCraftPiRetryClassifier(session);
 
   let callCount = 0;
   session.agent.streamFunction = () => {
@@ -259,6 +261,43 @@ async function runScenario(
 }
 
 describe('Pi SDK auto-retry integration', () => {
+  it('retries a socket reset missed by the SDK classifier and recovers', async () => {
+    const result = await runScenario([
+      { error: 'read ECONNRESET' },
+      { text: 'Recovered answer' },
+    ]);
+    expect(result.callCount).toBe(2);
+    expect(result.events.filter(event => event.type === 'typed_error')).toHaveLength(0);
+    expect(result.events.filter(event => event.type === 'text_complete')).toMatchObject([
+      { type: 'text_complete', text: 'Recovered answer' },
+    ]);
+  });
+
+  it('stops after five retries of a connection failure', async () => {
+    const result = await runScenario(
+      Array.from({ length: 6 }, () => ({ error: 'read ECONNRESET' })),
+      { maxRetries: 5 },
+    );
+    expect(result.callCount).toBe(6);
+    expect(result.events.filter(event => event.type === 'retry' && event.phase === 'backoff')).toHaveLength(5);
+    expect(result.events.filter(event => event.type === 'typed_error')).toMatchObject([
+      { type: 'typed_error', error: { code: 'network_error' } },
+    ]);
+  });
+
+  it('does not retry a risk-control response even when it contains 429', async () => {
+    const result = await runScenario([{ error: '429 Too many requests: security challenge required' }]);
+    expect(result.callCount).toBe(1);
+    expect(result.events.filter(event => event.type === 'retry')).toHaveLength(0);
+    expect(result.events.filter(event => event.type === 'typed_error')).toHaveLength(1);
+  });
+
+  it('does not mistake an authentication failure for a socket retry', async () => {
+    const result = await runScenario([{ error: '401 Unauthorized: connection failed' }]);
+    expect(result.callCount).toBe(1);
+    expect(result.events.filter(event => event.type === 'retry')).toHaveLength(0);
+  });
+
   it('discards failed partial text and completes with the retried answer', async () => {
     const result = await runScenario([
       { text: 'failed partial ', error: 'terminated' },
