@@ -625,9 +625,18 @@ export abstract class BaseAgent implements AgentBackend {
     if (this.config.mcpPool) {
       try {
         await this.config.mcpPool.sync(mcpServers, apiServers as Record<string, ApiServerConfig>);
+        const catalog: Record<string, string[]> = {};
+        for (const slug of this.config.mcpPool.getConnectedSlugs()) {
+          const names = this.config.mcpPool.getTools(slug).map(tool => tool.name);
+          if (names.length > 0) catalog[slug] = names;
+        }
+        this.sourceManager.setToolCatalog(catalog);
       } catch (err) {
+        this.sourceManager.setToolCatalog({});
         this.debug(`Failed to sync MCP pool: ${err instanceof Error ? err.message : String(err)}`);
       }
+    } else {
+      this.sourceManager.setToolCatalog({});
     }
   }
 

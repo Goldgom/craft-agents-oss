@@ -55,7 +55,7 @@ import { OnboardingWizard, type ApiSetupMethod } from '@/components/onboarding'
 import { RenameDialog } from '@/components/ui/rename-dialog'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { getModelShortName, type ModelDefinition } from '@config/models'
-import { getCompatibleAgentRuntimes, getModelsForProviderType, resolveAgentRuntime, resolveMidStreamBehavior, type CustomEndpointApi, type MidStreamBehavior } from '@config/llm-connections'
+import { getCompatibleAgentRuntimes, getModelsForProviderType, isImageGenerationModelId, resolveMiniModel, resolveAgentRuntime, resolveMidStreamBehavior, type CustomEndpointApi, type MidStreamBehavior } from '@config/llm-connections'
 import { toast } from 'sonner'
 
 /**
@@ -82,7 +82,10 @@ function getModelOptionsForConnection(
   if (connection.models && connection.models.length > 0) {
     const selectedGroup = connection.channelGroups?.find(group => group.id === connection.channelGroup)
     const allowedModels = selectedGroup?.models?.length ? new Set(selectedGroup.models) : null
-    return connection.models.filter(m => !allowedModels || allowedModels.has(typeof m === 'string' ? m : m.id)).map((m) => {
+    return connection.models.filter(m => {
+      const id = typeof m === 'string' ? m : m.id
+      return !isImageGenerationModelId(id) && (!allowedModels || allowedModels.has(id))
+    }).map((m) => {
       if (typeof m === 'string') {
         return { value: m, label: getModelShortName(m), description: '' }
       }
@@ -94,7 +97,7 @@ function getModelOptionsForConnection(
 
   // Fall back to registry models for this provider type
   const registryModels = getModelsForProviderType(connection.providerType, connection.piAuthProvider)
-  return registryModels.map((m) => ({
+  return registryModels.filter(m => !isImageGenerationModelId(m.id)).map((m) => ({
     value: m.id,
     label: m.name,
     description: m.description,
@@ -518,6 +521,7 @@ interface WorkspaceOverrideCardProps {
 const WORKSPACE_SETTING_LABELS: Partial<Record<keyof WorkspaceSettings, string>> = {
   defaultLlmConnection: 'workspace connection override',
   model: 'workspace model override',
+  miniModel: 'workspace mini model override',
   thinkingLevel: 'workspace thinking override',
 }
 
@@ -582,6 +586,10 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
     updateSetting('model', model === 'global' ? undefined : model)
   }, [updateSetting])
 
+  const handleMiniModelChange = useCallback((model: string) => {
+    updateSetting('miniModel', model === 'auto' ? undefined : model)
+  }, [updateSetting])
+
   const handleThinkingChange = useCallback((level: string) => {
     // 'global' means use app default (clear workspace override)
     updateSetting('thinkingLevel', level === 'global' ? undefined : level as ThinkingLevel)
@@ -591,12 +599,14 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
   const hasOverrides = settings && (
     settings.defaultLlmConnection ||
     settings.model ||
+    settings.miniModel ||
     settings.thinkingLevel
   )
 
   // Get display values
   const currentConnection = settings?.defaultLlmConnection || 'global'
   const currentModel = settings?.model || 'global'
+  const currentMiniModel = settings?.miniModel || 'auto'
   const currentThinking = settings?.thinkingLevel || 'global'
 
   // Derive workspace's effective connection (override or default)
@@ -604,6 +614,8 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
     const connSlug = settings?.defaultLlmConnection
     return connSlug ? llmConnections.find(c => c.slug === connSlug) : llmConnections.find(c => c.isDefault)
   }, [settings?.defaultLlmConnection, llmConnections])
+
+  const automaticMiniModel = workspaceEffectiveConnection ? resolveMiniModel(workspaceEffectiveConnection) : undefined
 
   // Get summary text for collapsed state
   const getSummary = () => {
@@ -615,6 +627,9 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
     }
     if (settings?.model) {
       parts.push(getModelShortName(settings.model))
+    }
+    if (settings?.miniModel) {
+      parts.push(`${t("settings.ai.miniModel")}: ${getModelShortName(settings.miniModel)}`)
     }
     if (settings?.thinkingLevel) {
       const level = THINKING_LEVELS.find(l => l.id === settings.thinkingLevel)
@@ -696,6 +711,17 @@ function WorkspaceOverrideCard({ workspace, llmConnections, onSettingsChange }: 
                   ...getModelOptionsForConnection(workspaceEffectiveConnection).map(o => ({
                     ...o, description: o.descriptionKey ? t(o.descriptionKey) : o.description,
                   })),
+                ]}
+              />
+              <SettingsMenuSelectRow
+                label={t("settings.ai.miniModel")}
+                description={t("settings.ai.miniModelDesc")}
+                value={currentMiniModel}
+                onValueChange={handleMiniModelChange}
+                options={[
+                  { value: 'auto', label: t("settings.ai.miniModelAuto"), description: automaticMiniModel ? getModelShortName(automaticMiniModel) : '' },
+                  ...getModelOptionsForConnection(workspaceEffectiveConnection)
+                    .map(option => ({ ...option, description: option.descriptionKey ? t(option.descriptionKey) : option.description })),
                 ]}
               />
               <SettingsMenuSelectRow

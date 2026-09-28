@@ -213,6 +213,18 @@ describe('SourceManager', () => {
 
       expect(formatted).toContain('github (no tools)');
     });
+
+    it('lists registered tools only for active sources and updates after a disconnect', () => {
+      sourceManager.updateActiveState(['github'], [], ['github', 'slack']);
+      sourceManager.setToolCatalog({ github: ['create_issue', 'list_issues'], slack: ['send_message'] });
+
+      const active = sourceManager.formatSourceState();
+      expect(active).toContain('github: create_issue, list_issues');
+      expect(active).not.toContain('slack: send_message');
+
+      sourceManager.setToolCatalog({});
+      expect(sourceManager.formatSourceState()).not.toContain('github: create_issue');
+    });
   });
 
   describe('Authentication Utilities', () => {

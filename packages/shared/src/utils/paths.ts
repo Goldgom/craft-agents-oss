@@ -223,8 +223,12 @@ export function getBundledAssetsDir(subfolder: string): string | undefined {
   const candidates = [
     // Electron packaged app (set via setBundledAssetsRoot at startup)
     ...(_assetsRoot ? [join(_assetsRoot, 'resources', subfolder)] : []),
+    // Headless development uses the repository root as its assets root.
+    ...(_assetsRoot ? [join(_assetsRoot, 'apps', 'electron', 'resources', subfolder)] : []),
     // Dev: electron app resources folder (when cwd is apps/electron)
     join(process.cwd(), 'resources', subfolder),
+    join(process.cwd(), 'apps', 'electron', 'resources', subfolder),
+    join(process.cwd(), '..', '..', 'apps', 'electron', 'resources', subfolder),
     // Dev: dist output (after build:copy)
     join(process.cwd(), 'dist', 'resources', subfolder),
   ];

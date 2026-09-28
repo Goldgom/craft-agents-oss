@@ -305,11 +305,20 @@ export interface SystemPromptOptions {
   backendName?: string;
 }
 
+/** Core source guidance kept after feature playbooks are moved into skills. */
+export const MCP_SOURCE_GUIDANCE = `
+## Connected Sources and MCP Tools
+- The per-turn \`<sources>\` block summarizes active connections and their registered source tools. The runtime's callable tool catalog has the complete list.
+- The runtime catalog also includes session tools for source setup, authentication, and workspace actions. Use their advertised descriptions when choosing a tool.
+- Use the exact callable tool name and schema advertised by the current runtime. Tool aliases differ between Pi, Claude Code, and Codex; do not construct a name from a source slug.
+- Read a listed source guide before its first tool call when required. If a source is inactive or needs authentication, use the advertised session source tools to activate it before retrying.
+`;
+
 /** Additional guidance for models that need explicit MCP tool-calling steps. */
 export const MCP_PROMPT_ENHANCEMENT = `
 ## MCP Tool Calling Workflow
-- Identify the relevant connected source and use its MCP tools directly.
-- Discover tools with the source's \`list_tools\` tool when needed, or call the requested tool directly.
+- Match the user's request to an active source in \`<sources>\`, then choose from its listed tools and the runtime's callable tool catalog.
+- Read the tool schema before calling it. A source may not provide a \`list_tools\` tool; do not invent one.
 - Never use shell/bash to invoke MCP tools and never use \`list_mcp_resources\` to discover tools.
 - Read the source guide before setup/authentication when required.
 - Call the tool, inspect its result, then continue with the next step.
@@ -357,18 +366,21 @@ const BUILTIN_PROMPT_SKILLS: readonly BuiltinPromptSkill[] = [
   { slug: 'subagent-collaboration', description: 'Delegate bounded tool-using work and integrate verified results.', capability: 'subagents' },
 ] as const;
 
-function getBuiltinSkillPath(slug: string): string {
+function getBuiltinSkillPath(slug: string): string | undefined {
   const root = getBundledAssetsDir('skills');
-  const fallbackRoot = [
-    join(process.cwd(), 'apps', 'electron', 'resources', 'skills'),
-    join(process.cwd(), '..', '..', 'apps', 'electron', 'resources', 'skills'),
-    join(process.cwd(), 'resources', 'skills'),
-  ].find(candidate => existsSync(candidate));
-  return root
-    ? join(root, slug, 'SKILL.md').replace(/\\/g, '/')
-    : fallbackRoot
-      ? join(fallbackRoot, slug, 'SKILL.md').replace(/\\/g, '/')
-      : `${APP_ROOT}/bundled-skills/${slug}/SKILL.md`;
+  if (!root) return undefined;
+  const path = join(root, slug, 'SKILL.md');
+  return existsSync(path) ? path.replace(/\\/g, '/') : undefined;
+}
+
+function formatBuiltinSkillEntries(skills: readonly BuiltinPromptSkill[], compact = false): string {
+  return skills.flatMap(skill => {
+    const path = getBuiltinSkillPath(skill.slug);
+    if (!path) return [];
+    return [compact
+      ? `- \`${skill.slug}\`: ${skill.description} Read \`${path}\`.`
+      : `- **${skill.slug}** — ${skill.description} Read \`${path}\`.`];
+  }).join('\n');
 }
 
 function formatBuiltinSkillsPrompt(compact = false): string {
@@ -378,10 +390,9 @@ function formatBuiltinSkillsPrompt(compact = false): string {
     if (skill.capability === 'browserTools' && !getBrowserToolEnabled()) return false;
     return true;
   });
-  const entries = visible.map(skill => compact
-    ? `- \`${skill.slug}\`: ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`
-    : `- **${skill.slug}** — ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`
-  ).join('\n');
+  const entries = formatBuiltinSkillEntries(visible, compact);
+
+  if (!entries) return '';
 
   return `## Built-in Skills (On-Demand)\n\nThe following app-shipped skills describe existing capabilities. When the current request matches one, read its SKILL.md before acting; do not read unrelated skills. A project, workspace, or global skill with the same slug takes precedence when explicitly mentioned.\n\n${entries}`;
 }
@@ -445,6 +456,8 @@ export function getLightweightModelSystemPrompt(
 ${agent}
 
 ${runtimePrompt}
+
+${MCP_SOURCE_GUIDANCE.trim()}
 
 ${formatBuiltinSkillsPrompt(true)}`;
 }
@@ -944,19 +957,11 @@ Windows (PowerShell) - use single quotes to avoid escaping issues:
 ${backendName === 'Codex' ? `
 ## MCP Tool Naming
 
-MCP tools from connected sources follow the naming pattern \`mcp__sources__{slug}__{tool}\`:
+Use the connected source tools listed in \`<sources>\` and the runtime's callable tool catalog. Call each tool by the exact name and schema advertised by the runtime. Tool naming differs between backends, so do not guess a tool name or rely on an error to discover tools.
+- **NEVER** use \`list_mcp_resources\` to discover tools; it lists resources instead.
+- **NEVER** use shell/bash to call MCP tools. Call them as first-class functions.
 
-- **\`slug\`** is the source's **slug** from the \`<sources>\` block above (e.g., \`linear\`, \`github\`)
-- Do **NOT** use source IDs, provider names, or config.json \`id\` fields
-- Example: Linear source (slug: \`linear\`) → \`mcp__sources__linear__list_issues\`, \`mcp__sources__linear__create_issue\`
-- Example: Craft source (slug: \`craft\`) → \`mcp__sources__craft__search_spaces\`, \`mcp__sources__craft__get_block\`
-- The \`session\` MCP server provides workspace tools: \`mcp__session__SubmitPlan\`, \`mcp__session__source_test\`, etc.
-
-**Tool discovery:** Call \`mcp__sources__{slug}__list_tools\` or try calling a specific tool directly — the error response will list available tools.
-- **NEVER** use \`list_mcp_resources\` — it lists resources, not tools. It will not help you discover available tools.
-- **NEVER** use shell/bash to call MCP tools. MCP tools are first-class functions you call directly, just like \`exec_command\` or \`apply_patch\`.
-
-**After OAuth completes:** MCP tools become available on the next turn. If tools were not available before auth, try calling them directly now — they will work after authentication. Do NOT keep running \`source_test\` to check — just call the tools.
+**After OAuth completes:** Check the callable tool catalog on the next turn and use the registered source tools. Do not repeatedly run \`source_test\` to check authentication.
 
 ## Source Management Tools
 
@@ -1448,6 +1453,7 @@ You have a \`send_developer_feedback\` tool — a direct line to the TokenBird d
   // resident; only delay-loadable feature documentation is removed.
   for (const heading of [
     '## External Sources',
+    '## MCP Tool Naming',
     '## Theme Package Design',
     '## Skills',
     '## Configuration Documentation',
@@ -1468,6 +1474,7 @@ You have a \`send_developer_feedback\` tool — a direct line to the TokenBird d
     '## Multiple Items (Tabs)',
     '## Document Tools',
   ]) assembled = removePromptSection(assembled, heading)
+  assembled += `\n\n${MCP_SOURCE_GUIDANCE.trim()}`
   assembled += `\n\n${formatBuiltinSkillsPrompt()}`
   if (promptSettings.capabilities.subagents) assembled += `\n\n${SUBAGENT_COLLABORATION_PROMPT.trim()}`
   if (promptSettings.editableInstructions?.trim()) assembled += `\n\n## User supplemental instructions\n${promptSettings.editableInstructions.trim()}`
@@ -1527,23 +1534,28 @@ export function getSystemPromptSources(
   coreBuiltin = removePromptSection(coreBuiltin, '## Built-in Skills (On-Demand)')
   const generalSkills = BUILTIN_PROMPT_SKILLS.filter(skill => !skill.capability)
   if (generalSkills.length > 0) {
-    sources.push({
-      id: 'builtin-skills:on-demand',
-      source: 'builtin',
-      title: 'Built-in skills (on demand)',
-      content: `## Built-in Skills (On-Demand)\n\n${generalSkills.map(skill => `- **${skill.slug}** — ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`).join('\n')}`,
-      enabled: true,
-    })
+    const entries = formatBuiltinSkillEntries(generalSkills)
+    if (entries) {
+      sources.push({
+        id: 'builtin-skills:on-demand',
+        source: 'builtin',
+        title: 'Built-in skills (on demand)',
+        content: `## Built-in Skills (On-Demand)\n\n${entries}`,
+        enabled: true,
+      })
+    }
   }
   for (const capability of Object.keys(getSystemPromptSettings().capabilities) as SystemPromptCapabilityId[]) {
     if (sources.some(source => source.id === `capability:${capability}`)) continue
     const skills = BUILTIN_PROMPT_SKILLS.filter(skill => skill.capability === capability)
     if (skills.length === 0) continue
+    const entries = formatBuiltinSkillEntries(skills)
+    if (!entries) continue
     sources.push({
       id: `capability:${capability}`,
       source: 'builtin',
       title: `${capability} on-demand skill`,
-      content: skills.map(skill => `- **${skill.slug}** — ${skill.description} Read \`${getBuiltinSkillPath(skill.slug)}\`.`).join('\n'),
+      content: entries,
       enabled: getSystemPromptSettings().capabilities[capability] !== false
         && (capability !== 'browserTools' || getBrowserToolEnabled()),
     })

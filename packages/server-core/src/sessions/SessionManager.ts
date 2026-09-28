@@ -94,7 +94,7 @@ import { messageToStored, storedToMessage, type Message, type StoredAttachment, 
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
 import { invalidateContextFileCache } from '@craft-agent/shared/prompts/system'
-import { getToolIconsDir, getMiniModel } from '@craft-agent/shared/config'
+import { getToolIconsDir, resolveMiniModel } from '@craft-agent/shared/config'
 import { listAgents, type AgentSessionSettings } from '@craft-agent/shared/agents'
 import { getDefaultSummarizationModel } from '@craft-agent/shared/config/models'
 import type { SummarizeCallback } from '@craft-agent/shared/sources'
@@ -2946,7 +2946,7 @@ export class SessionManager implements ISessionManager {
       )
       if (tierConnection) {
         resolvedModelOption = resolvedModelOption === 'fast'
-          ? (getMiniModel(tierConnection) ?? tierConnection.defaultModel ?? defaultModel)
+          ? (resolveMiniModel(tierConnection, wsConfig?.defaults?.miniModel) ?? defaultModel)
           : (tierConnection.defaultModel ?? defaultModel)
       } else {
         resolvedModelOption = defaultModel
@@ -3589,6 +3589,7 @@ export class SessionManager implements ISessionManager {
       agentRuntime: backendContext.agentRuntime,
       authType: backendContext.authType,
       resolvedModel: backendContext.resolvedModel,
+      miniModel: connection ? resolveMiniModel(connection, workspaceConfig?.defaults?.miniModel) : undefined,
     }
     const runtimeSignature = buildBackendRuntimeSignature(sigInput)
     const restartSignature = buildRestartRequiredSignature(sigInput)
@@ -3760,6 +3761,7 @@ export class SessionManager implements ISessionManager {
       agentRuntime: backendContext.agentRuntime,
       authType: backendContext.authType,
       resolvedModel: backendContext.resolvedModel,
+      miniModel: connection ? resolveMiniModel(connection, workspaceConfig?.defaults?.miniModel) : undefined,
     }
     const runtimeSignature = buildBackendRuntimeSignature(sigInput)
     const restartSignature = buildRestartRequiredSignature(sigInput)
@@ -3847,7 +3849,7 @@ export class SessionManager implements ISessionManager {
       }
 
       // Per-session env overrides
-      const miniModel = connection ? (getMiniModel(connection) ?? connection.defaultModel) : undefined
+      const miniModel = sigInput.miniModel
       const envOverrides: Record<string, string> = {
         CRAFT_WORKSPACE_PATH: managed.workspace.rootPath,
         // Pass mini model to SDK subprocess so built-in tools like WebFetch
@@ -5920,6 +5922,8 @@ export class SessionManager implements ISessionManager {
       return { success: false, error: 'Session not found' }
     }
 
+    await this.tryRefreshAgentRuntime(managed, 'title refresh')
+
     // Ensure messages are loaded from disk (lazy loading support)
     await this.ensureMessagesLoaded(managed)
 
@@ -5961,7 +5965,9 @@ export class SessionManager implements ISessionManager {
     if (!agent && managed.llmConnection) {
       try {
         const connection = getLlmConnection(managed.llmConnection)
-        const resolvedMiniModel = connection ? (getMiniModel(connection) ?? connection.defaultModel) : undefined
+        const resolvedMiniModel = connection
+          ? resolveMiniModel(connection, loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.miniModel)
+          : undefined
 
         agent = createBackendFromConnection(managed.llmConnection, {
           workspace: managed.workspace,
@@ -8318,7 +8324,9 @@ export class SessionManager implements ISessionManager {
 
         agent = createBackendFromConnection(managed.llmConnection, {
           workspace: managed.workspace,
-          miniModel: connection ? (getMiniModel(connection) ?? connection.defaultModel) : undefined,
+          miniModel: connection
+            ? resolveMiniModel(connection, loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.miniModel)
+            : undefined,
           session: {
             id: `title-${managed.id}`,
             workspaceRootPath: managed.workspace.rootPath,
@@ -9460,7 +9468,7 @@ export class SessionManager implements ISessionManager {
     })
 
     const miniModel = backendContext.connection
-      ? (getMiniModel(backendContext.connection) ?? backendContext.connection.defaultModel ?? getDefaultSummarizationModel())
+      ? (resolveMiniModel(backendContext.connection, wsConfig?.defaults?.miniModel) ?? getDefaultSummarizationModel())
       : getDefaultSummarizationModel()
 
     const envOverrides: Record<string, string> = {

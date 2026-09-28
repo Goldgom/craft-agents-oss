@@ -13,6 +13,15 @@ import { setBundledAssetsRoot } from '../../utils/paths.ts'
 const bundledAssetsRoot = join(process.cwd(), '..', '..', 'apps', 'electron')
 
 describe('bundled skills', () => {
+  it('resolves skill files when a headless development server uses the repository root', () => {
+    try {
+      setBundledAssetsRoot(join(process.cwd(), '..', '..'))
+      expect(getBuiltinSkillsDir()).toBe(join(bundledAssetsRoot, 'resources', 'skills'))
+    } finally {
+      setBundledAssetsRoot(bundledAssetsRoot)
+    }
+  })
+
   it('loads bundled skills and lets a workspace definition override one', () => {
     setBundledAssetsRoot(bundledAssetsRoot)
     expect(getBuiltinSkillsDir()).toBe(join(bundledAssetsRoot, 'resources', 'skills'))

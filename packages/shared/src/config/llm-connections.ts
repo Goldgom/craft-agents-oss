@@ -341,13 +341,38 @@ export function isDeniedMiniModelId(modelId: string, piAuthProvider?: string): b
  * Auth-flavor-aware: skips models that the user's `piAuthProvider` would reject
  * (e.g. `gpt-5.1-codex-mini` under ChatGPT-account auth). See
  * {@link isDeniedMiniModelId}.
+ * Image generation models are excluded because utility requests require text output.
+ * A valid workspace selection wins; TokenNest otherwise prefers gpt-6-luna
+ * when that model is available in the active channel group.
  *
  * Used for mini agent, title generation, and mini completions.
  */
 export function getMiniModel(
-  connection: Pick<LlmConnection, 'models' | 'providerType' | 'piAuthProvider'>,
+  connection: Pick<LlmConnection, 'models' | 'providerType' | 'piAuthProvider'> & Partial<Pick<LlmConnection, 'oauthProvider' | 'channelGroup' | 'channelGroups'>>,
+  preferredModel?: string,
 ): string | undefined {
-  return findSmallModel(connection);
+  return findSmallModel(connection, preferredModel);
+}
+
+/** Resolve the utility model, including a text-only default when no model list is available. */
+export function resolveMiniModel(
+  connection: Pick<LlmConnection, 'models' | 'providerType' | 'piAuthProvider' | 'defaultModel'> & Partial<Pick<LlmConnection, 'oauthProvider' | 'channelGroup' | 'channelGroups'>>,
+  preferredModel?: string,
+): string | undefined {
+  const selected = getMiniModel(connection, preferredModel);
+  if (selected) return selected;
+  if (connection.models?.length) return undefined;
+
+  if (preferredModel && !isImageGenerationModelId(preferredModel)
+    && !isDeniedMiniModelId(preferredModel, connection.piAuthProvider)) {
+    const providerModels = getModelsForProviderType(connection.providerType, connection.piAuthProvider);
+    if (providerModels.some(model => model.id === preferredModel)) return preferredModel;
+  }
+
+  const fallback = connection.defaultModel;
+  return fallback && !isImageGenerationModelId(fallback) && !isDeniedMiniModelId(fallback, connection.piAuthProvider)
+    ? fallback
+    : undefined;
 }
 
 /**
@@ -371,11 +396,12 @@ export function getSummarizationModel(
  *   - Pi: find "mini" or "flash"
  *   - Otherwise: last model in the list
  *
- * Skips models denied by {@link isDeniedMiniModelId} for the connection's
- * auth flavor.
+ * Skips image generation models and models denied by {@link isDeniedMiniModelId}
+ * for the connection's auth flavor.
  */
 function findSmallModel(
-  connection: Pick<LlmConnection, 'models' | 'providerType' | 'piAuthProvider'>,
+  connection: Pick<LlmConnection, 'models' | 'providerType' | 'piAuthProvider'> & Partial<Pick<LlmConnection, 'oauthProvider' | 'channelGroup' | 'channelGroups'>>,
+  preferredModel?: string,
 ): string | undefined {
   if (!connection.models || connection.models.length === 0) return undefined;
 
@@ -384,8 +410,24 @@ function findSmallModel(
   const toSearchStr = (m: ModelDefinition | string) =>
     typeof m === 'string' ? m.toLowerCase() : `${m.id} ${m.name} ${m.shortName}`.toLowerCase();
 
-  const isAllowedModel = (m: ModelDefinition | string): boolean =>
-    !isDeniedMiniModelId(toId(m), connection.piAuthProvider);
+  const activeGroup = connection.channelGroups?.find(group => group.id === connection.channelGroup);
+  const allowedGroupModels = activeGroup?.models?.length ? new Set(activeGroup.models) : null;
+
+  const isAllowedModel = (m: ModelDefinition | string): boolean => {
+    const id = toId(m);
+    return (!allowedGroupModels || allowedGroupModels.has(id))
+      && !isImageGenerationModelId(id)
+      && !isDeniedMiniModelId(id, connection.piAuthProvider);
+  };
+
+  const availableModels = connection.models.filter(isAllowedModel);
+  const selected = availableModels.find(model => toId(model) === preferredModel);
+  if (selected) return toId(selected);
+
+  if (connection.oauthProvider === 'tokennest') {
+    const tokenNestDefault = availableModels.find(model => toId(model) === 'gpt-6-luna');
+    if (tokenNestDefault) return toId(tokenNestDefault);
+  }
 
   // Provider-aware keyword search
   const keywords: string[] = [];
@@ -400,8 +442,7 @@ function findSmallModel(
   }
 
   if (keywords.length > 0) {
-    const match = connection.models.find(m => {
-      if (!isAllowedModel(m)) return false;
+    const match = availableModels.find(m => {
       const searchStr = toSearchStr(m);
       return keywords.some(k => searchStr.includes(k));
     });
@@ -410,9 +451,9 @@ function findSmallModel(
     }
   }
 
-  // Fallback: last allowed model in the list, otherwise final entry.
-  const fallback = [...connection.models].reverse().find(isAllowedModel);
-  return fallback ? toId(fallback) : toId(connection.models[connection.models.length - 1]!);
+  // Fallback: last allowed text model in the list.
+  const fallback = availableModels.at(-1);
+  return fallback ? toId(fallback) : undefined;
 }
 
 /**

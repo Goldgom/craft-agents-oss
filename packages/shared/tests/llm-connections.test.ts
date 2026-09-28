@@ -5,7 +5,7 @@
  * model resolution used for title generation, summarization, and call_llm.
  */
 import { describe, it, expect } from 'bun:test';
-import { getMiniModel, getSummarizationModel, isDeniedMiniModelId } from '../src/config/llm-connections.ts';
+import { getMiniModel, getModelsForProviderType, getSummarizationModel, isDeniedMiniModelId, resolveMiniModel } from '../src/config/llm-connections.ts';
 import type { LlmProviderType } from '../src/config/llm-connections.ts';
 
 // ============================================================
@@ -131,6 +131,49 @@ describe('getMiniModel()', () => {
   it('handles single-model list', () => {
     const conn = makeConnection('pi', ['pi/gpt-5']);
     expect(getMiniModel(conn)).toBe('pi/gpt-5');
+  });
+
+  it('skips image models when choosing the fallback for title generation', () => {
+    const conn = makeConnection('pi', ['pi/gpt-5', 'pi/gpt-image-1']);
+    expect(getMiniModel(conn)).toBe('pi/gpt-5');
+    expect(getSummarizationModel(conn)).toBe('pi/gpt-5');
+  });
+
+  it('returns no utility model when a connection contains only image models', () => {
+    const conn = makeConnection('pi', ['pi/gpt-image-1']);
+    expect(getMiniModel(conn)).toBeUndefined();
+  });
+
+  it('defaults TokenNest utility requests to gpt-6-luna in the active group', () => {
+    const conn = {
+      ...makeConnection('pi_compat', ['gpt-6-astra', 'gpt-6-luna', 'gpt-image-1']),
+      oauthProvider: 'tokennest' as const,
+      channelGroup: 'chat',
+      channelGroups: [{ id: 'chat', name: 'Chat', models: ['gpt-6-astra', 'gpt-6-luna'] }],
+    };
+    expect(getMiniModel(conn)).toBe('gpt-6-luna');
+    expect(getMiniModel(conn, 'gpt-6-astra')).toBe('gpt-6-astra');
+    expect(getMiniModel(conn, 'gpt-image-1')).toBe('gpt-6-luna');
+    expect(getMiniModel({ ...conn, channelGroup: 'drawing', channelGroups: [
+      ...conn.channelGroups, { id: 'drawing', name: 'Drawing', models: ['gpt-image-1'] },
+    ] })).toBeUndefined();
+  });
+
+  it('uses a text default only when the model list is unavailable', () => {
+    expect(resolveMiniModel({ ...makeConnection('pi', []), defaultModel: 'gpt-5' })).toBe('gpt-5');
+    expect(resolveMiniModel({ ...makeConnection('pi', ['gpt-image-1']), defaultModel: 'gpt-image-1' })).toBeUndefined();
+    expect(resolveMiniModel({
+      ...makeConnection('pi_compat', ['gpt-6-astra', 'gpt-image-1']),
+      defaultModel: 'gpt-6-astra',
+      channelGroup: 'drawing',
+      channelGroups: [{ id: 'drawing', name: 'Drawing', models: ['gpt-image-1'] }],
+    })).toBeUndefined();
+  });
+
+  it('honors a workspace selection from the provider catalog when no model list is saved', () => {
+    const selected = getModelsForProviderType('anthropic')[0]!.id;
+    expect(resolveMiniModel({ ...makeConnection('anthropic', []), defaultModel: 'other' }, selected))
+      .toBe(selected);
   });
 });
 

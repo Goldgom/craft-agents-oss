@@ -46,6 +46,7 @@ export class SourceManager {
   private intendedSlugs: Set<string> = new Set();
   private allSources: LoadedSource[] = [];
   private knownSlugs: Set<string> = new Set();
+  private toolCatalog: Map<string, string[]> = new Map();
 
   constructor(config: SourceManagerConfig = {}) {
     this.config = config;
@@ -89,6 +90,14 @@ export class SourceManager {
    */
   setAllSources(sources: LoadedSource[]): void {
     this.allSources = sources;
+  }
+
+  /** Names of tools currently registered by connected source runtimes. */
+  setToolCatalog(catalog: Record<string, string[]>): void {
+    this.toolCatalog = new Map(Object.entries(catalog).map(([slug, names]) => [
+      slug,
+      [...new Set(names)].sort(),
+    ]));
   }
 
   /**
@@ -195,6 +204,15 @@ export class SourceManager {
         return hasWorkingTools ? slug : `${slug} (no tools)`;
       });
       parts.push(`Active: ${activeWithStatus.join(', ')}`);
+      const available = activeSlugs.filter(slug => this.activeSlugs.has(slug) && this.toolCatalog.has(slug));
+      if (available.length > 0) {
+        parts.push('Available source tools (source/tool; call the exact name advertised by your runtime):');
+        for (const slug of available) {
+          const names = this.toolCatalog.get(slug)!;
+          const shown = names.slice(0, 60);
+          parts.push(`- ${slug}: ${shown.join(', ')}${names.length > shown.length ? ` (+${names.length - shown.length} more in the callable tool catalog)` : ''}`);
+        }
+      }
     } else {
       parts.push('Active: none');
     }

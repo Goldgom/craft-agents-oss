@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { LlmConnection } from '@craft-agent/shared/config'
 import type { FileAttachment } from '@craft-agent/shared/protocol'
-import { buildBackendRuntimeSignature, filterAttachmentsForModelInput } from './runtime-config'
+import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 
 const baseCompat: LlmConnection = {
   slug: 'local',
@@ -70,6 +70,20 @@ describe('buildBackendRuntimeSignature', () => {
     })
 
     expect(codex).not.toBe(pi)
+  })
+})
+
+describe('buildRestartRequiredSignature', () => {
+  it('restarts an existing session after its workspace mini model changes', () => {
+    const input = {
+      connection: baseCompat,
+      provider: 'pi' as const,
+      agentRuntime: 'pi' as const,
+      authType: 'api_key' as const,
+      resolvedModel: 'gemma',
+    }
+    expect(buildRestartRequiredSignature({ ...input, miniModel: 'gemma' }))
+      .not.toBe(buildRestartRequiredSignature({ ...input, miniModel: 'gpt-6-luna' }))
   })
 })
 

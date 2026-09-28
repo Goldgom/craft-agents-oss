@@ -137,9 +137,9 @@ function assembleResources(config: ServerBuildConfig): void {
   const destResources = join(outputDir, 'resources');
 
   console.log(minimal
-    ? '  Copying essential permission and tool metadata...'
-    : '  Copying docs, themes, permissions, tool-icons...');
-  const resourceDirs = minimal ? ['permissions', 'tool-icons'] : ['docs', 'themes', 'permissions', 'tool-icons'];
+    ? '  Copying essential docs, skills, permission and tool metadata...'
+    : '  Copying docs, themes, skills, permissions, tool-icons...');
+  const resourceDirs = minimal ? ['docs', 'skills', 'permissions', 'tool-icons'] : ['docs', 'themes', 'skills', 'permissions', 'tool-icons'];
   for (const dir of resourceDirs) {
     const src = join(srcResources, dir);
     if (existsSync(src)) {

@@ -8,6 +8,7 @@ export interface BackendRuntimeSignatureInput {
   agentRuntime: AgentRuntimeProtocol
   authType?: LlmAuthType
   resolvedModel: string
+  miniModel?: string
 }
 
 export interface ModelAttachmentFilterResult {
@@ -49,7 +50,7 @@ function normalizeCustomModels(connection: LlmConnection): Array<Record<string, 
  * fully reset on a runtime update.
  */
 export function buildRestartRequiredSignature(input: BackendRuntimeSignatureInput): string {
-  const { connection, provider, agentRuntime, authType } = input
+  const { connection, provider, agentRuntime, authType, miniModel } = input
   return JSON.stringify(definedObject({
     provider,
     agentRuntime,
@@ -57,6 +58,7 @@ export function buildRestartRequiredSignature(input: BackendRuntimeSignatureInpu
     slug: connection?.slug,
     providerType: connection?.providerType,
     piAuthProvider: connection?.piAuthProvider,
+    miniModel,
   }))
 }
 

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync
 import { dirname, join } from 'path'
 import { tmpdir } from 'node:os'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
-import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, getDefaultThinkingLevel, setDefaultThinkingLevel, getDefaultLlmConnection, getLlmConnection, resolveAgentRuntime } from '@craft-agent/shared/config'
+import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, getDefaultThinkingLevel, setDefaultThinkingLevel, getDefaultLlmConnection, getLlmConnection, resolveMiniModel, resolveAgentRuntime } from '@craft-agent/shared/config'
 import { isValidThinkingLevel, normalizeThinkingLevel, THINKING_LEVEL_IDS } from '@craft-agent/shared/agent/thinking-levels'
 import { setTransferableHandler } from './transfer'
 
@@ -227,6 +227,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     return {
       name: config?.name,
       model: config?.defaults?.model,
+      miniModel: config?.defaults?.miniModel,
       permissionMode: config?.defaults?.permissionMode,
       cyclablePermissionModes: config?.defaults?.cyclablePermissionModes,
       thinkingLevel: normalizeThinkingLevel(config?.defaults?.thinkingLevel),
@@ -245,7 +246,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       : value
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection']
+    const validKeys = ['name', 'model', 'miniModel', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection']
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
     }
@@ -269,6 +270,15 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const config = loadWorkspaceConfig(workspace.rootPath)
     if (!config) {
       throw new Error(`Failed to load workspace config: ${workspaceId}`)
+    }
+
+    if (key === 'miniModel' && normalizedValue !== undefined && normalizedValue !== null) {
+      if (typeof normalizedValue !== 'string') throw new Error('Mini model must be a model ID')
+      const connectionSlug = config.defaults?.defaultLlmConnection ?? getDefaultLlmConnection()
+      const connection = connectionSlug ? getLlmConnection(connectionSlug) : null
+      if (!connection || resolveMiniModel(connection, normalizedValue) !== normalizedValue) {
+        throw new Error(`Mini model "${normalizedValue}" is unavailable for this workspace connection`)
+      }
     }
 
     // Handle 'name' specially - it's a top-level config property, not in defaults

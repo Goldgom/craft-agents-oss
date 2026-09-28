@@ -89,6 +89,10 @@ describe('system prompt guidance', () => {
     const skillPaths = [...prompt.matchAll(/Read `([^`]+\/skills\/[^`]+\/SKILL\.md)`\./g)].map(match => match[1]!)
     expect(skillPaths.length).toBeGreaterThanOrEqual(17)
     expect(skillPaths.every(path => existsSync(path))).toBe(true)
+    expect(prompt).not.toContain('/bundled-skills/')
+    expect(prompt).toContain('## Connected Sources and MCP Tools')
+    expect(prompt).toContain('runtime\'s callable tool catalog')
+    expect(prompt).not.toContain('mcp__sources__{slug}__list_tools')
   })
 
   it('also injects Subagent Collaboration guidance for lightweight models when enabled', () => {
@@ -106,6 +110,7 @@ describe('system prompt guidance', () => {
       { lightweight: true },
     )
     expect(prompt).toContain('## Subagent Collaboration')
+    expect(prompt).toContain('## Connected Sources and MCP Tools')
   })
 })
 

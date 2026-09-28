@@ -58,6 +58,8 @@ export interface WorkspaceConfig {
    */
   defaults?: {
     model?: string;
+    /** Text model for titles, summaries, and other short utility requests. */
+    miniModel?: string;
     /** Default LLM connection for new sessions (slug). Overrides global default. */
     defaultLlmConnection?: string;
     enabledSourceSlugs?: string[]; // Sources to enable by default

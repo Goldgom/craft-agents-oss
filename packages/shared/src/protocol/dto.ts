@@ -988,6 +988,7 @@ export interface UpdateInfo {
 export interface WorkspaceSettings {
   name?: string
   model?: string
+  miniModel?: string
   permissionMode?: PermissionMode
   cyclablePermissionModes?: PermissionMode[]
   thinkingLevel?: ThinkingLevel

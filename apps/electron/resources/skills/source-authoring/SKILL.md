@@ -15,6 +15,6 @@ Ask only for connection details that are required. Scope URLs, filesystem roots,
 
 Write a short guide that tells the agent what the source is for, how to use it safely, and what important entities or conventions mean. Validate the configuration and report any credential or authorization step that remains with the user.
 
-For Codex-style runtimes, source MCP tools are named from the source slug, not an internal ID. Use `mcp__sources__{slug}__list_tools` when discovery is needed and call MCP functions directly rather than through the shell.
+For Codex-style runtimes, use the connected source tools listed in `<sources>` and the runtime's callable tool catalog. Use each tool's advertised name and schema; tool naming can differ by runtime. Call MCP functions directly rather than through the shell.
 
 Run `source_test` once after authoring, before authentication. Then trigger the correct credential or OAuth tool. If a freshly authenticated MCP source still reports authentication required, ask the user to re-enable the source or restart the session instead of repeatedly testing or retrying.

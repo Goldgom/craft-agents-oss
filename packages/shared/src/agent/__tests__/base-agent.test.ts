@@ -132,6 +132,18 @@ describe('BaseAgent', () => {
       expect(agent.isSourceServerActive('inactive-source')).toBe(false);
     });
 
+    it('exposes tools registered by the MCP pool in per-turn source context', async () => {
+      const pool = {
+        sync: async () => {},
+        getConnectedSlugs: () => ['github'],
+        getTools: () => [{ name: 'list_issues' }, { name: 'create_issue' }],
+      };
+      const poolAgent = new TestAgent({ ...createMockBackendConfig(), mcpPool: pool as never });
+      await poolAgent.setSourceServers({ github: { type: 'http', url: 'http://test' } }, {}, ['github']);
+
+      expect(poolAgent.getSourceManager().formatSourceState()).toContain('github: create_issue, list_issues');
+    });
+
     it('should track all sources', () => {
       const sources = [
         createMockSource({ slug: 'source-1' }),
