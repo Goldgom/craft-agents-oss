@@ -78,7 +78,7 @@ import {
   type EphemeralQueryResource,
 } from './ephemeral-query-lifecycle.ts';
 import {
-  buildCustomEndpointModelDef,
+  buildCustomEndpointProviderModels,
   normalizeCustomEndpointModelEntry,
   stripPiPrefix,
   type CustomEndpointApi,
@@ -498,12 +498,7 @@ function registerCustomEndpointModels(
     api,
     authHeader: true,
     headers: initConfig?.customHeaders,
-    models: allIds.map(id => buildCustomEndpointModelDef(
-      id,
-      { supportsImages: initConfig?.customEndpoint?.supportsImages === true },
-      customModelOverrides.get(id),
-      api,
-    )),
+    models: buildCustomEndpointProviderModels(allIds, initConfig?.customEndpoint, customModelOverrides),
   });
   debugLog(`Registered custom endpoint: ${baseUrl} with ${allIds.length} model(s) [${allIds.join(', ')}], api: ${api}`);
 }

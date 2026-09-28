@@ -179,9 +179,9 @@ export async function buildCallLlmRequest(
   input: Record<string, unknown>,
   options: BuildCallLlmOptions
 ): Promise<LLMQueryRequest> {
-  const prompt = input.prompt as string;
-  if (!prompt?.trim()) {
-    throw new Error('Prompt is required and cannot be empty.');
+  const prompt = input.prompt;
+  if (typeof prompt !== 'string' || !prompt.trim()) {
+    throw new Error('Prompt is required and cannot be empty. Retry call_llm with a non-empty prompt describing the task.');
   }
 
   // Process attachments
@@ -562,7 +562,7 @@ export function createLLMTool(options: LLMToolOptions) {
 
   return tool(
     'call_llm',
-    `Invoke a secondary LLM for focused subtasks. Use for:
+    `Invoke a secondary LLM for focused subtasks. Always provide a non-empty 'prompt' with the specific task; 'model' and 'attachments' alone are not a request. Use for:
 - Cost optimization: use a smaller model for simple tasks (summarization, classification)
 - Structured output: JSON schema compliance via native backend support
 - Parallel processing: call multiple times in one message - all run simultaneously
@@ -602,7 +602,7 @@ For large files (>2000 lines), use {path, startLine, endLine} to select a portio
       // ========================================
 
       if (!args.prompt?.trim()) {
-        return errorResponse('Prompt is required and cannot be empty.');
+        return errorResponse('Prompt is required and cannot be empty. Retry call_llm with a non-empty prompt describing the task.');
       }
 
       if (args.outputFormat && args.outputSchema) {

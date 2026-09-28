@@ -81,6 +81,7 @@ describe('system prompt guidance', () => {
     expect(prompt).toContain('browser-automation')
     expect(prompt).toContain('pages-authoring')
     expect(prompt).toContain('document-workflows')
+    expect(prompt).toContain('canvas-editing')
     expect(prompt).not.toContain('browser_tool click-at 350 200')
     expect(prompt).not.toContain('"filename": "Q1_Revenue.xlsx"')
     expect(prompt).toContain('## Permission Modes')

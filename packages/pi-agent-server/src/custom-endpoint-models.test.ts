@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   buildCustomEndpointModelDef,
+  buildCustomEndpointProviderModels,
   normalizeCustomEndpointModelEntry,
   stripPiPrefix,
 } from './custom-endpoint-models.ts'
@@ -41,6 +42,27 @@ describe('normalizeCustomEndpointModelEntry', () => {
       contextWindow: 262_144,
       supportsImages: true,
     })
+  })
+})
+
+describe('buildCustomEndpointProviderModels', () => {
+  it('registers TokenNest models with image input when the connection leaves the capability unset', () => {
+    const models = buildCustomEndpointProviderModels(
+      ['gpt-vision'],
+      { api: 'openai-completions' },
+      new Map(),
+    )
+    expect(models[0]?.input).toEqual(['text', 'image'])
+  })
+
+  it('keeps explicit text-only and per-model image settings', () => {
+    const overrides = new Map([['vision', { supportsImages: true }]])
+    const models = buildCustomEndpointProviderModels(
+      ['text-only', 'vision'],
+      { api: 'openai-completions', supportsImages: false },
+      overrides,
+    )
+    expect(models.map(model => model.input)).toEqual([['text'], ['text', 'image']])
   })
 })
 

@@ -43,6 +43,14 @@ describe('session tool filtering helpers', () => {
     expect(names.includes('send_developer_feedback')).toBe(false);
   });
 
+  it('advertises a required non-empty prompt for call_llm', () => {
+    const callLlm = getToolDefsAsJsonSchema().find(def => def.name === 'call_llm');
+    expect(callLlm).toBeDefined();
+    expect(callLlm!.description.slice(0, 200)).toContain("non-empty 'prompt'");
+    expect(callLlm!.inputSchema.required).toContain('prompt');
+    expect((callLlm!.inputSchema.properties as Record<string, { minLength?: number }>).prompt.minLength).toBe(1);
+  });
+
   it('all canonical session tools declare safeMode metadata', () => {
     for (const def of SESSION_TOOL_DEFS) {
       expect(def.safeMode === 'allow' || def.safeMode === 'block').toBe(true);

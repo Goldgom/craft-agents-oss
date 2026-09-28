@@ -3,6 +3,7 @@ import { CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, C
 import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
+import { runStudioImageToolAction } from './studio-image-tool'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import { createScopedLogger, CONSOLE_LOGGER, type PlatformServices, type Logger } from '@craft-agent/server-core/runtime'
 import { basename, dirname, join } from 'path'
@@ -4718,6 +4719,9 @@ export class SessionManager implements ISessionManager {
       // Wire up session self-management tools (set_session_labels, set_session_status, etc.)
       mergeSessionScopedToolCallbacks(managed.id, {
         canvasToolFn: async (args: Record<string, unknown>): Promise<unknown> => {
+          if (args.action === 'list_image_connections' || args.action === 'generate_image') {
+            return runStudioImageToolAction(managed.workspace.rootPath, managed.id, args)
+          }
           if (!this.rpcServer) throw new Error('Canvas requires a connected desktop client')
           const candidates = this.rpcServer.findClientsWithCapability(CLIENT_CANVAS_INVOKE, { workspaceId: managed.workspace.id })
           const clientId = candidates[0]

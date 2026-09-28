@@ -349,6 +349,7 @@ const BUILTIN_PROMPT_SKILLS: readonly BuiltinPromptSkill[] = [
   { slug: 'session-workflows', description: 'Manage session metadata, tasks, background work, and cross-session handoffs.' },
   { slug: 'pages-authoring', description: 'Create persistent Pages and their secure live-data bridge.' },
   { slug: 'previews-and-diagrams', description: 'Render Mermaid, HTML, PDF, image, Markdown, and tabbed previews.' },
+  { slug: 'canvas-editing', description: 'Create images with GPT Image and operate drawing sessions through canvas_tool.' },
   { slug: 'messaging-and-collaboration', description: 'Work with messaging channels, shared collaboration boards, and collaboration files.' },
   { slug: 'resource-transfer', description: 'Export or import portable source and integration bundles.' },
   { slug: 'remote-operations', description: 'Run scoped local/remote shell commands and transfer files over SFTP.' },

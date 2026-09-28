@@ -15,6 +15,10 @@ const ZH_HANS_BUILTIN_SKILLS: Record<string, LocalizedSkillMetadata> = {
     name: '浏览器自动化',
     description: '操作词元鸟内置浏览器，完成界面操作、表单填写、下载、检查及 API 不适用时的访问任务。',
   },
+  'canvas-editing': {
+    name: '画布与图片生成',
+    description: '调用 GPT Image 生成图片，或操作词元鸟画布中的图层、选区及绘画能力。',
+  },
   'document-workflows': {
     name: '文档工作流',
     description: '使用内置命令行工具读取、创建、转换、检查、比较和编辑 PDF、Office、图片、日历等文档。',
@@ -89,6 +93,10 @@ const ZH_HANT_BUILTIN_SKILLS: Record<string, LocalizedSkillMetadata> = {
   'browser-automation': {
     name: '瀏覽器自動化',
     description: '操作詞元鳥內建瀏覽器，完成介面操作、表單填寫、下載、檢查及 API 不適用時的存取工作。',
+  },
+  'canvas-editing': {
+    name: '畫布與圖片生成',
+    description: '呼叫 GPT Image 生成圖片，或操作詞元鳥畫布中的圖層、選取區域及繪畫功能。',
   },
   'document-workflows': {
     name: '文件工作流程',

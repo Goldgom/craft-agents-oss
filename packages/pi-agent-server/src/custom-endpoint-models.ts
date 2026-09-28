@@ -79,3 +79,17 @@ export function buildCustomEndpointModelDef(
     ...(api === 'openai-completions' ? { compat: { supportsStore: false } } : {}),
   }
 }
+
+/** Keep an omitted endpoint capability omitted when registering Pi models. */
+export function buildCustomEndpointProviderModels(
+  ids: string[],
+  endpoint: { api: CustomEndpointApi; supportsImages?: boolean } | undefined,
+  overrides: ReadonlyMap<string, CustomEndpointModelOverrides>,
+) {
+  return ids.map(id => buildCustomEndpointModelDef(
+    id,
+    endpoint,
+    overrides.get(id),
+    endpoint?.api,
+  ))
+}

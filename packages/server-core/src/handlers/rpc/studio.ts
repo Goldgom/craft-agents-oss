@@ -7,7 +7,7 @@ import { exportDrawioToVisio } from './studio-visio'
 import { inflateRawSync } from 'node:zlib'
 import { isValidThinkingLevel, type ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 
-type ImageInput = {
+export type ImageInput = {
   connectionSlug: string
   model: string
   prompt: string
@@ -195,9 +195,7 @@ function parseMindMapReply(raw: string): { xml: string; summary: string } {
   return { xml: requireDrawioXml(xml), summary }
 }
 
-export function registerStudioHandlers(server: RpcServer): void {
-  server.handle(RPC_CHANNELS.studio.EXPORT_VISIO, async (_ctx, xml: string) => ({ base64: await exportDrawioToVisio(xml) }))
-  server.handle(RPC_CHANNELS.studio.GENERATE_IMAGE, async (_ctx, input: ImageInput) => {
+export async function generateStudioImage(input: ImageInput): Promise<{ imageBase64: string; mimeType: string; images: Array<{ imageBase64: string; mimeType: string }> }> {
     const { connection, baseUrl } = resolveConnection(input.connectionSlug)
     const model = requireText(input.model, 'Image model', 120)
     const prompt = requireText(input.prompt, 'Prompt', 4000)
@@ -239,7 +237,11 @@ export function registerStudioHandlers(server: RpcServer): void {
       : []
     if (images.length) return { ...images[0], images }
     throw new Error('Image provider did not return image data')
-  })
+}
+
+export function registerStudioHandlers(server: RpcServer): void {
+  server.handle(RPC_CHANNELS.studio.EXPORT_VISIO, async (_ctx, xml: string) => ({ base64: await exportDrawioToVisio(xml) }))
+  server.handle(RPC_CHANNELS.studio.GENERATE_IMAGE, async (_ctx, input: ImageInput) => generateStudioImage(input))
 
   server.handle(RPC_CHANNELS.studio.ASSIST_CANVAS, async (_ctx, input: CanvasAssistRequest) => {
     const { connection, baseUrl } = resolveConnection(input.connectionSlug)

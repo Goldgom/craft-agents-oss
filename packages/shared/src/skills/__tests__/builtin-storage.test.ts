@@ -26,6 +26,7 @@ describe('bundled skills', () => {
         .filter(skill => skill.source === 'builtin')
         .map(skill => skill.slug)
       expect(builtinSlugs).toContain('browser-automation')
+      expect(builtinSlugs).toContain('canvas-editing')
       expect(builtinSlugs).toContain('structured-data')
       expect(builtinSlugs).toContain('document-workflows')
       expect(builtinSlugs).toContain('pages-authoring')

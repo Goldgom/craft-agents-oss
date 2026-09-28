@@ -85,6 +85,7 @@ export const CanvasToolSchema = z.object({
     'add_layer', 'duplicate_layer', 'remove_layer', 'move_layer', 'set_layer', 'transform_layer', 'merge_down',
     'paint', 'erase', 'extract_selection', 'clear_selection_pixels', 'cutout', 'adjust', 'set_parameters',
     'generate', 'choose_candidate', 'download_candidate', 'dismiss_candidates',
+    'list_image_connections', 'generate_image',
     'list_history', 'add_history', 'delete_history', 'download_history', 'reuse_prompt',
     'ask_gpt', 'undo', 'redo', 'fit_view', 'zoom', 'set_view',
   ]).describe('Canvas operation to perform'),
@@ -111,6 +112,8 @@ export const CanvasToolSchema = z.object({
   prompt: z.string().optional(),
   mode: z.enum(['generate', 'inpaint', 'outpaint', 'cutout']).optional(),
   count: z.number().int().min(1).max(4).optional(),
+  size: z.enum(['1024x1024', '1536x1024', '1024x1536']).optional().describe('Direct image generation size'),
+  transparentBackground: z.boolean().optional().describe('Request a transparent GPT Image background'),
   connectionSlug: z.string().optional(), model: z.string().optional(), channelGroup: z.string().optional(),
   assistantConnectionSlug: z.string().optional(), assistantModel: z.string().optional(),
   question: z.string().optional().describe('Question for the GPT canvas assistant'),
@@ -158,7 +161,7 @@ export const CredentialPromptSchema = z.object({
 });
 
 export const CallLlmSchema = z.object({
-  prompt: z.string().describe('Instructions for the LLM'),
+  prompt: z.string().min(1).describe('Required non-empty instructions and input for the LLM. Include the specific task even when using attachments.'),
   attachments: z.array(z.union([
     z.string().describe('Simple file path'),
     z.object({
@@ -451,7 +454,7 @@ export const ImportResourcesSchema = z.object({
 // ============================================================
 
 export const TOOL_DESCRIPTIONS = {
-  canvas_tool: `Operate TokenBird drawing sessions through the connected desktop client. Start with list_sessions or get_state. Use sessionId to target a specific drawing session; select_session switches the editor to it. Supports session CRUD, importing images/projects, PNG/project export, selections, layers, painting/erasing, cutout, color/style/blur adjustments, AI image generation, GPT canvas questions, undo/redo and view controls. Image/project/output paths refer to the connected desktop machine. Destructive delete_session requires confirm=true. For AI generation, set image connection/model first with set_parameters; inpaint/outpaint require a selection.`,
+  canvas_tool: `Operate TokenBird drawing sessions through the connected desktop client. Start with list_sessions or get_state. Use sessionId to target a specific drawing session; select_session switches the editor to it. Supports session CRUD, importing images/projects, PNG/project export, selections, layers, painting/erasing, cutout, color/style/blur adjustments, AI image generation, GPT canvas questions, undo/redo and view controls. Image/project/output paths refer to the connected desktop machine. Destructive delete_session requires confirm=true. For canvas AI generation, set image connection/model first with set_parameters; inpaint/outpaint require a selection. To generate a standalone GPT Image without opening the canvas, call list_image_connections then generate_image with a prompt; this requires a configured image connection or TokenNest image access and saves PNG files in the agent session.`,
   SubmitPlan: `Submit a plan for user review.
 
 Call this after you have written your plan to a markdown file using the Write tool.
@@ -687,7 +690,7 @@ Examples:
 - \`close\` — close and destroy the browser window
 - \`hide\` — hide the window while preserving state`,
 
-  call_llm: `Invoke a secondary LLM for focused subtasks. Use for:
+  call_llm: `Invoke a secondary LLM for focused subtasks. Always provide a non-empty 'prompt' with the specific task; 'model' and 'attachments' alone are not a request. Use for:
 - Cost optimization: use a smaller model for simple tasks (summarization, classification)
 - Structured output: JSON schema compliance via prompt instructions
 - Parallel processing: call multiple times in one message - all run simultaneously

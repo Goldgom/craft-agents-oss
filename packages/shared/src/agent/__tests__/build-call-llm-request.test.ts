@@ -56,6 +56,12 @@ describe('buildCallLlmRequest()', () => {
     ).rejects.toThrow('Prompt is required');
   });
 
+  it('tells the agent how to retry a missing prompt', async () => {
+    await expect(
+      buildCallLlmRequest({ model: 'gpt-6-luna' }, { backendName: 'Test' })
+    ).rejects.toThrow('Retry call_llm with a non-empty prompt describing the task.');
+  });
+
   // --- Basic request ---
 
   it('builds request from prompt-only input', async () => {
