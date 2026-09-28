@@ -7,6 +7,8 @@
  * callers (factory.ts testBackendConnection timeout path) can surface them.
  */
 import { describe, expect, it } from 'bun:test'
+import { EventEmitter } from 'node:events'
+import type { ChildProcess } from 'node:child_process'
 import { PiAgent } from '../pi-agent.ts'
 import type { BackendConfig } from '../backend/types.ts'
 
@@ -104,6 +106,25 @@ describe('PiAgent stderr ring buffer', () => {
 
     expect(rejection?.message).toContain('code 1')
     expect(rejection?.message).toContain('native module failed to load')
+    agent.destroy()
+  })
+
+  it('ignores exit events from an old or intentionally stopped subprocess', () => {
+    const agent = new PiAgent(createConfig())
+    const oldChild = new EventEmitter() as ChildProcess
+    const currentChild = new EventEmitter() as ChildProcess
+    const internals = agent as unknown as {
+      subprocess: ChildProcess | null
+      stoppingSubprocesses: WeakSet<ChildProcess>
+      handleChildExit: (child: ChildProcess, code: number | null, signal: string | null) => void
+    }
+    internals.subprocess = currentChild
+    internals.handleChildExit(oldChild, null, 'SIGTERM')
+    expect(internals.subprocess).toBe(currentChild)
+    internals.stoppingSubprocesses.add(currentChild)
+    internals.handleChildExit(currentChild, null, 'SIGTERM')
+    expect(internals.subprocess).toBe(currentChild)
+    internals.subprocess = null
     agent.destroy()
   })
 })

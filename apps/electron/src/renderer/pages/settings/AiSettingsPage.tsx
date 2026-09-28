@@ -220,30 +220,44 @@ function ModelPromptSettingsCard({
   const models = getModelOptionsForConnection(connection)
   if (models.length === 0) return null
   return (
-    <SettingsSection title={`${t('settings.ai.modelPromptSettings')}: ${connection.name}`} description={t('settings.ai.modelPromptSettingsDesc')}>
-      <SettingsCard>
-        {models.map((model, index) => {
-          const settings = connection.modelSettings?.[model.value] ?? {}
-          return (
-            <div key={model.value} className={cn(index > 0 && 'border-t border-border/50')}>
-              <div className="px-4 pt-3 text-sm font-medium">{model.label}</div>
-              <SettingsToggle
-                label={t('settings.ai.lightweightPrompt')}
-                description={t('settings.ai.lightweightPromptDesc')}
-                checked={settings.lightweight === true}
-                onCheckedChange={(value) => onChange(model.value, 'lightweight', value)}
-              />
-              <SettingsToggle
-                label={t('settings.ai.mcpPromptEnhancement')}
-                description={t('settings.ai.mcpPromptEnhancementDesc')}
-                checked={settings.mcpPromptEnhancement === true}
-                onCheckedChange={(value) => onChange(model.value, 'mcpPromptEnhancement', value)}
-              />
-            </div>
-          )
-        })}
-      </SettingsCard>
-    </SettingsSection>
+    <section>
+      <details className="group/connection overflow-hidden rounded-xl bg-background shadow-minimal">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3.5 transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <span className="block text-base font-semibold">{t('settings.ai.modelPromptSettings')}: {connection.name}</span>
+            <span className="block text-sm text-muted-foreground">{t('settings.ai.modelPromptSettingsDesc')}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open/connection:rotate-90" />
+        </summary>
+        <div className="border-t border-border/50">
+          {models.map((model, index) => {
+            const settings = connection.modelSettings?.[model.value] ?? {}
+            return (
+              <details key={model.value} className={cn('group/model', index > 0 && 'border-t border-border/50')}>
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                  <span className="min-w-0 truncate">{model.label}</span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open/model:rotate-90" />
+                </summary>
+                <div className="border-t border-border/30">
+                  <SettingsToggle
+                    label={t('settings.ai.lightweightPrompt')}
+                    description={t('settings.ai.lightweightPromptDesc')}
+                    checked={settings.lightweight === true}
+                    onCheckedChange={(value) => onChange(model.value, 'lightweight', value)}
+                  />
+                  <SettingsToggle
+                    label={t('settings.ai.mcpPromptEnhancement')}
+                    description={t('settings.ai.mcpPromptEnhancementDesc')}
+                    checked={settings.mcpPromptEnhancement === true}
+                    onCheckedChange={(value) => onChange(model.value, 'mcpPromptEnhancement', value)}
+                  />
+                </div>
+              </details>
+            )
+          })}
+        </div>
+      </details>
+    </section>
   )
 }
 

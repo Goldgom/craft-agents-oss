@@ -26,7 +26,7 @@ import { findSessionDataLink, workspaceDataRelativePath } from '@/lib/session-da
 import { navigate, routes } from '@/lib/navigate'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
-import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, releaseSessionMessagesAtom, sessionMetaMapAtom } from '@/atoms/sessions'
+import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, releaseSessionMessagesAtom, sessionMetaMapAtom, updateSessionAtom } from '@/atoms/sessions'
 import { kanbanEditorTargetAtom } from '@/atoms/kanban'
 import { getSessionTitle } from '@/utils/session'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
@@ -106,6 +106,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   const ensureMessagesLoaded = useSetAtom(ensureSessionMessagesLoadedAtom)
   const forceMessagesReload = useSetAtom(forceSessionMessagesReloadAtom)
   const releaseMessages = useSetAtom(releaseSessionMessagesAtom)
+  const updateSession = useSetAtom(updateSessionAtom)
   const [messagesLoadError, setMessagesLoadError] = React.useState<string | null>(null)
   const [messagesRetrying, setMessagesRetrying] = React.useState(false)
   const autoForcedReloadSessionRef = React.useRef<string | null>(null)
@@ -300,13 +301,17 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     if (activeWorkspaceId) {
       try {
         await window.electronAPI.setSessionModel(sessionId, activeWorkspaceId, model, connection)
+        // The remote server may acknowledge the change before its event reaches this
+        // window (or the event may be lost during reconnect). Keep the picker in
+        // sync with the persisted model after the RPC succeeds.
+        updateSession(sessionId, current => current ? { ...current, model } : current)
       } catch (error) {
         toast.error(t('toast.failedToSaveSetting', { setting: t('common.model') }), {
           description: error instanceof Error ? error.message : 'Unknown error',
         })
       }
     }
-  }, [sessionId, activeWorkspaceId, t])
+  }, [sessionId, activeWorkspaceId, t, updateSession])
 
   // Session connection change handler - can only change before first message
   const handleConnectionChange = React.useCallback(async (connectionSlug: string) => {

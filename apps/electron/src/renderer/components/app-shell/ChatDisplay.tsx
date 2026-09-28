@@ -259,10 +259,7 @@ export interface ChatDisplayHandle {
   isHighlighting: boolean
 }
 
-/**
- * Processing status messages - cycles through these randomly
- * Inspired by Claude Code's playful status messages
- */
+/** Processing status messages, including a few playful additions. */
 const PROCESSING_MESSAGE_KEYS = [
   'chat.processing.thinking',
   'chat.processing.pondering',
@@ -314,7 +311,26 @@ const PROCESSING_MESSAGE_KEYS = [
   'chat.processing.chugging',
   'chat.processing.trucking',
   'chat.processing.rolling',
+  'chat.processing.gatheringClues',
+  'chat.processing.sortingIdeas',
+  'chat.processing.connectingSparks',
+  'chat.processing.sketchingIdeas',
+  'chat.processing.fittingPieces',
+  'chat.processing.littleGears',
+  'chat.processing.tidyingThoughts',
+  'chat.processing.untanglingThreads',
+  'chat.processing.whizzingThoughts',
+  'chat.processing.thinkingHard',
 ]
+
+function shuffledProcessingMessageIndexes(exclude: number): number[] {
+  const indexes = PROCESSING_MESSAGE_KEYS.map((_, index) => index).filter(index => index !== exclude)
+  for (let index = indexes.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[indexes[index], indexes[swapIndex]] = [indexes[swapIndex], indexes[index]]
+  }
+  return indexes
+}
 
 /**
  * Format elapsed time: "45s" under a minute, "1:02" for 1+ minutes
@@ -331,18 +347,26 @@ interface ProcessingIndicatorProps {
   startTime?: number
   /** Override cycling messages with explicit status (e.g., "Compacting...") */
   statusMessage?: string
+  /** Intermediate assistant text received since the latest user message. */
+  thinkingMessages: Message[]
 }
 
 /**
  * ProcessingIndicator - Shows cycling status messages with elapsed time
  * Matches TurnCard header layout for visual continuity
  */
-function ProcessingIndicator({ startTime, statusMessage }: ProcessingIndicatorProps) {
+function ProcessingIndicator({ startTime, statusMessage, thinkingMessages }: ProcessingIndicatorProps) {
   const { t } = useTranslation()
   const [elapsed, setElapsed] = React.useState(0)
-  const [messageIndex, setMessageIndex] = React.useState(() =>
-    Math.floor(Math.random() * PROCESSING_MESSAGE_KEYS.length)
-  )
+  const [showThinking, setShowThinking] = React.useState(false)
+  const thinkingStreamId = React.useId()
+  const thinkingStreamRef = React.useRef<HTMLDivElement>(null)
+  const followThinkingRef = React.useRef(true)
+  const latestThinkingText = thinkingMessages.at(-1)?.content
+  const [messageCycle, setMessageCycle] = React.useState(() => ({
+    index: Math.floor(Math.random() * PROCESSING_MESSAGE_KEYS.length),
+    remaining: [] as number[],
+  }))
 
   // Update elapsed time every second using provided startTime
   React.useEffect(() => {
@@ -356,50 +380,94 @@ function ProcessingIndicator({ startTime, statusMessage }: ProcessingIndicatorPr
     return () => clearInterval(interval)
   }, [startTime])
 
-  // Cycle through messages every 10 seconds (only when not showing status)
+  // Cycle through each phrase before repeating one, unless the backend sets an explicit status.
   React.useEffect(() => {
     if (statusMessage) return  // Don't cycle when showing status
     const interval = setInterval(() => {
-      setMessageIndex(prev => {
-        // Pick a random different message
-        let next = Math.floor(Math.random() * PROCESSING_MESSAGE_KEYS.length)
-        while (next === prev && PROCESSING_MESSAGE_KEYS.length > 1) {
-          next = Math.floor(Math.random() * PROCESSING_MESSAGE_KEYS.length)
+      setMessageCycle(prev => {
+        const remaining = prev.remaining.length > 0
+          ? prev.remaining
+          : shuffledProcessingMessageIndexes(prev.index)
+        return {
+          index: remaining.at(-1) ?? prev.index,
+          remaining: remaining.slice(0, -1),
         }
-        return next
       })
     }, 10000)
     return () => clearInterval(interval)
   }, [statusMessage])
 
   // Use status message if provided, otherwise cycle through default messages
-  const displayMessage = statusMessage || t(PROCESSING_MESSAGE_KEYS[messageIndex])
+  const displayMessage = statusMessage || t(PROCESSING_MESSAGE_KEYS[messageCycle.index])
+
+  React.useLayoutEffect(() => {
+    const stream = thinkingStreamRef.current
+    if (showThinking && stream && followThinkingRef.current) {
+      stream.scrollTop = stream.scrollHeight
+    }
+  }, [showThinking, thinkingMessages.length, latestThinkingText])
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1 -mb-1 text-[13px] text-muted-foreground">
-      {/* Spinner in same location as TurnCard chevron */}
-      <div className="w-3 h-3 flex items-center justify-center shrink-0">
-        <Spinner className="text-[10px]" />
+    <div className="px-3 py-1 -mb-1 text-[13px] text-muted-foreground">
+      <div className="flex items-center gap-2">
+        {/* Spinner in same location as TurnCard chevron */}
+        <div className="w-3 h-3 flex items-center justify-center shrink-0">
+          <Spinner className="text-[10px]" />
+        </div>
+        {/* Label with crossfade animation on content change only */}
+        <span className="relative h-5 flex items-center">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={displayMessage}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.4, ease: 'easeInOut' }}
+            >
+              {displayMessage}
+            </motion.span>
+          </AnimatePresence>
+          {elapsed >= 1 && (
+            <span className="text-muted-foreground/60 ml-1 tabular-nums">
+              {formatElapsed(elapsed)}
+            </span>
+          )}
+        </span>
+        <button
+          type="button"
+          aria-expanded={showThinking}
+          aria-controls={thinkingStreamId}
+          onClick={() => {
+            followThinkingRef.current = true
+            setShowThinking(value => !value)
+          }}
+          className="ml-1 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs text-muted-foreground/80 hover:bg-muted/50 hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {t('chat.modelPicker.thinkingSection')}
+          {showThinking ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+        </button>
       </div>
-      {/* Label with crossfade animation on content change only */}
-      <span className="relative h-5 flex items-center">
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.span
-            key={displayMessage}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.4, ease: 'easeInOut' }}
-          >
-            {displayMessage}
-          </motion.span>
-        </AnimatePresence>
-        {elapsed >= 1 && (
-          <span className="text-muted-foreground/60 ml-1 tabular-nums">
-            {formatElapsed(elapsed)}
-          </span>
-        )}
-      </span>
+      {showThinking && (
+        <div
+          id={thinkingStreamId}
+          ref={thinkingStreamRef}
+          role="log"
+          aria-live="off"
+          onScroll={event => {
+            const stream = event.currentTarget
+            followThinkingRef.current = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 24
+          }}
+          className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs leading-relaxed select-text"
+        >
+          {thinkingMessages.length > 0 ? thinkingMessages.map(message => (
+            <p key={message.id} className="whitespace-pre-wrap break-words [&+p]:mt-2">
+              {message.content || t('chat.noOutputYet')}
+            </p>
+          )) : (
+            <p>{t('chat.noOutputYet')}</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1901,8 +1969,14 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                   const lastUserMsg = [...session.messages].reverse().find(m => m.role === 'user')
                   return (
                     <ProcessingIndicator
+                      key={session.id}
                       startTime={lastUserMsg?.timestamp}
                       statusMessage={session.currentStatus?.message}
+                      thinkingMessages={session.messages.filter(m =>
+                        m.role === 'assistant'
+                        && (m.isIntermediate || m.isPending)
+                        && (!lastUserMsg || m.timestamp >= lastUserMsg.timestamp)
+                      )}
                     />
                   )
                 })()}

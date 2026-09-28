@@ -94,6 +94,31 @@ describe('PiEventAdapter', () => {
   // ============================================================
 
   describe('message events', () => {
+    it('streams thinking separately from the following answer', () => {
+      collect(adapter.adaptEvent({ type: 'turn_start' } as any));
+      const first = collect(adapter.adaptEvent({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'Checking' },
+      } as any));
+      const second = collect(adapter.adaptEvent({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: ' the request' },
+      } as any));
+      const answer = collect(adapter.adaptEvent({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Done' },
+      } as any));
+
+      expect(first[0]).toMatchObject({ type: 'text_delta', text: 'Checking' });
+      expect(second[0].turnId).toBe(first[0].turnId);
+      expect(answer[0]).toMatchObject({
+        type: 'text_complete', text: 'Checking the request', isIntermediate: true,
+        turnId: first[0].turnId,
+      });
+      expect(answer[1]).toMatchObject({ type: 'text_delta', text: 'Done' });
+      expect(answer[1].turnId).not.toBe(first[0].turnId);
+    });
+
     it('should emit nothing for message_start', () => {
       const events = collect(adapter.adaptEvent({ type: 'message_start' } as any));
       expect(events).toHaveLength(0);

@@ -82,6 +82,7 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
   private emittedToolStarts = new Set<string>();
   private activeParentTools = new Set<string>();
   private pendingText: string | null = null;
+  private pendingThinking: { id: string; index: number; text: string } | null = null;
 
   // Session-persistent state (survives across turns)
   private lastAssistantUsage: AssistantUsage | null = null;
@@ -104,6 +105,7 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
     this.emittedToolStarts = new Set();
     this.activeParentTools = new Set();
     this.pendingText = null;
+    this.pendingThinking = null;
     this.lastAssistantUsage = null;
   }
 
@@ -296,6 +298,20 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
   private adaptStreamEvent(message: SDKMessage, events: AgentEvent[]): void {
     const event = (message as any).event;
 
+    const finishThinking = () => {
+      if (!this.pendingThinking) return;
+      if (this.pendingThinking.text) {
+        events.push({
+          type: 'text_complete',
+          text: this.pendingThinking.text,
+          isIntermediate: true,
+          turnId: this.pendingThinking.id,
+          parentToolUseId: (message as any).parent_tool_use_id || undefined,
+        });
+      }
+      this.pendingThinking = null;
+    };
+
     // Debug: log key stream events only (skip per-chunk deltas and frequent pings)
     if (this.callbacks.onDebug && (event.type === 'message_start' || event.type === 'message_stop')) {
       this.callbacks.onDebug(
@@ -313,6 +329,7 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
 
     // message_delta contains the actual stop_reason — emit pending text now
     if (event.type === 'message_delta') {
+      finishThinking();
       const stopReason = event.delta?.stop_reason;
       if (this.pendingText) {
         const isIntermediate = stopReason === 'tool_use';
@@ -327,7 +344,25 @@ export class ClaudeEventAdapter extends BaseEventAdapter {
       }
     }
 
-    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+    if (event.type === 'content_block_delta' && event.delta.type === 'thinking_delta' && event.delta.thinking) {
+      if (!this.pendingThinking) {
+        this.pendingThinking = {
+          id: `${this.currentTurnId || 'unknown'}__thinking${event.index ?? 0}`,
+          index: event.index ?? 0,
+          text: '',
+        };
+      }
+      this.pendingThinking.text += event.delta.thinking;
+      events.push({
+        type: 'text_delta',
+        text: event.delta.thinking,
+        turnId: this.pendingThinking.id,
+        parentToolUseId: (message as any).parent_tool_use_id || undefined,
+      });
+    } else if (event.type === 'content_block_stop' && this.pendingThinking?.index === event.index) {
+      finishThinking();
+    } else if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      finishThinking();
       events.push({
         type: 'text_delta',
         text: event.delta.text,

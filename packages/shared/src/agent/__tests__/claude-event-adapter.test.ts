@@ -71,6 +71,29 @@ describe('ClaudeEventAdapter', () => {
   });
 
   describe('stream_event: text_delta', () => {
+    it('streams thinking as an intermediate block before answer text', async () => {
+      const streamEvent = (event: Record<string, unknown>) => adapter.adapt({
+        type: 'stream_event', event, parent_tool_use_id: null, session_id: 'sess-1',
+      } as any);
+      await streamEvent({ type: 'message_start', message: { id: 'msg-1' } });
+      const thinking = await streamEvent({
+        type: 'content_block_delta', index: 0,
+        delta: { type: 'thinking_delta', thinking: 'Considering options' },
+      });
+      const end = await streamEvent({ type: 'content_block_stop', index: 0 });
+      const answer = await streamEvent({
+        type: 'content_block_delta', index: 1,
+        delta: { type: 'text_delta', text: 'Here is the answer' },
+      });
+
+      expect(thinking[0]).toMatchObject({ type: 'text_delta', text: 'Considering options', turnId: 'msg-1__thinking0' });
+      expect(end[0]).toMatchObject({
+        type: 'text_complete', text: 'Considering options', isIntermediate: true,
+        turnId: 'msg-1__thinking0',
+      });
+      expect(answer[0]).toMatchObject({ type: 'text_delta', text: 'Here is the answer', turnId: 'msg-1' });
+    });
+
     it('should emit text_delta for content_block_delta', async () => {
       const events = await adapter.adapt({
         type: 'stream_event',

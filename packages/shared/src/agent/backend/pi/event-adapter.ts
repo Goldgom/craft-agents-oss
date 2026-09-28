@@ -98,6 +98,8 @@ export class PiEventAdapter extends BaseEventAdapter {
   // Sub-turnId isolation for tool calls within a single Pi turn
   private subTurnCounter: number = 0;
   private messageSubTurnId: string | null = null;
+  private thinkingSubTurnId: string | null = null;
+  private thinkingText = '';
 
   // Model context window for usage_update events
   private contextWindow: number | undefined;
@@ -367,6 +369,8 @@ export class PiEventAdapter extends BaseEventAdapter {
     this.hasEmittedFinalText = false;
     this.subTurnCounter = 0;
     this.messageSubTurnId = null;
+    this.thinkingSubTurnId = null;
+    this.thinkingText = '';
     // A new Craft turn can only start once the previous queue completed (or
     // was force-aborted), so any recovery state left here is stale.
     this.resetRecoveryState();
@@ -494,6 +498,8 @@ export class PiEventAdapter extends BaseEventAdapter {
         // Keep sub-turn IDs unique across SDK turns/retries within this Craft
         // turn. startTurn() is the only place the counter resets.
         this.messageSubTurnId = null;
+        this.thinkingSubTurnId = null;
+        this.thinkingText = '';
         break;
 
       // ============================================================
@@ -507,6 +513,21 @@ export class PiEventAdapter extends BaseEventAdapter {
       case 'message_update': {
         // Pi SDK emits message_update only for assistant messages (streaming deltas)
         const amEvent: AssistantMessageEvent = event.assistantMessageEvent;
+        if (amEvent.type === 'thinking_delta' && amEvent.delta) {
+          if (!this.thinkingSubTurnId) this.thinkingSubTurnId = this.nextSubTurnId('thinking');
+          this.thinkingText += amEvent.delta;
+          yield { type: 'text_delta', text: amEvent.delta, turnId: this.thinkingSubTurnId };
+        }
+        if ((amEvent.type === 'thinking_end' || amEvent.type === 'text_delta') && this.thinkingSubTurnId) {
+          yield {
+            type: 'text_complete',
+            text: this.thinkingText,
+            isIntermediate: true,
+            turnId: this.thinkingSubTurnId,
+          };
+          this.thinkingSubTurnId = null;
+          this.thinkingText = '';
+        }
         if (amEvent.type === 'text_delta' && amEvent.delta) {
           this.hasStreamedDeltas = true;
           if (!this.messageSubTurnId) {
@@ -530,6 +551,14 @@ export class PiEventAdapter extends BaseEventAdapter {
         // event to the Craft assistant message created here (#782).
         const sdkMessageId = (event as { sdkMessageId?: string }).sdkMessageId ?? msg?.id;
         if (msg?.role !== 'assistant') break;
+
+        if (this.thinkingSubTurnId) {
+          yield msg.stopReason === 'error'
+            ? { type: 'text_discard', turnId: this.thinkingSubTurnId }
+            : { type: 'text_complete', text: this.thinkingText, isIntermediate: true, turnId: this.thinkingSubTurnId };
+          this.thinkingSubTurnId = null;
+          this.thinkingText = '';
+        }
 
         // Surface API errors — Pi SDK sets stopReason: 'error' and errorMessage on failures
         if (msg.stopReason === 'error' && msg.errorMessage) {

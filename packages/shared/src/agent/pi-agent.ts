@@ -200,6 +200,7 @@ export class PiAgent extends BaseAgent {
 
   // Subprocess process handle
   private subprocess: ChildProcess | null = null;
+  private readonly stoppingSubprocesses = new WeakSet<ChildProcess>();
   private readline: ReadlineInterface | null = null;
   private subprocessReady: Promise<void> | null = null;
   private subprocessReadyResolve: (() => void) | null = null;
@@ -594,10 +595,11 @@ export class PiAgent extends BaseAgent {
 
     // Handle subprocess exit
     child.on('exit', (code, signal) => {
-      this.handleSubprocessExit(code, signal);
+      this.handleChildExit(child, code, signal);
     });
 
     child.on('error', (error) => {
+      if (this.subprocess !== child || this.stoppingSubprocesses.has(child)) return;
       this.debug(`Subprocess error: ${error.message}`);
       this.subprocessReadyReject?.(error);
       this.resetSubprocessErrorDedup();
@@ -1930,6 +1932,11 @@ export class PiAgent extends BaseAgent {
   /**
    * Handle subprocess exit.
    */
+  private handleChildExit(child: ChildProcess, code: number | null, signal: string | null): void {
+    if (this.subprocess !== child || this.stoppingSubprocesses.has(child)) return;
+    this.handleSubprocessExit(code, signal);
+  }
+
   private handleSubprocessExit(code: number | null, signal: string | null): void {
     this.debug(`Pi subprocess exited: code=${code}, signal=${signal}`);
 
@@ -2655,6 +2662,7 @@ export class PiAgent extends BaseAgent {
     }
 
     const stoppingError = new Error('Pi subprocess stopped during tool registration');
+    this.stoppingSubprocesses.add(child);
     this.subprocessReadyReject?.(stoppingError);
     for (const [, pending] of this.pendingToolRegistrations) {
       pending.reject(stoppingError);
