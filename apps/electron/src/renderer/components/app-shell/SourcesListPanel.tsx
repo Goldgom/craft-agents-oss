@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { DatabaseZap, Download, Upload } from 'lucide-react'
+import { DatabaseZap, Download, Upload, RefreshCw, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { deriveConnectionStatus } from '@/components/ui/source-status-indicator'
@@ -9,6 +9,7 @@ import { EntityListBadge } from '@/components/ui/entity-list-badge'
 import { EntityListEmptyScreen } from '@/components/ui/entity-list-empty'
 import { sourceSelection } from '@/hooks/useEntitySelection'
 import { SourceMenu } from './SourceMenu'
+import { McpManagementDialog } from './McpManagementDialog'
 import { SendResourceToWorkspaceDialog } from './SendResourceToWorkspaceDialog'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { EditPopover, getEditConfig, type EditContextKey } from '@/components/ui/EditPopover'
@@ -39,6 +40,7 @@ export interface SourcesListPanelProps {
   sourceFilter?: SourceFilter | null
   workspaceRootPath?: string
   onDeleteSource: (sourceSlug: string) => void
+  onRefreshSources: () => Promise<void>
   onSourceClick: (source: LoadedSource) => void
   selectedSourceSlug?: string | null
   localMcpEnabled?: boolean
@@ -50,6 +52,7 @@ export function SourcesListPanel({
   sourceFilter,
   workspaceRootPath,
   onDeleteSource,
+  onRefreshSources,
   onSourceClick,
   selectedSourceSlug,
   localMcpEnabled = true,
@@ -66,6 +69,26 @@ export function SourcesListPanel({
 
   // Bundle archive (打包存档 / 一键导入) state
   const [bundleBusy, setBundleBusy] = React.useState<'export' | 'import' | null>(null)
+  const [mcpDialogOpen, setMcpDialogOpen] = React.useState(false)
+  const [refreshing, setRefreshing] = React.useState(false)
+  const refresh = React.useCallback(async () => {
+    if (!activeWorkspaceId) return
+    setRefreshing(true)
+    try {
+      const latest = await window.electronAPI.getSources(activeWorkspaceId)
+      let connected = 0
+      let failed = 0
+      for (const source of latest.filter(item => item.config.type === 'mcp' && item.config.enabled)) {
+        const result = await window.electronAPI.getMcpTools(activeWorkspaceId, source.config.slug, true)
+        if (result.success) connected++
+        else failed++
+      }
+      await onRefreshSources()
+      toast.info(t('mcpManage.refreshResult', { connected, failed }))
+    }
+    catch (error) { toast.error(t('mcpManage.refreshFailed'), { description: error instanceof Error ? error.message : undefined }) }
+    finally { setRefreshing(false) }
+  }, [activeWorkspaceId, onRefreshSources, t])
 
   const handleExportBundle = React.useCallback(async () => {
     if (!activeWorkspaceId) return
@@ -138,7 +161,15 @@ export function SourcesListPanel({
     <>
     {/* Bundle archive toolbar: package integrations into a portable file or import one */}
     {activeWorkspaceId && (
-      <div className="flex items-center gap-2 px-3 pt-2">
+      <div className="flex flex-wrap items-center gap-2 px-3 pt-2">
+        {sourceFilter?.sourceType === 'mcp' && <>
+          <button className="inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] disabled:opacity-50" disabled={refreshing} onClick={() => void refresh()}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />{t('mcpManage.refresh')}
+          </button>
+          <button className="inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03]" onClick={() => setMcpDialogOpen(true)}>
+            <Settings2 className="h-3.5 w-3.5 mr-1.5" />{t('mcpManage.title')}
+          </button>
+        </>}
         <button
           className="inline-flex items-center h-7 px-2.5 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors disabled:opacity-50"
           disabled={bundleBusy !== null}
@@ -237,6 +268,13 @@ export function SourcesListPanel({
         activeWorkspaceId={activeWorkspaceId}
       />
     )}
+    {activeWorkspaceId && <McpManagementDialog
+      open={mcpDialogOpen}
+      onOpenChange={setMcpDialogOpen}
+      workspaceId={activeWorkspaceId}
+      sources={sources}
+      onRefresh={onRefreshSources}
+    />}
     </>
   )
 }

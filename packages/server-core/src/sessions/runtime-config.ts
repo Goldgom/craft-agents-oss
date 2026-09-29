@@ -1,5 +1,5 @@
 import type { AgentProvider, AgentRuntimeProtocol, LlmAuthType } from '@craft-agent/shared/agent/backend'
-import { isCompatProvider, modelSupportsImages, type LlmConnection } from '@craft-agent/shared/config'
+import { getModelPromptSettings, isCompatProvider, modelSupportsImages, type LlmConnection } from '@craft-agent/shared/config'
 import type { FileAttachment } from '@craft-agent/shared/protocol'
 
 export interface BackendRuntimeSignatureInput {
@@ -98,6 +98,7 @@ export function buildBackendRuntimeSignature(input: BackendRuntimeSignatureInput
     agentRuntime,
     authType,
     resolvedModel,
+    autoCompactionTokenLimit: getModelPromptSettings(connection ?? undefined, resolvedModel)?.autoCompactionTokenLimit,
     connection: connectionShape,
   }))
 }

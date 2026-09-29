@@ -120,6 +120,18 @@ export interface ModelPromptSettings {
   lightweight?: boolean;
   /** Add explicit MCP tool discovery/calling workflow guidance. */
   mcpPromptEnhancement?: boolean;
+  /** Context tokens used before automatic compaction starts. Unset uses the runtime default. */
+  autoCompactionTokenLimit?: number;
+}
+
+/** Ignore malformed persisted limits and keep the threshold inside the model window. */
+export function resolveAutoCompactionTokenLimit(
+  settings: ModelPromptSettings | undefined,
+  contextWindow?: number,
+): number | undefined {
+  const limit = settings?.autoCompactionTokenLimit;
+  if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1_000) return undefined;
+  return contextWindow && contextWindow > 1_000 ? Math.min(limit, contextWindow - 1) : limit;
 }
 
 /** Resolve prompt settings while accepting legacy/deprecated model ids. */

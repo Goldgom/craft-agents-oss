@@ -8,7 +8,8 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, RefreshCw } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopover'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { SourceMenu } from '@/components/app-shell/SourceMenu'
@@ -179,6 +180,27 @@ export default function SourceInfoPage({ sourceSlug, workspaceId, onDelete }: So
   const [mcpToolsLoading, setMcpToolsLoading] = useState(false)
   const [mcpToolsError, setMcpToolsError] = useState<string | null>(null)
   const [localMcpEnabled, setLocalMcpEnabled] = useState(true)
+
+  const handleRefreshMcp = useCallback(async () => {
+    setMcpToolsLoading(true)
+    setMcpToolsError(null)
+    try {
+      const result = await window.electronAPI.getMcpTools(workspaceId, sourceSlug, true)
+      if (result.success && result.tools) {
+        setMcpTools(result.tools)
+        toast.success(t('mcpManage.refreshed'))
+      } else {
+        setMcpTools(null)
+        setMcpToolsError(result.error || t('sourceInfo.failedToLoadTools'))
+      }
+      const sources = await window.electronAPI.getSources(workspaceId)
+      setSource(sources.find(item => item.config.slug === sourceSlug) ?? null)
+    } catch (err) {
+      setMcpToolsError(err instanceof Error ? err.message : t('sourceInfo.failedToLoadTools'))
+    } finally {
+      setMcpToolsLoading(false)
+    }
+  }, [workspaceId, sourceSlug, t])
 
 
   // Load source data
@@ -463,15 +485,19 @@ export default function SourceInfoPage({ sourceSlug, workspaceId, onDelete }: So
               title={t('sourceInfo.tools')}
               description={t('sourceInfo.toolsDesc')}
               actions={
-                // EditPopover for AI-assisted tool permissions editing
-                <EditPopover
-                  trigger={<EditButton />}
-                  {...getEditConfig('source-tool-permissions', source.folderPath)}
-                  secondaryAction={{
-                    label: t('common.editFile'),
-                    filePath: `${source.folderPath}/permissions.json`,
-                  }}
-                />
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={mcpToolsLoading} onClick={() => void handleRefreshMcp()}>
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />{t('mcpManage.refresh')}
+                  </Button>
+                  <EditPopover
+                    trigger={<EditButton />}
+                    {...getEditConfig('source-tool-permissions', source.folderPath)}
+                    secondaryAction={{
+                      label: t('common.editFile'),
+                      filePath: `${source.folderPath}/permissions.json`,
+                    }}
+                  />
+                </div>
               }
             >
               <ToolsDataTable

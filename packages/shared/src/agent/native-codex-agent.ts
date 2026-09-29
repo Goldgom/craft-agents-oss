@@ -5,7 +5,8 @@ import {
 } from '@craft-agent/session-tools-core';
 import type { FileAttachment } from '../utils/files.ts';
 import type { Workspace } from '../config/storage.ts';
-import { getBrowserToolEnabled } from '../config/storage.ts';
+import { getBrowserToolEnabled, getLlmConnection } from '../config/storage.ts';
+import { getModelPromptSettings, resolveAutoCompactionTokenLimit } from '../config/llm-connections.ts';
 import { getCoAuthorPreference } from '../config/preferences.ts';
 import { getCredentialManager } from '../credentials/index.ts';
 import { refreshChatGptTokens } from '../auth/chatgpt-oauth.ts';
@@ -336,8 +337,14 @@ export class NativeCodexAgent extends BaseAgent {
   }
 
   private async ensureThread(client: NativeCodexAppServerClient): Promise<string> {
+    const connection = this.config.connectionSlug ? getLlmConnection(this.config.connectionSlug) ?? undefined : undefined;
+    if (this.config.connectionSlug) this.config.modelPromptSettings = getModelPromptSettings(connection, this._model);
     const tools = this.buildDynamicTools();
-    const signature = JSON.stringify(tools);
+    const connectionModel = connection?.models?.find(model => (typeof model === 'string' ? model : model.id) === this._model);
+    const contextWindow = (typeof connectionModel === 'object' ? connectionModel.contextWindow : undefined)
+      ?? getModelById(this._model)?.contextWindow;
+    const compactLimit = resolveAutoCompactionTokenLimit(this.config.modelPromptSettings, contextWindow);
+    const signature = JSON.stringify({ tools, compactLimit });
     if (this.codexThreadId && this.threadClient === client && !this.toolsChanged && signature === this.toolSignature) {
       return this.codexThreadId;
     }
@@ -354,6 +361,7 @@ export class NativeCodexAgent extends BaseAgent {
     this.debug(`Registering ${tools.length} Codex dynamic tools, including ${this.config.mcpPool?.getProxyToolDefs().length ?? 0} MCP source tools`);
     const response = await client.request<ThreadResponse>('thread/start', {
       model: bareModelId(this._model),
+      ...(compactLimit !== undefined ? { config: { model_auto_compact_token_limit: compactLimit } } : {}),
       cwd: this.workingDirectory,
       runtimeWorkspaceRoots: [this.config.workspace.rootPath],
       approvalPolicy: policy.approvalPolicy,

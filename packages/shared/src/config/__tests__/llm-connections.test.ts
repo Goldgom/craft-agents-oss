@@ -13,8 +13,18 @@ import {
   deriveBedrockRegionPrefix,
   getCompatibleAgentRuntimes,
   resolveAgentRuntime,
+  resolveAutoCompactionTokenLimit,
 } from '../llm-connections'
 import { ANTHROPIC_MODELS, getModelDisplayName, getModelContextWindow, getModelShortName, isClaudeModel, normalizeDeprecatedModelId } from '../models'
+
+describe('resolveAutoCompactionTokenLimit', () => {
+  it('uses the saved token limit and keeps it inside the model window', () => {
+    expect(resolveAutoCompactionTokenLimit({ autoCompactionTokenLimit: 80_000 }, 100_000)).toBe(80_000)
+    expect(resolveAutoCompactionTokenLimit({ autoCompactionTokenLimit: 120_000 }, 100_000)).toBe(99_999)
+    expect(resolveAutoCompactionTokenLimit({ autoCompactionTokenLimit: 800 }, 100_000)).toBeUndefined()
+    expect(resolveAutoCompactionTokenLimit(undefined, 100_000)).toBeUndefined()
+  })
+})
 
 // ============================================================
 // getDefaultModelsForConnection

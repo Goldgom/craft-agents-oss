@@ -71,6 +71,12 @@ describe('buildBackendRuntimeSignature', () => {
 
     expect(codex).not.toBe(pi)
   })
+
+  it('changes when the selected model automatic compaction limit changes', () => {
+    const before = sig(baseCompat)
+    const after = sig({ ...baseCompat, modelSettings: { gemma: { autoCompactionTokenLimit: 12_000 } } })
+    expect(after).not.toBe(before)
+  })
 })
 
 describe('buildRestartRequiredSignature', () => {

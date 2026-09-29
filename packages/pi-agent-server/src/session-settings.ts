@@ -16,6 +16,7 @@
  */
 import { SettingsManager } from '@earendil-works/pi-coding-agent';
 import { LLM_QUERY_TIMEOUT_MS } from '../../shared/src/agent/llm-tool.ts';
+import { resolveAutoCompactionTokenLimit } from '../../shared/src/config/llm-connections.ts';
 
 type PiSettings = NonNullable<Parameters<typeof SettingsManager.inMemory>[0]>;
 
@@ -73,10 +74,25 @@ export const CRAFT_PI_EPHEMERAL_MAX_BACKOFF_MS =
     (2 ** CRAFT_PI_EPHEMERAL_RETRY_SETTINGS.maxRetries - 1);
 
 /** Settings applied to one Pi session, isolated from project/global Pi files. */
-export function buildCraftPiSettings(purpose: CraftPiSessionPurpose = 'main'): PiSettings {
+export function buildCraftPiSettings(
+  purpose: CraftPiSessionPurpose = 'main',
+  compaction?: { tokenLimit?: number; contextWindow?: number },
+): PiSettings {
   const retry = purpose === 'ephemeral'
     ? CRAFT_PI_EPHEMERAL_RETRY_SETTINGS
     : CRAFT_PI_RETRY_SETTINGS;
+  const limit = purpose === 'main'
+    ? resolveAutoCompactionTokenLimit(
+        { autoCompactionTokenLimit: compaction?.tokenLimit },
+        compaction?.contextWindow,
+      )
+    : undefined;
+  const reserveTokens = limit !== undefined && compaction?.contextWindow
+    ? compaction.contextWindow - limit
+    : undefined;
+  const keepRecentTokens = limit !== undefined
+    ? Math.min(20_000, Math.max(1_000, Math.floor(limit / 2)))
+    : undefined;
 
   return {
     retry: {
@@ -88,7 +104,13 @@ export function buildCraftPiSettings(purpose: CraftPiSessionPurpose = 'main'): P
     // PiAgent re-asserts auto-compaction on every subprocess start
     // (requestSetAutoCompaction(true)); keep the SDK default explicit here so
     // the intent is visible next to the retry policy.
-    compaction: { enabled: true },
+    compaction: {
+      enabled: true,
+      ...(reserveTokens !== undefined ? {
+        reserveTokens,
+        keepRecentTokens,
+      } : {}),
+    },
   };
 }
 
@@ -99,6 +121,7 @@ export function buildCraftPiSettings(purpose: CraftPiSessionPurpose = 'main'): P
  */
 export function createCraftSettingsManager(
   purpose: CraftPiSessionPurpose = 'main',
+  compaction?: { tokenLimit?: number; contextWindow?: number },
 ): SettingsManager {
-  return SettingsManager.inMemory(buildCraftPiSettings(purpose));
+  return SettingsManager.inMemory(buildCraftPiSettings(purpose, compaction));
 }

@@ -133,6 +133,18 @@ describe('NativeCodexAgent protocol adaptation', () => {
     agent.destroy();
   });
 
+  it('sets the Codex native auto-compaction token limit on the thread', async () => {
+    let params: Record<string, unknown> | undefined;
+    const agent = createAgent({ modelPromptSettings: { autoCompactionTokenLimit: 80_000 } });
+    const client = { request: async (_method: string, requestParams: Record<string, unknown>) => {
+      params = requestParams;
+      return { thread: { id: 'configured-thread' } };
+    } } as never;
+    await agent['ensureThread'](client);
+    expect(params?.config).toEqual({ model_auto_compact_token_limit: 80_000 });
+    agent.destroy();
+  });
+
   it('preserves the full Craft thinking-level range in Codex effort values', () => {
     const agent = createAgent();
     expect(agent['reasoningEffort']('off')).toBe('minimal');

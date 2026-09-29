@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
 import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, WalletCards } from 'lucide-react'
@@ -54,7 +55,7 @@ import { useWorkspaceIcon } from '@/hooks/useWorkspaceIcon'
 import { OnboardingWizard, type ApiSetupMethod } from '@/components/onboarding'
 import { RenameDialog } from '@/components/ui/rename-dialog'
 import { useAppShellContext } from '@/context/AppShellContext'
-import { getModelShortName, type ModelDefinition } from '@config/models'
+import { getModelContextWindow, getModelShortName, type ModelDefinition } from '@config/models'
 import { getCompatibleAgentRuntimes, getModelsForProviderType, isImageGenerationModelId, resolveMiniModel, resolveAgentRuntime, resolveMidStreamBehavior, type CustomEndpointApi, type MidStreamBehavior } from '@config/llm-connections'
 import { toast } from 'sonner'
 
@@ -75,7 +76,7 @@ function formatTokenCount(n: number): string {
  */
 function getModelOptionsForConnection(
   connection: LlmConnectionWithStatus | undefined,
-): Array<{ value: string; label: string; description: string; descriptionKey?: string }> {
+): Array<{ value: string; label: string; description: string; descriptionKey?: string; contextWindow?: number }> {
   if (!connection) return []
 
   // If connection has explicit models, use those
@@ -87,11 +88,11 @@ function getModelOptionsForConnection(
       return !isImageGenerationModelId(id) && (!allowedModels || allowedModels.has(id))
     }).map((m) => {
       if (typeof m === 'string') {
-        return { value: m, label: getModelShortName(m), description: '' }
+        return { value: m, label: getModelShortName(m), description: '', contextWindow: getModelContextWindow(m) }
       }
       // ModelDefinition object
       const def = m as ModelDefinition
-      return { value: def.id, label: def.name, description: def.description, descriptionKey: def.descriptionKey }
+      return { value: def.id, label: def.name, description: def.description, descriptionKey: def.descriptionKey, contextWindow: def.contextWindow ?? getModelContextWindow(def.id) }
     })
   }
 
@@ -102,6 +103,7 @@ function getModelOptionsForConnection(
     label: m.name,
     description: m.description,
     descriptionKey: m.descriptionKey,
+    contextWindow: m.contextWindow,
   }))
 }
 
@@ -212,12 +214,77 @@ function formatApiBalance(balance: ApiBalance): string {
   }
 }
 
+function AutoCompactionLimitInput({
+  value,
+  contextWindow,
+  onSave,
+}: {
+  value?: number
+  contextWindow?: number
+  onSave: (value?: number) => Promise<boolean>
+}) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState(value?.toString() ?? '')
+  const [error, setError] = useState(false)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { setDraft(value?.toString() ?? ''); setError(false) }, [value])
+  const commit = async () => {
+    if (saving) return
+    const trimmed = draft.trim()
+    if (!trimmed) {
+      setError(false)
+      if (value !== undefined) {
+        setSaving(true)
+        if (!await onSave(undefined)) setDraft(value.toString())
+        setSaving(false)
+      }
+      return
+    }
+    const parsed = Number(trimmed)
+    if (!Number.isSafeInteger(parsed) || parsed < 1_000 || (contextWindow && parsed >= contextWindow)) {
+      setError(true)
+      return
+    }
+    setError(false)
+    if (parsed !== value) {
+      setSaving(true)
+      if (!await onSave(parsed)) setDraft(value?.toString() ?? '')
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="px-4 py-3.5 space-y-2">
+      <label className="block text-sm font-medium">{t('settings.ai.autoCompactionLimit')}</label>
+      <p className="text-xs text-muted-foreground">{t('settings.ai.autoCompactionLimitDesc')}{contextWindow ? ` ${t('settings.ai.autoCompactionWindow', { tokens: contextWindow.toLocaleString() })}` : ''}</p>
+      <Input
+        type="number"
+        min={1000}
+        max={contextWindow ? contextWindow - 1 : undefined}
+        step={1000}
+        value={draft}
+        disabled={saving}
+        onChange={event => { setDraft(event.target.value); setError(false) }}
+        onBlur={commit}
+        onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') { setDraft(value?.toString() ?? ''); setError(false) } }}
+        placeholder={t('settings.ai.autoCompactionDefault')}
+        aria-invalid={error}
+        className="w-48 bg-muted/50"
+      />
+      {error && <p className="text-xs text-destructive">{t('settings.ai.autoCompactionLimitError')}</p>}
+    </div>
+  )
+}
+
 function ModelPromptSettingsCard({
   connection,
+  enable1MContext,
   onChange,
+  onCompactionLimitChange,
 }: {
   connection: LlmConnectionWithStatus
+  enable1MContext: boolean
   onChange: (model: string, key: 'lightweight' | 'mcpPromptEnhancement', value: boolean) => void
+  onCompactionLimitChange: (model: string, value?: number) => Promise<boolean>
 }) {
   const { t } = useTranslation()
   const models = getModelOptionsForConnection(connection)
@@ -235,6 +302,9 @@ function ModelPromptSettingsCard({
         <div className="border-t border-border/50">
           {models.map((model, index) => {
             const settings = connection.modelSettings?.[model.value] ?? {}
+            const contextWindow = !enable1MContext && resolveAgentRuntime(connection) === 'claude-code' && model.contextWindow === 1_000_000
+              ? 200_000
+              : model.contextWindow
             return (
               <details key={model.value} className={cn('group/model', index > 0 && 'border-t border-border/50')}>
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
@@ -253,6 +323,11 @@ function ModelPromptSettingsCard({
                     description={t('settings.ai.mcpPromptEnhancementDesc')}
                     checked={settings.mcpPromptEnhancement === true}
                     onCheckedChange={(value) => onChange(model.value, 'mcpPromptEnhancement', value)}
+                  />
+                  <AutoCompactionLimitInput
+                    value={settings.autoCompactionTokenLimit}
+                    contextWindow={contextWindow}
+                    onSave={value => onCompactionLimitChange(model.value, value)}
                   />
                 </div>
               </details>
@@ -1206,6 +1281,32 @@ export default function AiSettingsPage() {
     else toast.error(t('settings.ai.modelPromptSettingsUpdateFailed'))
   }, [refreshLlmConnections, t])
 
+  const handleModelCompactionLimitChange = useCallback(async (
+    connection: LlmConnectionWithStatus,
+    model: string,
+    value?: number,
+  ) => {
+    if (!window.electronAPI) return false
+    const modelSettings = { ...(connection.modelSettings ?? {}) }
+    const current = { ...(modelSettings[model] ?? {}) }
+    if (value !== undefined) current.autoCompactionTokenLimit = value
+    else delete current.autoCompactionTokenLimit
+    if (Object.keys(current).length) modelSettings[model] = current
+    else delete modelSettings[model]
+    const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = { ...connection, modelSettings }
+    try {
+      const result = await window.electronAPI.saveLlmConnection(connectionData as import('../../../shared/types').LlmConnection)
+      if (result.success) {
+        await refreshLlmConnections()
+        return true
+      }
+      toast.error(t('settings.ai.modelPromptSettingsUpdateFailed'))
+    } catch {
+      toast.error(t('settings.ai.modelPromptSettingsUpdateFailed'))
+    }
+    return false
+  }, [refreshLlmConnections, t])
+
   // Get the default connection for display
   const defaultConnection = useMemo(() => {
     return llmConnections.find(c => c.isDefault)
@@ -1512,7 +1613,9 @@ export default function AiSettingsPage() {
                 <ModelPromptSettingsCard
                   key={`prompt-${connection.slug}`}
                   connection={connection}
+                  enable1MContext={enable1MContext}
                   onChange={(model, key, value) => handleModelPromptSettingChange(connection, model, key, value)}
+                  onCompactionLimitChange={(model, value) => handleModelCompactionLimitChange(connection, model, value)}
                 />
               ))}
 

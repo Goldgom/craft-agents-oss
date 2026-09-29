@@ -638,6 +638,7 @@ export class PiAgent extends BaseAgent {
       customEndpoint: runtime.customEndpoint,
       customModels: runtime.customModels,
       customHeaders: runtime.customHeaders,
+      autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit,
       // Branch params for Pi SDK session fork
       branchFromSdkSessionId: this.config.session?.branchFromSdkSessionId,
       branchFromSessionPath: this.config.session?.branchFromSessionPath,
@@ -2108,7 +2109,7 @@ export class PiAgent extends BaseAgent {
   /**
    * Ask subprocess to refresh runtime-affecting custom endpoint config in-place.
    */
-  private async requestRuntimeConfigUpdate(update: BackendRuntimeUpdate): Promise<boolean> {
+  private async requestRuntimeConfigUpdate(update: BackendRuntimeUpdate & { autoCompactionTokenLimit?: number }): Promise<boolean> {
     if (!this.subprocess) return true;
 
     const id = `runtime-config-${++this.rpcIdCounter}`;
@@ -2142,6 +2143,7 @@ export class PiAgent extends BaseAgent {
         customEndpoint: runtime.customEndpoint,
         customModels: runtime.customModels,
         customHeaders: runtime.customHeaders,
+        autoCompactionTokenLimit: update.autoCompactionTokenLimit,
       });
     });
   }
@@ -2458,6 +2460,7 @@ export class PiAgent extends BaseAgent {
       providerType: this.config.providerType,
       authType: this.config.authType,
       runtime: getBackendRuntime(this.config),
+      autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit,
     });
     this.debug(`Runtime config refreshed in subprocess: ${previousModel} → ${update.model}`);
     return updated;
@@ -2466,10 +2469,14 @@ export class PiAgent extends BaseAgent {
   override setModel(model: string): void {
     const previousModel = this.getModel();
     super.setModel(model);
+    this.config.modelPromptSettings = getModelPromptSettings(
+      this.config.connectionSlug ? getLlmConnection(this.config.connectionSlug) ?? undefined : undefined,
+      model,
+    );
     // Forward to subprocess so it uses the new model on next turn
     if (this.subprocess) {
       this.debug(`Forwarding model change to subprocess: ${previousModel} → ${model}`);
-      this.send({ type: 'set_model', model });
+      this.send({ type: 'set_model', model, autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit });
     } else {
       this.debug(`Model updated but no subprocess to forward to: ${previousModel} → ${model}`);
     }

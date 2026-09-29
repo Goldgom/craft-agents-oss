@@ -154,24 +154,26 @@ export function registerSourcesHandlers(server: RpcServer, deps: HandlerDeps): v
   })
 
   // Get MCP tools for a source with permission status
-  server.handle(RPC_CHANNELS.sources.GET_MCP_TOOLS, async (_ctx, workspaceId: string, sourceSlug: string) => {
+  server.handle(RPC_CHANNELS.sources.GET_MCP_TOOLS, async (_ctx, workspaceId: string, sourceSlug: string, forceRefresh = false) => {
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) return { success: false, error: 'Workspace not found' }
 
+    let refreshedSource: Awaited<ReturnType<typeof loadWorkspaceSources>>[number] | undefined
     try {
       const sources = await loadWorkspaceSources(workspace.rootPath)
       const source = sources.find(s => s.config.slug === sourceSlug)
       if (!source) return { success: false, error: 'Source not found' }
       if (source.config.type !== 'mcp') return { success: false, error: 'Source is not an MCP server' }
       if (!source.config.mcp) return { success: false, error: 'MCP config not found' }
+      refreshedSource = source
 
-      if (source.config.connectionStatus === 'needs_auth') {
+      if (!forceRefresh && source.config.connectionStatus === 'needs_auth') {
         return { success: false, error: 'Source requires authentication' }
       }
-      if (source.config.connectionStatus === 'failed') {
+      if (!forceRefresh && source.config.connectionStatus === 'failed') {
         return { success: false, error: source.config.connectionError || 'Connection failed' }
       }
-      if (source.config.connectionStatus === 'untested') {
+      if (!forceRefresh && source.config.connectionStatus === 'untested') {
         return { success: false, error: 'Source has not been tested yet' }
       }
 
@@ -208,12 +210,22 @@ export function registerSourcesHandlers(server: RpcServer, deps: HandlerDeps): v
         client = new CraftMcpClient({
           transport: 'http',
           url: source.config.mcp.url,
-          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+          headers: {
+            ...source.config.mcp.headers,
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          },
         })
       }
 
-      const tools = await client.listTools()
-      await client.close()
+      const tools = await client.listTools().finally(() => client.close())
+      if (forceRefresh) {
+        const { saveSourceConfig } = await import('@craft-agent/shared/sources')
+        source.config.connectionStatus = 'connected'
+        source.config.isAuthenticated = true
+        source.config.connectionError = undefined
+        source.config.lastTestedAt = Date.now()
+        saveSourceConfig(workspace.rootPath, source.config)
+      }
 
       const { loadSourcePermissionsConfig, permissionsConfigCache } = await import('@craft-agent/shared/agent')
       const permissionsConfig = loadSourcePermissionsConfig(workspace.rootPath, sourceSlug)
@@ -236,6 +248,14 @@ export function registerSourcesHandlers(server: RpcServer, deps: HandlerDeps): v
     } catch (error) {
       log.error('Failed to get MCP tools:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to fetch tools'
+      if (forceRefresh && refreshedSource) {
+        const { saveSourceConfig } = await import('@craft-agent/shared/sources')
+        refreshedSource.config.connectionStatus = /\b401\b|\b403\b|unauthorized|authentication/i.test(errorMessage) ? 'needs_auth' : 'failed'
+        if (refreshedSource.config.connectionStatus === 'needs_auth') refreshedSource.config.isAuthenticated = false
+        refreshedSource.config.connectionError = errorMessage
+        refreshedSource.config.lastTestedAt = Date.now()
+        saveSourceConfig(workspace.rootPath, refreshedSource.config)
+      }
       if (errorMessage.includes('404')) {
         return { success: false, error: 'MCP server endpoint not found. The server may be offline or the URL may be incorrect.' }
       }

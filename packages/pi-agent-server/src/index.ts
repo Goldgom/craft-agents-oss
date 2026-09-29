@@ -131,6 +131,7 @@ interface InitMessage {
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
   customHeaders?: Record<string, string>;
   piAuth?: { provider: string; credential: PiCredential };
+  autoCompactionTokenLimit?: number;
   /** Windows: globally configured Git Bash path (config.json gitBashPath) for the built-in bash tool */
   gitBashPath?: string;
 }
@@ -145,6 +146,7 @@ interface RuntimeConfigUpdateMessage {
   customEndpoint?: { api: CustomEndpointApi; supportsImages?: boolean };
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
   customHeaders?: Record<string, string>;
+  autoCompactionTokenLimit?: number;
 }
 
 /** Messages from main process (stdin) */
@@ -159,7 +161,7 @@ type InboundMessage =
   | { type: 'llm_query'; id: string; request: LLMQueryRequest }
   | { type: 'cancel_ephemeral_query'; id: string }
   | { type: 'ensure_session_ready'; id: string }
-  | { type: 'set_model'; model: string }
+  | { type: 'set_model'; model: string; autoCompactionTokenLimit?: number }
   | { type: 'set_thinking_level'; level: string }
   | { type: 'compact'; id: string; customInstructions?: string }
   | { type: 'set_auto_compaction'; id: string; enabled: boolean }
@@ -752,6 +754,10 @@ async function ensureSession(): Promise<AgentSession> {
   }
 
   // Create the session — tools flow through customTools + allowlist (see comment above).
+  sessionOptions.settingsManager = createCraftSettingsManager('main', {
+    tokenLimit: initConfig.autoCompactionTokenLimit,
+    contextWindow: sessionOptions.model?.contextWindow,
+  });
   const { session } = await createAgentSession(sessionOptions);
   installCraftPiRetryClassifier(session);
   piSession = session;
@@ -1660,6 +1666,10 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
     if (!initConfig) {
       throw new Error('Runtime config update received before init');
     }
+    if (initConfig.autoCompactionTokenLimit !== msg.autoCompactionTokenLimit
+      || (initConfig.model !== msg.model && (initConfig.autoCompactionTokenLimit || msg.autoCompactionTokenLimit))) {
+      toolsChanged = true;
+    }
 
     initConfig = {
       ...initConfig,
@@ -1670,6 +1680,7 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       customEndpoint: msg.customEndpoint,
       customModels: msg.customModels,
       customHeaders: msg.customHeaders,
+      autoCompactionTokenLimit: msg.autoCompactionTokenLimit,
     };
 
     if (piModelRegistry && initConfig.baseUrl?.trim() && initConfig.customEndpoint) {
@@ -1739,7 +1750,14 @@ async function handleSetModel(msg: Extract<InboundMessage, { type: 'set_model' }
     setInterceptorApiHints(piModel as { api?: string; provider?: string; baseUrl?: string });
     // Keep initConfig.model current so downstream consumers that read it (e.g. the web-search
     // provider's model derivation, #1023) reflect the switch — setModel alone didn't update it.
-    if (initConfig) initConfig.model = msg.model;
+    if (initConfig) {
+      if (initConfig.autoCompactionTokenLimit !== msg.autoCompactionTokenLimit
+        || (initConfig.model !== msg.model && (initConfig.autoCompactionTokenLimit || msg.autoCompactionTokenLimit))) {
+        toolsChanged = true;
+      }
+      initConfig.model = msg.model;
+      initConfig.autoCompactionTokenLimit = msg.autoCompactionTokenLimit;
+    }
     debugLog(`[set_model] Model changed to: ${msg.model} (resolved: ${piModel.provider}/${piModel.id})`);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);

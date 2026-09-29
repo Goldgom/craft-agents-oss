@@ -10,7 +10,7 @@ type ContentBlockParam =
 import { z } from 'zod';
 import { getSystemPrompt, getLightweightModelSystemPrompt, MCP_PROMPT_ENHANCEMENT } from '../prompts/system.ts';
 import { BaseAgent, type MiniAgentConfig, MINI_AGENT_TOOLS, MINI_AGENT_MCP_KEYS } from './base-agent.ts';
-import { getModelPromptSettings } from '../config/llm-connections.ts';
+import { getModelPromptSettings, resolveAutoCompactionTokenLimit } from '../config/llm-connections.ts';
 import type { BackendConfig, PostInitResult, PermissionRequestType, SdkMcpServerConfig } from './backend/types.ts';
 // Plan types are used by UI components; not needed in craft-agent.ts since Safe Mode is user-controlled
 import { parseError, buildAndroidClaudeUnsupportedError, type AgentError } from './errors.ts';
@@ -1211,14 +1211,32 @@ export class ClaudeAgent extends BaseAgent {
       const effectiveModel = use1M && getModelContextWindow(model) === 1_000_000
         ? `${model}[1m]`
         : model;
+      const connection = this.config.connectionSlug ? getLlmConnection(this.config.connectionSlug) ?? undefined : undefined;
+      const connectionModel = connection?.models?.find(entry => (typeof entry === 'string' ? entry : entry.id) === model);
+      const modelContextWindow = (typeof connectionModel === 'object' ? connectionModel.contextWindow : undefined)
+        ?? getModelContextWindow(model);
+      const contextWindow = !use1M && modelContextWindow === 1_000_000
+        ? 200_000
+        : modelContextWindow;
+      if (this.config.connectionSlug) {
+        this.config.modelPromptSettings = getModelPromptSettings(connection, model);
+      }
+      const compactLimit = resolveAutoCompactionTokenLimit(this.config.modelPromptSettings, contextWindow);
+      const compactPercent = compactLimit && contextWindow
+        ? Math.max(1, Math.min(99, Math.floor(compactLimit / contextWindow * 100)))
+        : undefined;
 
       // Capture the resolved spawn cwd here (rather than via an instance
       // field) so the catch handler reads the value passed to *this*
       // chatImpl invocation, not state left over from an earlier call.
       const resolvedCwd = this.resolveSpawnCwd({ isRetry: _isRetry, sessionId });
 
+      const defaultOptions = getDefaultOptions(this.config.envOverrides);
       const options: Options = {
-        ...getDefaultOptions(this.config.envOverrides),
+        ...defaultOptions,
+        ...(compactPercent !== undefined ? {
+          env: { ...defaultOptions.env, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(compactPercent) },
+        } : {}),
         spawnClaudeCodeProcess: (spawnOptions) => this.spawnClaudeCodeProcess(spawnOptions),
         // Workspace agents are isolated definitions exposed through Claude's
         // native Agent/Task tool. The built-in `compact` agent is intentionally

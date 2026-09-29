@@ -67,6 +67,7 @@ export type UserInput =
 
 export interface ThreadStartParams {
   model?: string | null;
+  config?: Record<string, JsonValue> | null;
   cwd?: string | null;
   runtimeWorkspaceRoots?: string[] | null;
   approvalPolicy?: AskForApproval | null;

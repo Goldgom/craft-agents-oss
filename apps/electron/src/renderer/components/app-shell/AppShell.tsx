@@ -3598,6 +3598,9 @@ function AppShellContent({
                 sourceFilter={sourceFilter}
                 workspaceRootPath={activeWorkspace?.rootPath}
                 onDeleteSource={handleDeleteSource}
+                onRefreshSources={async () => {
+                  if (activeWorkspaceId) setSources(await window.electronAPI.getSources(activeWorkspaceId))
+                }}
                 onSourceClick={handleSourceSelect}
                 selectedSourceSlug={isSourcesNavigation(navState) && navState.details ? navState.details.sourceSlug : null}
                 localMcpEnabled={localMcpEnabled}

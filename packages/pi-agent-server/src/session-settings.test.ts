@@ -55,6 +55,13 @@ describe('createCraftSettingsManager', () => {
     expect(createCraftSettingsManager().getCompactionEnabled()).toBe(true);
   });
 
+  it('converts a model token limit to the Pi SDK reserve threshold', () => {
+    const settings = createCraftSettingsManager('main', { tokenLimit: 80_000, contextWindow: 100_000 });
+    expect(settings.getCompactionSettings()).toEqual({ enabled: true, reserveTokens: 20_000, keepRecentTokens: 20_000 });
+    expect(createCraftSettingsManager('ephemeral', { tokenLimit: 80_000, contextWindow: 100_000 })
+      .getCompactionReserveTokens()).toBe(16_384);
+  });
+
   it('ignores a .pi/settings.json in the working directory', () => {
     // A repo used as the session's working directory may ship Pi project
     // settings. The SDK's default SettingsManager.create(cwd, agentDir) merges
