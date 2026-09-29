@@ -1,5 +1,7 @@
 # Build script for Windows NSIS installer
-# Usage: powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1
+# Usage: powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1 [-ForceDownload]
+
+param([switch]$ForceDownload)
 
 $ErrorActionPreference = "Stop"
 
@@ -83,7 +85,6 @@ Start-Sleep -Seconds 2
 # 1. Clean previous build artifacts (with retry for locked files)
 Write-Host "Cleaning previous builds..."
 $foldersToClean = @(
-    "$ElectronDir\vendor",
     "$ElectronDir\node_modules\@anthropic-ai",
     "$ElectronDir\packages",
     "$ElectronDir\release"
@@ -104,21 +105,44 @@ foreach ($folder in $foldersToClean) {
     }
 }
 
-# 2. Install dependencies
-Write-Host "Installing dependencies..."
-Push-Location $RootDir
-try {
-    bun install
-} finally {
-    Pop-Location
+# 2. Reuse installed dependencies when the lockfile and root manifest match.
+$DependencyStamp = Join-Path $RootDir "node_modules\.tokenbird-build-win32-x64.sha256"
+$DependencyFingerprint = "$(Get-Sha256 (Join-Path $RootDir 'bun.lock')):$(Get-Sha256 (Join-Path $RootDir 'package.json'))"
+$DependenciesReady = (Test-Path "$RootDir\node_modules\@anthropic-ai\claude-agent-sdk") -and
+    (Test-Path "$RootDir\node_modules\@vscode\ripgrep\bin\rg.exe") -and
+    (Test-Path "$RootDir\node_modules\electron\dist\electron.exe")
+$StampMatches = (Test-Path $DependencyStamp) -and ((Get-Content $DependencyStamp -Raw).Trim() -eq $DependencyFingerprint)
+if ($ForceDownload -or -not $DependenciesReady -or -not $StampMatches) {
+    Write-Host "Installing dependencies..."
+    Push-Location $RootDir
+    try {
+        if ($ForceDownload) { bun install --frozen-lockfile --force }
+        else { bun install --frozen-lockfile }
+        if ($LASTEXITCODE -ne 0) { throw "bun install failed with exit code $LASTEXITCODE" }
+        Set-Content -Path $DependencyStamp -Value $DependencyFingerprint -NoNewline
+    } finally {
+        Pop-Location
+    }
+} else {
+    Write-Host "Reusing installed dependencies from node_modules"
 }
 
 # 3. Download Bun binary for Windows
 # Use baseline build - works on all x64 CPUs (no AVX2 requirement)
+$BunDownload = "bun-windows-x64-baseline"
+$BunExePath = "$ElectronDir\vendor\bun\bun.exe"
+$CachedBunVersion = $null
+if (Test-Path $BunExePath) {
+    try {
+        $CachedBunVersion = (& $BunExePath --version 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0) { $CachedBunVersion = $null }
+    } catch { $CachedBunVersion = $null }
+}
+if (-not $ForceDownload -and $CachedBunVersion -eq $BunVersion.Replace('bun-v', '')) {
+    Write-Host "Reusing Bun $BunVersion at $BunExePath"
+} else {
 Write-Host "Downloading Bun $BunVersion for Windows x64 (baseline)..."
 New-Item -ItemType Directory -Force -Path "$ElectronDir\vendor\bun" | Out-Null
-
-$BunDownload = "bun-windows-x64-baseline"
 $TempDir = Join-Path $env:TEMP "bun-download-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 
@@ -166,6 +190,7 @@ try {
 } finally {
     Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 }
+}
 
 # 4. Copy SDK from root node_modules (monorepo hoisting).
 # Since SDK 0.2.113: thin core + per-platform binary package.
@@ -185,16 +210,24 @@ Copy-Item -Recurse -Force $SdkSource "$ElectronDir\node_modules\@anthropic-ai\"
 # Target arch is hard-coded x64 — Windows arm64 is not currently shipped.
 $SdkBinPkg = "claude-agent-sdk-win32-x64"
 $SdkBinSource = "$RootDir\node_modules\@anthropic-ai\$SdkBinPkg"
-if (-not (Test-Path $SdkBinSource)) {
-    Write-Host "Cross-arch build: $SdkBinPkg not in node_modules — fetching from npm..."
+if ($ForceDownload -or -not (Test-Path $SdkBinSource)) {
     $SdkVersion = (node -p "require('$RootDir/package.json'.replace(/\\/g, '/')).dependencies['@anthropic-ai/claude-agent-sdk']").Trim('"')
+    $CacheDir = Join-Path $RootDir '.build\native-packages'
+    New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
+    $Tarball = Join-Path $CacheDir "anthropic-ai-$SdkBinPkg-$SdkVersion.tgz"
+    if ($ForceDownload -or -not (Test-Path $Tarball)) {
+        Write-Host "Fetching $SdkBinPkg@$SdkVersion from npm..."
+        if ($ForceDownload) { npm pack "@anthropic-ai/$SdkBinPkg@$SdkVersion" --force --prefer-online --pack-destination $CacheDir | Out-Null }
+        else { npm pack "@anthropic-ai/$SdkBinPkg@$SdkVersion" --pack-destination $CacheDir | Out-Null }
+        if ($LASTEXITCODE -ne 0) { throw "npm pack failed with exit code $LASTEXITCODE" }
+    } else {
+        Write-Host "Reusing cached $SdkBinPkg@$SdkVersion"
+    }
     $PkgTmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine($env:TEMP, [System.Guid]::NewGuid().ToString()))
     try {
-        Push-Location $PkgTmp
-        npm pack "@anthropic-ai/$SdkBinPkg@$SdkVersion" | Out-Null
-        $Tarball = Get-ChildItem -Filter "anthropic-ai-*.tgz" | Select-Object -First 1
-        tar -xzf $Tarball.Name
-        Pop-Location
+        tar -xzf $Tarball -C $PkgTmp
+        if ($LASTEXITCODE -ne 0) { throw "tar extraction failed with exit code $LASTEXITCODE" }
+        Remove-Item -Recurse -Force $SdkBinSource -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $SdkBinSource | Out-Null
         Copy-Item -Recurse -Force "$PkgTmp\package\*" $SdkBinSource
     } finally {
@@ -353,6 +386,8 @@ try {
 # Single source of truth — matches Mac/Linux build (bun run build:copy).
 # Copies: resources (icons, DMG bg), docs, tool-icons, themes, permissions, config-defaults.
 Write-Host "  Copying resources and bundled assets..."
+$PreviousForceDownload = $env:TOKENBIRD_FORCE_DOWNLOAD
+$env:TOKENBIRD_FORCE_DOWNLOAD = if ($ForceDownload) { '1' } else { '0' }
 Push-Location $ElectronDir
 try {
     # Provision platform-specific runtime resources (including uv.exe) before
@@ -364,6 +399,7 @@ try {
     Write-Host "  Assets copied" -ForegroundColor Green
 } finally {
     Pop-Location
+    $env:TOKENBIRD_FORCE_DOWNLOAD = $PreviousForceDownload
 }
 
 # 7. Package with electron-builder
@@ -450,6 +486,12 @@ while ($retryCount -lt $maxRetries) {
 [System.GC]::WaitForPendingFinalizers()
 
 # Run electron-builder with retry logic for EBUSY errors
+$ElectronDist = "$RootDir\node_modules\electron\dist"
+$ElectronDistArgs = @()
+if (-not $ForceDownload -and (Test-Path "$ElectronDist\electron.exe") -and (Test-Path "$ElectronDist\version")) {
+    Write-Host "Reusing installed Electron at $ElectronDist"
+    $ElectronDistArgs = @("--config.electronDist=$ElectronDist")
+}
 Push-Location $ElectronDir
 $maxBuilderRetries = 3
 $builderRetry = 0
@@ -468,7 +510,7 @@ while (-not $builderSuccess -and $builderRetry -lt $maxBuilderRetries) {
 
     # Build NSIS first so an unavailable MSI/WiX toolchain cannot discard the
     # otherwise usable Windows installer.
-    & bunx electron-builder --win nsis --x64 2>&1 | Tee-Object -Variable builderOutput
+    & bunx electron-builder --win nsis --x64 @ElectronDistArgs 2>&1 | Tee-Object -Variable builderOutput
 
     if ($LASTEXITCODE -eq 0) {
         $builderSuccess = $true
@@ -502,7 +544,7 @@ if (-not $builderSuccess) {
 Push-Location $ElectronDir
 try {
     Write-Host "  Building optional MSI installer..." -ForegroundColor Cyan
-    & bunx electron-builder --win msi --x64 2>&1 | Tee-Object -Variable msiOutput
+    & bunx electron-builder --win msi --x64 @ElectronDistArgs 2>&1 | Tee-Object -Variable msiOutput
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  WARNING: MSI build skipped (WiX unavailable or download failed)." -ForegroundColor Yellow
     } else {

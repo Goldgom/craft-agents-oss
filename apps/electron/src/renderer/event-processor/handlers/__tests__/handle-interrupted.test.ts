@@ -16,7 +16,7 @@ function makeState(messages: any[]): SessionState {
 
 describe('handleInterrupted (#616)', () => {
   describe('user-initiated stop (event.message present)', () => {
-    it('removes queued bubbles AND emits restore_input', () => {
+    it('removes queued bubbles without restoring text to the composer', () => {
       const state = makeState([
         { id: 'msg-1', role: 'user', content: 'first' },
         { id: 'msg-2', role: 'user', content: 'queued one', isQueued: true },
@@ -26,7 +26,7 @@ describe('handleInterrupted (#616)', () => {
       const event: InterruptedEvent = {
         type: 'interrupted',
         sessionId: 'session-1',
-        message: { id: 'info-1', role: 'info', content: 'Response interrupted', timestamp: 0 } as any,
+        message: { id: 'info-1', role: 'info', content: 'Response interrupted', interruptedInput: 'first\n\nqueued one\n\nqueued two', timestamp: 0 } as any,
         queuedMessages: ['queued one', 'queued two'],
       }
 
@@ -38,10 +38,8 @@ describe('handleInterrupted (#616)', () => {
       expect(ids).not.toContain('msg-3')
       // info message appended
       expect(ids).toContain('info-1')
-      // restore_input effect emitted with combined text
-      expect(next.effects).toEqual([
-        { type: 'restore_input', text: 'queued one\n\nqueued two' },
-      ])
+      expect(next.effects).toEqual([])
+      expect(next.state.session.messages.find(m => m.id === 'info-1')?.interruptedInput).toBe('first\n\nqueued one\n\nqueued two')
       // isProcessing cleared
       expect(next.state.session.isProcessing).toBe(false)
     })

@@ -163,6 +163,39 @@ describe('preferences.uiLanguage', () => {
     });
   });
 
+  describe('formatPreferencesForPrompt', () => {
+    it('includes the persisted application language without other preferences', () => {
+      const { configDir, prefsFile } = setupDir();
+      try {
+        writeRawPrefs(prefsFile, { uiLanguage: 'zh-Hans' });
+        const r = runScript(configDir, `
+          import { formatPreferencesForPrompt } from '${PREFS_MODULE}';
+          console.log(formatPreferencesForPrompt());
+        `);
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout).toContain('Preferred language: 简体中文 (zh-Hans; application language setting)');
+        expect(r.stdout).not.toContain('User Preferences - User has explicitly set');
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+
+    it('uses the system locale when no application language is saved', () => {
+      const { configDir } = setupDir();
+      try {
+        const r = runScript(configDir, `
+          import { formatPreferencesForPrompt } from '${PREFS_MODULE}';
+          console.log(formatPreferencesForPrompt());
+        `);
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout).toContain('## Environment Language');
+        expect(r.stdout).toContain('system locale');
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('resolveTitleLanguageName', () => {
     it('returns undefined when no UI language is persisted (so titles auto-detect)', () => {
       const { configDir } = setupDir();

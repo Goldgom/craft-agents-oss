@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "Too many requests were sent in a short time. Wait a moment, then try again.",
   "chat.rateLimitedTitle": "Too many requests",
   "chat.renameSession": "Rename Session",
-  "chat.responseInterrupted": "Response interrupted",
+  "chat.responseInterrupted": "Response interrupted. Click here to restore your message to the input box.",
   "chat.scrollUpForEarlier": "Scroll up for earlier messages ({{count}} more)",
   "chat.selectedText": "Selected text",
   "chat.serviceErrorMessage": "The AI service is temporarily unavailable. Please wait a moment and try again.",

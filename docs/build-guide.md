@@ -12,7 +12,14 @@
 bun run build:all
 # 仅构建指定目标，发布 APK 使用 --release
 bun run build:all win linux android --release
+# 需要重新下载构建依赖时才使用
+bun run build:all win --force-download
 ```
+
+默认复用本地 `node_modules`、固定版本的 Bun 和 Electron，以及已缓存的跨平台原生包。
+依赖缺失或锁文件变化时会重新安装；`--force-download` 会主动重新获取桌面与无头服务的构建依赖。
+跨平台原生包缓存在 `.build/native-packages/`，构建产物目录清理时不会删除该缓存。
+WSL 构建会在 WSL 的 `~/.cache/tokenbird-wsl-build/` 保留 Bun、uv 和原生包缓存，供下次临时工作区复用。
 
 目标名称为 `win`、`linux`、`android`、`linux-headless`、`win-headless`、`mac-headless`。
 桌面包必须在对应的构建环境中执行（Linux 桌面包在 Linux/WSL，Windows 包在 Windows）；
@@ -79,10 +86,13 @@ cd apps/electron
 bun run dist:win
 ```
 
+Windows 单独打包可执行 `powershell -ExecutionPolicy Bypass -File apps/electron/scripts/build-win.ps1 -ForceDownload`
+强制重新下载。Linux/macOS 的对应脚本使用 `--force-download`。
+
 `dist:win` 实际执行 `scripts/build-win.ps1`，完整流程：
 
 1. 结束残留的 node/npm/electron 进程，清理旧产物；
-2. 下载固定版本 Bun（`bun-v1.3.9`，SHA256 校验）到 `apps/electron/vendor/bun/`；
+2. 复用本地 Bun（`bun-v1.3.9`）；缓存缺失、版本不符或强制下载时，校验 SHA256 后更新到 `apps/electron/vendor/bun/`；
 3. 将 Claude Agent SDK 核心 + **win32-x64** 原生二进制（约 253 MB）暂存为
    `claude-agent-sdk-binary` 别名，并复制 `@vscode/ripgrep`；
 4. esbuild 编译主进程 / preload，vite 编译渲染层，拷贝内置资源；

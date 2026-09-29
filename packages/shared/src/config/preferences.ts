@@ -228,18 +228,24 @@ export function resolveTitleLanguageName(): string | undefined {
  */
 export function formatPreferencesForPrompt(): string {
   const prefs = loadPreferences();
+  const uiLanguage = getPersistedUiLanguage();
+  const locale = uiLanguage ?? Intl.DateTimeFormat().resolvedOptions().locale;
+  const languageName = uiLanguage
+    ? LOCALE_REGISTRY[uiLanguage].nativeName
+    : new Intl.DisplayNames([locale], { type: 'language' }).of(locale) ?? locale;
+  const source = uiLanguage ? 'application language setting' : 'system locale';
 
-  // Derive language from the app's i18n setting (Appearance > Language).
-  const langCode = (i18n.resolvedLanguage ?? 'en') as LanguageCode;
-  const langEntry = LOCALE_REGISTRY[langCode];
-  const langName = langEntry?.nativeName ?? 'English';
+  const lines: string[] = [
+    '## Environment Language',
+    `- Preferred language: ${languageName} (${locale}; ${source}).`,
+    '- Use this as the default response language. Follow the language of the user\'s current message or an explicit language request when it differs.',
+  ];
 
-  if (Object.keys(prefs).length === 0 ||
-      (!prefs.name && !prefs.timezone && !prefs.location && !prefs.notes && langCode === 'en')) {
-    return '';
+  if (!prefs.name && !prefs.timezone && !prefs.location && !prefs.notes) {
+    return `\n\n${lines.join('\n')}`;
   }
 
-  const lines: string[] = ['## User Preferences - User has explicitly set these preferences, so adhere to them', ''];
+  lines.push('', '## User Preferences - User has explicitly set these preferences, so adhere to them', '');
 
   if (prefs.name) {
     lines.push(`- Name: ${prefs.name}`);
@@ -257,15 +263,12 @@ export function formatPreferencesForPrompt(): string {
     }
   }
 
-  // Always include language so the AI knows which language to respond in.
-  lines.push(`- Preferred language: ${langName}`);
-
   if (prefs.notes) {
     lines.push('', '### Notes about this user', prefs.notes);
   }
 
   lines.push('');
-  return lines.join('\n');
+  return `\n\n${lines.join('\n')}`;
 }
 
 /**

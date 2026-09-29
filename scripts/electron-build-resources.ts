@@ -42,6 +42,7 @@ const buildConfig: BuildConfig = {
   uploadScript: false,
   rootDir: ROOT_DIR,
   electronDir: ELECTRON_DIR,
+  forceDownload: process.env.TOKENBIRD_FORCE_DOWNLOAD === '1',
 };
 
 async function main(): Promise<void> {

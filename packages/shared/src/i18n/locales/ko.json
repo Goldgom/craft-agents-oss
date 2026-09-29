@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "짧은 시간에 너무 많은 요청을 보냈습니다. 잠시 기다린 후 다시 시도하세요.",
   "chat.rateLimitedTitle": "요청이 너무 많음",
   "chat.renameSession": "세션 이름 바꾸기",
-  "chat.responseInterrupted": "응답이 중단되었습니다.",
+  "chat.responseInterrupted": "응답이 중단되었습니다. 여기를 클릭하면 이전 메시지를 입력창에 복원할 수 있습니다.",
   "chat.scrollUpForEarlier": "이전 메시지를 보려면 위로 스크롤하세요({{count}} 이상).",
   "chat.selectedText": "선택한 텍스트",
   "chat.serviceErrorMessage": "AI 서비스를 일시적으로 사용할 수 없습니다. 잠시 기다린 후 다시 시도하세요.",

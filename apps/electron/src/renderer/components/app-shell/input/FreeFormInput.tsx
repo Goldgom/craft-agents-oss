@@ -139,8 +139,8 @@ export interface FreeFormInputProps {
   isProcessing?: boolean
   /** Callback when message is submitted (skillSlugs from @mentions) */
   onSubmit: (message: string, attachments?: FileAttachment[], skillSlugs?: string[]) => void
-  /** Callback to stop processing. Pass silent=true to skip "Response interrupted" message */
-  onStop?: (silent?: boolean) => void
+  /** Stop processing; recallPrompt is used by the explicit Arrow Up shortcut. */
+  onStop?: (silent?: boolean, recallPrompt?: boolean) => void
   /** External ref for the input */
   inputRef?: React.RefObject<RichTextInputHandle>
   /** Current model ID */
@@ -653,6 +653,31 @@ export function FreeFormInput({
     window.addEventListener('craft:insert-text', handleInsertText as EventListener)
     return () => window.removeEventListener('craft:insert-text', handleInsertText as EventListener)
   }, [sessionId, isFocusedPanel, syncToParent, richInputRef])
+
+  // Attachment storage runs after submit has cleared the composer. If it fails,
+  // restore both the text and files so the user can retry without reattaching.
+  React.useEffect(() => {
+    const handleRestoreUnsentMessage = (e: CustomEvent<{
+      sessionId: string
+      message: string
+      attachments: FileAttachment[]
+    }>) => {
+      if (!shouldHandleScopedInputEvent({ sessionId, isFocusedPanel, targetSessionId: e.detail?.sessionId })) return
+      const restoredInput = input === e.detail.message
+        ? input
+        : input ? `${e.detail.message}\n${input}` : e.detail.message
+      const restoredAttachments = [
+        ...e.detail.attachments,
+        ...attachmentsRef.current.filter(a => !e.detail.attachments.includes(a)),
+      ]
+      setInput(restoredInput)
+      setAttachments(restoredAttachments)
+      syncToParent(restoredInput)
+    }
+
+    window.addEventListener('craft:restore-unsent-message', handleRestoreUnsentMessage as EventListener)
+    return () => window.removeEventListener('craft:restore-unsent-message', handleRestoreUnsentMessage as EventListener)
+  }, [sessionId, isFocusedPanel, input, syncToParent])
 
   const clearInputDraft = React.useCallback(() => {
     setInput('')
@@ -1321,8 +1346,8 @@ export function FreeFormInput({
     submitMessage()
   }
 
-  const handleStop = (silent = false) => {
-    onStop?.(silent)
+  const handleStop = (silent = false, recallPrompt = false) => {
+    onStop?.(silent, recallPrompt)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1392,7 +1417,7 @@ export function FreeFormInput({
       disableSend,
     })) {
       e.preventDefault()
-      handleStop()
+      handleStop(false, true)
       return
     }
 

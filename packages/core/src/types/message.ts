@@ -299,6 +299,8 @@ export interface Message {
   statusType?: 'compacting' | 'compaction_complete' | 'retrying';
   // Info level for info messages (determines icon/color)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
+  /** Text offered when the user clicks an interrupted response marker. */
+  interruptedInput?: string;
   // Error-specific fields (for typed errors with diagnostics)
   errorCode?: string;
   errorTitle?: string;
@@ -378,6 +380,8 @@ export interface StoredMessage {
   statusType?: 'compacting' | 'compaction_complete' | 'retrying';
   // Info level for info messages (persisted for reload)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
+  /** Text offered when the user clicks an interrupted response marker. */
+  interruptedInput?: string;
   // Error display fields
   errorCode?: string;
   errorTitle?: string;

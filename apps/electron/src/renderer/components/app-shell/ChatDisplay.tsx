@@ -1372,19 +1372,15 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
 
   // Handle stop request from InputContainer
   // silent=true when redirecting (sending new message), silent=false when user clicks Stop button
-  const handleStop = (silent = false) => {
+  const handleStop = (silent = false, recallPrompt = false) => {
     if (!session?.isProcessing) return
 
-    // Explicit Stop (not a redirect/new-message send): put the in-flight prompt
-    // back in the input so the user can tweak and resend. Append to any draft.
-    // Exclude isQueued messages — those are restored separately by the backend
-    // `restore_input` effect (App.tsx) and would otherwise double up here.
-    if (!silent) {
-      const lastUserMsg = [...session.messages].reverse().find(m => m.role === 'user' && !m.isQueued)
+    // Arrow Up is an explicit recall shortcut. The Stop button and Escape
+    // leave the draft alone; the interruption marker offers recall afterward.
+    if (recallPrompt) {
+      const lastUserMsg = [...session.messages].reverse().find(m => m.role === 'user' && !m.isQueued && !m.hidden)
       const restoredText = coerceInputText(lastUserMsg?.content)
-      if (restoredText) {
-        onInputChange?.(appendRestoredInput(inputValue, restoredText))
-      }
+      if (restoredText) onInputChange?.(appendRestoredInput(inputValue, restoredText))
     }
 
     window.electronAPI.cancelProcessing(session.id, silent).catch(error => {
@@ -1721,6 +1717,12 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             onOpenFile={onOpenFile}
                             onOpenUrl={onOpenUrl}
                             sessionId={session?.id}
+                            onRestoreInterrupted={turn.message.content === 'Response interrupted' ? () => {
+                              const markerIndex = session.messages.findIndex(m => m.id === turn.message.id)
+                              const previousUser = session.messages.slice(0, markerIndex).findLast(m => m.role === 'user' && !m.isQueued && !m.hidden)
+                              const restoredText = coerceInputText(turn.message.interruptedInput || previousUser?.content)
+                              if (restoredText) onInputChange?.(appendRestoredInput(inputValue, restoredText))
+                            } : undefined}
                             onRetry={turn.message.role === 'error' ? () => {
                               const msgs = session?.messages
                               if (!msgs) return
@@ -2215,6 +2217,8 @@ interface MessageBubbleProps {
   compactMode?: boolean
   /** Callback to resend the user message that preceded an error */
   onRetry?: () => void
+  /** Restore the stopped prompt to the composer when its marker is clicked. */
+  onRestoreInterrupted?: () => void
 }
 
 /**
@@ -2343,6 +2347,7 @@ function MessageBubble({
   onPopOut,
   compactMode,
   onRetry,
+  onRestoreInterrupted,
 }: MessageBubbleProps) {
   const { t } = useTranslation()
 
@@ -2455,14 +2460,21 @@ function MessageBubble({
       ? t('chat.responseInterrupted')
       : message.content
 
-    return (
-      <div className={cn('flex items-center gap-2 px-3 py-1 text-[13px] select-none', config.className)}>
+    const isInterrupted = message.content === 'Response interrupted'
+    const className = cn('flex items-center gap-2 px-3 py-1 text-[13px] select-none', config.className)
+    const children = (
+      <>
         <div className="w-3 h-3 flex items-center justify-center shrink-0">
           <Icon className="w-3 h-3" />
         </div>
         <span>{content}</span>
-      </div>
+      </>
     )
+    return isInterrupted && onRestoreInterrupted
+      ? <button type="button" className={cn(className, 'cursor-pointer hover:text-foreground text-left')} onClick={onRestoreInterrupted} title={content}>
+          {children}
+        </button>
+      : <div className={className}>{children}</div>
   }
 
   // === WARNING MESSAGE: Info themed bubble ===
@@ -2500,6 +2512,7 @@ const MemoizedMessageBubble = React.memo(MessageBubble, (prev, next) => {
     prev.message.content === next.message.content &&
     prev.message.role === next.message.role &&
     prev.sessionId === next.sessionId &&
-    prev.compactMode === next.compactMode
+    prev.compactMode === next.compactMode &&
+    prev.onRestoreInterrupted === next.onRestoreInterrupted
   )
 })

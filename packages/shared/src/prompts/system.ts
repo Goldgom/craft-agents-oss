@@ -410,12 +410,12 @@ export type SystemPromptPreset = 'default' | 'mini';
  *
  * @param workspaceRootPath - Root path of the workspace for config file locations
  */
-export function getMiniAgentSystemPrompt(workspaceRootPath?: string): string {
+export function getMiniAgentSystemPrompt(workspaceRootPath?: string, preferencesPrompt = formatPreferencesForPrompt()): string {
   const workspaceContext = workspaceRootPath
     ? `\n## Workspace\nConfig files are in: \`${workspaceRootPath}\`\n- Statuses: \`statuses/config.json\`\n- Labels: \`labels/config.json\`\n- Permissions: \`permissions.json\`\n`
     : '';
 
-  return `You are a focused assistant for quick configuration edits in TokenBird.
+  return `You are a focused assistant for quick configuration edits in TokenBird.${preferencesPrompt}
 
 ## Your Role
 You help users make targeted changes to configuration files. Be concise and efficient.
@@ -440,12 +440,13 @@ export function getLightweightModelSystemPrompt(
   includeCoAuthoredBy: boolean = true,
   agentPrompt?: string,
   agentRuntime?: AgentRuntimeProtocol,
+  preferencesPrompt = formatPreferencesForPrompt(),
 ): string {
   const workspace = workspaceRootPath ? `\nWorkspace: \`${workspaceRootPath}\`` : '';
   const coAuthor = includeCoAuthoredBy ? '\n- Include co-authored attribution when appropriate.' : '';
   const agent = agentPrompt?.trim() ? `\n\n<agent_instructions>\n${agentPrompt.trim()}\n</agent_instructions>` : '';
   const runtimePrompt = getAgentRuntimePrompt(agentRuntime ?? inferAgentRuntimeFromBackendName(backendName));
-  return `You are TokenBird, powered by ${backendName}. Help the user complete their request accurately and safely.${workspace}
+  return `You are TokenBird, powered by ${backendName}. Help the user complete their request accurately and safely.${workspace}${preferencesPrompt}
 
 ## Essential rules
 - Follow the user's goal, permission mode, and safety constraints.
@@ -490,12 +491,12 @@ export function getSystemPrompt(
   // Use mini agent prompt for quick edits (pass workspace root for config paths)
   if (preset === 'mini') {
     debug('[getSystemPrompt] 🤖 Generating MINI agent system prompt for workspace:', workspaceRootPath);
-    return getMiniAgentSystemPrompt(workspaceRootPath);
+    return getMiniAgentSystemPrompt(workspaceRootPath, pinnedPreferencesPrompt ?? formatPreferencesForPrompt());
   }
 
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference();
   if (modelPromptSettings?.lightweight) {
-    let prompt = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, agentPrompt, agentRuntime);
+    let prompt = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, agentPrompt, agentRuntime, pinnedPreferencesPrompt ?? formatPreferencesForPrompt());
     if (getSystemPromptSettings().capabilities.subagents) prompt += `\n\n${SUBAGENT_COLLABORATION_PROMPT.trim()}`;
     if (modelPromptSettings.mcpPromptEnhancement) prompt += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`;
     return prompt;
@@ -1500,11 +1501,11 @@ export function getSystemPromptSources(
   modelPromptSettings?: ModelPromptSettings,
   agentRuntime?: AgentRuntimeProtocol,
 ): SystemPromptSource[] {
-  if (preset === 'mini') return [{ id: 'mini-system', source: 'builtin', title: 'Mini system prompt', content: getMiniAgentSystemPrompt(workspaceRootPath), enabled: true }]
+  if (preset === 'mini') return [{ id: 'mini-system', source: 'builtin', title: 'Mini system prompt', content: getMiniAgentSystemPrompt(workspaceRootPath, pinnedPreferencesPrompt ?? formatPreferencesForPrompt()), enabled: true }]
   const preferences = pinnedPreferencesPrompt ?? formatPreferencesForPrompt()
   const resolvedIncludeCoAuthoredBy = includeCoAuthoredBy ?? getCoAuthorPreference()
   if (modelPromptSettings?.lightweight) {
-    let content = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, undefined, agentRuntime)
+    let content = getLightweightModelSystemPrompt(workspaceRootPath, backendName, resolvedIncludeCoAuthoredBy, undefined, agentRuntime, preferences)
     if (getSystemPromptSettings().capabilities.subagents) content += `\n\n${SUBAGENT_COLLABORATION_PROMPT.trim()}`
     if (modelPromptSettings.mcpPromptEnhancement) content += `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}`
     return [{ id: 'lightweight-system', source: 'builtin', title: 'Lightweight system prompt', content, enabled: true }]
@@ -1563,7 +1564,14 @@ export function getSystemPromptSources(
   coreBuiltin = removePromptSection(coreBuiltin, '## User supplemental instructions')
   sources.unshift({ id: 'craft-agent-system', source: 'builtin', title: 'TokenBird core system prompt', content: coreBuiltin, enabled: true })
   sources.splice(1, 0, { id: `runtime:${resolvedRuntime}`, source: 'builtin', title: `${resolvedRuntime} runtime prompt`, content: runtimePrompt, enabled: true })
-  if (preferences.trim()) sources.push({ id: 'user-preferences', source: 'user', title: 'User preferences', content: preferences, enabled: true })
+  const environmentLanguage = extractPromptSection(preferences, '## Environment Language')
+  if (environmentLanguage) {
+    sources.push({ id: 'environment-language', source: 'context', title: 'Environment language', content: environmentLanguage, enabled: true })
+  }
+  const userPreferences = extractPromptSection(preferences, '## User Preferences') ?? (environmentLanguage ? '' : preferences.trim())
+  if (userPreferences.trim()) {
+    sources.push({ id: 'user-preferences', source: 'user', title: 'User preferences', content: userPreferences, enabled: true })
+  }
   const editable = getSystemPromptSettings().editableInstructions?.trim()
   if (editable) sources.push({ id: 'user-editable-instructions', source: 'user', title: 'User supplemental instructions', content: editable, enabled: true })
   if (workspaceRootPath) {

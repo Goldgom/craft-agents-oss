@@ -30,16 +30,18 @@ ARCH="x64"
 UPLOAD=false
 UPLOAD_LATEST=false
 UPLOAD_SCRIPT=false
+FORCE_DOWNLOAD=false
 
 show_help() {
     cat << EOF
-Usage: build-linux.sh [x64|arm64] [--upload] [--latest] [--script]
+Usage: build-linux.sh [x64|arm64] [--upload] [--latest] [--script] [--force-download]
 
 Arguments:
   x64|arm64    Target architecture (default: x64)
   --upload     Upload AppImage to S3 after building
   --latest     Also update electron/latest (requires --upload)
   --script     Also upload install-app.sh (requires --upload)
+  --force-download  Re-download build dependencies even when cached
 
 Environment variables (from .env or environment):
   S3_VERSIONS_BUCKET_*      - S3 credentials (for --upload)
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --upload)      UPLOAD=true; shift ;;
         --latest)      UPLOAD_LATEST=true; shift ;;
         --script)      UPLOAD_SCRIPT=true; shift ;;
+        --force-download) FORCE_DOWNLOAD=true; shift ;;
         -h|--help)     show_help ;;
         *)
             echo "Unknown option: $1"
@@ -61,6 +64,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ "$FORCE_DOWNLOAD" = true ]; then export TOKENBIRD_FORCE_DOWNLOAD=1; else export TOKENBIRD_FORCE_DOWNLOAD=0; fi
 
 # Configuration
 BUN_VERSION="bun-v1.3.9"  # Pinned version for reproducible builds
@@ -72,18 +77,28 @@ fi
 
 # 1. Clean previous build artifacts
 echo "Cleaning previous builds..."
-rm -rf "$ELECTRON_DIR/vendor"
 rm -rf "$ELECTRON_DIR/node_modules/@anthropic-ai"
 rm -rf "$ELECTRON_DIR/packages"
 rm -rf "$ELECTRON_DIR/release"
 
-# 2. Install dependencies
-echo "Installing dependencies..."
+# 2. Reuse installed dependencies when the lockfile and manifest match.
 cd "$ROOT_DIR"
-bun install
+DEPENDENCY_STAMP="$ROOT_DIR/node_modules/.tokenbird-build-linux-${ARCH}.sha256"
+DEPENDENCY_FINGERPRINT="$(sha256sum bun.lock package.json | sha256sum | cut -d ' ' -f1)"
+DEPENDENCIES_READY=false
+if [ -d node_modules/@anthropic-ai/claude-agent-sdk ] && [ -x node_modules/@vscode/ripgrep/bin/rg ] && [ -f node_modules/electron/dist/version ]; then
+    DEPENDENCIES_READY=true
+fi
+if [ "$FORCE_DOWNLOAD" = true ] || [ "$DEPENDENCIES_READY" = false ] || [ ! -f "$DEPENDENCY_STAMP" ] || [ "$(cat "$DEPENDENCY_STAMP")" != "$DEPENDENCY_FINGERPRINT" ]; then
+    echo "Installing dependencies..."
+    if [ "$FORCE_DOWNLOAD" = true ]; then bun install --frozen-lockfile --force; else bun install --frozen-lockfile; fi
+    if [ ! -x node_modules/@vscode/ripgrep/bin/rg ]; then bun pm trust @vscode/ripgrep; fi
+else
+    echo "Reusing installed dependencies from node_modules"
+fi
+printf '%s' "$DEPENDENCY_FINGERPRINT" > "$DEPENDENCY_STAMP"
 
 # 3. Download Bun binary with checksum verification
-echo "Downloading Bun ${BUN_VERSION} for linux-${ARCH}..."
 mkdir -p "$ELECTRON_DIR/vendor/bun"
 
 # Map architecture names (electron uses x64/arm64, bun uses x64/aarch64)
@@ -93,6 +108,22 @@ else
     BUN_DOWNLOAD="bun-linux-x64-baseline"
 fi
 
+BUN_PATH="$ELECTRON_DIR/vendor/bun/bun"
+BUN_CACHE_STAMP="$ELECTRON_DIR/vendor/bun/.build-runtime"
+BUN_CACHED=false
+if [ "$FORCE_DOWNLOAD" = false ] && [ -f "$BUN_PATH" ]; then
+    if [ -f "$BUN_CACHE_STAMP" ] && [ "$(cat "$BUN_CACHE_STAMP")" = "${BUN_VERSION}:${BUN_DOWNLOAD}" ]; then
+        BUN_CACHED=true
+    elif { [ "$ARCH" = x64 ] && [ "$(uname -m)" = x86_64 ]; } || { [ "$ARCH" = arm64 ] && [ "$(uname -m)" = aarch64 ]; }; then
+        if [ "$("$BUN_PATH" --version 2>/dev/null || true)" = "${BUN_VERSION#bun-v}" ]; then BUN_CACHED=true; fi
+    fi
+fi
+
+if [ "$BUN_CACHED" = true ]; then
+    echo "Reusing Bun ${BUN_VERSION} at $BUN_PATH"
+    printf '%s' "${BUN_VERSION}:${BUN_DOWNLOAD}" > "$BUN_CACHE_STAMP"
+else
+echo "Downloading Bun ${BUN_VERSION} for linux-${ARCH}..."
 # Create temp directory to avoid race conditions
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
@@ -112,6 +143,8 @@ cd - > /dev/null
 unzip -o "$TEMP_DIR/${BUN_DOWNLOAD}.zip" -d "$TEMP_DIR"
 cp "$TEMP_DIR/${BUN_DOWNLOAD}/bun" "$ELECTRON_DIR/vendor/bun/"
 chmod +x "$ELECTRON_DIR/vendor/bun/bun"
+printf '%s' "${BUN_VERSION}:${BUN_DOWNLOAD}" > "$BUN_CACHE_STAMP"
+fi
 
 # 4. Copy SDK from root node_modules (monorepo hoisting).
 # Since SDK 0.2.113: thin core + per-platform binary package.
@@ -126,19 +159,27 @@ cp -r "$SDK_SOURCE" "$ELECTRON_DIR/node_modules/@anthropic-ai/"
 # 4a. Resolve the target arch's binary package (cross-fetch from npm if absent).
 SDK_BIN_PKG="claude-agent-sdk-linux-${ARCH}"
 SDK_BIN_SOURCE="$ROOT_DIR/node_modules/@anthropic-ai/${SDK_BIN_PKG}"
-if [ ! -d "$SDK_BIN_SOURCE" ]; then
-    echo "Cross-arch build: ${SDK_BIN_PKG} not in node_modules — fetching from npm..."
+if [ "$FORCE_DOWNLOAD" = true ] || [ ! -d "$SDK_BIN_SOURCE" ]; then
     SDK_VERSION=$(node -p "require('$ROOT_DIR/package.json').dependencies['@anthropic-ai/claude-agent-sdk']" | tr -d '"')
+    CACHE_DIR="$ROOT_DIR/.build/native-packages"
+    TARBALL="$CACHE_DIR/anthropic-ai-${SDK_BIN_PKG}-${SDK_VERSION}.tgz"
+    mkdir -p "$CACHE_DIR"
+    if [ "$FORCE_DOWNLOAD" = true ] || [ ! -f "$TARBALL" ]; then
+        echo "Fetching ${SDK_BIN_PKG}@${SDK_VERSION} from npm..."
+        if [ "$FORCE_DOWNLOAD" = true ]; then
+            npm pack "@anthropic-ai/${SDK_BIN_PKG}@${SDK_VERSION}" --force --prefer-online --pack-destination "$CACHE_DIR" >/dev/null
+        else
+            npm pack "@anthropic-ai/${SDK_BIN_PKG}@${SDK_VERSION}" --pack-destination "$CACHE_DIR" >/dev/null
+        fi
+    else
+        echo "Reusing cached ${SDK_BIN_PKG}@${SDK_VERSION}"
+    fi
     PKG_TMP=$(mktemp -d)
-    trap "rm -rf $PKG_TMP" RETURN
-    (
-        cd "$PKG_TMP"
-        npm pack "@anthropic-ai/${SDK_BIN_PKG}@${SDK_VERSION}" >/dev/null
-        TARBALL=$(ls anthropic-ai-*.tgz | head -1)
-        tar -xzf "$TARBALL"
-    )
+    tar -xzf "$TARBALL" -C "$PKG_TMP"
+    rm -rf "$SDK_BIN_SOURCE"
     mkdir -p "$SDK_BIN_SOURCE"
     cp -r "$PKG_TMP/package/." "$SDK_BIN_SOURCE/"
+    rm -rf "$PKG_TMP"
 fi
 
 require_path "$SDK_BIN_SOURCE" "SDK native binary package (${SDK_BIN_PKG})" \
@@ -194,7 +235,7 @@ cd "$ELECTRON_DIR"
 # a corrupt ZIP when a proxy interrupts electron-builder's range requests.
 ELECTRON_DIST="$ROOT_DIR/node_modules/electron/dist"
 HOST_ARCH="$(uname -m)"
-if [ -f "$ELECTRON_DIST/version" ] && {
+if [ "$FORCE_DOWNLOAD" = false ] && [ -f "$ELECTRON_DIST/version" ] && {
     { [ "$ARCH" = "x64" ] && [ "$HOST_ARCH" = "x86_64" ]; } ||
     { [ "$ARCH" = "arm64" ] && [ "$HOST_ARCH" = "aarch64" ]; }
 }; then

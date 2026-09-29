@@ -34,6 +34,7 @@ describe('createCraftSettingsManager', () => {
 
   it('uses a smaller retry policy for bounded ephemeral queries', () => {
     const settings = createCraftSettingsManager('ephemeral');
+    expect(CRAFT_PI_EPHEMERAL_RETRY_SETTINGS.maxRetries).toBe(3);
     expect(settings.getRetrySettings()).toEqual({
       enabled: true,
       maxRetries: CRAFT_PI_EPHEMERAL_RETRY_SETTINGS.maxRetries,
@@ -43,7 +44,7 @@ describe('createCraftSettingsManager', () => {
       maxRetries: CRAFT_PI_EPHEMERAL_RETRY_SETTINGS.provider.maxRetries,
       maxRetryDelayMs: CRAFT_PI_EPHEMERAL_RETRY_SETTINGS.provider.maxRetryDelayMs,
     });
-    expect(CRAFT_PI_EPHEMERAL_MAX_BACKOFF_MS).toBe(6_000);
+    expect(CRAFT_PI_EPHEMERAL_MAX_BACKOFF_MS).toBe(14_000);
     expect(CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS).toBe(115_000);
     expect(CRAFT_PI_EPHEMERAL_MAX_BACKOFF_MS).toBeLessThan(
       CRAFT_PI_EPHEMERAL_QUERY_DEADLINE_MS,

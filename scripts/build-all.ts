@@ -19,13 +19,14 @@ type Target = typeof allTargets[number];
 
 const args = new Set(process.argv.slice(2));
 if (args.has('--help') || args.has('-h')) {
-  console.log('Usage: bun run build:all [targets...] [--release] [--checksums-only]');
+  console.log('Usage: bun run build:all [targets...] [--release] [--checksums-only] [--force-download]');
   console.log(`Targets: ${allTargets.join(', ')}`);
   process.exit(0);
 }
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith('-')) as Target[];
 const targets = requested.length ? requested : [...allTargets];
 const release = args.has('--release');
+const forceDownload = args.has('--force-download');
 
 for (const target of targets) {
   if (!allTargets.includes(target)) throw new Error(`Unknown target "${target}". Valid targets: ${allTargets.join(', ')}`);
@@ -70,12 +71,12 @@ function collectRelease(target: string): void {
 async function buildDesktop(target: 'win' | 'linux'): Promise<void> {
   if (target === 'win') {
     if (process.platform !== 'win32') throw new Error('The Windows Electron package must be built on Windows.');
-    await run('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', 'apps/electron/scripts/build-win.ps1']);
+    await run('powershell.exe', ['-ExecutionPolicy', 'Bypass', '-File', 'apps/electron/scripts/build-win.ps1', ...(forceDownload ? ['-ForceDownload'] : [])]);
   } else {
     if (process.platform !== 'linux') {
       throw new Error('The Linux Electron package must be built on Linux. Run this target in a Linux CI job or WSL.');
     }
-    await run('bash', ['apps/electron/scripts/build-linux.sh', process.arch === 'arm64' ? 'arm64' : 'x64']);
+    await run('bash', ['apps/electron/scripts/build-linux.sh', process.arch === 'arm64' ? 'arm64' : 'x64', ...(forceDownload ? ['--force-download'] : [])]);
   }
   const unpackedResources = join(root, 'apps', 'electron', 'release', target === 'win' ? 'win-unpacked' : 'linux-unpacked', 'resources');
   for (const worker of ['messaging-whatsapp-worker', 'messaging-qqbot-worker']) {
@@ -121,7 +122,7 @@ async function buildHeadless(target: 'linux-headless' | 'win-headless' | 'mac-he
   // build-server resolves --output relative to the repository root. Passing an
   // absolute Windows path would make it concatenate root + absolute path.
   const relativeOutput = `${stagingRelative}/${target}`;
-  await run('bun', ['run', 'scripts/build-server.ts', `--platform=${platform}`, '--arch=x64', `--output=${relativeOutput}`, '--compress']);
+  await run('bun', ['run', 'scripts/build-server.ts', `--platform=${platform}`, '--arch=x64', `--output=${relativeOutput}`, '--compress', ...(forceDownload ? ['--force-download'] : [])]);
   const destination = join(dist, target);
   mkdirSync(destination, { recursive: true });
   // Use a fresh unpacked path for every run. Even copying over an existing tree

@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "Se enviaron demasiadas solicitudes en poco tiempo. Espera un momento y vuelve a intentarlo.",
   "chat.rateLimitedTitle": "Demasiadas solicitudes",
   "chat.renameSession": "Renombrar sesión",
-  "chat.responseInterrupted": "Respuesta interrumpida",
+  "chat.responseInterrupted": "Respuesta interrumpida. Haz clic aquí para recuperar tu mensaje en el cuadro de texto.",
   "chat.scrollUpForEarlier": "Sube para ver mensajes anteriores ({{count}} más)",
   "chat.selectedText": "Texto seleccionado",
   "chat.serviceErrorMessage": "El servicio de IA no está disponible temporalmente. Espera un momento y vuelve a intentarlo.",

@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "短時間に送信されたリクエストが多すぎます。しばらく待ってから再試行してください。",
   "chat.rateLimitedTitle": "リクエストが多すぎます",
   "chat.renameSession": "セッション名を変更",
-  "chat.responseInterrupted": "応答が中断されました",
+  "chat.responseInterrupted": "応答を中断しました。ここをクリックすると元のメッセージを入力欄に戻せます。",
   "chat.scrollUpForEarlier": "上にスクロールして以前のメッセージを表示 (あと {{count}} 件)",
   "chat.selectedText": "選択テキスト",
   "chat.serviceErrorMessage": "AI サービスは一時的に利用できません。しばらく待ってから再試行してください。",

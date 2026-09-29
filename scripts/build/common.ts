@@ -3,7 +3,7 @@
  */
 
 import { $ } from 'bun';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import {
   existsSync,
   mkdirSync,
@@ -31,6 +31,8 @@ export interface BuildConfig {
   electronDir: string;
   /** Optional platform-specific Bun cache used by cross-platform server builds. */
   bunVendorDir?: string;
+  /** Re-fetch pinned runtime assets even when a validated local copy exists. */
+  forceDownload?: boolean;
 }
 
 /**
@@ -64,6 +66,15 @@ export const TEMURIN_JDK_VERSION = '17.0.14+7';
 
 /** Directory name used for the extracted PortableGit runtime. */
 export const BUNDLED_GIT_BASH_DIR = 'git-bash';
+
+function localBinaryVersion(path: string, args: string[]): string | null {
+  try {
+    const result = spawnSync(path, args, { encoding: 'utf8', timeout: 10_000 });
+    return result.status === 0 ? `${result.stdout ?? ''}${result.stderr ?? ''}`.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Get platform key for resources/bin folder naming.
@@ -182,11 +193,19 @@ export async function downloadBun(config: BuildConfig): Promise<void> {
   const bunDownload = getBunDownloadName(platform, arch);
   const vendorDir = config.bunVendorDir ?? join(electronDir, 'vendor', 'bun');
   const bunBinary = platform === 'win32' ? 'bun.exe' : 'bun';
+  const binaryPath = join(vendorDir, bunBinary);
+  const versionStamp = join(vendorDir, '.build-runtime');
+  const expectedStamp = `${BUN_VERSION}:${bunDownload}`;
 
-  // Skip when already provisioned (offline builds: pre-seed + --skip-download)
-  if (existsSync(join(vendorDir, bunBinary))) {
-    console.log(`Bun already present at ${join(vendorDir, bunBinary)}`);
-    return;
+  if (!config.forceDownload && existsSync(binaryPath)) {
+    const stampMatches = existsSync(versionStamp) && readFileSync(versionStamp, 'utf8') === expectedStamp;
+    const canRunLocally = platform === process.platform && arch === process.arch;
+    const preseededCrossTarget = !canRunLocally && !!config.bunVendorDir && !existsSync(versionStamp);
+    if (stampMatches || preseededCrossTarget || (canRunLocally && localBinaryVersion(binaryPath, ['--version']) === BUN_VERSION.slice(5))) {
+      if (!stampMatches) writeFileSync(versionStamp, expectedStamp);
+      console.log(`Bun already present at ${binaryPath}`);
+      return;
+    }
   }
 
   console.log(`Downloading Bun ${BUN_VERSION} for ${platform}-${arch}...`);
@@ -252,6 +271,7 @@ export async function downloadBun(config: BuildConfig): Promise<void> {
     if (platform !== 'win32' && process.platform !== 'win32') {
       await $`chmod +x ${destPath}`.quiet();
     }
+    writeFileSync(versionStamp, expectedStamp);
 
     console.log(`  Bun installed to ${destPath} ✓`);
   } finally {
@@ -289,11 +309,17 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
 
   const targetDir = join(electronDir, 'resources', 'bin', platformKey);
   const targetPath = join(targetDir, uvBinaryName);
+  const versionStamp = join(targetDir, '.uv-build-version');
 
-  // Skip when already provisioned
-  if (existsSync(targetPath)) {
-    console.log(`uv already present at ${targetPath}`);
-    return;
+  if (!config.forceDownload && existsSync(targetPath)) {
+    const stampMatches = existsSync(versionStamp) && readFileSync(versionStamp, 'utf8') === UV_VERSION;
+    const canRunLocally = platform === process.platform && arch === process.arch;
+    const preseededCrossTarget = !canRunLocally && !existsSync(versionStamp);
+    if (stampMatches || preseededCrossTarget || (canRunLocally && localBinaryVersion(targetPath, ['--version'])?.includes(UV_VERSION))) {
+      if (!stampMatches) writeFileSync(versionStamp, UV_VERSION);
+      console.log(`uv already present at ${targetPath}`);
+      return;
+    }
   }
 
   console.log(`Downloading uv ${UV_VERSION} for ${platformKey}...`);
@@ -348,6 +374,7 @@ export async function downloadUv(config: BuildConfig): Promise<void> {
     if (platform !== 'win32' && process.platform !== 'win32') {
       await $`chmod +x ${targetPath}`.quiet();
     }
+    writeFileSync(versionStamp, UV_VERSION);
 
     console.log(`  uv installed to ${targetPath} ✓`);
   } finally {
@@ -408,7 +435,7 @@ export async function downloadGitBash(config: BuildConfig): Promise<void> {
   const gitPath = join(targetDir, 'cmd', 'git.exe');
   const licensePath = join(targetDir, 'LICENSE.txt');
 
-  if (
+  if (!config.forceDownload &&
     existsSync(bashPath)
     && existsSync(licensePath)
     && hasExpectedGitForWindowsVersion(gitPath)
@@ -490,6 +517,8 @@ export async function downloadWindowsToolchains(config: BuildConfig): Promise<vo
   const nodeDir = join(toolchainsDir, 'node');
   const pythonDir = join(toolchainsDir, 'python');
   const jdkDir = join(toolchainsDir, 'jdk');
+  const versionStamp = join(toolchainsDir, '.build-versions');
+  const expectedVersions = `${NODE_VERSION}:${PYTHON_VERSION}:${TEMURIN_JDK_VERSION}`;
   const pythonPipModule = join(pythonDir, 'Lib', 'site-packages', 'pip', '__init__.py');
   if (existsSync(join(pythonDir, 'python.exe')) && existsSync(pythonPipModule)) {
     const scriptsDir = join(pythonDir, 'Scripts');
@@ -505,9 +534,17 @@ export async function downloadWindowsToolchains(config: BuildConfig): Promise<vo
     && existsSync(join(pythonDir, 'Scripts', 'pip.cmd'))
     && existsSync(join(jdkDir, 'bin', 'java.exe'))
     && existsSync(join(jdkDir, 'bin', 'javac.exe'));
-  if (complete) {
-    console.log(`Windows toolchains already present at ${toolchainsDir}`);
-    return;
+  if (complete && !config.forceDownload) {
+    const stampMatches = existsSync(versionStamp) && readFileSync(versionStamp, 'utf8') === expectedVersions;
+    const binariesMatch = !stampMatches && process.platform === 'win32'
+      && localBinaryVersion(join(nodeDir, 'node.exe'), ['--version']) === `v${NODE_VERSION}`
+      && localBinaryVersion(join(pythonDir, 'python.exe'), ['--version'])?.includes(PYTHON_VERSION)
+      && localBinaryVersion(join(jdkDir, 'bin', 'javac.exe'), ['-version'])?.includes(TEMURIN_JDK_VERSION.split('+')[0]);
+    if (stampMatches || binariesMatch) {
+      if (!stampMatches) writeFileSync(versionStamp, expectedVersions);
+      console.log(`Windows toolchains already present at ${toolchainsDir}`);
+      return;
+    }
   }
 
   if (process.platform !== 'win32') {
@@ -569,6 +606,7 @@ export async function downloadWindowsToolchains(config: BuildConfig): Promise<vo
     if (!existsSync(join(nodeDir, 'node.exe')) || !existsSync(join(pythonDir, 'python.exe')) || !existsSync(join(jdkDir, 'bin', 'javac.exe'))) {
       throw new Error('Bundled Windows toolchain verification failed after extraction');
     }
+    writeFileSync(versionStamp, expectedVersions);
     console.log(`  Windows JDK, Python and Node toolchains installed to ${toolchainsDir} ✓`);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

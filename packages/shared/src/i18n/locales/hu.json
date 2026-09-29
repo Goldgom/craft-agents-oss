@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "Rövid idő alatt túl sok kérés érkezett. Várjon egy kicsit, majd próbálja újra.",
   "chat.rateLimitedTitle": "Túl sok kérés",
   "chat.renameSession": "Munkamenet átnevezése",
-  "chat.responseInterrupted": "A válasz megszakadt",
+  "chat.responseInterrupted": "A válasz megszakadt. Kattints ide az eredeti üzenet visszaállításához a beviteli mezőbe.",
   "chat.scrollUpForEarlier": "Görgess fel a korábbi üzenetekért (még {{count}})",
   "chat.selectedText": "Kijelölt szöveg",
   "chat.serviceErrorMessage": "Az AI-szolgáltatás átmenetileg nem érhető el. Várjon egy kicsit, majd próbálja újra.",

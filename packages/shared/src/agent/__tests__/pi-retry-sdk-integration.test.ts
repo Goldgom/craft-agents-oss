@@ -285,6 +285,38 @@ describe('Pi SDK auto-retry integration', () => {
     ]);
   });
 
+  it('reconnects after a 520 response and hides the failed attempt', async () => {
+    const result = await runScenario(
+      [{ error: 'Raw: 520 status code (no body)' }, { text: 'Recovered answer' }],
+      { maxRetries: 5 },
+    );
+    expect(result.callCount).toBe(2);
+    expect(result.events.filter(event => event.type === 'typed_error')).toHaveLength(0);
+    expect(result.events.filter(event => event.type === 'text_complete')).toMatchObject([
+      { type: 'text_complete', text: 'Recovered answer' },
+    ]);
+  });
+
+  it('reports the original 520 after exactly three reconnects', async () => {
+    const result = await runScenario(
+      Array.from({ length: 4 }, () => ({ error: 'Raw: 520 status code (no body)' })),
+      { maxRetries: 5 },
+    );
+    expect(result.callCount).toBe(4);
+    expect(result.events.filter(event => event.type === 'retry' && event.phase === 'backoff')).toHaveLength(3);
+    expect(result.events.filter(event => event.type === 'typed_error')).toMatchObject([
+      { type: 'typed_error', error: { code: 'service_error', originalError: 'Raw: 520 status code (no body)' } },
+    ]);
+    expect(result.events.filter(event => event.type === 'typed_error')).toHaveLength(1);
+    expect(result.queueCompletionSdkEvents).toEqual(['agent_end']);
+  });
+
+  it('does not retry a 520 response that also requires a security challenge', async () => {
+    const result = await runScenario([{ error: 'HTTP 520: security challenge required' }]);
+    expect(result.callCount).toBe(1);
+    expect(result.events.filter(event => event.type === 'retry')).toHaveLength(0);
+  });
+
   it('does not retry a risk-control response even when it contains 429', async () => {
     const result = await runScenario([{ error: '429 Too many requests: security challenge required' }]);
     expect(result.callCount).toBe(1);

@@ -6824,6 +6824,13 @@ export class SessionManager implements ISessionManager {
     }
 
     try {
+      // Cancellation can arrive while source credentials or the agent are
+      // initializing, before there is a provider request to abort.
+      if (managed.stopRequested || managed.processingGeneration !== myGeneration) {
+        sendSpan.end()
+        await this.onProcessingStopped(sessionId, 'interrupted')
+        return
+      }
       sessionLog.info('Starting chat for session:', sessionId)
       sessionLog.info('Workspace:', JSON.stringify(managed.workspace, null, 2))
       sessionLog.info('Message:', message)
@@ -6881,6 +6888,12 @@ export class SessionManager implements ISessionManager {
       sessionLog.info('Got chat iterator, starting iteration...')
 
       for await (const event of chatIterator) {
+        // A stop may arrive while the iterator is waiting for its next event.
+        // Discard that event (including a trailing `complete`) immediately so
+        // cancelled work cannot extend the visible response or finish normally.
+        if (managed.stopRequested || managed.processingGeneration !== myGeneration) {
+          break
+        }
         // Log events (skip noisy text_delta)
         if (event.type !== 'text_delta') {
           if (event.type === 'tool_start') {
@@ -6894,6 +6907,12 @@ export class SessionManager implements ISessionManager {
 
         // Process the event first
         await this.processEvent(managed, event)
+
+        // processEvent can await disk or tool work. A stop received during that
+        // await must win over the SDK's queued completion event.
+        if (managed.stopRequested || managed.processingGeneration !== myGeneration) {
+          break
+        }
 
         // Fallback: Capture SDK session ID if the onSdkSessionIdUpdate callback didn't fire.
         // Primary capture happens in getOrCreateAgent() via onSdkSessionIdUpdate callback,
@@ -7012,24 +7031,28 @@ export class SessionManager implements ISessionManager {
           return  // Exit function, skip finally block (onProcessingStopped handles cleanup)
         }
 
-        // NOTE: We no longer break early on !isProcessing or stopRequested.
-        // After soft interrupt (forceAbort), the backend sets turnComplete=true which causes
-        // the generator to yield remaining queued events and then complete naturally.
-        // This ensures we don't lose in-flight messages.
+        // Continue until completion unless a stop or newer turn supersedes us.
       }
 
       // Loop exited - either via complete event (normal) or generator ended after soft interrupt
-      if (!managed.isProcessing) {
+      if (managed.processingGeneration !== myGeneration) {
+        sendSpan.end()
+        return
+      } else if (!managed.isProcessing) {
         sessionLog.info('Chat loop exited after explicit handoff/stop')
         sendSpan.mark('chat.exit.already_stopped')
         sendSpan.end()
       } else if (managed.stopRequested) {
-        sessionLog.info('Chat loop completed after stop request - events drained successfully')
+        sessionLog.info('Chat loop exited after stop request')
         this.onProcessingStopped(sessionId, 'interrupted')
       } else {
         sessionLog.info('Chat loop exited unexpectedly')
       }
     } catch (error) {
+      if (managed.processingGeneration !== myGeneration) {
+        sendSpan.end()
+        return
+      }
       // Check if this is an abort error (expected when interrupted)
       const isAbortError = error instanceof Error && (
         error.name === 'AbortError' ||
@@ -7086,14 +7109,17 @@ export class SessionManager implements ISessionManager {
 
   async cancelProcessing(sessionId: string, silent = false): Promise<void> {
     const managed = this.sessions.get(sessionId)
-    if (!managed?.isProcessing) {
+    if (!managed?.isProcessing || managed.stopRequested) {
       return // Not processing, nothing to cancel
     }
 
     sessionLog.info('Cancelling processing for session:', sessionId, silent ? '(silent)' : '')
 
-    // Collect queued message text for input restoration before clearing
+    // Keep the stopped prompt and any queued follow-ups on the persisted info
+    // marker. The composer only receives them when that marker is clicked.
+    const stoppedPrompt = [...managed.messages].reverse().find(m => m.role === 'user' && !m.isQueued && !m.hidden)?.content
     const queuedTexts = managed.messageQueue.map(q => q.message)
+    const interruptedInput = [stoppedPrompt, ...queuedTexts].filter((text): text is string => !!text).join('\n\n')
 
     // Collect queued message IDs so we can remove them from the messages array
     // (they were added when sendMessage was called during processing)
@@ -7109,15 +7135,15 @@ export class SessionManager implements ISessionManager {
       managed.messages = managed.messages.filter(m => !queuedMessageIds.has(m.id))
     }
 
-    // Signal intent to stop - let the event loop drain remaining events before clearing isProcessing
-    // This prevents losing in-flight messages after soft interrupt
+    // Signal intent to stop. The chat loop now drops any event arriving after
+    // this point, including a backend completion racing with this request.
     managed.stopRequested = true
 
     // Track interruption so the next user message gets a context note
     // telling the LLM the previous response was cut short
     managed.wasInterrupted = true
 
-    // Force-abort via Query.close() - sends soft interrupt to the backend
+    // Abort the active provider request.
     if (managed.agent) {
       managed.agent.forceAbort(AbortReason.UserStop)
     }
@@ -7130,27 +7156,24 @@ export class SessionManager implements ISessionManager {
         role: 'info',
         content: 'Response interrupted',
         timestamp: this.monotonic(),
+        ...(interruptedInput ? { interruptedInput } : {}),
       }
       managed.messages.push(interruptedMessage)
       this.sendEvent({
         type: 'interrupted',
         sessionId,
         message: interruptedMessage,
-        // Include queued texts so the UI can restore them to the input field
-        ...(queuedTexts.length > 0 ? { queuedMessages: queuedTexts } : {}),
       }, managed.workspace.id)
     } else {
       // Still send interrupted event but without the message (for UI state update)
       this.sendEvent({
         type: 'interrupted',
         sessionId,
-        // Include queued texts so the UI can restore them to the input field
-        ...(queuedTexts.length > 0 ? { queuedMessages: queuedTexts } : {}),
       }, managed.workspace.id)
     }
 
-    // Safety timeout: if event loop doesn't complete within 5 seconds, force cleanup
-    // This handles cases where the generator gets stuck
+    // A provider iterator can remain blocked despite abort. Release the
+    // session promptly so the next message is not stuck behind that iterator.
     if (managed.stopCleanupTimer) clearTimeout(managed.stopCleanupTimer)
     managed.stopCleanupTimer = setTimeout(() => {
       managed.stopCleanupTimer = undefined
@@ -7158,10 +7181,9 @@ export class SessionManager implements ISessionManager {
         sessionLog.warn('Generator did not complete after stop request, forcing cleanup')
         this.onProcessingStopped(sessionId, 'timeout')
       }
-    }, 5000)
+    }, 500)
 
-    // NOTE: We don't clear isProcessing or send complete event here anymore.
-    // The event loop will drain remaining events and call onProcessingStopped when done.
+    // The iterator normally stops the session; the timer handles stuck providers.
   }
 
   /**
@@ -7299,6 +7321,18 @@ export class SessionManager implements ISessionManager {
     if (!managed) return
 
     sessionLog.info(`Processing stopped for session ${sessionId}: ${reason}`)
+
+    // The provider may still be aborting after its event iterator closes.
+    // Retire the old runtime before accepting another prompt, including when
+    // the iterator ignored abort and reached the timeout backstop.
+    if (managed.stopRequested && (reason === 'interrupted' || reason === 'timeout')) {
+      managed.processingGeneration++
+      if (managed.stopCleanupTimer) {
+        clearTimeout(managed.stopCleanupTimer)
+        managed.stopCleanupTimer = undefined
+      }
+      await this.disposeManagedAgentRuntime(managed, 'user stop')
+    }
 
     // 1. Cleanup state
     this.setProcessing(managed, false)

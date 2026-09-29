@@ -350,9 +350,8 @@ export function handleInfo(
  *
  * Two distinct shapes:
  * - **User-initiated stop** (`event.message` present): user clicked the Stop
- *   button. We render the "Response interrupted" notice, drop queued user
- *   bubbles, and restore their text to the input field so the user can edit
- *   and re-send.
+ *   button. We render the "Response interrupted" notice and drop queued user
+ *   bubbles. The notice offers the stopped text when clicked.
  * - **Silent redirect** (`event.message` absent): the agent aborted internally
  *   so a new message could be processed. The backend's `processNextQueuedMessage`
  *   will auto-replay queued messages — we must NOT remove the queued bubbles
@@ -364,7 +363,6 @@ export function handleInterrupted(
   event: InterruptedEvent
 ): ProcessResult {
   const { session } = state
-  const effects: Effect[] = []
   const isUserInitiated = !!event.message
 
   // Clear transient streaming state (isPending, isStreaming) and mark running tools as interrupted
@@ -392,16 +390,6 @@ export function handleInterrupted(
     ? [...updatedMessages, event.message]
     : updatedMessages
 
-  // Restore queued message text to the input field — only on user-initiated
-  // stops. Silent redirects keep the bubble in chat and rely on the backend's
-  // auto-replay (#616).
-  if (isUserInitiated && event.queuedMessages && event.queuedMessages.length > 0) {
-    effects.push({
-      type: 'restore_input',
-      text: event.queuedMessages.join('\n\n'),
-    })
-  }
-
   return {
     state: {
       session: {
@@ -412,7 +400,7 @@ export function handleInterrupted(
       },
       streaming: null,
     },
-    effects,
+    effects: [],
   }
 }
 

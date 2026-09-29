@@ -8,15 +8,18 @@ const root = resolve(import.meta.dir, '..');
 const args = process.argv.slice(2);
 let distro: string | undefined;
 let checkOnly = false;
+let forceDownload = false;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
   if (arg === '--help' || arg === '-h') {
-    console.log('Usage: bun run build:linux:wsl [--distro NAME] [--check]');
+    console.log('Usage: bun run build:linux:wsl [--distro NAME] [--check] [--force-download]');
     process.exit(0);
   }
   if (arg === '--check') {
     checkOnly = true;
+  } else if (arg === '--force-download') {
+    forceDownload = true;
   } else if (arg === '--distro' && args[i + 1]) {
     distro = args[++i];
   } else {
@@ -35,6 +38,7 @@ export PATH="$HOME/.bun/bin:$PATH"
 
 source_dir="$(wslpath -u "$1")"
 check_only="$2"
+force_download="$3"
 
 if [ ! -f "$source_dir/package.json" ] || [ ! -f "$source_dir/apps/electron/scripts/build-linux.sh" ]; then
   echo "WSL cannot access the repository at: $source_dir" >&2
@@ -66,7 +70,24 @@ fi
 
 umask 077
 workspace="$(mktemp -d "$HOME/tokenbird-wsl-build.XXXXXXXX")"
-trap 'rm -rf -- "$workspace"' EXIT
+cache_dir="$HOME/.cache/tokenbird-wsl-build"
+mkdir -p "$cache_dir"
+save_cache() {
+  if [ -d "$workspace/apps/electron/vendor" ]; then
+    mkdir -p "$cache_dir/vendor"
+    cp -a "$workspace/apps/electron/vendor/." "$cache_dir/vendor/"
+  fi
+  if [ -d "$workspace/apps/electron/resources/bin/linux-x64" ]; then
+    mkdir -p "$cache_dir/linux-x64"
+    cp -a "$workspace/apps/electron/resources/bin/linux-x64/." "$cache_dir/linux-x64/"
+  fi
+  if [ -d "$workspace/.build/native-packages" ]; then
+    mkdir -p "$cache_dir/native-packages"
+    cp -a "$workspace/.build/native-packages/." "$cache_dir/native-packages/"
+  fi
+  rm -rf -- "$workspace"
+}
+trap save_cache EXIT
 
 echo "Copying workspace into WSL: $workspace"
 tar -C "$source_dir" \
@@ -76,12 +97,23 @@ tar -C "$source_dir" \
   --exclude='./apps/electron/vendor' --exclude='./apps/electron/release' \
   -cf - . | tar -C "$workspace" -xf -
 
+if [ -d "$cache_dir/vendor" ]; then
+  mkdir -p "$workspace/apps/electron/vendor"
+  cp -a "$cache_dir/vendor/." "$workspace/apps/electron/vendor/"
+fi
+if [ -d "$cache_dir/linux-x64" ]; then
+  mkdir -p "$workspace/apps/electron/resources/bin/linux-x64"
+  cp -a "$cache_dir/linux-x64/." "$workspace/apps/electron/resources/bin/linux-x64/"
+fi
+if [ -d "$cache_dir/native-packages" ]; then
+  mkdir -p "$workspace/.build/native-packages"
+  cp -a "$cache_dir/native-packages/." "$workspace/.build/native-packages/"
+fi
+
 # Windows Git checkouts may have CRLF even when invoked through bash.
 sed -i 's/\r$//' "$workspace/apps/electron/scripts/build-linux.sh"
 cd "$workspace"
-bun install
-bun pm trust @vscode/ripgrep
-bun run build:all linux
+if [ "$force_download" = true ]; then bun run build:all linux --force-download; else bun run build:all linux; fi
 
 artifact="$workspace/dist/linux/TokenBird-x64.AppImage"
 if [ ! -f "$artifact" ]; then
@@ -95,7 +127,7 @@ echo "AppImage: $source_dir/dist/linux/TokenBird-x64.AppImage"
 
 const commandArgs = [
   ...(distro ? ['--distribution', distro] : []),
-  '--exec', 'bash', '-l', '-s', '--', root, String(checkOnly),
+  '--exec', 'bash', '-l', '-s', '--', root, String(checkOnly), String(forceDownload),
 ];
 const result = spawnSync('wsl.exe', commandArgs, {
   input: script,

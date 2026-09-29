@@ -267,7 +267,7 @@ export interface InterruptedEvent {
   type: 'interrupted'
   sessionId: string
   message?: Message
-  /** Messages that were queued but not processed — should be restored to input field */
+  /** Legacy payload from older servers; current clients do not auto-restore it. */
   queuedMessages?: string[]
 }
 

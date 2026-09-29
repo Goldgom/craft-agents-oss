@@ -1464,23 +1464,28 @@ export default function App() {
           }
         })
 
-        // Notify user about failed attachments
-        const failedCount = storeResults.filter(r => r.status === 'rejected').length
-        if (failedCount > 0) {
-          console.warn(`${failedCount} attachment(s) failed to store`)
-          // Add warning message to session so user knows some attachments weren't included
-          const failedNames = attachments
-            .filter((_, i) => storeResults[i].status === 'rejected')
-            .map(a => a.name)
-            .join(', ')
+        // Keep the draft intact if any attachment fails. Sending the text alone
+        // can make the agent act on an image it never received.
+        const failedAttachments = storeResults.flatMap((result, i) =>
+          result.status === 'rejected'
+            ? [{ name: attachments[i].name, reason: result.reason instanceof Error ? result.reason.message : String(result.reason) }]
+            : []
+        )
+        if (failedAttachments.length > 0) {
+          const details = failedAttachments.map(({ name, reason }) => `${name}: ${reason}`).join('; ')
+          console.warn(`${failedAttachments.length} attachment(s) failed to store: ${details}`)
           updateSessionById(sessionId, (s) => ({
             messages: [...s.messages, {
               id: generateMessageId(),
               role: 'warning' as const,
-              content: `⚠️ ${failedCount} attachment(s) could not be stored and will not be sent: ${failedNames}`,
+              content: `⚠️ Attachment upload failed. Message was not sent. ${details}`,
               timestamp: Date.now()
             }]
           }))
+          window.dispatchEvent(new CustomEvent('craft:restore-unsent-message', {
+            detail: { sessionId, message, attachments },
+          }))
+          return
         }
 
         // Step 2: Create processed attachments for Claude

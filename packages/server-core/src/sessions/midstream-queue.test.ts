@@ -52,6 +52,35 @@ describe('mid-stream queue runtime invariants', () => {
     })
   })
 
+  it('stops once and keeps the stopped and queued text on the interruption marker', async () => {
+    const managed = buildSession('stop-with-queue')
+    managed.isProcessing = true
+    managed.messages = [
+      { id: 'active-user', role: 'user', content: 'original prompt', timestamp: 1 },
+      { id: 'queued-user', role: 'user', content: 'follow up', timestamp: 2, isQueued: true },
+    ]
+    managed.messageQueue.push({ message: 'follow up', messageId: 'queued-user' })
+    const forceAbort = mock(() => {})
+    managed.agent = { forceAbort } as unknown as typeof managed.agent
+    const events: any[] = []
+    sm.setEventSink((_channel, _target, event) => events.push(event))
+
+    try {
+      await sm.cancelProcessing(managed.id)
+      await sm.cancelProcessing(managed.id)
+
+      expect(forceAbort).toHaveBeenCalledTimes(1)
+      expect(managed.stopRequested).toBe(true)
+      expect(managed.messageQueue).toEqual([])
+      expect(managed.messages.some(message => message.id === 'queued-user')).toBe(false)
+      expect(events.filter(event => event.type === 'interrupted')).toHaveLength(1)
+      expect(events.find(event => event.type === 'interrupted')?.message?.interruptedInput)
+        .toBe('original prompt\n\nfollow up')
+    } finally {
+      if (managed.stopCleanupTimer) clearTimeout(managed.stopCleanupTimer)
+    }
+  })
+
   it('re-stamps replay after the prior final response and emits that timestamp', async () => {
     const sessionId = 'queue-ordering'
     const managed = buildSession(sessionId)

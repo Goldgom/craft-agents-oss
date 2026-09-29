@@ -59,6 +59,7 @@ function createFullMessage(): Message {
     isIntermediate: false,
     turnId: 'turn-abc',
     infoLevel: 'warning',
+    interruptedInput: 'Stopped prompt',
     errorCode: 'network_error',
     errorTitle: 'Connection Failed',
     errorDetails: ['DNS lookup failed'],
@@ -119,7 +120,7 @@ describe('messageToStored/storedToMessage round-trip', () => {
       'parentToolUseId',
       'taskId', 'shellId', 'elapsedSeconds', 'isBackground',
       'isError', 'attachments', 'badges', 'annotations',
-      'isIntermediate', 'turnId', 'infoLevel',
+      'isIntermediate', 'turnId', 'infoLevel', 'interruptedInput',
       'errorCode', 'errorTitle', 'errorDetails', 'errorOriginal', 'errorCanRetry',
       'planPath',
       'authRequestId', 'authRequestType', 'authSourceSlug', 'authSourceName',
@@ -164,6 +165,7 @@ describe('messageToStored/storedToMessage round-trip', () => {
     expect(restored.isIntermediate).toBe(original.isIntermediate)
     expect(restored.turnId).toBe(original.turnId)
     expect(restored.infoLevel).toBe(original.infoLevel)
+    expect(restored.interruptedInput).toBe(original.interruptedInput)
     expect(restored.errorCode).toBe(original.errorCode)
     expect(restored.errorTitle).toBe(original.errorTitle)
     expect(restored.errorDetails).toEqual(original.errorDetails)

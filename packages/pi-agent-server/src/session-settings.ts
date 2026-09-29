@@ -52,12 +52,12 @@ export const CRAFT_PI_RETRY_SETTINGS = {
  * Smaller retry budget for utility sessions (`call_llm`, titles, summaries).
  *
  * These calls have an end-to-end 120-second RPC budget and a 115-second child
- * deadline. Agent backoff consumes at most 6 seconds, leaving headroom for
+ * deadline. Agent backoff consumes at most 14 seconds, leaving headroom for
  * request and cleanup latency.
  */
 export const CRAFT_PI_EPHEMERAL_RETRY_SETTINGS = {
   enabled: true,
-  maxRetries: 2,
+  maxRetries: 3,
   baseDelayMs: 2_000,
   provider: {
     maxRetries: 0,

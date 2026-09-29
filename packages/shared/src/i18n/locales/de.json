@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "In kurzer Zeit wurden zu viele Anfragen gesendet. Warten Sie einen Moment und versuchen Sie es erneut.",
   "chat.rateLimitedTitle": "Zu viele Anfragen",
   "chat.renameSession": "Sitzung umbenennen",
-  "chat.responseInterrupted": "Antwort unterbrochen",
+  "chat.responseInterrupted": "Antwort unterbrochen. Hier klicken, um die ursprüngliche Nachricht ins Eingabefeld zurückzuholen.",
   "chat.scrollUpForEarlier": "Nach oben scrollen für ältere Nachrichten ({{count}} weitere)",
   "chat.selectedText": "Ausgewählter Text",
   "chat.serviceErrorMessage": "Der KI-Dienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es gleich noch einmal.",

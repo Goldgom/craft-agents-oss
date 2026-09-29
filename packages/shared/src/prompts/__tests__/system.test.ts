@@ -7,9 +7,10 @@ import { join } from 'path'
 // it's unrelated to the behavior under test here.
 let mockIncludeCoAuthoredBy = true
 let mockSubagentsEnabled = false
+let mockPreferencesPrompt = ''
 mock.module('../../config/preferences.ts', () => ({
   getCoAuthorPreference: () => mockIncludeCoAuthoredBy,
-  formatPreferencesForPrompt: () => '',
+  formatPreferencesForPrompt: () => mockPreferencesPrompt,
   getSystemPromptSettings: () => ({
     capabilities: {
       browserTools: true,
@@ -27,6 +28,10 @@ import type { ProjectPromptContext } from '../../projects/types.ts'
 
 const GIT_CONVENTIONS_HEADING = '## Git Conventions'
 const CO_AUTHOR_TRAILER = 'Co-Authored-By: TokenBird <agents-noreply@craft.do>'
+
+beforeEach(() => {
+  mockPreferencesPrompt = ''
+})
 
 describe('system prompt guidance', () => {
   beforeEach(() => {
@@ -121,6 +126,24 @@ describe('system prompt guidance', () => {
     expect(prompt).not.toContain('All MCP tools require two metadata fields')
     expect(mini).toContain('Tool names and parameters vary by runtime')
     expect(mini).not.toContain('Use Read, Edit, Write tools')
+  })
+
+  it('includes environment language in standard, lightweight, mini, and overview prompts', () => {
+    mockPreferencesPrompt = '\n\n## Environment Language\n- Preferred language: Español (es; application language setting).'
+    const standard = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+    const lightweight = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, undefined, undefined, undefined, undefined, { lightweight: true })
+    const mini = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', 'mini')
+    const overview = getSystemPromptSources(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+    const lightweightOverview = getSystemPromptSources(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, undefined, undefined, undefined, { lightweight: true })
+    const miniOverview = getSystemPromptSources(undefined, undefined, '/tmp/workspace', '/tmp/workspace', 'mini')
+
+    for (const prompt of [standard, lightweight, mini]) {
+      expect(prompt).toContain('Preferred language: Español')
+    }
+    expect(overview.find(source => source.id === 'environment-language')?.content).toContain('Preferred language: Español')
+    expect(overview.find(source => source.id === 'environment-language')?.source).toBe('context')
+    expect(lightweightOverview[0]?.content).toContain('Preferred language: Español')
+    expect(miniOverview[0]?.content).toContain('Preferred language: Español')
   })
 })
 

@@ -22,7 +22,7 @@ import { BaseEventAdapter } from '../base-event-adapter.ts';
 import { PI_TOOL_NAME_MAP } from './constants.ts';
 import { toolMetadataStore } from '../../../interceptor-common.ts';
 import { createAgentError, parseError } from '../../errors.ts';
-import { isCraftRetryableAssistantError } from './retry-policy.ts';
+import { isCraftRetryableAssistantError, isHttp520Error } from './retry-policy.ts';
 
 function finiteNumberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -302,7 +302,9 @@ export class PiEventAdapter extends BaseEventAdapter {
       return { type: 'typed_error', error: parsed };
     }
     if (isCraftRetryableAssistantError(message)) {
-      const code = RETRYABLE_PROVIDER_SIDE_PATTERN.test(errorMessage) ? 'service_error' : 'network_error';
+      const code = (RETRYABLE_PROVIDER_SIDE_PATTERN.test(errorMessage) || isHttp520Error(errorMessage))
+        ? 'service_error'
+        : 'network_error';
       return { type: 'typed_error', error: createAgentError(code, errorMessage) };
     }
     // Keep unknown provider text available for diagnostics, but never surface

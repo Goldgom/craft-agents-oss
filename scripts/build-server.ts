@@ -17,6 +17,7 @@
  *   --output         Output directory (default: dist/server)
  *   --compress       Create .tar.gz archive after assembly
  *   --skip-download  Skip Bun/uv downloads (use existing if present)
+ *   --force-download Re-fetch cached runtime and native dependencies
  *   --minimal        Build the small CLI + agent server distribution
  *   --help           Show help
  */
@@ -78,6 +79,7 @@ interface ServerBuildConfig {
   outputDir: string;
   compress: boolean;
   skipDownload: boolean;
+  forceDownload: boolean;
   minimal: boolean;
   version: string;
 }
@@ -102,6 +104,7 @@ Options:
   --compress             Create .tar.gz after assembly
   --skip-download        Reuse existing Bun/uv binaries (pre-seed them for
                          offline builds; see docs/build-guide.md for paths)
+  --force-download       Re-download runtimes and native packages even if cached
   --minimal              Build a small headless distribution containing the
                          CLI, agent runtimes, and remote RPC server only
   --help                 Show this help message
@@ -223,7 +226,7 @@ function assembleResources(config: ServerBuildConfig): void {
 // ---------------------------------------------------------------------------
 
 async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
-  const { platform, arch, outputDir, skipDownload } = config;
+  const { platform, arch, outputDir, skipDownload, forceDownload } = config;
   const uvDest = join(outputDir, 'resources', 'bin', platform === 'win32' ? 'uv.exe' : 'uv');
 
   // Use common.ts downloadUv which writes to electronDir/resources/bin/{platform-arch}/
@@ -243,8 +246,8 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
       );
     }
     console.log(`  uv pre-seeded at ${electronUvPath}, skipping download`);
-  } else if (!existsSync(electronUvPath)) {
-    // Download using the shared helper
+  } else {
+    // The shared helper validates the pinned version before reusing its cache.
     const buildConfig: BuildConfig = {
       platform,
       arch,
@@ -253,6 +256,7 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
       uploadScript: false,
       rootDir: config.rootDir,
       electronDir: config.electronDir,
+      forceDownload,
     };
     await downloadUv(buildConfig);
   }
@@ -274,7 +278,7 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
-  const { platform, arch, outputDir, skipDownload } = config;
+  const { platform, arch, outputDir, skipDownload, forceDownload } = config;
   const runtimeDir = join(outputDir, 'vendor', 'bun');
   const bunName = platform === 'win32' ? 'bun.exe' : 'bun';
   const bunDest = join(runtimeDir, bunName);
@@ -303,6 +307,7 @@ async function downloadBunForServer(config: ServerBuildConfig): Promise<void> {
       uploadScript: false,
       rootDir: config.rootDir,
       electronDir: config.electronDir,
+      forceDownload,
       bunVendorDir,
     };
     await downloadBun(buildConfig);
@@ -584,17 +589,27 @@ async function ensureCrossPlatformNativeDeps(config: ServerBuildConfig): Promise
 
   for (const dep of nativeDeps) {
     const destination = join(destModules, dep);
-    if (existsSync(destination)) continue;
+    if (existsSync(destination) && !config.forceDownload) continue;
     const version = rootPackage.optionalDependencies?.[dep]
       ?? sharpPackage.optionalDependencies?.[dep]
       ?? (dep.startsWith('@anthropic-ai/') ? rootPackage.dependencies['@anthropic-ai/claude-agent-sdk'] : undefined);
     if (!version) throw new Error(`No pinned version found for cross-platform dependency ${dep}`);
 
-    console.log(`  Fetching ${dep}@${version} for ${platform}-${arch}...`);
-    const packOutput = await $`npm pack ${`${dep}@${version}`} --json --pack-destination ${cacheDir}`.cwd(rootDir).text();
-    const [{ filename }] = JSON.parse(packOutput) as Array<{ filename: string }>;
+    const expectedArchive = join(cacheDir, `${dep.slice(1).replace('/', '-')}-${version}.tgz`);
+    let archive = expectedArchive;
+    if (config.forceDownload || !existsSync(expectedArchive)) {
+      console.log(`  Fetching ${dep}@${version} for ${platform}-${arch}...`);
+      const packOutput = config.forceDownload
+        ? await $`npm pack ${`${dep}@${version}`} --json --force --prefer-online --pack-destination ${cacheDir}`.cwd(rootDir).text()
+        : await $`npm pack ${`${dep}@${version}`} --json --pack-destination ${cacheDir}`.cwd(rootDir).text();
+      const [{ filename }] = JSON.parse(packOutput) as Array<{ filename: string }>;
+      archive = join(cacheDir, filename);
+    } else {
+      console.log(`  Reusing cached ${dep}@${version}`);
+    }
+    if (existsSync(destination)) rmSync(destination, { recursive: true, force: true });
     mkdirSync(destination, { recursive: true });
-    await $`tar -xzf ${join(cacheDir, filename)} -C ${destination} --strip-components=1`;
+    await $`tar -xzf ${archive} -C ${destination} --strip-components=1`;
     if (!existsSync(join(destination, 'package.json'))) {
       throw new Error(`Native package extraction failed: ${dep}`);
     }
@@ -612,12 +627,13 @@ async function ensureCrossPlatformNativeDeps(config: ServerBuildConfig): Promise
   if (!ripgrepVersion) throw new Error('Could not determine the pinned ripgrep binary version');
   const archiveName = `ripgrep-${ripgrepVersion}-${ripgrepTarget}.${platform === 'win32' ? 'zip' : 'tar.gz'}`;
   const archivePath = join(cacheDir, archiveName);
-  if (!existsSync(archivePath)) {
+  if (config.forceDownload || !existsSync(archivePath)) {
     const url = `https://github.com/microsoft/ripgrep-prebuilt/releases/download/${ripgrepVersion}/${archiveName}`;
     console.log(`  Fetching ripgrep for ${platform}-${arch}...`);
     const downloadPath = `${archivePath}.download`;
     rmSync(downloadPath, { force: true });
     await $`curl -fL --retry 3 -o ${downloadPath} ${url}`;
+    if (config.forceDownload) rmSync(archivePath, { force: true });
     renameSync(downloadPath, archivePath);
   }
   const ripgrepBin = join(ripgrepDir, 'bin');
@@ -1065,6 +1081,7 @@ async function main(): Promise<void> {
       output: { type: 'string' },
       compress: { type: 'boolean', default: false },
       'skip-download': { type: 'boolean', default: false },
+      'force-download': { type: 'boolean', default: false },
       minimal: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -1102,6 +1119,9 @@ async function main(): Promise<void> {
   const version: string = electronPkg.version;
 
   const minimal = values.minimal ?? false;
+  if (values['skip-download'] && values['force-download']) {
+    throw new Error('--skip-download and --force-download cannot be used together');
+  }
   const outputArg = values.output ?? (minimal ? 'dist/cli' : 'dist/server');
   const outputDir = join(rootDir, outputArg);
 
@@ -1113,6 +1133,7 @@ async function main(): Promise<void> {
     outputDir,
     compress: values.compress ?? false,
     skipDownload: values['skip-download'] ?? false,
+    forceDownload: values['force-download'] ?? false,
     minimal,
     version,
   };

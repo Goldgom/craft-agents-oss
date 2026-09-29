@@ -214,7 +214,7 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
   // Store an attachment to disk and generate thumbnail/markdown conversion
   // This is the core of the persistent file attachment system
   server.handle(RPC_CHANNELS.file.STORE_ATTACHMENT, async (
-    ctx,
+    _ctx,
     sessionId: string,
     attachment: FileAttachment,
     options?: { compressImagesBeforeUpload?: boolean },
@@ -228,20 +228,22 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
         throw new Error('Cannot attach empty file')
       }
 
-      // Get workspace slug from the calling window
-      const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
-      if (!workspaceId) {
-        throw new Error('Cannot determine workspace for attachment storage')
-      }
-      const workspace = getWorkspaceByNameOrId(workspaceId)
-      if (!workspace) {
-        throw new Error(`Workspace not found: ${workspaceId}`)
-      }
-      const workspaceRootPath = workspace.rootPath
-
       // SECURITY: Validate sessionId to prevent path traversal attacks
       // This must happen before using sessionId in any file path operations
       validateSessionId(sessionId)
+
+      // The session owns the attachment. A window's connection can retain an
+      // earlier workspace ID after a workspace switch, so use the session's
+      // workspace instead of the caller's connection context.
+      const session = await deps.sessionManager.getSession(sessionId)
+      if (!session) {
+        throw new Error(`Session not found: ${sessionId}`)
+      }
+      const workspace = getWorkspaceByNameOrId(session.workspaceId)
+      if (!workspace) {
+        throw new Error(`Workspace not found: ${session.workspaceId}`)
+      }
+      const workspaceRootPath = workspace.rootPath
 
       // Create attachments directory if it doesn't exist
       const attachmentsDir = getSessionAttachmentsPath(workspaceRootPath, sessionId)

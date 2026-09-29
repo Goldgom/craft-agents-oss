@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "短时间内请求次数过多，请稍等片刻后再试。",
   "chat.rateLimitedTitle": "请求过于频繁",
   "chat.renameSession": "重命名会话",
-  "chat.responseInterrupted": "回复已中断",
+  "chat.responseInterrupted": "消息已中断。点击这里可将原消息恢复到聊天框。",
   "chat.scrollUpForEarlier": "向上滚动查看更早的消息 (还有 {{count}} 条)",
   "chat.selectedText": "选中文本",
   "chat.serviceErrorMessage": "AI 服务暂时不可用，请稍等片刻后重试。",

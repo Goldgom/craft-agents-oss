@@ -286,7 +286,7 @@
   "chat.rateLimitedMessage": "Wysłano zbyt wiele żądań w krótkim czasie. Poczekaj chwilę i spróbuj ponownie.",
   "chat.rateLimitedTitle": "Zbyt wiele żądań",
   "chat.renameSession": "Zmień nazwę sesji",
-  "chat.responseInterrupted": "Odpowiedź przerwana",
+  "chat.responseInterrupted": "Odpowiedź przerwana. Kliknij tutaj, aby przywrócić wiadomość do pola wpisywania.",
   "chat.scrollUpForEarlier": "Przewiń w górę, aby zobaczyć wcześniejsze wiadomości (jeszcze {{count}})",
   "chat.selectedText": "Zaznaczony tekst",
   "chat.serviceErrorMessage": "Usługa AI jest tymczasowo niedostępna. Poczekaj chwilę i spróbuj ponownie.",
