@@ -84,7 +84,9 @@ export interface ThreadResponse {
   cwd: string;
 }
 
-export interface ThreadResumeParams extends ThreadStartParams {
+// The app-server resume request does not accept dynamicTools; tools must be
+// supplied when a thread is started in the current app-server process.
+export interface ThreadResumeParams extends Pick<ThreadStartParams, 'model' | 'cwd' | 'runtimeWorkspaceRoots' | 'approvalPolicy' | 'sandbox'> {
   threadId: string;
   excludeTurns?: boolean;
 }

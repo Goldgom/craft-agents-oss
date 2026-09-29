@@ -68,6 +68,71 @@ describe('NativeCodexAgent protocol adaptation', () => {
     agent.destroy();
   });
 
+  it('registers MCP tools when restoring a persisted Codex session', async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let cleared = 0;
+    const agent = createAgent({
+      session: { id: 'test-session', name: 'Test', workspaceRootPath: process.cwd(), createdAt: Date.now(), lastUsedAt: Date.now(), permissionMode: 'ask', sdkSessionId: 'persisted-thread' },
+      mcpPool: {
+        getProxyToolDefs: () => [{ name: 'mcp__beecount__List_Ledgers', description: 'List ledgers', inputSchema: { type: 'object', properties: {} } }],
+        disconnectAll: async () => {},
+      } as never,
+      onSdkSessionIdCleared: () => { cleared++; },
+    });
+    const client = {
+      request: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        return { thread: { id: 'new-thread' } };
+      },
+    } as never;
+
+    expect(await agent['ensureThread'](client)).toBe('new-thread');
+    expect(calls.map(call => call.method)).toEqual(['thread/start']);
+    expect((calls[0]!.params.dynamicTools as Array<{ name: string }>).some(tool => tool.name === 'craft__beecount__List_Ledgers')).toBe(true);
+    expect(cleared).toBe(1);
+
+    expect(await agent['ensureThread'](client)).toBe('new-thread');
+    expect(calls).toHaveLength(1);
+    agent.destroy();
+  });
+
+  it('rebuilds the Codex thread when a connected source exposes new tools', async () => {
+    let sourceTools: Array<{ name: string; description: string; inputSchema: { type: string; properties: Record<string, never> } }> = [];
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const agent = createAgent({
+      mcpPool: { getProxyToolDefs: () => sourceTools, disconnectAll: async () => {} } as never,
+    });
+    const client = {
+      request: async (method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        return { thread: { id: `thread-${calls.length}` } };
+      },
+    } as never;
+
+    expect(await agent['ensureThread'](client)).toBe('thread-1');
+    sourceTools = [{ name: 'mcp__beecount__List_Ledgers', description: 'List ledgers', inputSchema: { type: 'object', properties: {} } }];
+    expect(await agent['ensureThread'](client)).toBe('thread-2');
+    expect(calls.map(call => call.method)).toEqual(['thread/start', 'thread/start']);
+    expect((calls[1]!.params.dynamicTools as Array<{ name: string }>).some(tool => tool.name === 'craft__beecount__List_Ledgers')).toBe(true);
+    agent.destroy();
+  });
+
+  it('registers current tools again after a Codex app-server reconnect', async () => {
+    const calls: string[] = [];
+    const agent = createAgent();
+    const makeClient = (id: string) => ({
+      request: async (method: string) => {
+        calls.push(method);
+        return { thread: { id } };
+      },
+    }) as never;
+
+    expect(await agent['ensureThread'](makeClient('first'))).toBe('first');
+    expect(await agent['ensureThread'](makeClient('second'))).toBe('second');
+    expect(calls).toEqual(['thread/start', 'thread/start']);
+    agent.destroy();
+  });
+
   it('preserves the full Craft thinking-level range in Codex effort values', () => {
     const agent = createAgent();
     expect(agent['reasoningEffort']('off')).toBe('minimal');

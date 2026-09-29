@@ -112,6 +112,8 @@ export class NativeCodexAgent extends BaseAgent {
   private sessionToolContext: SessionToolContext | null = null;
   private toolSignature = '';
   private toolsChanged = false;
+  /** Dynamic tools belong to the app-server process that started the thread. */
+  private threadClient: NativeCodexAppServerClient | null = null;
   private authenticated = false;
   private nativeToolAliases = new Map<string, string>();
   private ignoredTurnIds = new Set<string>();
@@ -131,7 +133,10 @@ export class NativeCodexAgent extends BaseAgent {
 
   getProcessId(): number | undefined { return this.client?.processId; }
   override getSessionId(): string | null { return this.codexThreadId; }
-  override setSessionId(sessionId: string | null): void { this.codexThreadId = sessionId; }
+  override setSessionId(sessionId: string | null): void {
+    if (sessionId !== this.codexThreadId) this.threadClient = null;
+    this.codexThreadId = sessionId;
+  }
   isProcessing(): boolean { return this.processing; }
 
   override async postInit(): Promise<PostInitResult> {
@@ -333,32 +338,20 @@ export class NativeCodexAgent extends BaseAgent {
   private async ensureThread(client: NativeCodexAppServerClient): Promise<string> {
     const tools = this.buildDynamicTools();
     const signature = JSON.stringify(tools);
-    if (this.toolsChanged && this.codexThreadId) {
-      this.debug('Dynamic tool set changed; starting a fresh Codex thread with recovery context');
+    if (this.codexThreadId && this.threadClient === client && !this.toolsChanged && signature === this.toolSignature) {
+      return this.codexThreadId;
+    }
+    if (this.codexThreadId) {
+      // thread/resume cannot accept dynamicTools. After a process restart its
+      // restored thread has no Craft tools, even if MCP sources are connected.
+      this.debug(`Starting a fresh Codex thread with ${tools.length} dynamic tools (${this.threadClient !== client ? 'app-server changed' : 'tool set changed'})`);
       this.codexThreadId = null;
+      this.threadClient = null;
       this.config.onSdkSessionIdCleared?.();
     }
 
     const policy = this.threadPolicy();
-    if (this.codexThreadId) {
-      try {
-        const response = await client.request<ThreadResponse>('thread/resume', {
-          threadId: this.codexThreadId,
-          model: bareModelId(this._model),
-          cwd: this.workingDirectory,
-          runtimeWorkspaceRoots: [this.config.workspace.rootPath],
-          approvalPolicy: policy.approvalPolicy,
-          sandbox: policy.sandbox,
-          excludeTurns: true,
-        });
-        return response.thread.id;
-      } catch (error) {
-        this.debug(`Thread resume failed, starting a recovered thread: ${error instanceof Error ? error.message : String(error)}`);
-        this.codexThreadId = null;
-        this.config.onSdkSessionIdCleared?.();
-      }
-    }
-
+    this.debug(`Registering ${tools.length} Codex dynamic tools, including ${this.config.mcpPool?.getProxyToolDefs().length ?? 0} MCP source tools`);
     const response = await client.request<ThreadResponse>('thread/start', {
       model: bareModelId(this._model),
       cwd: this.workingDirectory,
@@ -372,6 +365,7 @@ export class NativeCodexAgent extends BaseAgent {
     this.toolSignature = signature;
     this.toolsChanged = false;
     this.codexThreadId = response.thread.id;
+    this.threadClient = client;
     this.config.onSdkSessionIdUpdate?.(response.thread.id);
     return response.thread.id;
   }
@@ -959,12 +953,14 @@ export class NativeCodexAgent extends BaseAgent {
   override setWorkspace(workspace: Workspace): void {
     super.setWorkspace(workspace);
     this.codexThreadId = null;
+    this.threadClient = null;
     this.sessionToolContext = null;
     void this.disconnectClient();
   }
 
   override clearHistory(): void {
     this.codexThreadId = null;
+    this.threadClient = null;
     this.config.onSdkSessionIdCleared?.();
     super.clearHistory();
   }
