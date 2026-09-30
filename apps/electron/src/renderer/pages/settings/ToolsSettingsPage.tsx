@@ -20,12 +20,37 @@ export const meta: DetailsPageMeta = { navigator: 'settings', slug: 'tools' }
 
 const PAGE_SIZE = 10
 
+const BUILTIN_DESCRIPTION_KEYS: Record<string, string> = {
+  Read: 'settings.tools.builtinTool.read',
+  Write: 'settings.tools.builtinTool.write',
+  Edit: 'settings.tools.builtinTool.edit',
+  Bash: 'settings.tools.builtinTool.bash',
+  Grep: 'settings.tools.builtinTool.grep',
+  Glob: 'settings.tools.builtinTool.glob',
+  Find: 'settings.tools.builtinTool.find',
+  LS: 'settings.tools.builtinTool.ls',
+  Agent: 'settings.tools.builtinTool.agent',
+  WebSearch: 'settings.tools.builtinTool.webSearch',
+  WebFetch: 'settings.tools.builtinTool.webFetch',
+  'mcp__craft-agents-docs__SearchCraftAgents': 'settings.tools.builtinTool.craftAgentsDocs',
+}
+
 function ToolRows({ tools }: { tools: WorkspaceToolCatalogItem[] }) {
-  const { t } = useTranslation()
   return (
     <>
       {tools.map(tool => (
-        <div key={tool.id} className="flex items-start gap-3 px-4 py-3">
+        <ToolRow key={tool.id} tool={tool} />
+      ))}
+    </>
+  )
+}
+
+function ToolRow({ tool }: { tool: WorkspaceToolCatalogItem }) {
+  const { t } = useTranslation()
+  const descriptionKey = tool.origin === 'builtin' ? BUILTIN_DESCRIPTION_KEYS[tool.name] : undefined
+  const description = descriptionKey ? t(descriptionKey) : tool.description
+  return (
+    <div className="flex items-start gap-3 px-4 py-3">
           <div className={cn(
             'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border',
             tool.origin === 'builtin' ? 'border-blue-500/20 bg-blue-500/8 text-blue-500' : 'border-violet-500/20 bg-violet-500/8 text-violet-500',
@@ -46,16 +71,14 @@ function ToolRows({ tools }: { tools: WorkspaceToolCatalogItem[] }) {
                 </Badge>
               )}
             </div>
-            {tool.description && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-foreground/60">{tool.description}</p>}
+            {description && <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-foreground/60">{description}</p>}
             {tool.sourceName && (
               <p className="mt-1 text-[11px] text-foreground/45">
                 {t('settings.tools.sourceLabel', { source: tool.sourceName })}
               </p>
             )}
           </div>
-        </div>
-      ))}
-    </>
+    </div>
   )
 }
 
