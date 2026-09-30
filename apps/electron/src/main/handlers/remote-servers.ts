@@ -15,7 +15,6 @@ import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import {
   loadRemoteServerProfiles,
   getRemoteServerProfile,
-  upsertRemoteServerProfile,
   deleteRemoteServerProfile,
   markRemoteServerConnected,
   toProfileInfo,
@@ -24,10 +23,11 @@ import {
 } from '@craft-agent/shared/config/remote-servers'
 import { getWorkspaces, addWorkspace, updateWorkspaceRemoteServer } from '@craft-agent/shared/config'
 import { getDefaultWorkspacesDir, generateUniqueWorkspacePath } from '@craft-agent/shared/workspaces'
-import { join } from 'path'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from './handler-deps'
 import { connectToRemote } from './workspace'
+import { validateNativeRemoteUrl } from '../remote-transport-policy'
+import { resolveRemoteProfile, saveRemoteProfile, type ResolvedRemoteProfile } from '../remote-credentials'
 
 export const GUI_HANDLED_CHANNELS = [
   RPC_CHANNELS.remoteServers.LIST,
@@ -43,12 +43,30 @@ export const GUI_HANDLED_CHANNELS = [
 async function withRemoteProfile<T>(
   profile: RemoteServerProfile,
   fn: (client: { invoke: (channel: string, ...args: unknown[]) => Promise<unknown> }) => Promise<T>,
-): Promise<{ result: T | null; error: string | null }> {
-  const { client, error } = await connectToRemote(profile.url, profile.token)
-  if (!client) return { result: null, error: error ?? 'Connection failed' }
+  assertCurrent?: () => Promise<void>,
+): Promise<{ result: T | null; error: string | null; profile?: ResolvedRemoteProfile }> {
+  const resolved = await resolveRemoteProfile(profile.id)
+  if (!resolved) return { result: null, error: 'Server profile not found' }
+  const guard = async () => {
+    await assertCurrent?.()
+    const current = await resolveRemoteProfile(profile.id)
+    if (!current || current.revision !== resolved.revision) throw new Error('Remote server profile changed. Retry.')
+  }
+  const { client } = await connectToRemote(validateNativeRemoteUrl(resolved.url), resolved.token, undefined, {
+    beforeHandshake: guard, tlsRejectUnauthorized: true, useNodeWebSocket: true,
+  })
+  if (!client) return { result: null, error: 'Connection failed. Check Remote Servers settings.' }
   try {
+    const current = await resolveRemoteProfile(profile.id)
+    if (!current || current.revision !== resolved.revision) return { result: null, error: 'Remote server profile changed. Retry.' }
+    await guard()
     const result = await fn(client)
-    return { result, error: null }
+    await guard()
+    const after = await resolveRemoteProfile(profile.id)
+    if (!after || after.revision !== resolved.revision) return { result: null, error: 'Remote server profile changed. Retry.' }
+    return { result, error: null, profile: resolved }
+  } catch {
+    return { result: null, error: 'Remote request failed. Check Remote Servers settings.' }
   } finally {
     client.destroy()
   }
@@ -62,37 +80,31 @@ function findOrCreateRemoteStub(
   profile: RemoteServerProfile,
   remoteWorkspace: { id: string; name: string; slug?: string },
 ) {
+  const binding = {
+    url: profile.url,
+    token: profile.tokenRef ? '' : profile.token,
+    ...(profile.tokenRef ? { tokenRef: profile.tokenRef, tokenRefKind: 'profile' as const } : {}),
+    profileId: profile.id,
+    revision: profile.revision,
+    remoteWorkspaceId: remoteWorkspace.id,
+  }
   const existing = getWorkspaces().find(
-    (w) => w.remoteServer?.remoteWorkspaceId === remoteWorkspace.id,
+    workspace => workspace.remoteServer?.profileId === profile.id
+      && workspace.remoteServer.remoteWorkspaceId === remoteWorkspace.id,
   )
   if (existing) {
-    // Keep the stub in sync with the profile — the user may have changed the
-    // server URL/token since the instance was first opened. Stale snapshots
-    // cause reconnect loops against the old endpoint.
-    if (
-      existing.remoteServer
-      && (existing.remoteServer.url !== profile.url || existing.remoteServer.token !== profile.token)
-    ) {
-      updateWorkspaceRemoteServer(existing.id, {
-        url: profile.url,
-        token: profile.token,
-        remoteWorkspaceId: existing.remoteServer.remoteWorkspaceId,
-      })
-    }
-    return getWorkspaces().find((w) => w.id === existing.id) ?? existing
+    const bindingChanged = JSON.stringify(existing.remoteServer) !== JSON.stringify(binding)
+    if (bindingChanged) updateWorkspaceRemoteServer(existing.id, binding)
+    return { workspace: getWorkspaces().find(workspace => workspace.id === existing.id) ?? existing, bindingChanged }
   }
 
   const slug = remoteWorkspace.slug || remoteWorkspace.name
   const rootPath = generateUniqueWorkspacePath(slug, getDefaultWorkspacesDir())
-  return addWorkspace({
+  return { workspace: addWorkspace({
     name: remoteWorkspace.name,
     rootPath,
-    remoteServer: {
-      url: profile.url,
-      token: profile.token,
-      remoteWorkspaceId: remoteWorkspace.id,
-    },
-  })
+    remoteServer: binding,
+  }), bindingChanged: false }
 }
 
 export function registerRemoteServersGuiHandlers(server: RpcServer, deps: HandlerDeps): void {
@@ -104,29 +116,10 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
   server.handle(
     RPC_CHANNELS.remoteServers.SAVE,
     async (_ctx, input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput }) => {
-      const previous = input.id ? getRemoteServerProfile(input.id) : undefined
-      const profile = upsertRemoteServerProfile(input)
-
-      // Propagate URL/token changes to remote workspace stubs that were
-      // created from this profile — otherwise instances keep connecting to
-      // the old endpoint after the user edits the server link.
-      if (previous && (previous.url !== profile.url || previous.token !== profile.token)) {
-        for (const ws of getWorkspaces()) {
-          const rs = ws.remoteServer
-          if (!rs) continue
-          const boundToProfile =
-            rs.url === previous.url
-            && (previous.token ? rs.token === previous.token : true)
-          if (boundToProfile) {
-            updateWorkspaceRemoteServer(ws.id, {
-              url: profile.url,
-              token: profile.token,
-              remoteWorkspaceId: rs.remoteWorkspaceId,
-            })
-          }
-        }
-      }
-
+      const profile = await saveRemoteProfile(input)
+      // Other config files retain their complete previous endpoint/ref snapshot
+      // until explicitly reopened. No guessed URL/token matching or partial
+      // cross-file "save all" publication occurs here.
       return toProfileInfo(profile)
     },
   )
@@ -144,7 +137,7 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
     ): Promise<{ ok: boolean; error?: string; serverVersion?: string }> => {
       const profile =
         input.id != null
-          ? getRemoteServerProfile(input.id)
+          ? await resolveRemoteProfile(input.id)
           : input.url
             ? {
                 id: 'adhoc',
@@ -157,8 +150,8 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
             : undefined
       if (!profile) return { ok: false, error: 'Server profile not found' }
 
-      const { client, error } = await connectToRemote(profile.url, profile.token)
-      if (!client) return { ok: false, error: error ?? 'Connection failed' }
+      const { client } = await connectToRemote(profile.url, profile.token)
+      if (!client) return { ok: false, error: 'Connection failed. Check Remote Servers settings.' }
       try {
         const serverVersion = client.getServerVersion?.() ?? undefined
         if (profile.id !== 'adhoc') markRemoteServerConnected(profile.id)
@@ -188,7 +181,7 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
       const profile = getRemoteServerProfile(profileId)
       if (!profile) return { ok: false, error: 'Server profile not found' }
 
-      const { result, error } = await withRemoteProfile(profile, async (client) => {
+      const { result, error, profile: connectedProfile } = await withRemoteProfile(profile, async (client) => {
         return (await client.invoke(RPC_CHANNELS.server.CREATE_WORKSPACE, name)) as {
           id: string
           name: string
@@ -196,34 +189,42 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
         }
       })
       if (error) return { ok: false, error }
-      if (!result) return { ok: false, error: 'Remote server returned no workspace' }
+      if (!result || !connectedProfile) return { ok: false, error: 'Remote server returned no workspace' }
 
-      const local = findOrCreateRemoteStub(profile, result)
+      const { workspace: local } = findOrCreateRemoteStub(connectedProfile, result)
       return { ok: true, workspace: { id: local.id, name: local.name, slug: local.slug } }
     },
   )
 
-  server.handle(
-    RPC_CHANNELS.remoteServers.OPEN_WORKSPACE,
-    async (_ctx, profileId: string, remoteWorkspaceId: string) => {
-      const profile = getRemoteServerProfile(profileId)
-      if (!profile) return { ok: false, error: 'Server profile not found' }
-
-      // Resolve the remote workspace metadata so we can create a stub if needed.
-      const { result, error } = await withRemoteProfile(profile, async (client) => {
-        const workspaces = (await client.invoke(RPC_CHANNELS.server.GET_WORKSPACES)) as Array<{
-          id: string
-          name: string
-          slug?: string
-        }>
-        return workspaces.find((w) => w.id === remoteWorkspaceId)
-      })
-      if (error) return { ok: false, error }
-      if (!result) return { ok: false, error: 'Workspace not found on remote server' }
-
-      const local = findOrCreateRemoteStub(profile, result)
-      deps.windowManager?.focusOrCreateWindow(local.id)
-      return { ok: true, workspaceId: local.id }
-    },
+  server.handle(RPC_CHANNELS.remoteServers.OPEN_WORKSPACE, (_ctx, profileId: string, remoteWorkspaceId: string) =>
+    openSavedRemoteWorkspace(profileId, remoteWorkspaceId, (id, bindingChanged) => {
+      if (bindingChanged) {
+        for (const window of deps.windowManager?.getAllWindowsForWorkspace(id) ?? []) window.webContents.reload()
+      }
+      deps.windowManager?.focusOrCreateWindow(id)
+    }),
   )
+}
+
+/** Used by native collaboration IPC as well as the existing workspace picker. */
+export async function openSavedRemoteWorkspace(profileId: string, remoteWorkspaceId: string, focusWorkspace: (id: string, bindingChanged: boolean) => void, assertCurrent?: () => Promise<void>) {
+  const profile = getRemoteServerProfile(profileId)
+  if (!profile) return { ok: false, error: 'Server profile not found' }
+
+  // Resolve the remote workspace metadata so we can create a stub if needed.
+  const { result, error, profile: connectedProfile } = await withRemoteProfile(profile, async (client) => {
+    const workspaces = (await client.invoke(RPC_CHANNELS.server.GET_WORKSPACES)) as Array<{
+      id: string
+      name: string
+      slug?: string
+    }>
+    return workspaces.find((w) => w.id === remoteWorkspaceId)
+  }, assertCurrent)
+  if (error) return { ok: false, error }
+  if (!result || !connectedProfile) return { ok: false, error: 'Workspace not found on remote server' }
+
+  await assertCurrent?.()
+  const { workspace: local, bindingChanged } = findOrCreateRemoteStub(connectedProfile, result)
+  focusWorkspace(local.id, bindingChanged)
+  return { ok: true, workspaceId: local.id }
 }

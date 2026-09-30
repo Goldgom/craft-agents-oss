@@ -38,6 +38,31 @@ describe('system prompt guidance', () => {
     mockSubagentsEnabled = false
   })
 
+  it('shares explicit execution and recovery rules across standard, lightweight, and mini prompts', () => {
+    const variants = [
+      getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace'),
+      getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', 'mini'),
+      getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, undefined, undefined, undefined, undefined, { lightweight: true }),
+    ]
+    for (const prompt of variants) {
+      expect(prompt.match(/## Tool Execution Contract/g)).toHaveLength(1)
+      expect(prompt).toContain('Describing a call, printing JSON, or saying you will act does not execute it')
+      expect(prompt).toContain('Prefer app-managed tools')
+      expect(prompt).toContain('inspect state before retrying to avoid duplicates')
+      expect(prompt).toContain('never loop on a permission denial')
+      expect(prompt).toContain('Verify the requested state or output before claiming completion')
+    }
+  })
+
+  it('uses bounded authentication recovery and preserves the Explore approval gate', () => {
+    const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, undefined, undefined, undefined, undefined, { mcpPromptEnhancement: true })
+    expect(prompt).toContain('refresh the advertised tool catalog and retry a read-only call once')
+    expect(prompt).toContain('For a possibly completed write, inspect state before retrying')
+    expect(prompt).toContain('wait for user approval before execution')
+    expect(prompt).toContain('In execution modes, carry out already authorized work')
+    expect(prompt).not.toContain('Never try to execute a plan without submitting it first')
+  })
+
   it('uses backend-neutral debug log querying guidance (rg/grep via Bash)', () => {
     const prompt = getSystemPrompt(
       undefined,
@@ -116,6 +141,42 @@ describe('system prompt guidance', () => {
     )
     expect(prompt).toContain('## Subagent Collaboration')
     expect(prompt).toContain('## Connected Sources and MCP Tools')
+  })
+
+  it('keeps Claude lightweight composition on the shared prompt path', () => {
+    // The Claude runtime previously called the lower-level lightweight helper
+    // directly, bypassing the subagent capability block tested above.
+    const source = readFileSync(join(import.meta.dir, '..', '..', 'agent', 'claude-agent.ts'), 'utf8')
+    expect(source).toMatch(/this\.config\.modelPromptSettings\?\.lightweight\s*\? getSystemPrompt\(/)
+    expect(source).not.toContain('getLightweightModelSystemPrompt')
+    expect(source).not.toContain('MCP_PROMPT_ENHANCEMENT')
+  })
+
+  it('composes Claude lightweight capabilities once without assuming a system preset', () => {
+    mockSubagentsEnabled = true
+    const prompt = getSystemPrompt(
+      'Pinned preferences',
+      undefined,
+      '/tmp/workspace',
+      '/tmp/workspace',
+      undefined,
+      'Claude Code',
+      false,
+      undefined,
+      'Focused agent instructions',
+      { lightweight: true, mcpPromptEnhancement: true },
+      'claude-code',
+    )
+    for (const heading of ['Tool Execution Contract', 'Subagent Collaboration', 'MCP Tool Calling Workflow']) {
+      expect(prompt.match(new RegExp(`## ${heading}`, 'g'))).toHaveLength(1)
+    }
+    expect(prompt).toContain('Pinned preferences')
+    expect(prompt).toContain('Focused agent instructions')
+    expect(prompt).toContain('## Runtime protocol: Claude Code')
+    expect(prompt).toContain('configured system instructions and tool catalog')
+    expect(prompt).not.toContain('Claude Code system/tool preset')
+    expect(prompt).not.toContain('supplement the Claude Code preset')
+    expect(prompt).not.toContain('co-authored attribution')
   })
 
   it('uses advertised tool schemas in core and mini prompts', () => {

@@ -121,6 +121,11 @@ export type { AuthState, SetupNeeds, AuthType };
 
 // Credential health types
 import type { CredentialHealthStatus, CredentialHealthIssue, CredentialHealthIssueType } from '@craft-agent/shared/credentials/types';
+import type {
+  NativeCredentialResult, NativeCredentialStatusResponse, NativeCredentialListResponse,
+  NativeCredentialApplyRequest, NativeCredentialApplyResponse,
+  NativeCredentialMigrateRequest, NativeCredentialMigrateResponse,
+} from '@craft-agent/shared/credentials/native-types';
 export type { CredentialHealthStatus, CredentialHealthIssue, CredentialHealthIssueType };
 
 // Source types for session source selection
@@ -508,6 +513,12 @@ export interface ElectronAPI {
   // Credential health check (startup validation)
   getCredentialHealth(): Promise<CredentialHealthStatus>
 
+  // Native Electron credential management. Never routed over WebSocket RPC.
+  getNativeCredentialStatus(): Promise<NativeCredentialResult<NativeCredentialStatusResponse>>
+  listNativeCredentials(): Promise<NativeCredentialResult<NativeCredentialListResponse>>
+  applyNativeCredentialChanges(request: NativeCredentialApplyRequest): Promise<NativeCredentialResult<NativeCredentialApplyResponse>>
+  migrateNativeCredentials(request: NativeCredentialMigrateRequest): Promise<NativeCredentialResult<NativeCredentialMigrateResponse>>
+
   // Onboarding
   getAuthState(): Promise<AuthState>
   getSetupNeeds(): Promise<SetupNeeds>
@@ -619,6 +630,7 @@ export interface ElectronAPI {
   deleteSource(workspaceId: string, sourceSlug: string): Promise<void>
   startSourceOAuth(workspaceId: string, sourceSlug: string): Promise<{ success: boolean; error?: string }>
   saveSourceCredentials(workspaceId: string, sourceSlug: string, credential: string): Promise<void>
+  saveSourceCredentialsBatch(workspaceId: string, entries: import('@craft-agent/shared/sources').SourceCredentialUpdate[]): Promise<import('@craft-agent/shared/sources').SourceCredentialBatchResult>
   getSourcePermissionsConfig(workspaceId: string, sourceSlug: string): Promise<import('@craft-agent/shared/agent').PermissionsConfigFile | null>
   getWorkspacePermissionsConfig(workspaceId: string): Promise<import('@craft-agent/shared/agent').PermissionsConfigFile | null>
   getDefaultPermissionsConfig(): Promise<{ config: import('@craft-agent/shared/agent').PermissionsConfigFile | null; path: string }>
@@ -912,10 +924,23 @@ export interface ElectronAPI {
   generateAgent(workspaceId: string, request: { name?: string; goal: string }): Promise<import('@craft-agent/shared/agents').CustomAgentDefinition>
 
   // Session collaboration
-  createCollaboration(primarySessionId: string, secondarySessions: Array<{ sessionId: string; workspaceId: string; serverUrl?: string; name?: string }>): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>
+  getCollaborationSetupContext(primarySessionId: string): Promise<import('@craft-agent/shared/protocol').CollaborationSetupContext>
+  listCollaborationRelayWorkspaces(server: import('@craft-agent/shared/protocol').CollaborationServerRef): Promise<import('@craft-agent/shared/protocol').CollaborationWorkspace[]>
+  listCollaborationRelayCandidates(server: import('@craft-agent/shared/protocol').CollaborationServerRef, workspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationRelayCandidate[]>
+  createMultiServerCollaboration(input: import('@craft-agent/shared/protocol').CollaborationRelayCreateInput): Promise<import('@craft-agent/shared/protocol').CollaborationRelayCreateResult>
+  getCollaborationRelayStatus(lookup: import('@craft-agent/shared/protocol').CollaborationRelayStatusLookup): Promise<import('@craft-agent/shared/protocol').CollaborationRelayStatus>
+  endMultiServerCollaboration(lookup: import('@craft-agent/shared/protocol').CollaborationRelayStatusLookup): Promise<import('@craft-agent/shared/protocol').CollaborationRelayStatus>
+  listMultiServerCollaborations(): Promise<import('@craft-agent/shared/protocol').CollaborationRelayStatus[]>
+  getCollaborationRelayFile(lookup: import('@craft-agent/shared/protocol').CollaborationRelayStatusLookup, fileId: string): Promise<{ file: import('@craft-agent/shared/protocol').CollaborationRelayFile; dataBase64: string }>
+  createCollaboration(primarySessionId: string, secondarySessions: import('@craft-agent/shared/protocol').CollaborationSessionSelection[]): Promise<import('@craft-agent/shared/protocol').CollaborationCreateResult>
   getCollaboration(groupId: string, coordinatorWorkspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>
   listCollaborations(workspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationGroup[]>
   listCollaborationCandidates(): Promise<Session[]>
+  listCollaborationWorkspaces(): Promise<import('@craft-agent/shared/protocol').CollaborationWorkspace[]>
+  listRemoteCollaborationWorkspaces(profileId: string): Promise<import('@craft-agent/shared/protocol').CollaborationWorkspace[]>
+  openRemoteCollaborationWorkspace(profileId: string, workspaceId: string): Promise<{ ok: boolean; error?: string; workspaceId?: string }>
+  listRemoteCollaborationCandidates(profileId: string, workspaceId: string): Promise<Session[]>
+  createRemoteCollaboration(profileId: string, workspaceId: string, primarySessionId: string, secondarySessions: import('@craft-agent/shared/protocol').CollaborationSessionSelection[]): Promise<import('@craft-agent/shared/protocol').CollaborationCreateResult>
   getCollaborationFile(groupId: string, coordinatorWorkspaceId: string, fileId: string): Promise<{ file: import('@craft-agent/shared/protocol').CollaborationFile; dataBase64: string }>
   retryCollaborationDelivery(groupId: string, coordinatorWorkspaceId: string, operationId: string): Promise<{ group: import('@craft-agent/shared/protocol').CollaborationGroup; delivery: string }>
   endCollaboration(groupId: string, coordinatorWorkspaceId: string): Promise<import('@craft-agent/shared/protocol').CollaborationGroup>

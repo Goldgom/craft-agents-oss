@@ -452,6 +452,8 @@ export interface SessionToolContext {
    */
   sendAgentMessage?(sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>): Promise<SendAgentMessageResult>;
 
+  sendCollaborationMessage?(targetMemberId: string, message: string): Promise<SendAgentMessageResult>;
+
   /** Read the collaboration shared board and durable activity history for this session. */
   getCollaboration?(): Promise<unknown>;
 
@@ -811,7 +813,8 @@ export interface SendAgentMessageResult {
    * - `queued`: the target was mid-turn; the message is enqueued and will be
    *   processed after the current turn finishes.
    */
-  delivery: 'delivered' | 'queued';
+  delivery: 'delivered' | 'queued' | 'queued-for-relay';
+  operationId?: string;
   /** Whether the target session was processing a turn when the message arrived. */
   targetBusy: boolean;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { handleAndroidAdb, handleAndroidPermission } from './android-device.ts';
+import { handleAndroidAdb, handleAndroidPermission, type AndroidPermissionArgs, type AndroidAdbArgs } from './android-device.ts';
 
 function text(result: Awaited<ReturnType<typeof handleAndroidPermission>>): string {
   return result.content.map(block => block.type === 'text' ? block.text : '').join('\n');
@@ -21,7 +21,7 @@ describe('Android device tools', () => {
   it('forwards allowlisted permission requests to the Android bridge', async () => {
     let received: unknown;
     const result = await handleAndroidPermission({
-      androidPermissionFn: async args => {
+      androidPermissionFn: async (args: AndroidPermissionArgs) => {
         received = args;
         return { permissions: [{ key: 'camera', status: 'granted' }] };
       },
@@ -40,7 +40,7 @@ describe('Android device tools', () => {
   it('forwards one ADB command without server-side fallback', async () => {
     let received: unknown;
     const result = await handleAndroidAdb({
-      androidAdbFn: async args => {
+      androidAdbFn: async (args: AndroidAdbArgs) => {
         received = args;
         return { stdout: 'V1981A\n', exitCode: 0, truncated: false };
       },

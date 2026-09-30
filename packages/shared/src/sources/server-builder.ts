@@ -128,13 +128,18 @@ export class SourceServerBuilder {
       mergedHeaders = { ...mcp.headers };
     }
 
+    if (mcp.headerNames?.length && (!credential || !isMultiHeaderCredential(credential)
+      || !mcp.headerNames.every(name => typeof credential[name] === 'string' && credential[name].trim()))) {
+      return null;
+    }
+
     // 2. Credential-store headers (e.g., X-API-Key from credential store)
     if (credential && isMultiHeaderCredential(credential)) {
       mergedHeaders = { ...mergedHeaders, ...credential };
     }
 
     // 3. Auth token (highest priority — OAuth/bearer overrides everything)
-    if (mcp.authType !== 'none') {
+    if ((mcp.authType === 'oauth' || mcp.authType === 'bearer') && !mcp.headerNames?.length) {
       if (token) {
         mergedHeaders = { ...mergedHeaders, Authorization: `Bearer ${token}` };
       } else if (source.config.isAuthenticated) {

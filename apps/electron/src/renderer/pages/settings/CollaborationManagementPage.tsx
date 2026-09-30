@@ -9,6 +9,7 @@ import { useAppShellContext } from '@/context/AppShellContext'
 import { getSessionTitle } from '@/utils/session'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { CollaborationGroup } from '@craft-agent/shared/protocol'
+import { RelayGroupManagement } from '@/components/settings/RelayGroupManagement'
 
 export const meta: DetailsPageMeta = { navigator: 'settings', slug: 'collaborations' }
 
@@ -141,6 +142,7 @@ export default function CollaborationManagementPage() {
       />
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto w-full max-w-4xl space-y-4 p-4 md:p-6">
+          <RelayGroupManagement workspaceId={activeWorkspaceId} />
           <div className="rounded-lg border border-foreground/10 bg-background/50 p-4 text-sm text-muted-foreground">
             {t('settings.collaborations.info')}
           </div>

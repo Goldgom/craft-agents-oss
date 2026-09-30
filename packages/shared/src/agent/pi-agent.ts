@@ -15,6 +15,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { FileAttachment } from '../utils/files.ts';
@@ -53,6 +54,8 @@ import type { ProjectPromptContext } from '../projects/types.ts';
 
 // Credential manager for token storage
 import { getCredentialManager } from '../credentials/manager.ts';
+import { CredentialChangedError } from '../credentials/types.ts';
+import { CredentialVaultError } from '../credentials/backends/vault-protection.ts';
 
 // ChatGPT OAuth token refresh (used when Pi routes ChatGPT auth)
 import { refreshChatGptTokens } from '../auth/chatgpt-oauth.ts';
@@ -322,6 +325,9 @@ export class PiAgent extends BaseAgent {
   // Separate from pendingMiniCompletions because the payload shape differs:
   // queryLlm returns a full LLMQueryResult, not just text.
   private pendingLlmQueries = new Map<string, PendingEphemeralRequest<LLMQueryResult>>();
+  private pendingAuthUpdates = new Map<string, PendingEphemeralRequest<void>>();
+  private lastInjectedAuthFingerprint: string | null = null;
+  private lastInjectedAuthHadCredential = false;
 
   // Pending ensure_session_ready requests (branch preflight handshake)
   private pendingEnsureSessionReady: Map<string, {
@@ -613,6 +619,9 @@ export class PiAgent extends BaseAgent {
     const plansFolderPath = getSessionPlansPath(this.config.workspace.rootPath, sessionId);
     const workingDirectory = this.config.session?.workingDirectory || cwd;
 
+    // Retain only a digest, never a second plaintext credential cache.
+    this.lastInjectedAuthFingerprint = this.authFingerprint(piAuth, legacyApiKey);
+    this.lastInjectedAuthHadCredential = !!piAuth || !!legacyApiKey;
     // Send init command (flat structure matching subprocess InboundMessage type)
     this.send({
       type: 'init',
@@ -826,10 +835,67 @@ export class PiAgent extends BaseAgent {
       this.debug(`No credentials found for Pi provider: ${piAuthProvider}`);
       return null;
     } catch (error) {
-      if (error instanceof OAuthReauthenticationRequiredError) throw error;
+      if (error instanceof OAuthReauthenticationRequiredError || error instanceof CredentialVaultError) throw error;
       this.debug(`Failed to retrieve Pi auth: ${error}`);
       return null;
     }
+  }
+
+  private authFingerprint(piAuth: unknown, legacyApiKey?: string | null): string {
+    return createHash('sha256').update(JSON.stringify({ piAuth, legacyApiKey: legacyApiKey || null })).digest('hex');
+  }
+
+  private async readAuthAfterUpdate(): Promise<Awaited<ReturnType<PiAgent['getPiAuth']>>> {
+    try { return await this.getPiAuth(); }
+    catch (error) {
+      // Deletion while an ACK is pending is an explicit changed-credential
+      // outcome, not evidence that the user's new login expired.
+      if (error instanceof OAuthReauthenticationRequiredError) throw new CredentialChangedError();
+      throw error;
+    }
+  }
+
+  private pushAuthUpdate(piAuth: NonNullable<Awaited<ReturnType<PiAgent['getPiAuth']>>>): Promise<void> {
+    const id = `auth-update-${++this.rpcIdCounter}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingAuthUpdates.delete(id);
+        reject(new Error('Credential update was not acknowledged. Retry with an updated local runtime.'));
+      }, 15_000);
+      this.pendingAuthUpdates.set(id, { resolve, reject, timeout });
+      this.send({ type: 'token_update', id, piAuth });
+    });
+  }
+
+  /** Called only before starting a new turn, never as a Settings side effect. */
+  private async synchronizeStoredAuthBeforeTurn(): Promise<void> {
+    if (!this.subprocess) return;
+    const runtime = getBackendRuntime(this.config);
+    const piAuth = await this.getPiAuth();
+    const legacyApiKey = !piAuth && !runtime.customEndpoint && !runtime.piAuthProvider ? await this.getApiKey() : undefined;
+    const fingerprint = this.authFingerprint(piAuth, legacyApiKey);
+    if (fingerprint === this.lastInjectedAuthFingerprint) return;
+    const requiresStored = ['oauth', 'api_key', 'api_key_with_endpoint', 'bearer_token', 'iam_credentials', 'service_account_file'].includes(this.config.authType ?? '');
+    if (!piAuth && !legacyApiKey) {
+      if (this.lastInjectedAuthHadCredential || (requiresStored && !runtime.customEndpoint)) {
+        throw new Error('Stored credentials are unavailable. Update Credentials in Settings before the next request.');
+      }
+      return; // Existing keyless/environment-based connections remain supported.
+    }
+    if (piAuth?.credential.type === 'iam') {
+      // IAM lives in immutable process.env. A turn boundary does not prove the
+      // child has no mini-query, tools or background agents still running.
+      throw new Error('IAM credentials changed. Start a new session or restart this session after its background work finishes. Current background work has not been interrupted.');
+    }
+    const updated = piAuth ?? { provider: 'anthropic', credential: { type: 'api_key' as const, key: legacyApiKey! } };
+    await this.pushAuthUpdate(updated);
+    // Settings can change credentials while the child ACK is in flight. Never
+    // let that ACK authorize a prompt under a now-deleted/replaced credential.
+    const currentAuth = await this.readAuthAfterUpdate();
+    const currentLegacy = !currentAuth && !runtime.customEndpoint && !runtime.piAuthProvider ? await this.getApiKey() : undefined;
+    if (this.authFingerprint(currentAuth, currentLegacy) !== fingerprint) throw new CredentialChangedError();
+    this.lastInjectedAuthFingerprint = fingerprint;
+    this.lastInjectedAuthHadCredential = true;
   }
 
   /**
@@ -888,7 +954,10 @@ export class PiAgent extends BaseAgent {
       if (this.subprocess) {
         const piAuth = await this.getPiAuth();
         if (piAuth) {
-          this.send({ type: 'token_update', piAuth });
+          await this.pushAuthUpdate(piAuth);
+          if (this.authFingerprint(await this.readAuthAfterUpdate()) !== this.authFingerprint(piAuth)) throw new CredentialChangedError();
+          this.lastInjectedAuthFingerprint = this.authFingerprint(piAuth);
+          this.lastInjectedAuthHadCredential = true;
           this.debug('Pushed credentials refreshed by sibling instance');
         }
       }
@@ -898,7 +967,9 @@ export class PiAgent extends BaseAgent {
     const refreshPromise = (async () => {
       const piAuthProvider = getBackendRuntime(this.config).piAuthProvider;
       const credentialManager = getCredentialManager();
-      const stored = await credentialManager.getLlmOAuth(slug);
+      const id = { type: 'llm_oauth' as const, connectionSlug: slug };
+      const snapshot = await credentialManager.getSnapshot(id);
+      const stored = snapshot.credential;
 
       if (!stored?.refreshToken) {
         this.debug('No refresh token available — re-auth required');
@@ -914,20 +985,16 @@ export class PiAgent extends BaseAgent {
           // Copilot: refresh the short-lived Copilot token using the GitHub access token
           const { refreshGitHubCopilotToken } = await import('../auth/github-copilot.ts');
           const newCreds = await refreshGitHubCopilotToken(stored.refreshToken);
-          await credentialManager.setLlmOAuth(slug, {
-            accessToken: newCreds.access,
-            refreshToken: newCreds.refresh,
-            expiresAt: newCreds.expires,
-          });
+          if (!await credentialManager.compareAndSetMany([{ id, expectedRevision: snapshot.revision, credential: {
+            ...stored, value: newCreds.access, refreshToken: newCreds.refresh, expiresAt: newCreds.expires,
+          } }])) throw new CredentialChangedError();
         } else {
           // ChatGPT Plus: use existing refresh utility
           const newTokens = await refreshChatGptTokens(stored.refreshToken);
-          await credentialManager.setLlmOAuth(slug, {
-            accessToken: newTokens.accessToken,
-            idToken: newTokens.idToken,
-            refreshToken: newTokens.refreshToken,
-            expiresAt: newTokens.expiresAt,
-          });
+          if (!await credentialManager.compareAndSetMany([{ id, expectedRevision: snapshot.revision, credential: {
+            ...stored, value: newTokens.accessToken, idToken: newTokens.idToken,
+            refreshToken: newTokens.refreshToken, expiresAt: newTokens.expiresAt,
+          } }])) throw new CredentialChangedError();
         }
         this.debug('Token refresh successful');
 
@@ -935,17 +1002,22 @@ export class PiAgent extends BaseAgent {
         if (this.subprocess) {
           const piAuth = await this.getPiAuth();
           if (piAuth) {
-            this.send({ type: 'token_update', piAuth });
+            await this.pushAuthUpdate(piAuth);
+            if (this.authFingerprint(await this.readAuthAfterUpdate()) !== this.authFingerprint(piAuth)) throw new CredentialChangedError();
+            this.lastInjectedAuthFingerprint = this.authFingerprint(piAuth);
+            this.lastInjectedAuthHadCredential = true;
             this.debug('Pushed refreshed credentials to subprocess');
           }
         }
       } catch (error) {
+        const current = await credentialManager.getSnapshot(id);
+        if (error instanceof CredentialChangedError || current.revision !== snapshot.revision) throw new CredentialChangedError();
         const msg = error instanceof Error ? error.message : String(error);
-        this.debug(`Token refresh failed: ${msg}`);
+        this.debug('Token refresh failed');
         if (error instanceof OAuthReauthenticationRequiredError || refreshFailureRequiresReauthentication(msg)) {
           throw new OAuthReauthenticationRequiredError();
         }
-        throw error;
+        throw new Error('Token refresh failed. Try again.');
       }
     })();
 
@@ -985,6 +1057,7 @@ export class PiAgent extends BaseAgent {
         await this.refreshAndPushTokens();
         return;
       }
+      if (this.lastInjectedAuthHadCredential) throw new Error('Stored credentials are unavailable. Update Credentials in Settings before the next request.');
       throw new OAuthReauthenticationRequiredError();
     }
 
@@ -1025,7 +1098,8 @@ export class PiAgent extends BaseAgent {
       this.debug('No API keys found for Pi agent');
       return null;
     } catch (error) {
-      this.debug(`Failed to retrieve API key: ${error}`);
+      if (error instanceof CredentialVaultError) throw error;
+      this.debug('Failed to retrieve API key');
       return null;
     }
   }
@@ -1063,6 +1137,13 @@ export class PiAgent extends BaseAgent {
     }
 
     switch (type) {
+      case 'token_update_result': {
+        const pending = this.takePendingEphemeral(this.pendingAuthUpdates, typeof msg.id === 'string' ? msg.id : '');
+        if (msg.success === true) pending?.resolve();
+        else pending?.reject(new Error('Credential update failed in the local runtime. Try again.'));
+        break;
+      }
+
       case 'ready':
         // Subprocess initialized, callback server listening
         this.callbackPort = (msg.callbackPort as number) || 0;
@@ -1825,6 +1906,7 @@ export class PiAgent extends BaseAgent {
   private rejectAllPendingEphemeral(error: Error): void {
     this.rejectPendingEphemeralMap(this.pendingMiniCompletions, error);
     this.rejectPendingEphemeralMap(this.pendingLlmQueries, error);
+    this.rejectPendingEphemeralMap(this.pendingAuthUpdates, error);
   }
 
   /**
@@ -1955,6 +2037,8 @@ export class PiAgent extends BaseAgent {
     this.subprocess = null;
     this.readline = null;
     this.resetSubprocessErrorDedup();
+    this.lastInjectedAuthFingerprint = null;
+    this.lastInjectedAuthHadCredential = false;
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
     this.subprocessReadyReject = null;
@@ -2212,6 +2296,7 @@ export class PiAgent extends BaseAgent {
       // A running subprocess can outlive a short access token. Renew at the
       // turn boundary and push rotated credentials before sending the prompt.
       await this.ensureOAuthCredentialsFresh();
+      await this.synchronizeStoredAuthBeforeTurn();
 
       // Ensure subprocess is spawned and ready
       try {
@@ -2737,6 +2822,8 @@ export class PiAgent extends BaseAgent {
     if (this.subprocess === child) {
       this.subprocess = null;
     }
+    this.lastInjectedAuthFingerprint = null;
+    this.lastInjectedAuthHadCredential = false;
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
     this.subprocessReadyReject = null;
@@ -2789,6 +2876,8 @@ export class PiAgent extends BaseAgent {
       this.subprocess = null;
     }
 
+    this.lastInjectedAuthFingerprint = null;
+    this.lastInjectedAuthHadCredential = false;
     this.subprocessReady = null;
     this.subprocessReadyResolve = null;
     this.subprocessReadyReject = null;

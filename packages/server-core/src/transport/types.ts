@@ -8,6 +8,8 @@ export interface RequestContext {
   clientId: string
   workspaceId: string | null
   webContentsId: number | null
+  /** Set by the server's authentication verifier, never from handshake claims. */
+  authenticatedBy?: 'bearer' | 'cookie' | null
 }
 
 export type HandlerFn = (ctx: RequestContext, ...args: any[]) => Promise<any> | any

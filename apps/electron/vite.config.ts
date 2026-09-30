@@ -38,7 +38,7 @@ export default defineConfig({
   base: './',
   build: {
     outDir: resolve(__dirname, 'dist/renderer'),
-    emptyDirBeforeWrite: true,
+    emptyOutDir: true,
     sourcemap: true,  // Source maps generated for debugging. Not uploaded to Sentry (see CLAUDE.md).
     rollupOptions: {
       // UI modules are declarative components. Treating unused re-exports as

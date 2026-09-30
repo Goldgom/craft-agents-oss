@@ -17,6 +17,7 @@ import type { SettingsSubpage } from '../../../shared/settings-registry'
 import AppSettingsPage from './AppSettingsPage'
 import UsageSettingsPage from './UsageSettingsPage'
 import AiSettingsPage from './AiSettingsPage'
+import CredentialsSettingsPage from './CredentialsSettingsPage'
 import AppearanceSettingsPage from './AppearanceSettingsPage'
 import InputSettingsPage from './InputSettingsPage'
 import WorkspaceSettingsPage from './WorkspaceSettingsPage'
@@ -42,6 +43,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   app: AppSettingsPage,
   usage: UsageSettingsPage,
   ai: AiSettingsPage,
+  credentials: CredentialsSettingsPage,
   appearance: AppearanceSettingsPage,
   input: InputSettingsPage,
   workspace: WorkspaceSettingsPage,

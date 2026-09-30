@@ -15,6 +15,16 @@ import type { RpcClient } from '@craft-agent/server-core/transport'
 import type { RemoteServerConfig } from '@craft-agent/core/types'
 import { isLocalOnly, RPC_CHANNELS } from '@craft-agent/shared/protocol'
 
+export interface WorkspaceTransportClient extends RpcClient {
+  connect(): void
+  destroy(): void
+  isChannelAvailable(channel: string): boolean
+  getConnectionState(): TransportConnectionState
+  onConnectionStateChanged(callback: (state: TransportConnectionState) => void): () => void
+  reconnectNow(): void
+  emitReconnected(isStale: boolean): void
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -31,14 +41,14 @@ export interface WorkspaceSwitchResult {
 }
 
 /** Factory to create a new WsRpcClient for a remote workspace. */
-export type WorkspaceClientFactory = (remoteServer: RemoteServerConfig) => WsRpcClient
+export type WorkspaceClientFactory = (remoteServer: RemoteServerConfig) => WorkspaceTransportClient
 
 // ---------------------------------------------------------------------------
 // RoutedClient
 // ---------------------------------------------------------------------------
 
 export class RoutedClient implements RpcClient {
-  private workspaceClient: WsRpcClient
+  private workspaceClient: WorkspaceTransportClient
 
   /** REMOTE_ELIGIBLE listener registry — survives workspace switches. */
   private remoteListeners = new Map<string, Set<ListenerEntry>>()
@@ -62,7 +72,7 @@ export class RoutedClient implements RpcClient {
 
   constructor(
     private readonly localClient: WsRpcClient,
-    initialWorkspaceClient: WsRpcClient,
+    initialWorkspaceClient: WorkspaceTransportClient,
   ) {
     this.workspaceClient = initialWorkspaceClient
     this.bindConnectionState()
@@ -135,11 +145,8 @@ export class RoutedClient implements RpcClient {
 
     const result = await target.invoke(channel, ...translatedArgs)
 
-    // Intercept SWITCH_WORKSPACE response to swap workspace client
-    if (channel === RPC_CHANNELS.window.SWITCH_WORKSPACE) {
-      this.handleWorkspaceSwitch(result as WorkspaceSwitchResult)
-    }
-
+    // Network responses never grant local routing authority. Native preload
+    // explicitly applies its trusted workspace-switch result below.
     return result
   }
 
@@ -206,6 +213,12 @@ export class RoutedClient implements RpcClient {
   // Workspace switch
   // -------------------------------------------------------------------------
 
+  /** Native Electron owns window identity; WS updates only this connection. */
+  async applyNativeWorkspaceSwitch(result: WorkspaceSwitchResult): Promise<void> {
+    await this.localClient.invoke(RPC_CHANNELS.window.SWITCH_WORKSPACE, result.workspaceId)
+    this.handleWorkspaceSwitch(result)
+  }
+
   private handleWorkspaceSwitch(result: WorkspaceSwitchResult): void {
     if (!result) return
 
@@ -222,7 +235,7 @@ export class RoutedClient implements RpcClient {
     }
   }
 
-  private swapWorkspaceClient(newClient: WsRpcClient): void {
+  private swapWorkspaceClient(newClient: WorkspaceTransportClient): void {
     const old = this.workspaceClient
     this.workspaceClient = newClient
 

@@ -39,6 +39,7 @@ export const SETTINGS_PAGES = [
   { id: 'usage' as const, labelKey: 'settings.usage.title', descriptionKey: 'settings.usage.description' },
   { id: 'preferences' as const, labelKey: 'settings.preferences.title', descriptionKey: 'settings.preferences.description' },
   { id: 'ai' as const, labelKey: 'settings.ai.title', descriptionKey: 'settings.ai.description' },
+  { id: 'credentials' as const, labelKey: 'settings.credentials.title', descriptionKey: 'settings.credentials.description' },
   { id: 'appearance' as const, labelKey: 'settings.appearance.title', descriptionKey: 'settings.appearance.description' },
   { id: 'input' as const, labelKey: 'settings.input.title', descriptionKey: 'settings.input.description' },
   { id: 'workspace' as const, labelKey: 'settings.workspace.title', descriptionKey: 'settings.workspace.description' },

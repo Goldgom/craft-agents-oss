@@ -6,6 +6,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import type { CredentialManager } from '../credentials/manager.ts';
+import { CredentialChangedError } from '../credentials/types.ts';
 
 export const TOKENNEST_OAUTH_CONFIG = {
   issuer: 'https://openai.goldgom.top',
@@ -335,7 +336,7 @@ export async function revokeTokenNestToken(token: string): Promise<void> {
   if (!response.ok) throw new Error(`TokenNest token revocation failed: ${response.status}`);
 }
 
-const credentialRefreshes = new Map<string, Promise<TokenNestTokens>>();
+const credentialRefreshesByManager = new WeakMap<CredentialManager, Map<string, Promise<TokenNestTokens>>>();
 
 /**
  * Return a usable TokenNest access token and atomically persist rotated tokens.
@@ -353,20 +354,39 @@ export async function getValidTokenNestCredentials(
   if (!forceRefresh && !expiring) return stored;
   if (!stored.refreshToken) return forceRefresh || expiring ? null : stored;
 
+  let credentialRefreshes = credentialRefreshesByManager.get(credentialManager);
+  if (!credentialRefreshes) {
+    credentialRefreshes = new Map();
+    credentialRefreshesByManager.set(credentialManager, credentialRefreshes);
+  }
   const existing = credentialRefreshes.get(connectionSlug);
   if (existing) return existing;
   const refresh = (async () => {
-    const latest = await credentialManager.getLlmOAuth(connectionSlug);
-    if (!latest?.accessToken || !latest.refreshToken) {
+    const id = { type: 'llm_oauth' as const, connectionSlug };
+    const snapshot = await credentialManager.getSnapshot(id);
+    const latest = snapshot.credential;
+    if (!latest?.value || !latest.refreshToken) {
       throw new Error('TokenNest refresh credentials are unavailable');
     }
     // Another caller may have completed a refresh before this mutex was set.
     if (!forceRefresh && latest.expiresAt && latest.expiresAt >= Date.now() + 5 * 60_000) {
-      return latest;
+      return { accessToken: latest.value, refreshToken: latest.refreshToken, expiresAt: latest.expiresAt, scope: latest.scope };
     }
-    const tokens = await refreshTokenNestTokens(latest.refreshToken);
+    let tokens: TokenNestTokens;
+    try { tokens = await refreshTokenNestTokens(latest.refreshToken); }
+    catch (error) {
+      // A late invalid_grant from the old token must not diagnose a newer
+      // user-provided credential as expired or in need of reauthorization.
+      if ((await credentialManager.getSnapshot(id)).revision !== snapshot.revision) throw new CredentialChangedError();
+      throw error;
+    }
     const updated = { ...tokens, scope: tokens.scope || latest.scope };
-    await credentialManager.setLlmOAuth(connectionSlug, updated);
+    const saved = await credentialManager.compareAndSetMany([{ id, expectedRevision: snapshot.revision,
+      credential: { ...latest, value: updated.accessToken, refreshToken: updated.refreshToken, expiresAt: updated.expiresAt, scope: updated.scope },
+    }]);
+    // A user replacement, deletion, or metadata edit wins. Never retry the
+    // remote rotation or return this superseded token for authorization.
+    if (!saved) throw new CredentialChangedError();
     return updated;
   })().finally(() => credentialRefreshes.delete(connectionSlug));
   credentialRefreshes.set(connectionSlug, refresh);

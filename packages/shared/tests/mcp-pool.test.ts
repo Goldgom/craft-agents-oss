@@ -6,7 +6,7 @@
  * This was the root cause of MCP connection drops every 30-60 minutes:
  * tokens were refreshed but never applied to existing transports.
  */
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { McpClientPool } from '../src/mcp/mcp-pool.ts';
 import type { SdkMcpServerConfig } from '../src/agent/backend/types.ts';
 import type { PoolClient } from '../src/mcp/client.ts';
@@ -24,35 +24,30 @@ const mockTools: Tool[] = [
   },
 ];
 
-function makeMockClient(): PoolClient {
-  return {
-    listTools: async () => mockTools,
-    callTool: async () => ({ content: [{ type: 'text', text: 'ok' }] }),
-    close: async () => {},
-  };
-}
-
 function httpConfig(token: string, url = 'https://mcp.example.com'): SdkMcpServerConfig {
   return { type: 'http', url, headers: { Authorization: `Bearer ${token}` } };
 }
 
 /**
- * Subclass that intercepts connect/disconnect to avoid real MCP connections
- * while letting sync()'s config-change detection logic run against real state.
+ * Replace transport I/O only, preserving the real connect and ownership path.
  */
+const pools: TestablePool[] = [];
+afterEach(async () => { await Promise.all(pools.splice(0).map(pool => pool.disconnectAll())); });
 class TestablePool extends McpClientPool {
+  failNext = false;
+  constructor() { super(); pools.push(this); }
   public connectCalls: Array<{ slug: string; config: SdkMcpServerConfig }> = [];
   public disconnectCalls: string[] = [];
 
-  async connect(slug: string, config: SdkMcpServerConfig): Promise<void> {
-    this.connectCalls.push({ slug, config });
-    await this.registerClient(slug, makeMockClient());
-    this.activeConfigs.set(slug, config);
-  }
-
-  async disconnect(slug: string): Promise<void> {
-    this.disconnectCalls.push(slug);
-    await super.disconnect(slug);
+  override async registerClient(slug: string, client: PoolClient): Promise<void> {
+    this.connectCalls.push({ slug, config: this.activeConfigs.get(slug)! });
+    client.listTools = async () => {
+      if (this.failNext) { this.failNext = false; throw new Error('Server unavailable'); }
+      return mockTools;
+    };
+    client.callTool = async () => ({ content: [{ type: 'text', text: 'ok' }] });
+    client.close = async () => { this.disconnectCalls.push(slug); };
+    await super.registerClient(slug, client);
   }
 
   /** Reset tracking arrays between sync phases within a single test */
@@ -107,9 +102,9 @@ describe('McpClientPool.sync — config change detection', () => {
     expect(pool.connectCalls).toHaveLength(1);
   });
 
-  it('does not reconnect when only non-auth headers change', async () => {
-    // Only Authorization and URL should trigger reconnect — other header
-    // changes (tracing, versioning) should not cause connection churn.
+  it('reconnects when custom headers change', async () => {
+    // Custom headers may carry API keys or select a server protocol version.
+    // Keep the transport aligned with the complete configured header set.
     const config1: SdkMcpServerConfig = {
       type: 'http',
       url: 'https://mcp.example.com',
@@ -126,8 +121,8 @@ describe('McpClientPool.sync — config change detection', () => {
 
     await pool.sync({ craft: config2 });
 
-    expect(pool.connectCalls).toHaveLength(0);
-    expect(pool.disconnectCalls).toHaveLength(0);
+    expect(pool.connectCalls).toHaveLength(1);
+    expect(pool.disconnectCalls).toHaveLength(1);
   });
 
   it('disconnects sources removed from config', async () => {
@@ -165,19 +160,13 @@ describe('McpClientPool.sync — config change detection', () => {
   });
 
   it('reports failure when reconnect fails after token refresh', async () => {
-    let connectAttempts = 0;
     const failPool = new TestablePool();
-    const origConnect = failPool.connect.bind(failPool);
-    failPool.connect = async (slug: string, config: SdkMcpServerConfig) => {
-      connectAttempts++;
-      if (connectAttempts > 1) throw new Error('Server unavailable');
-      return origConnect(slug, config);
-    };
 
     await failPool.sync({ craft: httpConfig('old-token') });
     expect(failPool.isConnected('craft')).toBe(true);
 
-    // Token refresh — disconnect succeeds but reconnect throws
+    // Token refresh — disconnect succeeds but the new handshake fails
+    failPool.failNext = true;
     const failures = await failPool.sync({ craft: httpConfig('new-token') });
 
     expect(failures).toContain('craft');

@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { importMcpEntries } from '@/lib/mcp-import-runner'
+import { parseSourceCredentialBatch } from '@/lib/source-credential-batch'
 import { parseMcpImport, type McpImportEntry } from '@/lib/mcp-import'
 import type { LoadedSource } from '../../../shared/types'
 
@@ -26,25 +28,34 @@ export function McpManagementDialog({ open, onOpenChange, workspaceId, sources, 
   const [args, setArgs] = React.useState('')
   const [batch, setBatch] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [credentialBatch, setCredentialBatch] = React.useState('')
+  const busyRef = React.useRef(false)
+  const fileReadId = React.useRef(0)
+  const openRef = React.useRef(open)
+  openRef.current = open
+  React.useEffect(() => {
+    fileReadId.current++
+    setToken(''); setBatch(''); setCredentialBatch('')
+  }, [workspaceId])
+  React.useEffect(() => {
+    if (!open) { fileReadId.current++; setToken(''); setBatch(''); setCredentialBatch('') }
+  }, [open])
 
   const importEntries = async (entries: Array<McpImportEntry & { credential?: string }>) => {
-    const existing = new Set(sources.filter(source => source.config.type === 'mcp').map(source => source.config.name.toLowerCase()))
-    let imported = 0
-    let skipped = 0
-    const failed: string[] = []
+    if (busyRef.current) return false
+    busyRef.current = true
     setBusy(true)
     try {
-      for (const entry of entries) {
-        if (existing.has(entry.name.toLowerCase())) { skipped++; continue }
-        try {
-          const created = await window.electronAPI.createSource(workspaceId, { name: entry.name, provider: 'custom', type: 'mcp', mcp: entry.mcp })
-          existing.add(entry.name.toLowerCase())
-          imported++
-          if (entry.credential) await window.electronAPI.saveSourceCredentials(workspaceId, created.slug, entry.credential)
-        } catch (error) {
-          failed.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`)
-        }
-      }
+      const { imported, skipped, failures } = await importMcpEntries(
+        entries,
+        sources.filter(source => source.config.type === 'mcp').map(source => source.config.name),
+        {
+          create: entry => window.electronAPI.createSource(workspaceId, { name: entry.name, provider: 'custom', type: 'mcp', mcp: entry.mcp }),
+          save: (slug, credential) => window.electronAPI.saveSourceCredentials(workspaceId, slug, credential),
+          remove: slug => window.electronAPI.deleteSource(workspaceId, slug),
+        },
+      )
+      const failed = failures.map(failure => `${failure.name}: ${t(failure.reason === 'rollback' ? 'mcpManage.credentialRollbackFailed' : failure.reason === 'credential' ? 'mcpManage.credentialSaveFailed' : 'mcpManage.createFailed')}`)
       try { await onRefresh() }
       catch (error) {
         toast.error(t('mcpManage.refreshFailed'), { description: error instanceof Error ? error.message : undefined })
@@ -54,6 +65,28 @@ export function McpManagementDialog({ open, onOpenChange, workspaceId, sources, 
       })
       return failed.length === 0
     } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  const handleCredentials = async () => {
+    if (busyRef.current) return
+    let entries
+    try { entries = parseSourceCredentialBatch(credentialBatch) }
+    catch { toast.error(t('mcpManage.invalidCredentials')); return }
+    busyRef.current = true
+    setBusy(true)
+    try {
+      const result = await window.electronAPI.saveSourceCredentialsBatch(workspaceId, entries)
+      setCredentialBatch('')
+      toast.success(t('mcpManage.credentialsSaved', { count: result.saved }))
+      if (result.statusUpdateFailed.length) toast.warning(t('mcpManage.credentialStatusWarning'))
+      try { await onRefresh() } catch { toast.warning(t('mcpManage.refreshFailed')) }
+    } catch {
+      toast.error(t('mcpManage.credentialBatchFailed'))
+    } finally {
+      busyRef.current = false
       setBusy(false)
     }
   }
@@ -61,15 +94,15 @@ export function McpManagementDialog({ open, onOpenChange, workspaceId, sources, 
   const handleSingle = async () => {
     const trimmedName = name.trim()
     const trimmedEndpoint = endpoint.trim()
-    if (!trimmedName || !trimmedEndpoint) { toast.error(t('mcpManage.required')); return }
+    if (!trimmedName || !trimmedEndpoint || (transport !== 'stdio' && authType === 'bearer' && !token.trim())) { toast.error(t('mcpManage.required')); return }
     if (transport !== 'stdio') {
-      try { const url = new URL(trimmedEndpoint); if (!['http:', 'https:'].includes(url.protocol)) throw new Error() }
+      try { const url = new URL(trimmedEndpoint); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error() }
       catch { toast.error(t('mcpManage.invalidUrl')); return }
     }
     const mcp = transport === 'stdio'
       ? { transport, command: trimmedEndpoint, args: args.trim() ? args.trim().split(/\s+/) : [] }
       : { transport, url: trimmedEndpoint, authType }
-    const success = await importEntries([{ name: trimmedName, mcp, credential: authType === 'bearer' ? token.trim() : undefined }])
+    const success = await importEntries([{ name: trimmedName, mcp, credential: transport !== 'stdio' && authType === 'bearer' ? token.trim() : undefined }])
     if (success) { setName(''); setEndpoint(''); setArgs(''); setToken('') }
   }
 
@@ -83,7 +116,9 @@ export function McpManagementDialog({ open, onOpenChange, workspaceId, sources, 
   }
 
   const handleDelete = async (source: LoadedSource) => {
+    if (busyRef.current) return
     if (!window.confirm(t('mcpManage.deleteConfirm', { name: source.config.name }))) return
+    busyRef.current = true
     setBusy(true)
     try {
       await window.electronAPI.deleteSource(workspaceId, source.config.slug)
@@ -91,17 +126,17 @@ export function McpManagementDialog({ open, onOpenChange, workspaceId, sources, 
       toast.success(t('sourceInfo.deletedSource', { name: source.config.name }))
     }
     catch (error) { toast.error(t('sourceInfo.failedToDelete'), { description: error instanceof Error ? error.message : undefined }) }
-    finally { setBusy(false) }
+    finally { busyRef.current = false; setBusy(false) }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={next => { if (!busyRef.current) onOpenChange(next) }}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t('mcpManage.title')}</DialogTitle>
           <DialogDescription>{t('mcpManage.description')}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-5">
+        <fieldset disabled={busy} className="space-y-5 min-w-0">
           <section className="space-y-3">
             <h3 className="text-sm font-semibold">{t('mcpManage.add')}</h3>
             <Input value={name} onChange={event => setName(event.target.value)} placeholder={t('mcpManage.name')} aria-label={t('mcpManage.name')} />
@@ -125,11 +160,23 @@ export function McpManagementDialog({ open, onOpenChange, workspaceId, sources, 
               <span>{t('mcpManage.chooseFile')}</span>
               <Input type="file" accept=".json,application/json" onChange={event => {
                 const file = event.target.files?.[0]
-                if (file) void file.text().then(setBatch).catch(error => toast.error(t('mcpManage.invalidJson'), { description: String(error) }))
+                const readId = ++fileReadId.current
+                if (file) void file.text().then(text => {
+                  if (openRef.current && readId === fileReadId.current) setBatch(text)
+                }).catch(() => {
+                  if (openRef.current && readId === fileReadId.current) toast.error(t('mcpManage.invalidJson'))
+                })
               }} />
             </label>
             <Textarea value={batch} onChange={event => setBatch(event.target.value)} rows={7} className="font-mono text-xs" placeholder={'{"mcpServers":{"example":{"url":"https://example.com/mcp"}}}'} aria-label={t('mcpManage.batch')} />
             <Button disabled={busy || !batch.trim()} onClick={() => void handleBatch()}>{t('mcpManage.importBatch')}</Button>
+          </section>
+          <section className="space-y-3 border-t border-border pt-5">
+            <h3 className="text-sm font-semibold">{t('mcpManage.credentialsBatch')}</h3>
+            <p className="text-xs text-muted-foreground">{t('mcpManage.credentialsHint')}</p>
+            <p className="text-xs text-muted-foreground">{sources.filter(source => source.config.type !== 'local').map(source => `${source.config.name}: ${source.config.slug}`).join(' · ')}</p>
+            <Textarea value={credentialBatch} onChange={event => setCredentialBatch(event.target.value)} rows={5} autoComplete="off" spellCheck={false} className="font-mono text-xs" placeholder={'{"source-slug":"token","basic-source":{"username":"user","password":"password"}}'} aria-label={t('mcpManage.credentialsBatch')} />
+            <Button disabled={busy || !credentialBatch.trim()} onClick={() => void handleCredentials()}>{t('mcpManage.saveCredentialsBatch')}</Button>
           </section>
           <section className="space-y-2 border-t border-border pt-5">
             <h3 className="text-sm font-semibold">{t('mcpManage.configured')}</h3>
@@ -140,7 +187,7 @@ export function McpManagementDialog({ open, onOpenChange, workspaceId, sources, 
               </div>
             ))}
           </section>
-        </div>
+        </fieldset>
       </DialogContent>
     </Dialog>
   )

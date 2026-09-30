@@ -10,12 +10,13 @@ import {
 } from '../storage.ts'
 import { setBundledAssetsRoot } from '../../utils/paths.ts'
 
-const bundledAssetsRoot = join(process.cwd(), '..', '..', 'apps', 'electron')
+const repositoryRoot = join(import.meta.dir, '..', '..', '..', '..', '..')
+const bundledAssetsRoot = join(repositoryRoot, 'apps', 'electron')
 
 describe('bundled skills', () => {
   it('resolves skill files when a headless development server uses the repository root', () => {
     try {
-      setBundledAssetsRoot(join(process.cwd(), '..', '..'))
+      setBundledAssetsRoot(repositoryRoot)
       expect(getBuiltinSkillsDir()).toBe(join(bundledAssetsRoot, 'resources', 'skills'))
     } finally {
       setBundledAssetsRoot(bundledAssetsRoot)

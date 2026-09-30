@@ -110,3 +110,6 @@ export type {
   TokenRefreshResult,
   RefreshManagerOptions,
 } from './token-refresh-manager.ts';
+
+export { saveSourceCredentialBatch, validateSourceCredential } from './credential-batch.ts';
+export type { SourceCredentialUpdate, SourceCredentialBatchResult } from './credential-batch.ts';

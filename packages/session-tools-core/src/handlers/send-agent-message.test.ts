@@ -50,3 +50,21 @@ describe('handleSendAgentMessage delivery ack', () => {
     expect(res.isError).toBe(true);
   });
 });
+
+it('routes relay messages by member ID without a misleading bare-session reply envelope', async () => {
+  const calls: unknown[][] = [];
+  const ctx = { sessionId: 'primary', sendCollaborationMessage: async (...args: unknown[]) => { calls.push(args); return { delivery: 'queued-for-relay', targetBusy: false, operationId: 'stable-operation' }; } } as unknown as SessionToolContext;
+  const result = await handleSendAgentMessage(ctx, { targetMemberId: 'primary', message: 'A remote session can have the same bare ID' });
+  expect(result.isError).toBeFalsy();
+  expect(calls).toEqual([['primary', 'A remote session can have the same bare ID']]);
+  expect(JSON.stringify(result)).toContain('Do not repeat');
+  expect(JSON.stringify(result)).toContain('stable-operation');
+});
+
+it('rejects ambiguous relay targets and direct attachments before invoking the callback', async () => {
+  let calls = 0;
+  const ctx = { sendCollaborationMessage: async () => { calls++; return { delivery: 'queued-for-relay', targetBusy: false }; } } as unknown as SessionToolContext;
+  expect((await handleSendAgentMessage(ctx, { sessionId: 'x', targetMemberId: 'primary', message: 'no' })).isError).toBe(true);
+  expect((await handleSendAgentMessage(ctx, { targetMemberId: 'primary', message: 'no', attachments: [{ path: '/private' }] })).isError).toBe(true);
+  expect(calls).toBe(0);
+});

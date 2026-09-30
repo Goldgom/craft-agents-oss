@@ -4,10 +4,12 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { withMcpRequestLifetime } from './request-lifetime.ts';
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
@@ -76,7 +78,9 @@ export async function getProcessRssBytes(pid: number | undefined): Promise<numbe
  * HTTP transport config for remote MCP servers
  */
 export interface HttpMcpClientConfig {
-  transport: 'http';
+  transport: 'http' | 'sse';
+  /** Bound transport startup plus MCP initialization (default 30 seconds). */
+  connectTimeoutMs?: number;
   url: string;
   headers?: Record<string, string>;
 }
@@ -86,6 +90,8 @@ export interface HttpMcpClientConfig {
  */
 export interface StdioMcpClientConfig {
   transport: 'stdio';
+  /** Bound transport startup plus MCP initialization (default 30 seconds). */
+  connectTimeoutMs?: number;
   command: string;
   args?: string[];
   env?: Record<string, string>;
@@ -107,6 +113,9 @@ const BLOCKED_ENV_VARS = [
   // TokenBird auth (set by the app itself)
   'ANTHROPIC_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'CRAFT_SERVER_TOKEN',
+  'CRAFT_RPC_TOKEN',
+  'TOKENBIRD_SERVER_TOKEN',
 
   // AWS credentials
   'AWS_ACCESS_KEY_ID',
@@ -148,13 +157,31 @@ export class CraftMcpClient {
   private client: Client;
   private transport: Transport;
   private connected = false;
-  readonly transportType: 'stdio' | 'http';
+  private closed = false;
+  private connectPromise: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
+  private readonly connectTimeoutMs: number;
+  readonly transportType: 'stdio' | 'http' | 'sse';
+  /** Unexpected definitive SDK closure, never a request failure or cancellation. */
+  onclose?: () => void;
 
   constructor(config: McpClientConfig) {
+    this.connectTimeoutMs = config.connectTimeoutMs ?? 30_000;
+    if (!Number.isFinite(this.connectTimeoutMs) || this.connectTimeoutMs <= 0) throw new Error('Invalid MCP connection timeout');
     this.client = new Client({
       name: 'craft-agent',
       version: '1.0.0',
     });
+    this.client.onclose = () => {
+      // This wrapper owns one transport lifetime. Recovery requires a new
+      // client; retrying an already attempted request could repeat a mutation.
+      const alreadyClosed = this.closed;
+      this.closed = true;
+      this.connected = false;
+      // Explicit cleanup already belongs to its caller. In particular, an
+      // initialize failure must retain its original sanitized failure reason.
+      if (!alreadyClosed) this.onclose?.();
+    };
 
     // Create transport based on config type
     if (config.transport === 'stdio') {
@@ -173,16 +200,16 @@ export class CraftMcpClient {
         env: { ...processEnv, ...config.env },
       });
     } else {
-      this.transportType = 'http';
+      this.transportType = config.transport;
       // HTTP transport for remote MCP servers
-      this.transport = new StreamableHTTPClientTransport(
-        new URL(config.url),
-        {
-          requestInit: {
-            headers: config.headers,
-          },
-        }
-      );
+      const url = new URL(config.url);
+      this.transport = config.transport === 'sse'
+        ? new SSEClientTransport(url, {
+          requestInit: { headers: config.headers },
+          // The SDK forwards requestInit headers to EventSource and sets its
+          // required Accept: text/event-stream header after merging them.
+        })
+        : new StreamableHTTPClientTransport(url, { requestInit: { headers: config.headers } });
     }
   }
 
@@ -193,21 +220,36 @@ export class CraftMcpClient {
   }
 
   async connect(): Promise<void> {
+    if (this.closed) throw new Error('MCP client is closed');
     if (this.connected) return;
-
-    await this.client.connect(this.transport);
-
-    // Verify connection works by listing tools
-    try {
-      await this.client.listTools();
-    } catch (error) {
-      await this.client.close();
-      throw new Error(
-        `MCP connection failed health check: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-
-    this.connected = true;
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const initialization = (async () => {
+        await this.client.connect(this.transport);
+        await this.client.listTools();
+        if (this.closed) throw new Error('MCP client closed during connection');
+        this.connected = true;
+      })();
+      try {
+        // SDK request timers begin after transport.start. A silent SSE stream
+        // can otherwise wait forever before even sending initialize.
+        await Promise.race([
+          initialization,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('MCP connection timed out')), this.connectTimeoutMs);
+          }),
+        ]);
+      } catch (error) {
+        // Initialization failure can leave SSE reconnection loops or a stdio
+        // process alive even though connected was never set. Always close.
+        await this.close().catch(() => {});
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    })();
+    try { await this.connectPromise; } finally { this.connectPromise = null; }
   }
 
   async listTools(): Promise<Tool[]> {
@@ -234,17 +276,20 @@ export class CraftMcpClient {
       await this.connect();
     }
 
-    const result = await this.client.callTool({ name, arguments: args }, undefined, {
-      ...(options?.signal ? { signal: options.signal } : {}),
+    return withMcpRequestLifetime(signal => this.client.callTool({ name, arguments: args }, undefined, {
+      signal,
       ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-    });
-    return result;
+    }), options?.signal);
   }
 
   async close(): Promise<void> {
-    if (this.connected) {
-      await this.client.close();
-      this.connected = false;
-    }
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.connected = false;
+    this.closePromise = (async () => {
+      try { await this.client.close(); }
+      finally { await this.transport.close(); }
+    })();
+    return this.closePromise;
   }
 }

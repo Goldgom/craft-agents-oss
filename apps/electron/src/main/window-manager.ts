@@ -1,3 +1,4 @@
+import { advanceNativeWindowBinding } from './native-window-authority'
 import { BrowserWindow, shell, nativeTheme, Menu, app } from 'electron'
 import { windowLog } from './logger'
 import { join, resolve, sep } from 'path'
@@ -316,6 +317,9 @@ export class WindowManager {
     // __get-workspace-id (via sendSync) which reads this map during eval.
     const webContentsId = window.webContents.id
     this.windows.set(webContentsId, { window, workspaceId })
+    window.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) advanceNativeWindowBinding(window.webContents)
+    })
 
     // Apply window-title policy now that the map size reflects this window —
     // covers both the new window and any existing windows that should switch

@@ -58,12 +58,15 @@ describe('TokenNest OAuth', () => {
       refreshToken: 'one-time-refresh-token',
       expiresAt: Date.now() - 1,
     };
-    const setLlmOAuth = mock(async (_slug: string, tokens: typeof stored) => {
-      stored = tokens;
+    const compareAndSetMany = mock(async (changes: import('../credentials/types.ts').CredentialCompareAndSet[]) => {
+      const token = changes[0]!.credential!;
+      stored = { accessToken: token.value, refreshToken: token.refreshToken!, expiresAt: token.expiresAt! };
+      return true;
     });
     const credentialManager = {
       getLlmOAuth: mock(async () => stored),
-      setLlmOAuth,
+      getSnapshot: mock(async () => ({ credential: { value: stored.accessToken, refreshToken: stored.refreshToken, expiresAt: stored.expiresAt }, revision: 'dummy-revision' })),
+      compareAndSetMany,
     } as unknown as CredentialManager;
     const refreshRequests: string[] = [];
     globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
@@ -86,7 +89,7 @@ describe('TokenNest OAuth', () => {
     expect(first?.refreshToken).toBe('rotated-refresh-token');
     expect(refreshRequests).toHaveLength(1);
     expect(refreshRequests[0]).toContain('refresh_token=one-time-refresh-token');
-    expect(setLlmOAuth).toHaveBeenCalledTimes(1);
+    expect(compareAndSetMany).toHaveBeenCalledTimes(1);
     expect(stored.refreshToken).toBe('rotated-refresh-token');
   });
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import * as backend from '@craft-agent/shared/agent/backend'
 import { loadWorkspaceConfig } from '@craft-agent/shared/workspaces'
+import { resolveMiniModel } from '@craft-agent/shared/config'
 import { SessionManager, createManagedSession } from './SessionManager.ts'
 import { buildRestartRequiredSignature } from './runtime-config.ts'
 
@@ -85,6 +86,7 @@ function injectSession(
       agentRuntime: ctx.agentRuntime,
       authType: ctx.authType,
       resolvedModel: ctx.resolvedModel,
+      miniModel: ctx.connection ? resolveMiniModel(ctx.connection, workspaceConfig?.defaults?.miniModel) : undefined,
     })
   }
   managed.isProcessing = opts.isProcessing ?? false

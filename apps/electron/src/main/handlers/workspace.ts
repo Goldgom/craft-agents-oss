@@ -20,13 +20,15 @@ export const GUI_HANDLED_CHANNELS = [
  * bundles as one response frame and need more headroom over WAN.
  * Returns the connected client or null + error message.
  */
-export async function connectToRemote(url: string, token: string, workspaceId?: string, opts?: { requestTimeout?: number }) {
+export async function connectToRemote(url: string, token: string, workspaceId?: string, opts?: { requestTimeout?: number; beforeHandshake?: () => Promise<void>; tlsRejectUnauthorized?: boolean; useNodeWebSocket?: boolean }) {
   const { WsRpcClient } = await import('../../transport/client')
   const client = new WsRpcClient(url, {
     token,
     workspaceId,
     autoReconnect: false,
-    tlsRejectUnauthorized: false,
+    tlsRejectUnauthorized: opts?.tlsRejectUnauthorized ?? false,
+    useNodeWebSocket: opts?.useNodeWebSocket,
+    beforeHandshake: opts?.beforeHandshake,
     requestTimeout: opts?.requestTimeout,
   })
 

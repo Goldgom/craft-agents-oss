@@ -381,7 +381,8 @@ export const ListBackgroundTasksSchema = z.object({
 
 // Inter-session messaging
 export const SendAgentMessageSchema = z.object({
-  sessionId: z.string().describe('Target session ID to send the message to'),
+  sessionId: z.string().optional().describe('Target session ID for ordinary same-server messaging'),
+  targetMemberId: z.string().optional().describe('Exact member ID from collaboration_board for a multi-server collaboration; do not use a bare session ID'),
   message: z.string().describe('The message to send to the target session'),
   attachments: z.array(z.object({
     path: z.string().describe('Absolute file path on disk'),
@@ -790,7 +791,8 @@ Status meanings:
 
 Never guess or claim "the app restarted" — report exactly what this tool returns. Omit sessionId for the current session.`,
 
-  send_agent_message: `Send a message to another session. The message is delivered with your session ID so the target can reply back.
+  send_agent_message: `For a multi-server collaboration use targetMemberId from collaboration_board. For ordinary same-server messaging use sessionId. Supply exactly one target.
+Send a message to another session. The message is delivered with your session ID so the target can reply back.
 
 In a collaboration, direct attachments are not supported because request/report retries are text-only. Publish files with collaboration_file first, then mention the shared file in the message.
 

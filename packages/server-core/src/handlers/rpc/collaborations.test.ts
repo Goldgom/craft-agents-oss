@@ -13,7 +13,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-async function fixture(options?: { failSecondaryDelivery?: boolean; failMetadataSessionId?: string }) {
+async function fixture(options?: { failSecondaryDelivery?: boolean; failMetadataSessionId?: string; failCreateNumber?: number }) {
   const mainRoot = await mkdtemp(join(tmpdir(), 'craft-collaboration-rpc-'))
   const otherRoot = `${mainRoot}-other`
   roots.push(mainRoot, otherRoot)
@@ -45,7 +45,22 @@ async function fixture(options?: { failSecondaryDelivery?: boolean; failMetadata
     hasClientCapability: () => false,
     findClientsWithCapability: () => [],
   }
+  const created: Array<{ workspaceId: string; options: unknown }> = []
+  const deleted: string[] = []
   const sessionManager = {
+    getWorkspaces: () => [
+      { id: 'main', name: 'Main' },
+      { id: 'other', name: 'Other' },
+      { id: 'remote-stub', name: 'Remote stub', remoteServer: { url: 'wss://example.test' } },
+    ],
+    createSession: async (workspaceId: string, createOptions: { name?: string }) => {
+      created.push({ workspaceId, options: createOptions })
+      if (created.length === options?.failCreateNumber) throw new Error('new session write failed')
+      const session = { id: `new-${created.length}`, workspaceId, name: createOptions.name, messages: [] }
+      sessions.set(session.id, session)
+      return session
+    },
+    deleteSession: async (id: string) => { deleted.push(id); sessions.delete(id) },
     getCollaborationManager: () => manager,
     getSession: async (sessionId: string) => sessions.get(sessionId) ?? null,
     getSessions: (workspaceId?: string) => [...sessions.values()].filter(session => !workspaceId || session.workspaceId === workspaceId),
@@ -68,7 +83,8 @@ async function fixture(options?: { failSecondaryDelivery?: boolean; failMetadata
     },
     oauthFlowStore: {},
   } as unknown as HandlerDeps
-  registerCollaborationHandlers(server, deps)
+  const nativeContexts = new WeakSet<RequestContext>()
+  registerCollaborationHandlers(server, deps, nativeContexts)
 
   const invoke = async (channel: string, ctx: RequestContext, ...args: unknown[]) => {
     const handler = handlers.get(channel)
@@ -77,6 +93,8 @@ async function fixture(options?: { failSecondaryDelivery?: boolean; failMetadata
   }
   const mainCtx: RequestContext = { clientId: 'main-client', workspaceId: 'main', webContentsId: 1 }
   const otherCtx: RequestContext = { clientId: 'other-client', workspaceId: 'other', webContentsId: 2 }
+  nativeContexts.add(mainCtx)
+  nativeContexts.add(otherCtx)
   const create = () => invoke(
     RPC_CHANNELS.collaborations.CREATE,
     mainCtx,
@@ -86,6 +104,8 @@ async function fixture(options?: { failSecondaryDelivery?: boolean; failMetadata
 
   return {
     manager,
+    created,
+    deleted,
     otherRoot,
     sessions,
     deliveries,
@@ -106,7 +126,7 @@ describe('collaboration RPC handlers', () => {
     expect(f.deliveries).toHaveLength(1)
     expect(f.deliveries[0]).toMatchObject({ sessionId: 'primary-session', options: { hidden: true, collaborationDispatch: true } })
     expect((await f.manager.list('other')).map(item => item.id)).toEqual([group.id])
-    await rm(join(f.otherRoot, '.craft-agent', 'collaborations', 'index', `${group.id}.json`))
+    await rm(join(f.otherRoot, '.tokenbird', 'collaborations', 'index', `${group.id}.json`))
     expect(await f.manager.list('other')).toEqual([])
     expect((await f.invoke(RPC_CHANNELS.collaborations.LIST, f.otherCtx, 'other')).map((item: { id: string }) => item.id)).toEqual([group.id])
     expect((await f.manager.list('other')).map(item => item.id)).toEqual([group.id])
@@ -193,6 +213,84 @@ describe('collaboration RPC handlers', () => {
       [{ sessionId: 'remote-session', workspaceId: 'remote', serverUrl: 'wss://remote.example' }],
     )).rejects.toThrow('authenticated relay')
     expect(await f.manager.list('main')).toEqual([])
+  })
+
+  it('creates fresh collaborators with workspace defaults and attaches their membership', async () => {
+    const f = await fixture()
+    const group = await f.invoke(RPC_CHANNELS.collaborations.CREATE, f.mainCtx, 'primary-session', [
+      { createNew: true, workspaceId: 'main', name: '  Research  ' },
+      { sessionId: 'secondary-session', workspaceId: 'other' },
+    ])
+    expect(f.created).toEqual([{ workspaceId: 'main', options: { name: 'Research' } }])
+    expect(group.members.map((member: any) => member.sessionId)).toEqual(['primary-session', 'new-1', 'secondary-session'])
+    expect(f.sessions.get('new-1').collaboration).toMatchObject({ groupId: group.id, role: 'secondary' })
+    expect(f.deleted).toEqual([])
+  })
+
+  it('validates every selection before creating sessions and rejects duplicates or remote stubs', async () => {
+    const f = await fixture()
+    for (const invalid of [
+      { sessionId: 'missing', workspaceId: 'main' },
+      { createNew: true, sessionId: 'primary-session', workspaceId: 'main' },
+      { createNew: true, workspaceId: 'remote-stub' },
+      { sessionId: 'primary-session', workspaceId: 'main' },
+      { createNew: true, workspaceId: 'main', name: 'a'.repeat(201) },
+    ]) {
+      await expect(f.invoke(RPC_CHANNELS.collaborations.CREATE, f.mainCtx, 'primary-session', [
+        { createNew: true, workspaceId: 'main' }, invalid,
+      ])).rejects.toThrow()
+    }
+    expect(f.created).toEqual([])
+    expect(await f.manager.list('main')).toEqual([])
+  })
+
+  it('deletes only newly created sessions if a later creation fails', async () => {
+    const f = await fixture({ failCreateNumber: 2 })
+    await expect(f.invoke(RPC_CHANNELS.collaborations.CREATE, f.mainCtx, 'primary-session', [
+      { createNew: true, workspaceId: 'main' },
+      { createNew: true, workspaceId: 'main' },
+    ])).rejects.toThrow('new session write failed')
+    expect(f.deleted).toEqual(['new-1'])
+    expect(f.sessions.has('primary-session')).toBe(true)
+    expect(f.sessions.has('secondary-session')).toBe(true)
+    expect(await f.manager.list('main')).toEqual([])
+  })
+
+  it('rolls back fresh sessions and membership after metadata persistence fails', async () => {
+    const f = await fixture({ failMetadataSessionId: 'new-1' })
+    await expect(f.invoke(RPC_CHANNELS.collaborations.CREATE, f.mainCtx, 'primary-session', [
+      { createNew: true, workspaceId: 'main' },
+    ])).rejects.toThrow('metadata write failed')
+    expect(f.deleted).toEqual(['new-1'])
+    expect(f.sessions.get('primary-session').collaboration).toBeUndefined()
+    expect(await f.manager.list('main')).toEqual([])
+  })
+
+  it('lists only hosted and authorized workspaces, including empty ones for new sessions', async () => {
+    const f = await fixture()
+    expect(await f.invoke(RPC_CHANNELS.collaborations.LIST_WORKSPACES, f.mainCtx)).toEqual([
+      { id: 'main', name: 'Main' }, { id: 'other', name: 'Other' },
+    ])
+    const remoteCtx = { clientId: 'remote', workspaceId: 'main', webContentsId: null }
+    expect(await f.invoke(RPC_CHANNELS.collaborations.LIST_WORKSPACES, remoteCtx)).toEqual([{ id: 'main', name: 'Main' }])
+    await expect(f.invoke(RPC_CHANNELS.collaborations.CREATE, remoteCtx, 'primary-session', [
+      { createNew: true, workspaceId: 'other' },
+    ])).rejects.toThrow('trusted local desktop')
+    expect(f.created).toEqual([])
+    const group = await f.invoke(RPC_CHANNELS.collaborations.CREATE, remoteCtx, 'primary-session', [{ createNew: true, workspaceId: 'main' }])
+    expect(group.members).toHaveLength(2)
+  })
+
+  it('ignores spoofed desktop window IDs without native context authority', async () => {
+    const f = await fixture()
+    const spoofed = { ...f.mainCtx, clientId: 'network-spoof' }
+    expect(await f.invoke(RPC_CHANNELS.collaborations.LIST_WORKSPACES, spoofed)).toEqual([{ id: 'main', name: 'Main' }])
+    const candidates = await f.invoke(RPC_CHANNELS.collaborations.LIST_CANDIDATES, spoofed)
+    expect(candidates.map((session: any) => session.workspaceId)).toEqual(['main'])
+    await expect(f.invoke(RPC_CHANNELS.collaborations.CREATE, spoofed, 'primary-session', [
+      { createNew: true, workspaceId: 'other' },
+    ])).rejects.toThrow('trusted local desktop')
+    expect(f.created).toEqual([])
   })
 
   it('keeps headless candidate discovery and creation inside the connected workspace', async () => {

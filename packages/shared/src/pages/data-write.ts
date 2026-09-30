@@ -150,24 +150,44 @@ const patch = INPUT.patch;
 
 mkdirSync(dirname(INPUT.dbPath), { recursive: true });
 const db = new Database(INPUT.dbPath);
-// busy_timeout before WAL: concurrent first-writers each need the exclusive
-// lock to flip journal_mode, which contends immediately as SQLITE_BUSY without
-// a timeout set first. (Kept in lockstep with pages/data-store.ts.)
-db.exec('PRAGMA busy_timeout = 5000;');
-db.exec('PRAGMA journal_mode = WAL;');
-db.exec(\`
+// SQLite can skip busy_timeout for journal-mode lock upgrades. Retry only
+// idempotent initialization, with one shared budget (see pages/data-store.ts).
+const deadline = performance.now() + 5000;
+const initialize = (sql) => {
+  for (;;) {
+    const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+    db.exec('PRAGMA busy_timeout = ' + Math.min(100, remaining) + ';');
+    try {
+      db.exec(sql);
+      return;
+    } catch (error) {
+      if (error.code !== 'SQLITE_BUSY' || performance.now() >= deadline) throw error;
+      Bun.sleepSync(Math.min(20, Math.max(0, deadline - performance.now())));
+    }
+  }
+};
+try {
+  initialize('PRAGMA journal_mode = WAL;');
+  initialize(\`
   CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  \`);
+  initialize(\`
   CREATE TABLE IF NOT EXISTS timeseries (
     series TEXT NOT NULL,
     t INTEGER NOT NULL,
     v REAL NOT NULL,
     PRIMARY KEY (series, t)
   ) WITHOUT ROWID;
-\`);
+  \`);
+  db.exec('PRAGMA busy_timeout = 5000;');
+} catch (error) {
+  db.close();
+  throw error;
+}
 
 const kvUpsert = db.query('INSERT INTO kv (key, value, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at');
 const kvDelete = db.query('DELETE FROM kv WHERE key = ?1');

@@ -18,9 +18,10 @@
  */
 
 import { CraftMcpClient, getProcessRssBytes, type McpClientConfig, type PoolCallToolOptions, type PoolClient } from './client.ts';
-import { mcpRuntimeLimiter } from './runtime-limiter.ts';
+import { mcpRuntimeLimiter, type McpRuntimeLease } from './runtime-limiter.ts';
 import { ApiSourcePoolClient } from './api-source-pool-client.ts';
 import { proxyToolName } from './proxy-tool-name.ts';
+import { sanitizeMcpConnectionError } from './connection-error.ts';
 import type { SdkMcpServerConfig } from '../agent/backend/types.ts';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -88,7 +89,7 @@ export interface McpToolResult {
 function sdkConfigToClientConfig(config: SdkMcpServerConfig): McpClientConfig | null {
   if (config.type === 'http' || config.type === 'sse') {
     return {
-      transport: 'http',
+      transport: config.type,
       url: config.url,
       headers: config.headers,
     };
@@ -104,11 +105,15 @@ function sdkConfigToClientConfig(config: SdkMcpServerConfig): McpClientConfig | 
   return null;
 }
 
-/**
- * Check if an MCP source's config has changed in a way that requires reconnection.
- * Compares auth headers (token refresh) and URL changes.
- * Ignores stdio sources since they don't use OAuth tokens.
- */
+/** Compare maps without depending on insertion order or logging their secret values. */
+function equalConfigMap(a: Record<string, string> = {}, b: Record<string, string> = {}, caseInsensitiveKeys = false): boolean {
+  const normalize = (value: Record<string, string>) => Object.entries(value)
+    .map(([key, entry]) => [caseInsensitiveKeys ? key.toLowerCase() : key, entry] as const)
+    .sort(([keyA], [keyB]) => keyA.localeCompare(keyB));
+  return JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
+}
+
+/** Reconnect whenever effective transport settings or credentials change. */
 function mcpConfigChanged(oldConfig: SdkMcpServerConfig, newConfig: SdkMcpServerConfig): boolean {
   if (oldConfig.type !== newConfig.type) return true;
 
@@ -116,13 +121,49 @@ function mcpConfigChanged(oldConfig: SdkMcpServerConfig, newConfig: SdkMcpServer
     (oldConfig.type === 'http' || oldConfig.type === 'sse') &&
     (newConfig.type === 'http' || newConfig.type === 'sse')
   ) {
-    if (oldConfig.url !== newConfig.url) return true;
-    const oldAuth = oldConfig.headers?.['Authorization'];
-    const newAuth = newConfig.headers?.['Authorization'];
-    if (oldAuth !== newAuth) return true;
+    // API keys and custom auth headers matter just as much as Authorization.
+    return oldConfig.url !== newConfig.url
+      || !equalConfigMap(oldConfig.headers, newConfig.headers, true)
+      || oldConfig.bearerTokenEnvVar !== newConfig.bearerTokenEnvVar;
   }
 
+  if (oldConfig.type === 'stdio' && newConfig.type === 'stdio') {
+    return oldConfig.command !== newConfig.command
+      || JSON.stringify(oldConfig.args ?? []) !== JSON.stringify(newConfig.args ?? [])
+      || !equalConfigMap(oldConfig.env, newConfig.env)
+      || oldConfig.cwd !== newConfig.cwd
+      || JSON.stringify([...(oldConfig.envVars ?? [])].sort()) !== JSON.stringify([...(newConfig.envVars ?? [])].sort());
+  }
   return false;
+}
+
+/** Errors whose public text was constructed locally, without provider details. */
+class McpPoolError extends Error {}
+
+/** One immutable ownership token for a queued, connecting, or live source. */
+interface SourceConnection {
+  slug: string;
+  runtimeKey?: string;
+  config?: SdkMcpServerConfig;
+  server?: McpServer;
+  client?: PoolClient;
+  promise: Promise<void>;
+  previousClose: Promise<void>;
+  closePromise?: Promise<void>;
+  transportClosed?: boolean;
+  waitingCalls: number;
+  handshakeLease?: McpRuntimeLease;
+}
+
+/** Retain transport values, not a caller-owned object that may later be mutated. */
+function snapshotConfig(config: SdkMcpServerConfig): SdkMcpServerConfig {
+  if (config.type === 'http' || config.type === 'sse') {
+    return { ...config, headers: config.headers ? { ...config.headers } : undefined };
+  }
+  if (config.type === 'stdio') {
+    return { ...config, args: config.args?.slice(), env: config.env ? { ...config.env } : undefined, envVars: config.envVars?.slice() };
+  }
+  return { ...config };
 }
 
 export class McpClientPool {
@@ -138,8 +179,14 @@ export class McpClientPool {
   /** Cached tool lists keyed by source slug */
   private toolCache = new Map<string, Tool[]>();
 
-  /** Deduplicates reconnects when several queued calls wake for one source. */
-  private connecting = new Map<string, Promise<void>>();
+  /** Owners are installed synchronously, before waiting for slots or handshakes. */
+  private connections = new Map<string, SourceConnection>();
+  private clientConnections = new WeakMap<PoolClient, SourceConnection>();
+  private clientCloses = new WeakMap<PoolClient, Promise<void>>();
+  private closing = new Set<Promise<void>>();
+  private closingBySlug = new Map<string, Promise<void>>();
+  private nextGeneration = 1;
+  private syncGeneration = 0;
 
   /** Proxy tool name → { slug, originalName } (e.g., "mcp__linear__createIssue" → { slug: "linear", originalName: "createIssue" }) */
   private proxyTools = new Map<string, { slug: string; originalName: string }>();
@@ -165,43 +212,99 @@ export class McpClientPool {
     this.sessionPath = options?.sessionPath;
   }
 
-  private runtimeKey(sourceSlug: string): string {
-    return `${this.poolId}:${sourceSlug}`;
+  private closeClient(client: PoolClient): Promise<void> {
+    let closing = this.clientCloses.get(client);
+    if (!closing) {
+      closing = Promise.resolve().then(() => client.close()).catch(() => {});
+      this.clientCloses.set(client, closing);
+    }
+    return closing;
   }
 
-  private async evictRuntime(sourceSlug: string): Promise<void> {
-    const client = this.clients.get(sourceSlug);
-    if (!(client instanceof CraftMcpClient)) return;
-    // Remove it before awaiting close(). A concurrent tool call must not grab
-    // a client whose limiter slot has already been released; it will then
-    // follow the normal queued reconnect path instead.
-    if (this.clients.get(sourceSlug) === client) this.clients.delete(sourceSlug);
-    await client.close().catch(() => {});
-    this.debug(`Soft-evicted idle MCP runtime ${sourceSlug}`);
+  private closeConnection(connection: SourceConnection): Promise<void> {
+    if (connection.closePromise) return connection.closePromise;
+    if (connection.runtimeKey) mcpRuntimeLimiter.cancelQueued(connection.runtimeKey, new McpPoolError('MCP source connection was cancelled'));
+    // Hold the old slot until its resource has closed. A replacement waits for
+    // this close, but never for an obsolete handshake to finish.
+    const closed = Promise.all([
+      connection.previousClose,
+      connection.client ? this.closeClient(connection.client) : Promise.resolve(),
+    ]).then(() => {
+      if (connection.runtimeKey) mcpRuntimeLimiter.unregister(connection.runtimeKey);
+    });
+    connection.closePromise = closed;
+    this.closing.add(closed);
+    this.closingBySlug.set(connection.slug, closed);
+    void closed.then(() => {
+      this.closing.delete(closed);
+      if (this.closingBySlug.get(connection.slug) === closed) this.closingBySlug.delete(connection.slug);
+    });
+    return closed;
   }
 
-  private async ensureClientConnected(sourceSlug: string): Promise<PoolClient | undefined> {
+  private async evictRuntime(connection: SourceConnection): Promise<void> {
+    if (this.connections.get(connection.slug) === connection) {
+      this.connections.delete(connection.slug);
+      this.clients.delete(connection.slug);
+    }
+    // Keep the desired config and discovered tools for lazy reconnects.
+    await this.closeConnection(connection);
+    this.debug(`Soft-evicted idle MCP runtime ${connection.slug}`);
+  }
+
+  private onClientClosed(connection: SourceConnection): void {
+    // An old close notification must never retire a successor or recreate a
+    // source deliberately removed by disconnect()/disconnectAll().
+    if (this.connections.get(connection.slug) !== connection) return;
+    connection.transportClosed = true;
+    this.connections.delete(connection.slug);
+    if (this.clients.get(connection.slug) === connection.client) this.clients.delete(connection.slug);
+    // Keep desired config and catalog for a later new call/connect/sync. There
+    // is no automatic reconnect or replay of the call that observed the exit.
+    void this.closeConnection(connection);
+  }
+
+  private async runWithClient<T>(sourceSlug: string, operation: (client: PoolClient) => Promise<T>): Promise<T> {
+    const run = (client: PoolClient) => {
+      const connection = this.clientConnections.get(client);
+      return connection?.runtimeKey
+        ? mcpRuntimeLimiter.run(connection.runtimeKey, () => operation(client))
+        : operation(client);
+    };
     const existing = this.clients.get(sourceSlug);
-    if (existing) return existing;
-    const config = this.activeConfigs.get(sourceSlug);
-    if (!config) return undefined;
-
-    const pending = this.connecting.get(sourceSlug);
-    if (pending) {
-      await pending;
-      return this.clients.get(sourceSlug);
+    // Claim the live slot synchronously, without a gap where soft eviction can
+    // close it between fetching a client and entering limiter.run().
+    if (existing) return run(existing);
+    let connection = this.connections.get(sourceSlug);
+    let ready = connection?.promise;
+    if (!connection) {
+      const config = this.activeConfigs.get(sourceSlug);
+      if (!config) throw new McpPoolError(`MCP source "${sourceSlug}" is not configured`);
+      ready = this.connect(sourceSlug, config);
+      connection = this.connections.get(sourceSlug);
     }
-    const connection = this.connect(sourceSlug, config);
-    this.connecting.set(sourceSlug, connection);
+    if (!connection) throw new McpPoolError(`MCP source "${sourceSlug}" could not be connected`);
+    // Transfer the handshake reservation to waiting calls. In particular,
+    // softLimit=0 must not evict a freshly reconnected client before its caller
+    // has had a chance to enter run(). All callers share the same handshake.
+    connection.waitingCalls++;
     try {
-      await connection;
+      await ready;
+      const client = this.clients.get(sourceSlug);
+      if (!client || this.connections.get(sourceSlug) !== connection) {
+        throw new McpPoolError(`MCP source "${sourceSlug}" was disconnected during connection`);
+      }
+      return await run(client);
     } finally {
-      if (this.connecting.get(sourceSlug) === connection) this.connecting.delete(sourceSlug);
+      connection.waitingCalls--;
+      if (connection.waitingCalls === 0) {
+        connection.handshakeLease?.release();
+        connection.handshakeLease = undefined;
+      }
     }
-    return this.clients.get(sourceSlug);
   }
 
-  getDiagnostics(): Array<{ sourceSlug: string; transport: 'stdio' | 'http' | 'api'; connected: boolean; toolCount: number }> {
+  getDiagnostics(): Array<{ sourceSlug: string; transport: 'stdio' | 'http' | 'sse' | 'api'; connected: boolean; toolCount: number }> {
     return Array.from(this.clients.entries()).map(([sourceSlug, client]) => ({
       sourceSlug,
       transport: client instanceof CraftMcpClient ? client.transportType : 'api',
@@ -210,7 +313,7 @@ export class McpClientPool {
     }))
   }
 
-  async getDiagnosticsWithMemory(): Promise<Array<{ sourceSlug: string; transport: 'stdio' | 'http' | 'api'; connected: boolean; toolCount: number; pid?: number; rssBytes?: number }>> {
+  async getDiagnosticsWithMemory(): Promise<Array<{ sourceSlug: string; transport: 'stdio' | 'http' | 'sse' | 'api'; connected: boolean; toolCount: number; pid?: number; rssBytes?: number }>> {
     const diagnostics = this.getDiagnostics();
     return Promise.all(diagnostics.map(async diagnostic => {
       const client = this.clients.get(diagnostic.sourceSlug);
@@ -242,6 +345,12 @@ export class McpClientPool {
   protected async registerClient(slug: string, client: PoolClient): Promise<void> {
     // listTools() triggers connect() internally for both CraftMcpClient and ApiSourcePoolClient
     const tools = await client.listTools();
+    const connection = this.clientConnections.get(client);
+    // Never publish an obsolete handshake, including to the workspace cache.
+    if (connection && this.connections.get(slug) !== connection) return;
+    for (const [proxyName, info] of this.proxyTools) {
+      if (info.slug === slug) this.proxyTools.delete(proxyName);
+    }
     this.clients.set(slug, client);
     this.toolCache.set(slug, tools);
     if (this.workspaceRootPath) {
@@ -277,123 +386,134 @@ export class McpClientPool {
   }
 
   /**
-   * Connect to an MCP source server (remote HTTP/SSE/stdio).
-   * If already connected, this is a no-op.
+   * Connect one MCP source, sharing equivalent pending/live connections and
+   * replacing changed transport settings with a new ownership generation.
    */
   async connect(slug: string, config: SdkMcpServerConfig): Promise<void> {
-    if (this.clients.has(slug)) return;
-    const clientConfig = sdkConfigToClientConfig(config);
+    const current = this.connections.get(slug);
+    if (current?.config && !mcpConfigChanged(current.config, config)) return current.promise;
+    const savedConfig = snapshotConfig(config);
+    const clientConfig = sdkConfigToClientConfig(savedConfig);
     if (!clientConfig) {
       this.debug(`Unknown MCP server type for ${slug}: ${(config as { type: string }).type}`);
       return;
     }
-    // Keep the desired config visible while a connection is waiting for a
-    // hard-limit slot. This also lets disconnect() invalidate queued work.
-    this.activeConfigs.set(slug, config);
-    const key = this.runtimeKey(slug);
-    const lease = await mcpRuntimeLimiter.acquire(
-      key,
-      () => this.evictRuntime(slug),
-      async () => {
-        const current = this.clients.get(slug);
-        return current instanceof CraftMcpClient ? getProcessRssBytes(current.getPid()) : undefined;
-      },
-    );
-    if (this.clients.has(slug) || this.activeConfigs.get(slug) !== config) {
-      // The source was connected or removed while this request was queued.
-      lease.release();
-      return;
-    }
-    const client = new CraftMcpClient(clientConfig);
+    // disconnect() invalidates synchronously. Install the successor before any
+    // await so concurrent callers cannot create a second equivalent handshake.
+    const oldConfig = this.activeConfigs.get(slug);
+    const lazyReconnect = !current && !this.clients.has(slug) && oldConfig && !mcpConfigChanged(oldConfig, savedConfig);
+    // Soft eviction deliberately retained the catalog. Keep it visible while
+    // reconnecting so another queued call can still resolve its proxy name.
+    const previousClose = lazyReconnect ? (this.closingBySlug.get(slug) ?? Promise.resolve()) : this.disconnect(slug);
+    const connection: SourceConnection = {
+      slug, config: savedConfig, previousClose, promise: Promise.resolve(), waitingCalls: 0,
+      runtimeKey: `${this.poolId}:${slug}:${this.nextGeneration++}`,
+    };
+    this.connections.set(slug, connection);
+    this.activeConfigs.set(slug, savedConfig);
+    connection.promise = this.openConnection(connection, () => new CraftMcpClient(clientConfig));
+    return connection.promise;
+  }
+
+  private async openConnection(connection: SourceConnection, createClient: () => PoolClient): Promise<void> {
+    let lease: Awaited<ReturnType<typeof mcpRuntimeLimiter.acquire>> | undefined;
     try {
-      await this.registerClient(slug, client);
-      if (this.activeConfigs.get(slug) !== config) {
-        // disconnect() also removes the proxy/tool cache entries registered
-        // above, so a cancelled handshake cannot leave a stale client behind.
-        await this.disconnect(slug);
+      await connection.previousClose;
+      if (this.connections.get(connection.slug) !== connection) return;
+      if (connection.runtimeKey) {
+        lease = await mcpRuntimeLimiter.acquire(
+          connection.runtimeKey,
+          () => this.evictRuntime(connection),
+          async () => connection.client instanceof CraftMcpClient
+            ? getProcessRssBytes(connection.client.getPid()) : undefined,
+        );
+      }
+      if (this.connections.get(connection.slug) !== connection) {
+        // Cancellation may have raced with the limiter granting this lease.
+        if (connection.runtimeKey) mcpRuntimeLimiter.unregister(connection.runtimeKey);
         return;
       }
+      try {
+        const client = createClient();
+        connection.client = client;
+        this.clientConnections.set(client, connection);
+        if (client instanceof CraftMcpClient) client.onclose = () => this.onClientClosed(connection);
+        await this.registerClient(connection.slug, client);
+        // A successful discovery response can race with transport closure
+        // before its continuation publishes readiness. Do not report success
+        // for this dead generation, even if no request remains to reject.
+        if (connection.transportClosed) throw new Error('MCP source closed during connection');
+      } catch (error) {
+        // SDK/provider errors can echo URLs, headers, or response-body secrets.
+        // Do not retain their cause, message, or stack outside this boundary.
+        // The SDK also emits close when initialization fails. Preserve that
+        // failure's diagnosis rather than mistaking its retirement for a
+        // caller superseding or disconnecting this generation.
+        throw new McpPoolError(this.connections.get(connection.slug) === connection || connection.transportClosed
+          ? sanitizeMcpConnectionError(error).message
+          : 'MCP source connection was superseded or disconnected');
+      }
+      if (this.connections.get(connection.slug) !== connection) await this.closeConnection(connection);
     } catch (error) {
-      await client.close().catch(() => {});
-      mcpRuntimeLimiter.unregister(key);
+      if (this.connections.get(connection.slug) === connection) this.connections.delete(connection.slug);
+      await this.closeConnection(connection);
       throw error;
     } finally {
-      lease.release();
+      if (connection.waitingCalls > 0) connection.handshakeLease = lease;
+      else lease?.release();
     }
   }
 
-  /**
-   * Connect to an in-process MCP server (API source) via in-memory transport.
-   */
+  /** Connect an in-process API source using the same ownership rules. */
   async connectInProcess(slug: string, mcpServer: McpServer): Promise<void> {
-    if (this.clients.has(slug)) return;
-    await this.registerClient(slug, new ApiSourcePoolClient(mcpServer));
+    const current = this.connections.get(slug);
+    if (current?.server === mcpServer) return current.promise;
+    // Existing API servers are retained across syncs, which rebuild wrappers.
+    if (current?.server && this.clients.has(slug)) return;
+    const previousClose = this.disconnect(slug);
+    const connection: SourceConnection = {
+      slug, server: mcpServer, previousClose, promise: Promise.resolve(), waitingCalls: 0,
+    };
+    this.connections.set(slug, connection);
+    connection.promise = this.openConnection(connection, () => new ApiSourcePoolClient(mcpServer));
+    return connection.promise;
   }
 
   /**
-   * Ensure one source is connected with the given config, without touching
-   * other pool members (unlike sync(), which reconciles the full set).
-   * Reconnects when the config changed (e.g. refreshed OAuth token), and
-   * applies the same local-MCP gate as sync(): stdio configs are refused
-   * when local MCP is disabled for this workspace.
-   *
-   * @throws Error for stdio configs while local MCP is disabled, and on
-   *   connection failure (propagated from connect()).
+   * Ensure one source without touching other members; enforce the same local
+   * MCP gate as sync() before sharing or creating a connection.
    */
   async ensureConnected(slug: string, config: SdkMcpServerConfig): Promise<void> {
     if (config.type === 'stdio' && this.workspaceRootPath && !isLocalMcpEnabled(this.workspaceRootPath)) {
       throw new Error(`Local MCP is disabled for this workspace — cannot connect stdio source "${slug}"`);
     }
-
-    if (this.clients.has(slug)) {
-      const oldConfig = this.activeConfigs.get(slug);
-      if (!oldConfig || !mcpConfigChanged(oldConfig, config)) return;
-      this.debug(`Config changed for ${slug}, reconnecting with fresh credentials`);
-      await this.disconnect(slug);
-    }
-
     await this.connect(slug, config);
   }
 
-  /**
-   * Disconnect a source and remove its tools from the pool.
-   */
+  /** Invalidate a source before awaiting any transport cleanup. */
   async disconnect(slug: string): Promise<void> {
-    const key = this.runtimeKey(slug);
-    mcpRuntimeLimiter.cancelQueued(key);
+    const connection = this.connections.get(slug);
     const client = this.clients.get(slug);
-    if (client) {
-      await client.close().catch(() => {});
-      this.clients.delete(slug);
-    }
-    if (client instanceof CraftMcpClient) mcpRuntimeLimiter.unregister(key);
-
-    // Remove proxy tool entries for this slug
+    this.connections.delete(slug);
+    this.clients.delete(slug);
     for (const [proxyName, info] of this.proxyTools) {
       if (info.slug === slug) this.proxyTools.delete(proxyName);
     }
     this.toolCache.delete(slug);
     this.activeConfigs.delete(slug);
+    if (connection) await this.closeConnection(connection);
+    else if (client) await this.closeClient(client);
+    else await this.closingBySlug.get(slug);
     this.debug(`Disconnected source: ${slug}`);
   }
 
-  /**
-   * Disconnect all sources and clear all state.
-   */
+  /** Close the current snapshot, including pending handshakes and older closes. */
   async disconnectAll(): Promise<void> {
-    const slugs = new Set([...this.clients.keys(), ...this.activeConfigs.keys()]);
-    const closePromises = Array.from(slugs).map(async slug => {
-      const key = this.runtimeKey(slug);
-      mcpRuntimeLimiter.cancelQueued(key);
-      const client = this.clients.get(slug);
-      if (client instanceof CraftMcpClient) mcpRuntimeLimiter.unregister(key);
-      await client?.close().catch(() => {});
-    });
-    await Promise.all(closePromises);
-    this.clients.clear();
-    this.toolCache.clear();
-    this.proxyTools.clear();
-    this.activeConfigs.clear();
+    ++this.syncGeneration;
+    const slugs = new Set([...this.connections.keys(), ...this.clients.keys(), ...this.activeConfigs.keys()]);
+    const closePromises = Array.from(slugs, slug => this.disconnect(slug));
+    await Promise.all([...closePromises, ...this.closing]);
+    // No post-await clear: a new connection may have been requested meanwhile.
     await mcpRuntimeLimiter.enforceLimits();
     this.debug('Disconnected all MCP clients');
   }
@@ -414,6 +534,7 @@ export class McpClientPool {
     mcpServers: Record<string, SdkMcpServerConfig>,
     apiServers: Record<string, ApiServerConfig> = {}
   ): Promise<string[]> {
+    const generation = ++this.syncGeneration;
     // Filter out stdio sources when local MCP is disabled for this workspace.
     const localEnabled = !this.workspaceRootPath || isLocalMcpEnabled(this.workspaceRootPath);
     const filteredMcp: Record<string, SdkMcpServerConfig> = {};
@@ -437,9 +558,10 @@ export class McpClientPool {
     const failures: string[] = [];
 
     // Disconnect sources no longer desired
-    for (const slug of new Set([...this.clients.keys(), ...this.activeConfigs.keys()])) {
+    for (const slug of new Set([...this.connections.keys(), ...this.clients.keys(), ...this.activeConfigs.keys()])) {
       if (!desiredSlugs.has(slug)) {
         await this.disconnect(slug);
+        if (generation !== this.syncGeneration) return failures;
       }
     }
 
@@ -448,32 +570,23 @@ export class McpClientPool {
     // eviction, so the backend can keep advertising tools while runtimes are
     // swapped in only when a call actually needs them.
     for (const [slug, config] of Object.entries(filteredMcp)) {
-      const oldConfig = this.activeConfigs.get(slug);
-      if (oldConfig && mcpConfigChanged(oldConfig, config)) {
-        this.debug(`Config changed for ${slug}, reconnecting with fresh credentials`);
-        await this.disconnect(slug);
+      try {
+        await this.ensureConnected(slug, config);
+      } catch (err) {
+        this.debug(`Failed to connect MCP source ${slug}: ${err instanceof Error ? err.message : String(err)}`);
+        failures.push(slug);
       }
-      this.activeConfigs.set(slug, config);
-      if (!this.clients.has(slug)) {
-        try {
-          await this.connect(slug, config);
-        } catch (err) {
-          this.debug(`Failed to connect MCP source ${slug}: ${err instanceof Error ? err.message : String(err)}`);
-          failures.push(slug);
-        }
-      }
+      if (generation !== this.syncGeneration) return failures;
     }
 
-    // Connect new API sources
     for (const [slug, server] of apiSlugs) {
-      if (!this.clients.has(slug)) {
-        try {
-          await this.connectInProcess(slug, server);
-        } catch (err) {
-          this.debug(`Failed to connect API source ${slug}: ${err instanceof Error ? err.message : String(err)}`);
-          failures.push(slug);
-        }
+      try {
+        await this.connectInProcess(slug, server);
+      } catch (err) {
+        this.debug(`Failed to connect API source ${slug}: ${err instanceof Error ? err.message : String(err)}`);
+        failures.push(slug);
       }
+      if (generation !== this.syncGeneration) return failures;
     }
 
     await mcpRuntimeLimiter.enforceLimits();
@@ -556,29 +669,11 @@ export class McpClientPool {
 
     const { slug, originalName } = info;
 
-    let client: PoolClient | undefined;
     try {
-      client = await this.ensureClientConnected(slug);
-    } catch (err) {
-      return {
-        content: `MCP client for source "${slug}" could not be connected: ${err instanceof Error ? err.message : String(err)}`,
-        isError: true,
-        sourceSlug: slug,
-      };
-    }
-    if (!client) {
-      return {
-        content: `MCP client for source "${slug}" is not configured or could not be connected.`,
-        isError: true,
-        sourceSlug: slug,
-      };
-    }
-
-    try {
-      const call = () => client.callTool(originalName, args, options)
-      const result = await (client instanceof CraftMcpClient
-        ? mcpRuntimeLimiter.run(this.runtimeKey(slug), call)
-        : call()) as {
+      const result = await this.runWithClient(slug, client => {
+        if (options?.signal?.aborted) throw new McpPoolError('MCP tool request was cancelled before it was sent');
+        return client.callTool(originalName, args, options);
+      }) as {
         content?: Array<{ type: string; text?: unknown; data?: string; mimeType?: string }>;
         isError?: boolean;
       };
@@ -635,7 +730,9 @@ export class McpClientPool {
       };
     } catch (err) {
       return {
-        content: `MCP tool "${originalName}" (source: ${slug}) failed: ${err instanceof Error ? err.message : String(err)}`,
+        content: err instanceof McpPoolError
+          ? err.message
+          : 'MCP tool request failed. The outcome may be unknown; check the remote state before retrying.',
         isError: true,
         sourceSlug: slug,
       };

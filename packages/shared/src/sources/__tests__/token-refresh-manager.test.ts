@@ -302,7 +302,7 @@ describe('OAuth source filtering', () => {
 // --- TokenRefreshManager tests ---
 
 function createMockCredManager(overrides: Partial<SourceCredentialManager> = {}): SourceCredentialManager {
-  return {
+  const result = {
     load: mock(() => Promise.resolve(null)),
     refresh: mock(() => Promise.resolve(null)),
     isExpired: mock(() => true),
@@ -310,6 +310,16 @@ function createMockCredManager(overrides: Partial<SourceCredentialManager> = {})
     markSourceNeedsReauth: mock(() => {}),
     ...overrides,
   } as unknown as SourceCredentialManager;
+  // A real successful refresh saves its token before returning. Model that
+  // persistence in the test double so the post-refresh freshness guard is real.
+  if (overrides.refresh) {
+    const refresh = overrides.refresh;
+    const load = result.load;
+    let refreshedToken: string | null = null;
+    result.refresh = mock(async source => { const token = await refresh(source); if (token) refreshedToken = token; return token; });
+    result.load = mock(async source => { const credential = await load(source); return refreshedToken && credential ? { ...credential, value: refreshedToken } : credential; });
+  }
+  return result;
 }
 
 describe('TokenRefreshManager', () => {
@@ -504,6 +514,7 @@ describe('TokenRefreshManager', () => {
 
       await manager.ensureFreshToken(source);
 
+      // eslint-disable-next-line craft-shared/no-inline-source-auth-check -- Assert the stored status mutation, not effective authorization.
       expect(source.config.isAuthenticated).toBe(false);
       expect(source.config.connectionStatus).toBe('needs_auth');
       expect(source.config.connectionError).toBe('Token refresh failed');
@@ -535,9 +546,10 @@ describe('TokenRefreshManager', () => {
 
       await manager.ensureFreshToken(source);
 
+      // eslint-disable-next-line craft-shared/no-inline-source-auth-check -- Assert the stored status mutation, not effective authorization.
       expect(source.config.isAuthenticated).toBe(false);
       expect(source.config.connectionStatus).toBe('needs_auth');
-      expect(source.config.connectionError).toBe('Refresh error: network down');
+      expect(source.config.connectionError).toBe('Token refresh failed. Check the connection or sign in again.');
       expect(isSourceUsable(source)).toBe(false);
     });
   });

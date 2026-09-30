@@ -67,26 +67,47 @@ export class PageDataStore {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.snapshotPath = snapshotPath ?? join(dirname(dbPath), PAGE_SNAPSHOT_FILENAME);
     this.db = new Database(dbPath);
-    // busy_timeout MUST be set before switching to WAL: on a brand-new db,
-    // concurrent first-writers each need the exclusive lock to flip journal_mode,
-    // and without a timeout that contends immediately as SQLITE_BUSY. Setting it
-    // first makes the WAL switch (and every later write) wait instead of failing
-    // (refresh script vs. agent write_page_data).
-    this.db.exec('PRAGMA busy_timeout = 5000;');
-    this.db.exec('PRAGMA journal_mode = WAL;');
-    this.db.exec(`
+    // SQLite may skip its busy handler when journal_mode needs a lock upgrade.
+    // Retry ONLY these idempotent initialization statements, never user writes.
+    // Keep this bounded initialization in sync with data-write.ts's one-shot.
+    const deadline = performance.now() + 5000;
+    const initialize = (sql: string): void => {
+      for (;;) {
+        const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+        this.db.exec(`PRAGMA busy_timeout = ${Math.min(100, remaining)};`);
+        try {
+          this.db.exec(sql);
+          return;
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'SQLITE_BUSY' || performance.now() >= deadline) {
+            throw error;
+          }
+          Bun.sleepSync(Math.min(20, Math.max(0, deadline - performance.now())));
+        }
+      }
+    };
+    try {
+      initialize('PRAGMA journal_mode = WAL;');
+      initialize(`
       CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      `);
+      initialize(`
       CREATE TABLE IF NOT EXISTS timeseries (
         series TEXT NOT NULL,
         t INTEGER NOT NULL,
         v REAL NOT NULL,
         PRIMARY KEY (series, t)
       ) WITHOUT ROWID;
-    `);
+      `);
+      this.db.exec('PRAGMA busy_timeout = 5000;');
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   // ==========================================================

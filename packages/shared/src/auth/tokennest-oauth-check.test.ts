@@ -32,6 +32,8 @@ describe('TokenNest startup authorization check', () => {
     }
     manager.set = async (_id, value) => { stored = value }
     manager.get = async () => stored
+    manager.getSnapshot = async () => ({ credential: stored, revision: 'dummy-revision' })
+    manager.compareAndSetMany = async (changes) => { stored = changes[0]!.credential; return true }
     globalThis.fetch = (async () => Response.json({ access_token: 'new-token', expires_in: 3600 })) as unknown as typeof fetch
     const credentials = await getValidTokenNestCredentials('tokennest', manager)
     expect(credentials?.scope).toBe(TOKENNEST_OAUTH_CONFIG.scopes)

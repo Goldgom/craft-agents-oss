@@ -3,7 +3,10 @@
  * Wire-format strings (values) are the stable API contract.
  * Key paths are internal and may be reorganized freely.
  */
+import { COLLABORATION_RELAY_RPC } from './collaboration-relay'
+
 export const RPC_CHANNELS = {
+  collaborationRelay: COLLABORATION_RELAY_RPC,
   remote: {
     TEST_CONNECTION: 'remote:testConnection',
   },
@@ -70,6 +73,7 @@ export const RPC_CHANNELS = {
     GET: 'collaborations:get',
     LIST: 'collaborations:list',
     LIST_CANDIDATES: 'collaborations:listCandidates',
+    LIST_WORKSPACES: 'collaborations:listWorkspaces',
     REQUEST: 'collaborations:request',
     REPORT: 'collaborations:report',
     UPDATE_BOARD: 'collaborations:updateBoard',
@@ -329,6 +333,7 @@ export const RPC_CHANNELS = {
     DELETE: 'sources:delete',
     START_OAUTH: 'sources:startOAuth',
     SAVE_CREDENTIALS: 'sources:saveCredentials',
+    SAVE_CREDENTIALS_BATCH: 'sources:saveCredentialsBatch',
     CHANGED: 'sources:changed',
     GET_PERMISSIONS: 'sources:getPermissions',
     GET_MCP_TOOLS: 'sources:getMcpTools',

@@ -257,6 +257,22 @@ export interface ImportRemoteSessionTransferResult {
 /** A session reference is deliberately address based: a member may be local,
  * in another workspace, or represented by a relay on another server. Tokens
  * are never part of this persisted object. */
+/** Select an existing session or create a fresh collaborator on the coordinator server.
+ * The server validates the whole request before creating any new sessions. */
+export type CollaborationSessionSelection = {
+  workspaceId: string
+  name?: string
+  serverUrl?: string
+} & (
+  | { sessionId: string; createNew?: false }
+  | { createNew: true; sessionId?: never }
+)
+
+export interface CollaborationWorkspace {
+  id: string
+  name: string
+}
+
 export interface CollaborationMember {
   id: string
   sessionId: string
@@ -334,6 +350,12 @@ export interface CollaborationChangeResult {
   group: CollaborationGroup
   /** False when the same operationId was already committed. */
   applied: boolean
+}
+
+/** Additive creation response metadata; never persisted with the group.
+ * Older servers return the raw group without an activation status. */
+export interface CollaborationCreateResult extends CollaborationGroup {
+  activationStatus?: 'started' | 'failed'
 }
 
 // ---------------------------------------------------------------------------

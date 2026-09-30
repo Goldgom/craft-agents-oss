@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { AgentEvent, AgentEventUsage } from '@craft-agent/core/types';
 import {
   SESSION_TOOL_REGISTRY,
@@ -8,7 +9,7 @@ import type { Workspace } from '../config/storage.ts';
 import { getBrowserToolEnabled, getLlmConnection } from '../config/storage.ts';
 import { getModelPromptSettings, resolveAutoCompactionTokenLimit } from '../config/llm-connections.ts';
 import { getCoAuthorPreference } from '../config/preferences.ts';
-import { getCredentialManager } from '../credentials/index.ts';
+import { getCredentialManager, CredentialChangedError } from '../credentials/index.ts';
 import { refreshChatGptTokens } from '../auth/chatgpt-oauth.ts';
 import { getModelById } from '../config/models.ts';
 import { getSessionDataPath, getSessionPath, getSessionPlansPath } from '../sessions/storage.ts';
@@ -116,6 +117,7 @@ export class NativeCodexAgent extends BaseAgent {
   /** Dynamic tools belong to the app-server process that started the thread. */
   private threadClient: NativeCodexAppServerClient | null = null;
   private authenticated = false;
+  private authenticatedCredentialFingerprint: string | null = null;
   private nativeToolAliases = new Map<string, string>();
   private ignoredTurnIds = new Set<string>();
   private lastUsage?: AgentEventUsage;
@@ -252,6 +254,7 @@ export class NativeCodexAgent extends BaseAgent {
       const apiKey = await credentials.getLlmApiKey(slug);
       if (!apiKey) return false;
       await client.request('account/login/start', { type: 'apiKey', apiKey });
+      this.authenticatedCredentialFingerprint = createHash('sha256').update(apiKey).digest('hex');
       return true;
     }
     if (slug && this.config.authType === 'oauth') {
@@ -265,10 +268,29 @@ export class NativeCodexAgent extends BaseAgent {
         chatgptAccountId,
         chatgptPlanType: null,
       });
+      this.authenticatedCredentialFingerprint = createHash('sha256').update(oauth.accessToken).digest('hex');
       return true;
     }
     const result = await client.request<{ account: unknown | null; requiresOpenaiAuth: boolean }>('account/read', {});
     return !!result.account || !result.requiresOpenaiAuth;
+  }
+
+  private async synchronizeStoredAuthBeforeTurn(client: NativeCodexAppServerClient): Promise<void> {
+    const slug = this.config.connectionSlug ?? this.config.session?.llmConnection;
+    if (!slug || !['api_key', 'api_key_with_endpoint', 'oauth'].includes(this.config.authType ?? '')) return;
+    const id = { type: this.config.authType === 'oauth' ? 'llm_oauth' as const : 'llm_api_key' as const, connectionSlug: slug };
+    const snapshot = await getCredentialManager().getSnapshot(id);
+    if (!snapshot.credential?.value) {
+      this.authenticated = false;
+      throw new Error('Stored credentials are unavailable. Update Credentials in Settings before the next request.');
+    }
+    const fingerprint = createHash('sha256').update(snapshot.credential.value).digest('hex');
+    if (fingerprint !== this.authenticatedCredentialFingerprint) this.authenticated = await this.authenticateClient(client);
+    const current = await getCredentialManager().getSnapshot(id);
+    if (!current.credential?.value || createHash('sha256').update(current.credential.value).digest('hex') !== this.authenticatedCredentialFingerprint) {
+      this.authenticated = false;
+      throw new CredentialChangedError();
+    }
   }
 
   private buildDynamicTools(): DynamicToolSpec[] {
@@ -392,6 +414,7 @@ export class NativeCodexAgent extends BaseAgent {
     this.lastUsage = undefined;
     try {
       const client = await this.ensureClient();
+      await this.synchronizeStoredAuthBeforeTurn(client);
       if (!this.authenticated) this.authenticated = await this.authenticateClient(client);
       if (!this.authenticated) throw new Error('Codex authentication is unavailable');
       const previousThreadId = this.codexThreadId;
@@ -877,7 +900,9 @@ export class NativeCodexAgent extends BaseAgent {
     const slug = this.config.connectionSlug ?? this.config.session?.llmConnection;
     if (!slug) return client.respondError(request.id, 'Missing connection for token refresh');
     const manager = getCredentialManager();
-    const oauth = await manager.getLlmOAuth(slug);
+    const id = { type: 'llm_oauth' as const, connectionSlug: slug };
+    const snapshot = await manager.getSnapshot(id);
+    const oauth = snapshot.credential;
     if (!oauth?.refreshToken) return client.respondError(request.id, 'ChatGPT refresh token is unavailable');
     let refresh = NativeCodexAgent.tokenRefreshByConnection.get(slug);
     if (!refresh) {
@@ -889,7 +914,10 @@ export class NativeCodexAgent extends BaseAgent {
         );
         const chatgptAccountId = extractChatGptAccountId(refreshed.accessToken);
         if (!chatgptAccountId) throw new Error('Refreshed token has no ChatGPT account id');
-        await manager.setLlmOAuth(slug, refreshed);
+        if (!await manager.compareAndSetMany([{ id, expectedRevision: snapshot.revision, credential: {
+          ...snapshot.credential, value: refreshed.accessToken, refreshToken: refreshed.refreshToken,
+          expiresAt: refreshed.expiresAt, idToken: refreshed.idToken,
+        } }])) throw new CredentialChangedError();
         return { accessToken: refreshed.accessToken, chatgptAccountId };
       })();
       NativeCodexAgent.tokenRefreshByConnection.set(slug, refresh);
@@ -898,7 +926,9 @@ export class NativeCodexAgent extends BaseAgent {
       const refreshed = await refresh;
       await client.respond(request.id, { ...refreshed, chatgptPlanType: null });
     } catch (error) {
-      await client.respondError(request.id, error instanceof Error ? error.message : String(error));
+      const current = await manager.getSnapshot(id);
+      const changed = error instanceof CredentialChangedError || current.revision !== snapshot.revision;
+      await client.respondError(request.id, changed ? new CredentialChangedError().message : 'ChatGPT token refresh failed. Try again.');
     } finally {
       if (NativeCodexAgent.tokenRefreshByConnection.get(slug) === refresh) {
         NativeCodexAgent.tokenRefreshByConnection.delete(slug);

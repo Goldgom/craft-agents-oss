@@ -3,7 +3,8 @@ import type { ToolResult } from '../types.ts';
 import { successResponse, errorResponse } from '../response.ts';
 
 export interface SendAgentMessageArgs {
-  sessionId: string;
+  sessionId?: string;
+  targetMemberId?: string;
   message: string;
   attachments?: Array<{ path: string; name?: string }>;
 }
@@ -12,6 +13,15 @@ export async function handleSendAgentMessage(
   ctx: SessionToolContext,
   args: SendAgentMessageArgs
 ): Promise<ToolResult> {
+  if (args.targetMemberId !== undefined) {
+    if (args.sessionId !== undefined || !args.targetMemberId.trim() || args.attachments?.length || !args.message?.trim()) return errorResponse('Supply only targetMemberId and a non-empty message; publish shared files separately.');
+    if (!ctx.sendCollaborationMessage) return errorResponse('Multi-server collaboration messaging is unavailable.');
+    try {
+      const result = await ctx.sendCollaborationMessage(args.targetMemberId, args.message);
+      if (result.delivery === 'queued-for-relay') return successResponse(`Message saved for relay to member ${args.targetMemberId}. Keep the Electron app running. Do not repeat this operation${result.operationId ? ` (${result.operationId})` : ''}; acceptance and completion are separate.`);
+      return successResponse(`Message ${result.delivery} for member ${args.targetMemberId}; this is acceptance, not completion.`);
+    } catch { return errorResponse('Collaboration message could not be accepted. Check group membership and relay status.'); }
+  }
   if (!ctx.sendAgentMessage) {
     return errorResponse('send_agent_message is not available in this context.');
   }

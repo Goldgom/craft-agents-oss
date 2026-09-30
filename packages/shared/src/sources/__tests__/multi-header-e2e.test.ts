@@ -167,9 +167,9 @@ describe('Multi-header auth end-to-end', () => {
       value: 'not-valid-json{{{',
     });
 
-    // Should fall through and return raw string (not crash)
+    // Reject malformed secrets without logging or transmitting their contents
     const credential = await credManager.getApiCredential(datadogLikeSource);
-    expect(credential).toBe('not-valid-json{{{');
+    expect(credential).toBeNull();
 
     loadSpy.mockRestore();
   });
@@ -187,9 +187,8 @@ describe('Multi-header auth end-to-end', () => {
 
     const credential = await credManager.getApiCredential(datadogLikeSource);
 
-    // Should return raw JSON string since not all required headers present
-    expect(credential).toBe(storedCredential);
-    expect(typeof credential).toBe('string');
+    // Incomplete secrets must not fall through as a raw bearer/header value.
+    expect(credential).toBeNull();
 
     loadSpy.mockRestore();
   });

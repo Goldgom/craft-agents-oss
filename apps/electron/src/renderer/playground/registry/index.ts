@@ -26,6 +26,7 @@ import { imageSupportComponents } from './image-support'
 import { mobileWebUIComponents } from './mobile-webui'
 import { kanbanComponents } from './kanban'
 import { taskEditorComponents } from './task-editor'
+import { collaborationComponents } from './collaboration'
 
 export * from './types'
 
@@ -47,6 +48,7 @@ export const componentRegistry: ComponentEntry[] = [
   ...sessionListComponents,
   ...kanbanComponents,
   ...taskEditorComponents,
+  ...collaborationComponents,
   ...projectColorsComponents,
   ...editPopoverComponents,
   ...automationComponents,

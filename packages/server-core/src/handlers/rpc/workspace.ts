@@ -7,6 +7,7 @@ import { perf } from '@craft-agent/shared/utils'
 import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { isValidWorkspaceRootPath } from '../../utils/path-validation'
+import { redactWorkspaceRemoteCredentials, validateRemoteWorkspaceInput } from './workspace-remote-input'
 
 export const CORE_HANDLED_CHANNELS = [
   RPC_CHANNELS.workspaces.GET,
@@ -45,11 +46,10 @@ export const CORE_HANDLED_CHANNELS = [
 
 export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager } = deps
-  const windowManager = deps.windowManager
 
   // Get workspaces (LOCAL_ONLY — includes rootPath for local Electron renderer)
   server.handle(RPC_CHANNELS.workspaces.GET, async () => {
-    return sessionManager.getWorkspaces()
+    return sessionManager.getWorkspaces().map(redactWorkspaceRemoteCredentials)
   })
 
   // Create a new workspace at a folder path (Obsidian-style: folder IS the workspace)
@@ -60,11 +60,14 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
       throw new Error(validation.reason!)
     }
 
-    const workspace = addWorkspace({ name, rootPath, ...(remoteServer && { remoteServer }) })
+    const validatedRemote = remoteServer ? validateRemoteWorkspaceInput(remoteServer) : undefined
+    const preparedRemote = validatedRemote && deps.prepareRemoteWorkspaceConfig
+      ? await deps.prepareRemoteWorkspaceConfig(validatedRemote) : validatedRemote
+    const workspace = addWorkspace({ name, rootPath, ...(preparedRemote && { remoteServer: preparedRemote }) })
     // Make it active
     setActiveWorkspace(workspace.id)
-    deps.platform.logger.info(`Created workspace "${name}" at ${rootPath}${remoteServer ? ` (remote: ${remoteServer.url})` : ''}`)
-    return workspace
+    deps.platform.logger.info(`Created workspace "${name}" at ${rootPath}${remoteServer ? ' (remote)' : ''}`)
+    return redactWorkspaceRemoteCredentials(workspace)
   })
 
   // Check if a workspace slug already exists (for validation before creation)
@@ -77,14 +80,22 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
 
   // Update remote server config for an existing workspace (reconnect flow)
   server.handle(RPC_CHANNELS.workspaces.UPDATE_REMOTE, async (_ctx, workspaceId: string, remoteServer: { url: string; token: string; remoteWorkspaceId: string }) => {
-    updateWorkspaceRemoteServer(workspaceId, remoteServer)
-    deps.platform.logger.info(`Updated remote server for workspace ${workspaceId}: ${remoteServer.url}`)
+    const existing = getWorkspaceByNameOrId(workspaceId)
+    if (!existing || existing.id !== workspaceId) throw new Error('Workspace not found')
+    const validated = validateRemoteWorkspaceInput(remoteServer, existing.remoteServer)
+    const prepared = deps.prepareRemoteWorkspaceConfig ? await deps.prepareRemoteWorkspaceConfig(validated, workspaceId) : validated
+    // Do not overwrite a concurrent config change after asynchronous staging.
+    if (JSON.stringify(getWorkspaceByNameOrId(workspaceId)?.remoteServer) !== JSON.stringify(existing.remoteServer)) {
+      throw new Error('Remote workspace configuration changed. Retry.')
+    }
+    updateWorkspaceRemoteServer(workspaceId, prepared)
+    deps.platform.logger.info(`Updated remote server for workspace ${workspaceId}`)
     return { success: true }
   })
 
   // Get workspace ID for the calling window
   server.handle(RPC_CHANNELS.window.GET_WORKSPACE, (ctx) => {
-    const workspaceId = ctx.workspaceId ?? windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
+    const workspaceId = ctx.workspaceId
     // Set up ConfigWatcher for live updates (labels, statuses, sources, themes)
     if (workspaceId) {
       const workspace = getWorkspaceByNameOrId(workspaceId)
@@ -104,51 +115,16 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
   server.handle(RPC_CHANNELS.window.SWITCH_WORKSPACE, async (ctx, workspaceId: string) => {
     const end = perf.start('ipc.switchWorkspace', { workspaceId })
 
-    // Keep WS push routing in sync (works for both GUI and headless)
+    const workspace = typeof workspaceId === 'string' ? getWorkspaceByNameOrId(workspaceId) : undefined
+    if (!workspace || workspace.id !== workspaceId) throw new Error('Workspace not found')
+    // A handshake webContentsId is caller-controlled. It never grants authority
+    // to move a desktop window or obtain that window's remote credentials.
     server.updateClientWorkspace?.(ctx.clientId, workspaceId)
-
-    if (windowManager) {
-      const wcId = ctx.webContentsId!
-
-      // Get the old workspace ID before updating
-      const oldWorkspaceId = windowManager.getWorkspaceForWindow(wcId)
-
-      // Update the window's workspace mapping
-      const updated = windowManager.updateWindowWorkspace(wcId, workspaceId)
-
-      // If update failed, the window may have been re-created (e.g., after refresh)
-      // Try to register it
-      if (!updated) {
-        const win = windowManager.getWindowByWebContentsId(wcId)
-        if (win) {
-          windowManager.registerWindow(win, workspaceId)
-          deps.platform.logger.info(`Re-registered window ${wcId} for workspace ${workspaceId}`)
-        }
-      }
-
-      // Clear activeViewingSession for old workspace if no other windows are viewing it
-      // This ensures read/unread state is correct after workspace switch
-      if (oldWorkspaceId && oldWorkspaceId !== workspaceId) {
-        const otherWindows = windowManager.getAllWindowsForWorkspace(oldWorkspaceId)
-        if (otherWindows.length === 0) {
-          sessionManager.clearActiveViewingSession(oldWorkspaceId)
-        }
-      }
-    }
-
-    // Set up ConfigWatcher for the new workspace
-    const workspace = getWorkspaceByNameOrId(workspaceId)
-    if (workspace) {
-      sessionManager.setupConfigWatcher(workspace.rootPath, workspaceId)
-    }
+    sessionManager.setupConfigWatcher(workspace.rootPath, workspaceId)
     end()
 
-    // Return connection details so the preload RoutedClient can decide
-    // whether to connect directly to a remote server for this workspace.
-    return {
-      workspaceId,
-      remoteServer: workspace?.remoteServer ?? null,
-    }
+    // Native Electron IPC supplies private routing details to its own preload.
+    return { workspaceId, remoteServer: null }
   })
 
   // ============================================================

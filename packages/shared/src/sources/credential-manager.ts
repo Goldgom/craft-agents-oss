@@ -24,8 +24,9 @@ import {
   type MicrosoftService,
 } from './types.ts';
 import { buildAuthorizationHeader } from './api-tools.ts';
+import { resolve } from 'node:path';
 import type { CredentialId, StoredCredential } from '../credentials/types.ts';
-import { getCredentialManager } from '../credentials/index.ts';
+import { getCredentialManager, CredentialChangedError } from '../credentials/index.ts';
 import { CraftOAuth, getMcpBaseUrl, prepareMcpOAuth, exchangeMcpOAuth, type OAuthCallbacks, type OAuthTokens } from '../auth/oauth.ts';
 import { type OAuthSessionContext } from '../auth/types.ts';
 import { OAUTH_RELAY_CALLBACK_URL, wrapPreparedOAuthFlowForRelay } from '../auth/oauth-relay.ts';
@@ -61,6 +62,11 @@ import {
 } from '../auth/generic-oauth.ts';
 import { debug } from '../utils/debug.ts';
 import { markSourceAuthenticated, loadSourceConfig, saveSourceConfig } from './storage.ts';
+
+// Provider responses may echo access tokens, refresh tokens, or client secrets.
+const TOKEN_REFRESH_FAILURE = 'Token refresh failed. Check the connection or sign in again.';
+
+interface SourceRefreshSnapshot { id: CredentialId; revision: string; credential: StoredCredential; }
 
 /**
  * Result of authentication attempt
@@ -184,18 +190,14 @@ export class SourceCredentialManager {
       sourceId: source.config.slug,
     };
 
-    // Try OAuth first
-    const oauthCreds = await manager.get({ type: 'source_oauth', ...baseId });
-    if (oauthCreds?.value) {
-      debug(`[SourceCredentialManager] Found source_oauth for ${source.config.slug}`);
-      return oauthCreds;
-    }
-
-    // Fall back to bearer
-    const bearerCreds = await manager.get({ type: 'source_bearer', ...baseId });
-    if (bearerCreds?.value) {
-      debug(`[SourceCredentialManager] Found source_bearer for ${source.config.slug}`);
-      return bearerCreds;
+    // Explicit auth mode must win over a stale credential from a previous
+    // mode. Fallback remains for legacy sources without an explicit authType.
+    const types: Array<'source_oauth' | 'source_bearer'> = source.config.mcp?.authType === 'bearer'
+      ? ['source_bearer']
+      : source.config.mcp?.authType === 'oauth' ? ['source_oauth'] : ['source_oauth', 'source_bearer'];
+    for (const type of types) {
+      const credential = await manager.get({ type, ...baseId });
+      if (credential?.value) return credential;
     }
 
     debug(`[SourceCredentialManager] No credential found for MCP source ${source.config.slug}`);
@@ -259,32 +261,24 @@ export class SourceCredentialManager {
     // Check for multi-header auth (JSON with header names as keys)
     // Works for both API sources (api.headerNames) and MCP sources (mcp.headerNames)
     if (headerNames?.length) {
-      debug(`[SourceCredentialManager] Attempting multi-header parse for ${source.config.slug}, raw value length=${cred.value.length}`);
       try {
         const parsed = JSON.parse(cred.value);
-        debug(`[SourceCredentialManager] Parsed JSON keys: ${Object.keys(parsed).join(', ')}`);
-        // Validate all required headers are present
-        const hasAllHeaders = headerNames.every((h) => h in parsed);
-        debug(`[SourceCredentialManager] hasAllHeaders=${hasAllHeaders}`);
-        if (hasAllHeaders) {
-          return parsed as MultiHeaderCredential;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          && headerNames.every(h => Object.hasOwn(parsed, h) && typeof parsed[h] === 'string' && parsed[h].trim() && !/[\x00-\x1f\x7f\u0100-\uffff]/.test(parsed[h]))) {
+          return Object.fromEntries(headerNames.map(h => [h, parsed[h]]));
         }
-      } catch (e) {
-        // Not JSON, fall through to other auth types
-        debug(`[SourceCredentialManager] JSON parse failed: ${e}`);
-      }
+      } catch { /* Invalid stored values are not logged or sent as auth headers. */ }
+      return null;
     }
 
-    // Check for basic auth (JSON with username/password)
     if (source.config.api?.authType === 'basic') {
       try {
         const parsed = JSON.parse(cred.value);
-        if (parsed.username && parsed.password) {
-          return parsed as BasicAuthCredential;
+        if (parsed && typeof parsed.username === 'string' && parsed.username.trim() && typeof parsed.password === 'string') {
+          return { username: parsed.username, password: parsed.password };
         }
-      } catch {
-        // Not JSON, treat as regular credential
-      }
+      } catch { /* Never log malformed credential contents. */ }
+      return null;
     }
 
     return cred.value;
@@ -343,7 +337,7 @@ export class SourceCredentialManager {
    * Check if a credential is expired
    */
   isExpired(credential: StoredCredential): boolean {
-    if (!credential.expiresAt) return false;
+    if (credential.expiresAt === undefined) return false;
     return Date.now() > credential.expiresAt;
   }
 
@@ -351,7 +345,7 @@ export class SourceCredentialManager {
    * Check if a credential needs refresh (within 5 min of expiry)
    */
   needsRefresh(credential: StoredCredential): boolean {
-    if (!credential.expiresAt) return false;
+    if (credential.expiresAt === undefined) return false;
     const fiveMinutes = 5 * 60 * 1000;
     return Date.now() > credential.expiresAt - fiveMinutes;
   }
@@ -901,12 +895,12 @@ export class SourceCredentialManager {
    * - Microsoft rotates refresh tokens, so concurrent refreshes could cause token invalidation
    */
   async refresh(source: LoadedSource): Promise<string | null> {
-    const key = source.config.slug;
+    const key = JSON.stringify([resolve(source.workspaceRootPath), source.workspaceId, source.config.slug]);
 
     // Return existing refresh promise if one is in progress
     const pending = this.pendingRefreshes.get(key);
     if (pending) {
-      debug(`[SourceCredentialManager] Reusing pending refresh for ${key}`);
+      debug(`[SourceCredentialManager] Reusing pending refresh for ${source.config.slug}`);
       return pending;
     }
 
@@ -922,9 +916,43 @@ export class SourceCredentialManager {
   /**
    * Internal refresh implementation
    */
+  private async snapshotForRefresh(source: LoadedSource): Promise<SourceRefreshSnapshot | null> {
+    if (source.config.type === 'api' && source.config.api?.authType === 'none') return null;
+    const manager = getCredentialManager();
+    let ids = [this.getCredentialId(source)];
+    let requiresValue = false;
+    if (source.config.type === 'mcp' && source.config.mcp?.transport !== 'stdio' && source.config.mcp?.authType !== 'none') {
+      requiresValue = true;
+      const types: Array<'source_oauth' | 'source_bearer'> = source.config.mcp?.authType === 'bearer'
+        ? ['source_bearer'] : source.config.mcp?.authType === 'oauth' ? ['source_oauth'] : ['source_oauth', 'source_bearer'];
+      ids = types.map(type => ({ type, workspaceId: source.workspaceId, sourceId: source.config.slug }));
+    }
+    for (const id of ids) {
+      const snapshot = await manager.getSnapshot(id);
+      if (snapshot.credential && (!requiresValue || snapshot.credential.value)) return { id, ...snapshot, credential: snapshot.credential };
+    }
+    return null;
+  }
+
+  private async saveRefreshed(snapshot: SourceRefreshSnapshot, credential: StoredCredential): Promise<void> {
+    if (!await getCredentialManager().compareAndSetMany([{ id: snapshot.id, expectedRevision: snapshot.revision, credential }])) {
+      throw new CredentialChangedError();
+    }
+  }
+
+  private async refreshFailed(source: LoadedSource, snapshot: SourceRefreshSnapshot, error: unknown): Promise<null> {
+    if (error instanceof CredentialChangedError) throw error;
+    // A rejected old grant must never mark a replacement/deleted credential as invalid.
+    const current = await getCredentialManager().getSnapshot(snapshot.id);
+    if (current.revision !== snapshot.revision) throw new CredentialChangedError();
+    this.markSourceNeedsReauth(source, TOKEN_REFRESH_FAILURE);
+    return null;
+  }
+
   private async doRefresh(source: LoadedSource): Promise<string | null> {
-    const cred = await this.load(source);
-    if (!cred) {
+    const snapshot = await this.snapshotForRefresh(source);
+    const cred = snapshot?.credential;
+    if (!cred || !snapshot) {
       debug(`[SourceCredentialManager] No credential for ${source.config.slug}`);
       return null;
     }
@@ -933,7 +961,7 @@ export class SourceCredentialManager {
     // These sources may not have a separate refreshToken; they use the current
     // access token for renewal.
     if (hasRenewEndpoint(source)) {
-      return this.refreshApiRenew(source, cred);
+      return this.refreshApiRenew(source, cred, snapshot);
     }
 
     // For all other refresh strategies, a refreshToken is required.
@@ -944,30 +972,30 @@ export class SourceCredentialManager {
 
     // Google API refresh
     if (source.config.provider === 'google') {
-      return this.refreshGoogle(source, cred);
+      return this.refreshGoogle(source, cred, snapshot);
     }
 
     // Slack API refresh
     if (source.config.provider === 'slack') {
-      return this.refreshSlack(source, cred);
+      return this.refreshSlack(source, cred, snapshot);
     }
 
     // Microsoft API refresh
     if (source.config.provider === 'microsoft') {
-      return this.refreshMicrosoft(source, cred);
+      return this.refreshMicrosoft(source, cred, snapshot);
     }
 
     // Generic OAuth refresh
     if (source.config.api?.authType === 'oauth') {
       if (source.config.api?.oauth?.tokenUrl) {
         // Static config: tokenUrl from config.json
-        return this.refreshGeneric(source, cred);
+        return this.refreshGeneric(source, cred, snapshot);
       }
       // Auto-discovered: re-discover token endpoint from baseUrl via MCP OAuth refresh
       if (source.config.api?.baseUrl && cred.clientId) {
         return this.refreshMcp(
           { ...source, config: { ...source.config, type: 'mcp', mcp: { url: source.config.api.baseUrl, authType: 'oauth' } } },
-          cred,
+          cred, snapshot,
         );
       }
       return null;
@@ -975,7 +1003,7 @@ export class SourceCredentialManager {
 
     // MCP refresh
     if (source.config.type === 'mcp' && source.config.mcp?.url) {
-      return this.refreshMcp(source, cred);
+      return this.refreshMcp(source, cred, snapshot);
     }
 
     return null;
@@ -988,6 +1016,7 @@ export class SourceCredentialManager {
   private async refreshApiRenew(
     source: LoadedSource,
     cred: StoredCredential,
+    snapshot: SourceRefreshSnapshot,
   ): Promise<string | null> {
     const renewConfig = source.config.api?.renewEndpoint;
     if (!renewConfig?.path) return null;
@@ -1050,7 +1079,7 @@ export class SourceCredentialManager {
       // trigger refresh on next session start (safe but noisy).
 
       // 7. Save updated credential
-      await this.save(source, {
+      await this.saveRefreshed(snapshot, {
         ...cred,
         value: newToken,
         ...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -1059,10 +1088,8 @@ export class SourceCredentialManager {
       debug(`[SourceCredentialManager] Refreshed token via renew endpoint for ${source.config.slug}`);
       return newToken;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      debug(`[SourceCredentialManager] Renew endpoint refresh failed for ${source.config.slug}:`, error);
-      this.markSourceNeedsReauth(source, `Token refresh failed: ${errorMsg}`);
-      return null;
+      debug(`[SourceCredentialManager] Renew endpoint refresh failed for ${source.config.slug}`);
+      return this.refreshFailed(source, snapshot, error);
     }
   }
 
@@ -1071,7 +1098,8 @@ export class SourceCredentialManager {
    */
   private async refreshGoogle(
     source: LoadedSource,
-    cred: StoredCredential
+    cred: StoredCredential,
+    snapshot: SourceRefreshSnapshot,
   ): Promise<string | null> {
     try {
       // Pass stored credentials (or fall back to env vars via undefined)
@@ -1082,7 +1110,7 @@ export class SourceCredentialManager {
       );
 
       // Update stored credentials
-      await this.save(source, {
+      await this.saveRefreshed(snapshot, {
         ...cred,
         value: result.accessToken,
         expiresAt: result.expiresAt,
@@ -1091,10 +1119,8 @@ export class SourceCredentialManager {
       debug(`[SourceCredentialManager] Refreshed Google token for ${source.config.slug}`);
       return result.accessToken;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      debug(`[SourceCredentialManager] Google token refresh failed:`, error);
-      this.markSourceNeedsReauth(source, `Token refresh failed: ${errorMsg}`);
-      return null;
+      debug(`[SourceCredentialManager] Google token refresh failed`);
+      return this.refreshFailed(source, snapshot, error);
     }
   }
 
@@ -1103,13 +1129,14 @@ export class SourceCredentialManager {
    */
   private async refreshSlack(
     source: LoadedSource,
-    cred: StoredCredential
+    cred: StoredCredential,
+    snapshot: SourceRefreshSnapshot,
   ): Promise<string | null> {
     try {
       const result = await refreshSlackToken(cred.refreshToken!, cred.clientId);
 
       // Update stored credentials
-      await this.save(source, {
+      await this.saveRefreshed(snapshot, {
         ...cred,
         value: result.accessToken,
         expiresAt: result.expiresAt,
@@ -1118,10 +1145,8 @@ export class SourceCredentialManager {
       debug(`[SourceCredentialManager] Refreshed Slack token for ${source.config.slug}`);
       return result.accessToken;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      debug(`[SourceCredentialManager] Slack token refresh failed:`, error);
-      this.markSourceNeedsReauth(source, `Token refresh failed: ${errorMsg}`);
-      return null;
+      debug(`[SourceCredentialManager] Slack token refresh failed`);
+      return this.refreshFailed(source, snapshot, error);
     }
   }
 
@@ -1130,13 +1155,14 @@ export class SourceCredentialManager {
    */
   private async refreshMicrosoft(
     source: LoadedSource,
-    cred: StoredCredential
+    cred: StoredCredential,
+    snapshot: SourceRefreshSnapshot,
   ): Promise<string | null> {
     try {
       const result = await refreshMicrosoftToken(cred.refreshToken!);
 
       // Update stored credentials (Microsoft may rotate refresh tokens)
-      await this.save(source, {
+      await this.saveRefreshed(snapshot, {
         ...cred,
         value: result.accessToken,
         refreshToken: result.refreshToken || cred.refreshToken,
@@ -1146,10 +1172,8 @@ export class SourceCredentialManager {
       debug(`[SourceCredentialManager] Refreshed Microsoft token for ${source.config.slug}`);
       return result.accessToken;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      debug(`[SourceCredentialManager] Microsoft token refresh failed:`, error);
-      this.markSourceNeedsReauth(source, `Token refresh failed: ${errorMsg}`);
-      return null;
+      debug(`[SourceCredentialManager] Microsoft token refresh failed`);
+      return this.refreshFailed(source, snapshot, error);
     }
   }
 
@@ -1179,12 +1203,12 @@ export class SourceCredentialManager {
   private async refreshGeneric(
     source: LoadedSource,
     cred: StoredCredential,
+    snapshot: SourceRefreshSnapshot,
   ): Promise<string | null> {
     const oauthConfig = source.config.api?.oauth;
     if (!oauthConfig?.tokenUrl) {
       debug(`[SourceCredentialManager] No tokenUrl in config for generic OAuth refresh`);
-      this.markSourceNeedsReauth(source, 'Missing tokenUrl in api.oauth config');
-      return null;
+      return this.refreshFailed(source, snapshot, new Error('Missing token endpoint'));
     }
 
     try {
@@ -1195,7 +1219,7 @@ export class SourceCredentialManager {
         cred.clientSecret || oauthConfig.clientSecret,
       );
 
-      await this.save(source, {
+      await this.saveRefreshed(snapshot, {
         ...cred,
         value: result.accessToken,
         refreshToken: result.refreshToken || cred.refreshToken,
@@ -1205,10 +1229,8 @@ export class SourceCredentialManager {
       debug(`[SourceCredentialManager] Refreshed generic OAuth token for ${source.config.slug}`);
       return result.accessToken;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      debug(`[SourceCredentialManager] Generic OAuth token refresh failed:`, error);
-      this.markSourceNeedsReauth(source, `Token refresh failed: ${errorMsg}`);
-      return null;
+      debug(`[SourceCredentialManager] Generic OAuth token refresh failed`);
+      return this.refreshFailed(source, snapshot, error);
     }
   }
 
@@ -1217,12 +1239,12 @@ export class SourceCredentialManager {
    */
   private async refreshMcp(
     source: LoadedSource,
-    cred: StoredCredential
+    cred: StoredCredential,
+    snapshot: SourceRefreshSnapshot,
   ): Promise<string | null> {
     if (!cred.clientId) {
       debug(`[SourceCredentialManager] No clientId for MCP token refresh`);
-      this.markSourceNeedsReauth(source, 'Missing clientId for token refresh');
-      return null;
+      return this.refreshFailed(source, snapshot, new Error('Missing refresh client'));
     }
 
     try {
@@ -1244,7 +1266,7 @@ export class SourceCredentialManager {
       const tokens = await oauth.refreshAccessToken(cred.refreshToken!, cred.clientId);
 
       // Update stored credentials
-      await this.save(source, {
+      await this.saveRefreshed(snapshot, {
         ...cred,
         value: tokens.accessToken,
         refreshToken: tokens.refreshToken || cred.refreshToken,
@@ -1254,10 +1276,8 @@ export class SourceCredentialManager {
       debug(`[SourceCredentialManager] Refreshed MCP token for ${source.config.slug}`);
       return tokens.accessToken;
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      debug(`[SourceCredentialManager] MCP token refresh failed:`, error);
-      this.markSourceNeedsReauth(source, `Token refresh failed: ${errorMsg}`);
-      return null;
+      debug(`[SourceCredentialManager] MCP token refresh failed`);
+      return this.refreshFailed(source, snapshot, error);
     }
   }
 }

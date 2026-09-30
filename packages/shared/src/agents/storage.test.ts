@@ -33,7 +33,7 @@ describe('workspace agents storage', () => {
       await expect(saveAgentsConfig(root, {
         version: 1,
         agents: [{ id: 'review', name: 'Review', description: 'Review', prompt: 'Review', builtin: true }],
-      })).rejects.toThrow('Only the built-in')
+      })).rejects.toThrow('builtin')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

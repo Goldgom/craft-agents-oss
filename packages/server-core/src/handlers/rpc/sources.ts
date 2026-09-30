@@ -2,8 +2,7 @@ import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { getWorkspaceByNameOrId } from '@craft-agent/shared/config'
 import { loadWorkspaceSources } from '@craft-agent/shared/sources'
 import { safeJsonParse } from '@craft-agent/shared/utils/files'
-import { getCredentialManager } from '@craft-agent/shared/credentials'
-import type { RpcServer } from '@craft-agent/server-core/transport'
+import type { RequestContext, RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 
 export const HANDLED_CHANNELS = [
@@ -12,6 +11,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.sources.DELETE,
   RPC_CHANNELS.sources.START_OAUTH,
   RPC_CHANNELS.sources.SAVE_CREDENTIALS,
+  RPC_CHANNELS.sources.SAVE_CREDENTIALS_BATCH,
   RPC_CHANNELS.sources.GET_PERMISSIONS,
   RPC_CHANNELS.workspace.GET_PERMISSIONS,
   RPC_CHANNELS.permissions.GET_DEFAULTS,
@@ -20,6 +20,10 @@ export const HANDLED_CHANNELS = [
 
 export function registerSourcesHandlers(server: RpcServer, deps: HandlerDeps): void {
   const log = deps.platform.logger
+
+  const assertCredentialWorkspace = (ctx: RequestContext, workspaceId: string): void => {
+    if (!ctx.workspaceId || ctx.workspaceId !== workspaceId) throw new Error('Credential workspace does not match the connected workspace')
+  }
 
   // Get all sources for a workspace
   server.handle(RPC_CHANNELS.sources.GET, async (_ctx, workspaceId: string) => {
@@ -73,26 +77,22 @@ export function registerSourcesHandlers(server: RpcServer, deps: HandlerDeps): v
   })
 
   // Save credentials for a source (bearer token or API key)
-  server.handle(RPC_CHANNELS.sources.SAVE_CREDENTIALS, async (_ctx, workspaceId: string, sourceSlug: string, credential: string) => {
+  server.handle(RPC_CHANNELS.sources.SAVE_CREDENTIALS, async (ctx, workspaceId: string, sourceSlug: string, credential: string) => {
+    assertCredentialWorkspace(ctx, workspaceId)
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`)
-    const { loadSource, getSourceCredentialManager, markSourceAuthenticated } = await import('@craft-agent/shared/sources')
-
-    const source = loadSource(workspace.rootPath, sourceSlug)
-    if (!source) {
-      throw new Error(`Source not found: ${sourceSlug}`)
-    }
-
-    // SourceCredentialManager handles credential type resolution
-    const credManager = getSourceCredentialManager()
-    await credManager.save(source, { value: credential })
-
-    // A fresh user-supplied credential clears needs_auth — save() alone only
-    // writes the vault, so without this the UI would stay stuck on "needs
-    // auth" until something else touches the config.
-    markSourceAuthenticated(workspace.rootPath, sourceSlug)
-
+    const { saveSourceCredentialBatch } = await import('@craft-agent/shared/sources')
+    const result = await saveSourceCredentialBatch(workspace.rootPath, [{ sourceSlug, credential }])
+    if (result.statusUpdateFailed.length) log.warn('Credential saved, but source status could not be updated')
     log.info(`Saved credentials for source: ${sourceSlug}`)
+  })
+
+  server.handle(RPC_CHANNELS.sources.SAVE_CREDENTIALS_BATCH, async (ctx, workspaceId: string, entries: import('@craft-agent/shared/sources').SourceCredentialUpdate[]) => {
+    assertCredentialWorkspace(ctx, workspaceId)
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`)
+    const { saveSourceCredentialBatch } = await import('@craft-agent/shared/sources')
+    return saveSourceCredentialBatch(workspace.rootPath, entries)
   })
 
   // Get permissions config for a source (raw format for UI display)
@@ -196,24 +196,22 @@ export function registerSourcesHandlers(server: RpcServer, deps: HandlerDeps): v
           return { success: false, error: 'MCP source URL is required for HTTP/SSE transport' }
         }
 
+        const { getSourceCredentialManager, getSourceServerBuilder, TokenRefreshManager } = await import('@craft-agent/shared/sources')
+        const credentials = getSourceCredentialManager()
         let accessToken: string | undefined
-        if (source.config.mcp.authType === 'oauth' || source.config.mcp.authType === 'bearer') {
-          const credentialManager = getCredentialManager()
-          const credentialId = source.config.mcp.authType === 'oauth'
-            ? { type: 'source_oauth' as const, workspaceId: source.workspaceId, sourceId: sourceSlug }
-            : { type: 'source_bearer' as const, workspaceId: source.workspaceId, sourceId: sourceSlug }
-          const credential = await credentialManager.get(credentialId)
-          accessToken = credential?.value
+        if ((source.config.mcp.authType === 'oauth' || source.config.mcp.authType === 'bearer') && !source.config.mcp.headerNames?.length) {
+          const fresh = await new TokenRefreshManager(credentials).ensureFreshToken(source)
+          if (!fresh.success || !fresh.token) throw new Error('Authentication required. Please re-authenticate with this source.')
+          accessToken = fresh.token
         }
-
-        log.info(`Fetching MCP tools from ${source.config.mcp.url}`)
+        const headerCredentials = source.config.mcp.headerNames?.length ? await credentials.getApiCredential(source) : null
+        if (source.config.mcp.headerNames?.length && !headerCredentials) throw new Error('Authentication required. Please save credentials for this source.')
+        const config = getSourceServerBuilder().buildMcpServer(source, accessToken ?? null, headerCredentials)
+        if (!config || config.type === 'stdio') throw new Error('MCP connection configuration is invalid')
         client = new CraftMcpClient({
-          transport: 'http',
-          url: source.config.mcp.url,
-          headers: {
-            ...source.config.mcp.headers,
-            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-          },
+          transport: config.type,
+          url: config.url,
+          headers: config.headers,
         })
       }
 
@@ -246,21 +244,18 @@ export function registerSourcesHandlers(server: RpcServer, deps: HandlerDeps): v
 
       return { success: true, tools: toolsWithPermission }
     } catch (error) {
-      log.error('Failed to get MCP tools:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch tools'
+      // SDK/provider exceptions may echo request headers or response bodies.
+      // Classify locally, but never log, persist, or return their raw text.
+      const { sanitizeMcpConnectionError } = await import('@craft-agent/shared/mcp')
+      const { needsAuth, message: errorMessage } = sanitizeMcpConnectionError(error)
+      log.error('Failed to get MCP tools:', errorMessage)
       if (forceRefresh && refreshedSource) {
         const { saveSourceConfig } = await import('@craft-agent/shared/sources')
-        refreshedSource.config.connectionStatus = /\b401\b|\b403\b|unauthorized|authentication/i.test(errorMessage) ? 'needs_auth' : 'failed'
+        refreshedSource.config.connectionStatus = needsAuth ? 'needs_auth' : 'failed'
         if (refreshedSource.config.connectionStatus === 'needs_auth') refreshedSource.config.isAuthenticated = false
         refreshedSource.config.connectionError = errorMessage
         refreshedSource.config.lastTestedAt = Date.now()
         saveSourceConfig(workspace.rootPath, refreshedSource.config)
-      }
-      if (errorMessage.includes('404')) {
-        return { success: false, error: 'MCP server endpoint not found. The server may be offline or the URL may be incorrect.' }
-      }
-      if (errorMessage.includes('401') || errorMessage.includes('403')) {
-        return { success: false, error: 'Authentication failed. Please re-authenticate with this source.' }
       }
       return { success: false, error: errorMessage }
     }

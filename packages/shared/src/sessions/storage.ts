@@ -184,6 +184,7 @@ export async function createSession(
     model?: string;
     llmConnection?: string;
     agentId?: string;
+    collaboration?: SessionConfig['collaboration'];
     hidden?: boolean;
     sessionStatus?: SessionConfig['sessionStatus'];
     labels?: string[];
@@ -222,6 +223,7 @@ export async function createSession(
     model: options?.model,
     llmConnection: options?.llmConnection,
     agentId: options?.agentId,
+    collaboration: options?.collaboration,
     hidden: options?.hidden,
     sessionStatus: options?.sessionStatus,
     labels: options?.labels,

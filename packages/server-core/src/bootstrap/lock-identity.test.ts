@@ -28,7 +28,7 @@ describe('lockHolderMatchesLock (#978)', () => {
   })
 
   it('matches execName case-insensitively', () => {
-    expect(lockHolderMatchesLock(lockWith('craft agents.exe'), 'TokenBird.EXE', null)).toBe(true)
+    expect(lockHolderMatchesLock(lockWith('tokenbird.exe'), 'TokenBird.EXE', null)).toBe(true)
   })
 
   it('matches dev shapes the legacy heuristic missed (bun holding the lock)', () => {
@@ -50,8 +50,9 @@ describe('lockHolderMatchesLock (#978)', () => {
   })
 
   describe('legacy locks without execName', () => {
-    it('falls back to the craft-substring heuristic on the command line', () => {
+    it('recognizes TokenBird and legacy Craft command lines', () => {
       expect(lockHolderMatchesLock(lockWith(undefined), null, '/Applications/TokenBird.app/Contents/MacOS/TokenBird')).toBe(true)
+      expect(lockHolderMatchesLock(lockWith(undefined), null, '/Applications/Craft Agents.app/Contents/MacOS/Craft Agents')).toBe(true)
       expect(lockHolderMatchesLock(lockWith(undefined), null, '/usr/libexec/swcd')).toBe(false)
     })
 

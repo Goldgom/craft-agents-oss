@@ -108,6 +108,8 @@ import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntr
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { validateArchiveTarget } from './archive-guards'
 import { CollaborationConflictError, CollaborationManager, MAX_COLLABORATION_FILE_BYTES } from '../collaboration/CollaborationManager'
+import { buildCollaborationPrompt } from '../collaboration/prompt'
+import { RelayParticipantManager } from '../collaboration/RelayParticipantManager'
 import type { CollaborationChangeResult, CollaborationGroup } from '@craft-agent/shared/protocol'
 
 // Import from server-core domain utilities
@@ -744,6 +746,8 @@ interface ManagedSession {
   runtimeLastUsedAt?: number
   /** In-flight full runtime teardown; new sends await it before recreating. */
   runtimeTeardown?: Promise<void>
+  /** Runtime-only fence: deleted-session callbacks must not enqueue new writes. */
+  persistenceRetired?: boolean
   streamingText: string
   /** Identity of the unfinished assistant text, used for retry discard boundaries. */
   streamingTurnId?: string
@@ -2068,6 +2072,16 @@ export class SessionManager implements ISessionManager {
     return result
   }
 
+  /** Notify only explicitly edited credential identities. Agents defer any
+   * consequence to a new-turn boundary; current/background work is untouched. */
+  async notifyStoredCredentialChanges(changes: import('@craft-agent/shared/credentials/native-types').NativeCredentialAppliedChange[]): Promise<{ sessionIdsNeedingRestart: string[] }> {
+    const sessionIdsNeedingRestart: string[] = []
+    for (const managed of this.sessions.values()) {
+      if (await managed.agent?.notifyStoredCredentialChanges?.(changes)) sessionIdsNeedingRestart.push(managed.id)
+    }
+    return { sessionIdsNeedingRestart }
+  }
+
   private broadcastSourcesChanged(workspaceId: string, sources: LoadedSource[]): void {
     if (!this.eventSink) return
     this.eventSink(RPC_CHANNELS.sources.CHANGED, { to: 'workspace', workspaceId }, workspaceId, sources)
@@ -2342,12 +2356,16 @@ export class SessionManager implements ISessionManager {
    * `loadStoredSession` is synchronous (sync fs reads), so the entire path
    * stays sync — no microtask race window between the load and the enqueue.
    */
-  private persistSession(managed: ManagedSession): void {
+  private persistSession(managed: ManagedSession, requireDurable = false): void {
+    if (managed.persistenceRetired) {
+      if (requireDurable) throw new Error('Session persistence is retired for deletion')
+      return
+    }
     if (!managed.messagesLoaded) {
       this.hydrateMessagesForColdPersist(managed)
     }
     managed.transcriptAccessVersion = (managed.transcriptAccessVersion ?? 0) + 1
-    this.enqueuePersist(managed)
+    this.enqueuePersist(managed, requireDurable)
   }
 
   // Cold-persist hydration. Mirrors the messages/queue-recovery half of
@@ -2382,7 +2400,7 @@ export class SessionManager implements ISessionManager {
             messageId: msg.id,
             attachments: undefined,
             storedAttachments: msg.attachments,
-            options: undefined,
+            options: msg.relayDelivery ? { collaborationDispatch: true, hidden: msg.hidden } : undefined,
           })
         }
         if (!managed.isProcessing && managed.messageQueue.length > 0) {
@@ -2398,7 +2416,7 @@ export class SessionManager implements ISessionManager {
 
   // Build the StoredSession snapshot and hand it to the persistence queue.
   // Caller must ensure `managed.messagesLoaded` is true.
-  private enqueuePersist(managed: ManagedSession): void {
+  private enqueuePersist(managed: ManagedSession, requireDurable = false): void {
     try {
       // Filter out transient status messages (progress indicators like "Compacting...")
       // Error messages are now persisted with rich fields for diagnostics
@@ -2419,6 +2437,7 @@ export class SessionManager implements ISessionManager {
       sessionPersistenceQueue.enqueue(storedSession)
     } catch (error) {
       sessionLog.error(`Failed to queue session ${managed.id} for persistence:`, error)
+      if (requireDurable) throw error
     }
   }
 
@@ -2427,6 +2446,14 @@ export class SessionManager implements ISessionManager {
   // queue already has an entry whenever persistSession was just called.
   async flushSession(sessionId: string): Promise<void> {
     await sessionPersistenceQueue.flush(sessionId)
+  }
+
+  // SDK metadata callbacks cannot await persistence. Keep their historical
+  // best-effort behavior explicit now that flush correctly rejects disk errors.
+  private flushSessionBestEffort(sessionId: string): void {
+    void this.flushSession(sessionId).catch(error => {
+      sessionLog.error(`Failed to flush session ${sessionId}:`, error)
+    })
   }
 
   // Flush all pending sessions (call on app quit).
@@ -2861,7 +2888,7 @@ export class SessionManager implements ISessionManager {
             messageId: msg.id,
             attachments: undefined,  // Attachments already stored on disk
             storedAttachments: msg.attachments,
-            options: undefined,
+            options: msg.relayDelivery ? { collaborationDispatch: true, hidden: msg.hidden } : undefined,
           })
         }
         // Process queue when session becomes active (will be triggered by first message or interaction)
@@ -2892,7 +2919,7 @@ export class SessionManager implements ISessionManager {
     // announced to the renderer (see notifySessionCreated). Callers that register the session
     // themselves — the `sessions:create` RPC adds it from the return value — pass
     // `{ emitCreatedEvent: false }` to avoid a redundant hydrate.
-    internal?: { emitCreatedEvent?: boolean },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration },
   ): Promise<Session> {
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
@@ -3199,6 +3226,7 @@ export class SessionManager implements ISessionManager {
 
     // Use storage layer to create and persist the session
     const storedSession = await createStoredSession(workspaceRootPath, {
+      collaboration: internal?.collaboration,
       name: options?.name,
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
@@ -3894,14 +3922,14 @@ export class SessionManager implements ISessionManager {
           sessionLog.info(`SDK session ID captured for ${managed.id}: ${sdkSessionId}`)
         }
         this.persistSession(managed)
-        sessionPersistenceQueue.flush(managed.id)
+        this.flushSessionBestEffort(managed.id)
       }
 
       const onSdkSessionIdCleared = () => {
         managed.sdkSessionId = undefined
         sessionLog.info(`SDK session ID cleared for ${managed.id} (resume recovery)`)
         this.persistSession(managed)
-        sessionPersistenceQueue.flush(managed.id)
+        this.flushSessionBestEffort(managed.id)
       }
 
       const onBranchForkInvalidated = () => {
@@ -3911,7 +3939,7 @@ export class SessionManager implements ISessionManager {
         managed.branchFromSdkTurnId = undefined
         sessionLog.info(`Branch fork invalidated for ${managed.id}: cleared all fork metadata`)
         this.persistSession(managed)
-        sessionPersistenceQueue.flush(managed.id)
+        this.flushSessionBestEffort(managed.id)
       }
 
       const getRecoveryMessages = () => {
@@ -4004,9 +4032,7 @@ export class SessionManager implements ISessionManager {
         skipConfigWatcher: true, // Server owns workspace-level ConfigWatcher — don't duplicate in agents
         automationSystem: this.automationSystems.get(managed.workspace.rootPath),
         systemPromptPreset: managed.systemPromptPreset,
-        agentPrompt: [managed.agentPrompt, managed.collaboration && (managed.collaboration.role === 'primary'
-          ? `<collaboration_status>\nYou are the primary session in collaboration group "${managed.collaboration.groupId}". Coordinate work and send requests to secondary sessions; secondary sessions report back to you. Use shared board/files for coordination.\n</collaboration_status>`
-          : `<collaboration_status>\nYou are a secondary session in collaboration group "${managed.collaboration.groupId}". Only report results and status to the primary session; do not send requests to other secondary sessions. Use shared board/files when contributing.\n</collaboration_status>`)].filter(Boolean).join('\n\n') || undefined,
+        agentPrompt: [managed.agentPrompt, managed.collaboration && buildCollaborationPrompt(managed.collaboration)].filter(Boolean).join('\n\n') || undefined,
         debugMode: _platform?.isDebugMode ? { enabled: true, logFilePath: _platform.getLogFilePath?.() } : undefined,
         enable1MContext: await (async () => { const { getEnable1MContext } = await import('@craft-agent/shared/config/storage'); return getEnable1MContext(); })(),
         // Image resize callback — prevents oversized images from entering conversation history
@@ -4984,6 +5010,7 @@ export class SessionManager implements ISessionManager {
         getCollaborationFn: async () => {
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
+          if (collaboration.relay) return this.getCollaborationRelayManager().readForSession(managed.id)
           const group = await this.collaborationManager.open(
             collaboration.groupId,
             collaboration.coordinatorWorkspaceId,
@@ -4997,6 +5024,7 @@ export class SessionManager implements ISessionManager {
         updateCollaborationBoardFn: async (itemId: string, value: unknown) => {
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
+          if (collaboration.relay) return this.getCollaborationRelayManager().perform(managed.id, { kind: 'board', itemId, value })
           const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) => {
             const actor = group.members.find(member => member.id === collaboration.memberId)
             if (!actor || actor.sessionId !== managed.id) {
@@ -5025,6 +5053,7 @@ export class SessionManager implements ISessionManager {
           }
           const data = await readFile(safePath)
           const sharedName = name?.trim() || basename(safePath)
+          if (collaboration.relay) return this.getCollaborationRelayManager().perform(managed.id, { kind: 'putFile', name: sharedName, dataBase64: data.toString('base64'), contentType })
           const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) => {
             const actor = group.members.find(member => member.id === collaboration.memberId)
             if (!actor || actor.sessionId !== managed.id) {
@@ -5047,6 +5076,16 @@ export class SessionManager implements ISessionManager {
         getCollaborationFileFn: async (fileId: string) => {
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
+          if (collaboration.relay) {
+            const result = await this.getCollaborationRelayManager().readForSession(managed.id, fileId) as { file: { name: string; sha256: string; size: number }; dataBase64: string }
+            const data = Buffer.from(result.dataBase64, 'base64')
+            if (data.length !== result.file.size || data.length > MAX_COLLABORATION_FILE_BYTES || (await import('node:crypto')).createHash('sha256').update(data).digest('hex') !== result.file.sha256) throw new Error('Relay shared file integrity failed')
+            const destinationDir = join(managed.workspace.rootPath, '.craft-agent', 'collaboration-files', collaboration.groupId)
+            await mkdir(destinationDir, { recursive: true })
+            const destinationPath = join(destinationDir, basename(result.file.name))
+            await writeFile(destinationPath, data)
+            return { file: result.file, path: destinationPath }
+          }
           const group = await this.collaborationManager.open(
             collaboration.groupId,
             collaboration.coordinatorWorkspaceId,
@@ -5062,7 +5101,13 @@ export class SessionManager implements ISessionManager {
           await writeFile(destinationPath, Buffer.from(result.dataBase64, 'base64'))
           return { file: result.file, path: destinationPath }
         },
+        sendCollaborationMessageFn: async (targetMemberId: string, message: string) => {
+          if (!managed.collaboration?.relay) throw new Error('This session has no multi-server collaboration')
+          const result = await this.getCollaborationRelayManager().perform(managed.id, { kind: 'message', targetMemberId, message }) as { delivery: 'queued-for-relay'; operationId: string }
+          return { ...result, targetBusy: false }
+        },
         sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => {
+          if (managed.collaboration?.relay) throw new Error('Use targetMemberId for multi-server collaboration; bare session IDs are ambiguous')
           // Collaboration request/report events are the durable outbox. They
           // currently persist text only, so accepting direct attachments here
           // would make a retry silently deliver an incomplete message. Shared
@@ -6342,6 +6387,9 @@ export class SessionManager implements ISessionManager {
 
     // Get workspace slug before deleting
     const workspaceRootPath = managed.workspace.rootPath
+    // Teardown callbacks can still hold this object after it leaves the map.
+    // Fence their persistence before waiting on any runtime work.
+    managed.persistenceRetired = true
 
     // If processing is in progress, force-abort via Query.close() and wait for cleanup
     if (managed.isProcessing && managed.agent) {
@@ -6415,6 +6463,10 @@ export class SessionManager implements ISessionManager {
     if (automationSystem) {
       automationSystem.removeSessionMetadata(sessionId)
     }
+
+    // An already-submitted rename can complete after cancel(). Wait for that
+    // exact writer before physical deletion so it cannot recreate the file.
+    await sessionPersistenceQueue.cancelAndWait(sessionId)
 
     // Delete from disk too
     deleteStoredSession(workspaceRootPath, sessionId)
@@ -6565,7 +6617,7 @@ export class SessionManager implements ISessionManager {
         if (delivery.wasInterrupted) managed.wasInterrupted = true
       }
 
-      this.persistSession(managed)
+      this.persistSession(managed, true)
       // Force a synchronous flush so the user message is genuinely on disk
       // before we tell the renderer "accepted" — `persistSession` only
       // enqueues with a 500ms debounce. (#616 reliability fix.)
@@ -6607,7 +6659,7 @@ export class SessionManager implements ISessionManager {
       // Persist + flush before announcing — the user message must be
       // genuinely on disk before we tell the renderer "accepted", and
       // `persistSession` is debounced (500ms). #616.
-      this.persistSession(managed)
+      this.persistSession(managed, true)
       await this.flushSession(managed.id)
       onAck?.(userMessage.id)
 
@@ -6925,7 +6977,7 @@ export class SessionManager implements ISessionManager {
             sessionLog.info(`Captured SDK session ID via fallback: ${sdkId}`)
             // Also flush here since we're in fallback mode
             this.persistSession(managed)
-            sessionPersistenceQueue.flush(managed.id)
+            this.flushSessionBestEffort(managed.id)
           }
         }
 
@@ -8018,6 +8070,70 @@ export class SessionManager implements ISessionManager {
 
   getCollaborationManager(): CollaborationManager { return this.collaborationManager }
 
+  private collaborationRelayManager?: RelayParticipantManager
+  private readonly relayMessageQueues = new Map<string, Promise<unknown>>()
+  private readonly relayStartScheduled = new Set<string>()
+  getCollaborationRelayManager(): RelayParticipantManager {
+    return this.collaborationRelayManager ??= new RelayParticipantManager({ sessions: this, workspaceRoot: workspaceId => {
+      const workspace = getWorkspaceByNameOrId(workspaceId)
+      if (!workspace || workspace.remoteServer) throw new Error('Relay workspace is not hosted on this server')
+      return workspace.rootPath
+    } })
+  }
+
+  private scheduleRelayQueuedMessage(sessionId: string): void {
+    const managed = this.sessions.get(sessionId)
+    if (managed && !managed.isProcessing && !this.relayStartScheduled.has(sessionId)) {
+      this.relayStartScheduled.add(sessionId)
+      setImmediate(() => { if (!managed.isProcessing) this.processNextQueuedMessage(sessionId); setImmediate(() => this.relayStartScheduled.delete(sessionId)) })
+    }
+  }
+
+  /** One durable inbox acceptance; model processing is deliberately not awaited. */
+  async acceptCollaborationRelayMessage(sessionId: string, delivery: import('@craft-agent/shared/protocol').CollaborationRelayDelivery): Promise<import('@craft-agent/shared/protocol').CollaborationRelayReceipt> {
+    const work = (this.relayMessageQueues.get(sessionId) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      const managed = this.sessions.get(sessionId), membership = managed?.collaboration
+      if (!managed || managed.workspace.id !== delivery.target.workspaceId || membership?.groupId !== delivery.groupId || membership.memberId !== delivery.targetMemberId || membership.relay?.epoch !== delivery.epoch || membership.relay.phase !== 'active') throw new Error('Relay target membership is stale')
+      await this.ensureMessagesLoaded(managed)
+      const match = (m: { relayDelivery?: import('@craft-agent/core/types').Message['relayDelivery'] }) => m.relayDelivery?.groupId === delivery.groupId && m.relayDelivery.epoch === delivery.epoch && m.relayDelivery.targetMemberId === delivery.targetMemberId && m.relayDelivery.sequence === delivery.sequence
+      // A previous process may have persisted the message before its receipt.
+      const disk = loadStoredSession(managed.workspace.rootPath, sessionId)?.messages.find(match)
+      let existing = managed.messages.find(match)
+      if (existing || disk) {
+        if ((existing ?? disk)!.relayDelivery!.digest !== delivery.digest) throw new Error('Relay accepted message payload changed')
+        if (existing) {
+          this.persistSession(managed, true)
+          await this.flushSession(sessionId)
+          if (existing.isQueued) {
+            // An earlier failed flush retained the transcript entry but must
+            // not have made it runnable. Publish it only after durable retry.
+            if (!managed.messageQueue.some(queued => queued.messageId === existing.id)) {
+              managed.messageQueue.push({ message: existing.content, messageId: existing.id, options: { collaborationDispatch: true, hidden: existing.hidden } })
+            }
+            this.scheduleRelayQueuedMessage(sessionId)
+          }
+        }
+        return { operationId: delivery.operationId, sequence: delivery.sequence, messageId: (existing ?? disk)!.id, delivery: 'queued' as const, targetBusy: true }
+      }
+      const targetBusy = managed.isProcessing === true
+      const message: Message = { id: generateMessageId(), role: 'user', content: delivery.message, timestamp: this.monotonic(), isQueued: true, ...(delivery.hidden ? { hidden: true } : {}), relayDelivery: { groupId: delivery.groupId, epoch: delivery.epoch, operationId: delivery.operationId, sequence: delivery.sequence, targetMemberId: delivery.targetMemberId, digest: delivery.digest } }
+      managed.messages.push(message)
+      if (!delivery.hidden) managed.lastMessageRole = 'user'
+      this.persistSession(managed, true)
+      await this.flushSession(sessionId)
+      // The previous turn can finish while flush is pending. Do not expose a
+      // runnable task to its queue drain until the transcript is on disk.
+      managed.messageQueue.push({ message: message.content, messageId: message.id, options: { collaborationDispatch: true, hidden: delivery.hidden } })
+      this.sendEvent({ type: 'user_message', sessionId, message, status: 'queued' }, managed.workspace.id)
+      this.scheduleRelayQueuedMessage(sessionId)
+      return { operationId: delivery.operationId, sequence: delivery.sequence, messageId: message.id, delivery: targetBusy ? 'queued' as const : 'delivered' as const, targetBusy }
+    })
+    this.relayMessageQueues.set(sessionId, work)
+    void work.finally(() => { if (this.relayMessageQueues.get(sessionId) === work) this.relayMessageQueues.delete(sessionId) }).catch(() => {})
+    return work
+  }
+
+
   /** Retry a trusted, session-bound collaboration mutation against the latest
    * revision. Public RPC clients still use explicit optimistic revisions. */
   private async mutateCollaborationLatest(
@@ -8056,6 +8172,7 @@ export class SessionManager implements ISessionManager {
   private async recordPrimaryRequirement(managed: ManagedSession, message: string): Promise<void> {
     const collaboration = managed.collaboration
     if (!collaboration || collaboration.role !== 'primary' || !message.trim()) return
+    if (collaboration.relay) { await this.getCollaborationRelayManager().perform(managed.id, { kind: 'board', itemId: 'goal.current', value: { kind: 'goal', text: message.trim(), status: 'active', requestedAt: Date.now() } }, { waitForRelay: false }); return }
     const result = await this.mutateCollaborationLatest(collaboration, (group, operationId) =>
       this.collaborationManager.updateBoard(
         group.id,
@@ -8078,9 +8195,10 @@ export class SessionManager implements ISessionManager {
   async setSessionCollaboration(sessionId: string, collaboration: SessionCollaboration | null): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (collaboration && managed.collaboration && (managed.collaboration.groupId !== collaboration.groupId || managed.collaboration.memberId !== collaboration.memberId)) throw new Error('Session already belongs to another collaboration')
     managed.collaboration = collaboration ?? undefined
     this.setMetadataWriteGuard(managed)
-    this.persistSession(managed)
+    this.persistSession(managed, true)
     await this.flushSession(managed.id)
     if (managed.agent) {
       if (managed.agent.isProcessing()) {
@@ -9920,6 +10038,22 @@ export class SessionManager implements ISessionManager {
       unregisterSessionScopedToolCallbacks(sessionId)
     }
     await this.collaborationManager.cleanup()
+    await this.collaborationRelayManager?.cleanup()
+    await Promise.allSettled(this.relayMessageQueues.values())
+    this.relayStartScheduled.clear()
+
+    // Teardown/completion callbacks may have enqueued newer state after the
+    // caller's pre-shutdown flush. Finish those writes before reporting cleanup
+    // complete. Preserve failure until resources are released, and leave the
+    // queue's dirty snapshots available for explicit retry/error handling.
+    let finalPersistenceFailed = false
+    let finalPersistenceError: unknown
+    try {
+      await this.flushAllSessions()
+    } catch (error) {
+      finalPersistenceFailed = true
+      finalPersistenceError = error
+    }
 
     // Release all manager-owned indexes and callbacks. The process may keep
     // this manager reachable briefly during shutdown, so relying on GC of the
@@ -9941,6 +10075,7 @@ export class SessionManager implements ISessionManager {
     this.rpcServer = null
     this.eventSink = null
 
+    if (finalPersistenceFailed) throw finalPersistenceError
     sessionLog.info('Cleanup complete')
   }
 }

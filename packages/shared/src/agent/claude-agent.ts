@@ -1,5 +1,8 @@
 import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options, type SpawnOptions, type SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import type { CredentialId, StoredCredential } from '../credentials/types.ts';
+import type { NativeCredentialAppliedChange } from '../credentials/native-types.ts';
 import { getDefaultOptions, resetClaudeConfigCheck, isAndroidRuntime } from './options.ts';
 // Local type for SDK user message content blocks (text, image, document)
 // Replaces import from @anthropic-ai/sdk/resources — keeps SDK as agent-only dependency
@@ -8,7 +11,7 @@ type ContentBlockParam =
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } };
 import { z } from 'zod';
-import { getSystemPrompt, getLightweightModelSystemPrompt, MCP_PROMPT_ENHANCEMENT } from '../prompts/system.ts';
+import { getSystemPrompt } from '../prompts/system.ts';
 import { BaseAgent, type MiniAgentConfig, MINI_AGENT_TOOLS, MINI_AGENT_MCP_KEYS } from './base-agent.ts';
 import { getModelPromptSettings, resolveAutoCompactionTokenLimit } from '../config/llm-connections.ts';
 import type { BackendConfig, PostInitResult, PermissionRequestType, SdkMcpServerConfig } from './backend/types.ts';
@@ -481,6 +484,63 @@ const buildWindowsSkillsDirError = buildWindowsSkillsDirErrorFn;
 
 export class ClaudeAgent extends BaseAgent {
   protected backendName = 'Claude';
+  private injectedCredentialFingerprints = new Map<string, string>();
+  private pendingExplicitCredentialIds = new Map<string, CredentialId>();
+  private credentialEditGeneration = 0;
+
+  private credentialFingerprint(credential: StoredCredential | null): string {
+    const { value, refreshToken, clientId, clientSecret, idToken } = credential ?? {};
+    return createHash('sha256').update(JSON.stringify({ value, refreshToken, clientId, clientSecret, idToken })).digest('hex');
+  }
+
+  private credentialGuardIds(): CredentialId[] {
+    const slug = this.config.connectionSlug;
+    if (!slug) return [];
+    const connection = getLlmConnection(slug);
+    if (connection?.authType === 'oauth') return [{ type: 'claude_oauth' }, { type: 'llm_oauth', connectionSlug: slug }];
+    if (['api_key', 'api_key_with_endpoint', 'bearer_token'].includes(connection?.authType ?? '')) return [{ type: 'llm_api_key', connectionSlug: slug }];
+    return [];
+  }
+
+  private async captureInjectedCredentialState(injectedEnv: Record<string, string> = {}, generation = this.credentialEditGeneration): Promise<void> {
+    this.injectedCredentialFingerprints.clear();
+    for (const id of this.credentialGuardIds()) {
+      const current = await getCredentialManager().get(id);
+      const injectedValue = id.type === 'llm_api_key' ? injectedEnv.ANTHROPIC_API_KEY : injectedEnv.CLAUDE_CODE_OAUTH_TOKEN;
+      this.injectedCredentialFingerprints.set(JSON.stringify(id), this.credentialFingerprint(injectedValue === undefined ? current : { ...current, value: injectedValue }));
+    }
+    if (generation === this.credentialEditGeneration) this.pendingExplicitCredentialIds.clear();
+  }
+
+  async notifyStoredCredentialChanges(changes: NativeCredentialAppliedChange[]): Promise<boolean> {
+    const relevant = this.credentialGuardIds();
+    for (const change of changes) {
+      if (change.op === 'upsert' && change.fields && !change.fields.some(field => ['value', 'refreshToken', 'clientId', 'clientSecret', 'idToken'].includes(field))) continue;
+      const id = relevant.find(id => id.type === change.id.type && id.connectionSlug === change.id.connectionSlug);
+      if (id) { this.credentialEditGeneration++; this.pendingExplicitCredentialIds.set(JSON.stringify(id), id); }
+    }
+    if (!this.persistentInput) return false;
+    for (const [key, id] of this.pendingExplicitCredentialIds) {
+      if (this.injectedCredentialFingerprints.get(key) !== this.credentialFingerprint(await getCredentialManager().get(id))) return true;
+    }
+    this.pendingExplicitCredentialIds.clear();
+    return false;
+  }
+
+  private async assertExplicitCredentialsAtTurnBoundary(): Promise<void> {
+    if (!this.pendingExplicitCredentialIds.size) return;
+    if (!this.persistentInput) {
+      const result = await this.postInit();
+      if (!result.authInjected) throw new Error('Stored credentials are unavailable. Update Credentials in Settings before the next request.');
+      return;
+    }
+    for (const [key, id] of this.pendingExplicitCredentialIds) {
+      if (this.injectedCredentialFingerprints.get(key) !== this.credentialFingerprint(await getCredentialManager().get(id))) {
+        throw new Error('You changed credentials in Settings. Start a new session or restart this session after its background work finishes to use the saved credentials. Current background work has not been interrupted.');
+      }
+    }
+    this.pendingExplicitCredentialIds.clear();
+  }
   // Note: ClaudeAgentConfig is compatible with BackendConfig, so we use the inherited this.config
   private currentQuery: Query | null = null;
   private currentQueryAbortController: AbortController | null = null;
@@ -908,6 +968,7 @@ export class ClaudeAgent extends BaseAgent {
    * The subprocess spawns lazily on first chat(), so postInit() is early enough.
    */
   override async postInit(): Promise<PostInitResult> {
+    const credentialGeneration = this.credentialEditGeneration;
     const slug = this.config.connectionSlug;
     if (!slug) {
       return { authInjected: false, authWarning: 'No connection slug available', authWarningLevel: 'error' };
@@ -947,6 +1008,7 @@ export class ClaudeAgent extends BaseAgent {
       process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = this.config.miniModel;
     }
 
+    await this.captureInjectedCredentialState(result.envVars, credentialGeneration);
     return { authInjected: true };
   }
 
@@ -1049,6 +1111,14 @@ export class ClaudeAgent extends BaseAgent {
     attachments?: FileAttachment[],
     options?: ChatOptions
   ): AsyncGenerator<AgentEvent> {
+    // A blocked new prompt must not run SDK recovery or tear down live
+    // background work. Only explicit auth-bearing Settings edits mark this.
+    try { await this.assertExplicitCredentialsAtTurnBoundary(); }
+    catch (error) {
+      yield { type: 'error', message: error instanceof Error ? error.message : 'Stored credentials changed. Start a new session.' };
+      yield { type: 'complete' };
+      return;
+    }
     // Extract options (ChatOptions interface from AgentBackend)
     const _isRetry = options?.isRetry ?? false;
 
@@ -1289,7 +1359,19 @@ export class ClaudeAgent extends BaseAgent {
         systemPrompt: miniConfig.enabled
           ? this.getMiniSystemPrompt()
           : this.config.modelPromptSettings?.lightweight
-            ? `${getLightweightModelSystemPrompt(this.workspaceRootPath, 'Claude Code', this.pinnedIncludeCoAuthoredBy ?? undefined, this.config.agentPrompt, this.config.agentRuntime, this.pinnedPreferencesPrompt ?? formatPreferencesForPrompt())}${this.config.modelPromptSettings.mcpPromptEnhancement ? `\n\n${MCP_PROMPT_ENHANCEMENT.trim()}` : ''}`
+            ? getSystemPrompt(
+              this.pinnedPreferencesPrompt ?? undefined,
+              this.config.debugMode,
+              this.workspaceRootPath,
+              this.config.session?.workingDirectory,
+              undefined, // preset
+              'Claude Code',
+              this.pinnedIncludeCoAuthoredBy ?? undefined,
+              this.pinnedProjectContext ?? undefined,
+              this.config.agentPrompt,
+              this.config.modelPromptSettings,
+              this.config.agentRuntime,
+            )
             : {
               type: 'preset' as const,
               preset: 'claude_code' as const,

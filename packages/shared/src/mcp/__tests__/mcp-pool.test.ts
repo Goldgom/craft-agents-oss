@@ -4,25 +4,28 @@
  * and the local-MCP gate for stdio configs (same gate sync() applies).
  */
 
-import { describe, test, expect } from 'bun:test';
+import { afterEach, describe, test, expect } from 'bun:test';
 import { McpClientPool } from '../mcp-pool.ts';
 import type { PoolClient } from '../client.ts';
 import type { SdkMcpServerConfig } from '../../agent/backend/types.ts';
 
+const pools: McpClientPool[] = [];
+afterEach(async () => { await Promise.all(pools.splice(0).map(pool => pool.disconnectAll())); });
+
 class TestPool extends McpClientPool {
+  constructor(options?: ConstructorParameters<typeof McpClientPool>[0]) {
+    super(options);
+    pools.push(this);
+  }
   connectCalls: Array<{ slug: string; config: SdkMcpServerConfig }> = [];
   closedSlugs: string[] = [];
 
-  override async connect(slug: string, config: SdkMcpServerConfig): Promise<void> {
-    this.connectCalls.push({ slug, config });
-    const self = this;
-    const fake: PoolClient = {
-      listTools: async () => [],
-      callTool: async () => ({ content: [] }),
-      close: async () => { self.closedSlugs.push(slug); },
-    };
-    await this.registerClient(slug, fake);
-    this.activeConfigs.set(slug, config);
+  override async registerClient(slug: string, client: PoolClient): Promise<void> {
+    this.connectCalls.push({ slug, config: this.activeConfigs.get(slug)! });
+    client.listTools = async () => [];
+    client.callTool = async () => ({ content: [] });
+    client.close = async () => { this.closedSlugs.push(slug); };
+    await super.registerClient(slug, client);
   }
 }
 
@@ -53,6 +56,41 @@ describe('McpClientPool.ensureConnected', () => {
     expect(pool.connectCalls.length).toBe(2);
     expect(pool.closedSlugs).toEqual(['craft']);
     expect(pool.isConnected('craft')).toBe(true);
+  });
+
+  test('reconnects when a custom API key header is rotated or removed', async () => {
+    const pool = new TestPool();
+    const config = (headers: Record<string, string>): SdkMcpServerConfig => ({ type: 'http', url: 'https://mcp.example.test/mcp', headers });
+    await pool.ensureConnected('custom', config({ 'X-Api-Key': 'dummy-old' }));
+    await pool.ensureConnected('custom', config({ 'x-api-key': 'dummy-new' }));
+    await pool.ensureConnected('custom', config({}));
+    expect(pool.connectCalls.length).toBe(3);
+    expect(pool.closedSlugs).toEqual(['custom', 'custom']);
+  });
+
+  test('ignores header casing and map insertion order', async () => {
+    const pool = new TestPool();
+    await pool.ensureConnected('same', { type: 'http', url: 'https://mcp.example.test/mcp', headers: { Authorization: 'Bearer dummy', Accept: 'application/json' } });
+    await pool.ensureConnected('same', { type: 'http', url: 'https://mcp.example.test/mcp', headers: { accept: 'application/json', authorization: 'Bearer dummy' } });
+    expect(pool.connectCalls.length).toBe(1);
+  });
+
+  test('reconnects after stdio credentials, arguments, or executable change', async () => {
+    const pool = new TestPool();
+    const base = { type: 'stdio' as const, command: 'dummy-mcp', args: ['--test'], env: { API_KEY: 'dummy-old' } };
+    await pool.ensureConnected('local', base);
+    await pool.ensureConnected('local', { ...base, env: { API_KEY: 'dummy-new' } });
+    await pool.ensureConnected('local', { ...base, args: ['--other'] });
+    await pool.ensureConnected('local', { ...base, command: 'dummy-mcp-v2' });
+    expect(pool.connectCalls.length).toBe(4);
+    expect(pool.closedSlugs).toHaveLength(3);
+  });
+
+  test('does not reconnect unchanged stdio settings with reordered environment', async () => {
+    const pool = new TestPool();
+    await pool.ensureConnected('local', { type: 'stdio', command: 'dummy-mcp', env: { A: '1', B: '2' } });
+    await pool.ensureConnected('local', { type: 'stdio', command: 'dummy-mcp', args: [], env: { B: '2', A: '1' } });
+    expect(pool.connectCalls.length).toBe(1);
   });
 
   test('does not touch other pool members', async () => {

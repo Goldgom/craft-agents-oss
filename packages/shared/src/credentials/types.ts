@@ -25,6 +25,11 @@ export type CredentialType =
   | 'llm_oauth'          // OAuth token for LLM connection
   | 'llm_iam'            // AWS IAM credentials (accessKeyId + secretAccessKey)
   | 'llm_service_account' // GCP service account JSON
+  // Immutable local saved-connection revisions (name = ownerId/revision).
+  | 'remote_server_token'
+  | 'remote_workspace_token'
+  | 'remote_sftp_password'
+  | 'remote_sftp_passphrase'
   // Workspace credentials
   | 'workspace_oauth'    // Workspace MCP OAuth token
   // Source credentials (stored at ~/.tokenbird/workspaces/{ws}/sources/{slug}/)
@@ -45,6 +50,10 @@ const VALID_CREDENTIAL_TYPES: readonly CredentialType[] = [
   'llm_oauth',
   'llm_iam',
   'llm_service_account',
+  'remote_server_token',
+  'remote_workspace_token',
+  'remote_sftp_password',
+  'remote_sftp_passphrase',
   'workspace_oauth',
   'source_oauth',
   'source_bearer',
@@ -177,9 +186,21 @@ function isLlmCredential(type: CredentialType): boolean {
   return (LLM_CREDENTIAL_TYPES as readonly string[]).includes(type);
 }
 
+export const REMOTE_CREDENTIAL_TYPES = [
+  'remote_server_token', 'remote_workspace_token', 'remote_sftp_password', 'remote_sftp_passphrase',
+] as const;
+
+function isRemoteCredential(type: CredentialType): boolean {
+  return (REMOTE_CREDENTIAL_TYPES as readonly string[]).includes(type);
+}
+
 /** Convert CredentialId to credential store account string */
 export function credentialIdToAccount(id: CredentialId): string {
   const parts: string[] = [id.type];
+
+  if (isRemoteCredential(id.type) && id.name) {
+    return [id.type, id.name].join(CREDENTIAL_DELIMITER);
+  }
 
   // LLM connection-scoped format:
   // llm_api_key::{connectionSlug}
@@ -263,6 +284,10 @@ export function accountToCredentialId(account: string): CredentialId | null {
 
   const type = typeStr;
 
+  if (isRemoteCredential(type)) {
+    return parts.length === 2 && !!parts[1] ? { type, name: parts[1] } : null;
+  }
+
   // LLM connection-scoped format:
   // llm_api_key::{connectionSlug}
   // llm_oauth::{connectionSlug}
@@ -300,4 +325,54 @@ export function accountToCredentialId(account: string): CredentialId | null {
 
   // Unknown format
   return null;
+}
+
+/** One entry in an atomic encrypted-store update. */
+export interface CredentialWrite {
+  id: CredentialId;
+  credential: StoredCredential;
+}
+
+/** Internal optimistic-concurrency token; never a renderer credential field. */
+export interface CredentialSnapshot {
+  credential: StoredCredential | null;
+  revision: string;
+}
+
+export interface CredentialCompareAndSet {
+  id: CredentialId;
+  expectedRevision: string;
+  /** null deletes the entry if it is still the exact observed revision. */
+  credential: StoredCredential | null;
+}
+
+export class CredentialChangedError extends Error {
+  constructor() {
+    super('Credentials changed while a refresh was in progress. The refresh result was not saved; check the current sign-in before trying again.');
+    this.name = 'CredentialChangedError';
+  }
+}
+
+/** Validate the complete batch without including secret values in errors. */
+export function validateCredentialWrites(entries: CredentialWrite[]): void {
+  if (!Array.isArray(entries) || entries.length > 1000) throw new Error('Invalid credential batch');
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!entry?.id || !isValidCredentialType(entry.id.type) || !entry.credential
+      || typeof entry.credential.value !== 'string' || !entry.credential.value.trim()) {
+      throw new Error('Each credential must have a valid type and non-empty value');
+    }
+    const id = entry.id;
+    const validPart = (value: unknown): value is string => typeof value === 'string' && !!value.trim() && !value.includes(CREDENTIAL_DELIMITER);
+    if ((isSourceCredential(id.type) && (!validPart(id.workspaceId) || !validPart(id.sourceId)))
+      || (isLlmCredential(id.type) && !validPart(id.connectionSlug))
+      || (id.type === 'workspace_oauth' && !validPart(id.workspaceId))
+      || (isRemoteCredential(id.type) && (!validPart(id.name) || id.workspaceId !== undefined || id.sourceId !== undefined || id.connectionSlug !== undefined))
+      || ((isMessagingCredential(id.type) || isPageCredential(id.type)) && (!validPart(id.workspaceId) || !validPart(id.name)))) {
+      throw new Error('Credential scope is missing or invalid');
+    }
+    const key = credentialIdToAccount(id);
+    if (seen.has(key)) throw new Error('Duplicate credential in batch');
+    seen.add(key);
+  }
 }

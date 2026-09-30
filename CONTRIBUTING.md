@@ -67,6 +67,12 @@ Before submitting a PR, ensure all type checks pass:
 bun run typecheck:all
 ```
 
+## Test scope
+
+Run `bun run test` from the repository root. It runs the application/workspace tests in `packages`, `apps`, and `scripts`, followed by each `.isolated.ts` suite in a separate Bun process so module mocks cannot leak across suites.
+
+The standalone theme packages under `themes/` use their own Vitest configuration and dependencies. Test them separately from their package directories when changing a theme; the application test command does not claim to validate them.
+
 ## Pull Request Process
 
 1. **Title**: Use a clear, descriptive title

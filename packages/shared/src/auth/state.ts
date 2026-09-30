@@ -11,7 +11,7 @@
  * our native OAuth flow. This is a one-time migration.
  */
 
-import { getCredentialManager } from '../credentials/index.ts';
+import { getCredentialManager, CredentialChangedError } from '../credentials/index.ts';
 import {
   loadStoredConfig,
   getActiveWorkspace,
@@ -107,74 +107,45 @@ export async function performTokenRefresh(
   originalSource: 'native' | 'cli' | undefined,
   connectionSlug: string
 ): Promise<TokenResult> {
+  const globalId = { type: 'claude_oauth' as const };
+  const llmId = { type: 'llm_oauth' as const, connectionSlug };
+  const [globalSnapshot, llmSnapshot] = await Promise.all([manager.getSnapshot(globalId), manager.getSnapshot(llmId)]);
+  // A token supplied by an earlier read must not start a refresh after replacement.
+  if (globalSnapshot.credential?.refreshToken !== refreshToken
+    || (llmSnapshot.credential?.refreshToken && llmSnapshot.credential.refreshToken !== refreshToken)) {
+    throw new CredentialChangedError();
+  }
   try {
     const refreshed = await refreshClaudeToken(refreshToken);
-
-    // Format expiry time for logging
-    const expiresAtDate = refreshed.expiresAt ? new Date(refreshed.expiresAt).toISOString() : 'never';
-    debug(`[auth] Successfully refreshed Claude OAuth token (expires: ${expiresAtDate})`);
-
-    // Store the new credentials
-    // If refresh succeeded with our native endpoint, mark as 'native'
-    // (successful refresh proves compatibility with our OAuth system)
-    await manager.setClaudeOAuthCredentials({
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAt: refreshed.expiresAt,
-      source: 'native',
-    });
-
-    // Also save to LLM connection (dual-write for backwards compatibility)
-    // This ensures both legacy and modern auth paths have the refreshed token
-    await manager.setLlmOAuth(connectionSlug, {
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAt: refreshed.expiresAt,
-    });
-
+    const rotated = { value: refreshed.accessToken, refreshToken: refreshed.refreshToken, expiresAt: refreshed.expiresAt };
+    const saved = await manager.compareAndSetMany([
+      { id: globalId, expectedRevision: globalSnapshot.revision, credential: { ...globalSnapshot.credential, ...rotated, source: 'native' } },
+      { id: llmId, expectedRevision: llmSnapshot.revision, credential: { ...llmSnapshot.credential, ...rotated } },
+    ]);
+    if (!saved) throw new CredentialChangedError();
     return { accessToken: refreshed.accessToken };
   } catch (error) {
+    if (error instanceof CredentialChangedError) throw error;
+    const [currentGlobal, currentLlm] = await Promise.all([manager.getSnapshot(globalId), manager.getSnapshot(llmId)]);
+    if (currentGlobal.revision !== globalSnapshot.revision || currentLlm.revision !== llmSnapshot.revision) throw new CredentialChangedError();
     const errorMessage = error instanceof Error ? error.message : String(error);
-    debug('[auth] Failed to refresh Claude OAuth token:', errorMessage);
-
-    // Only clear credentials for specific OAuth errors that indicate the token is truly invalid
-    // Be conservative - don't clear for network errors, timeouts, or unknown errors
-    const isIncompatibleToken =
-      errorMessage.includes('invalid_grant') ||
-      errorMessage.includes('Refresh token not found or invalid') ||
-      errorMessage.includes('invalid_refresh_token');
-
+    debug('[auth] Failed to refresh Claude OAuth token');
+    const isIncompatibleToken = errorMessage.includes('invalid_grant')
+      || errorMessage.includes('Refresh token not found or invalid')
+      || errorMessage.includes('invalid_refresh_token');
     let migrationRequired: MigrationInfo | undefined;
-
     if (isIncompatibleToken) {
-      // Token refresh failed - could be legacy CLI token or expired/revoked
-      debug('[auth] Token refresh failed - credentials will be cleared');
-
-      // Check if this was from CLI based on stored source
-      const isFromCLI = originalSource === 'cli' || !originalSource;
-      if (isFromCLI) {
-        debug('[auth] Token was from CLI or unknown source - migration required');
-        migrationRequired = {
-          reason: 'legacy_token',
-          message:
-            'Your Claude authentication needs to be refreshed. ' +
-            'Please sign in again.',
-        };
+      // Clear only the two credentials used by this refresh, atomically. Never
+      // clear another auth type or credentials updated while the provider ran.
+      const cleared = await manager.compareAndSetMany([
+        { id: globalId, expectedRevision: globalSnapshot.revision, credential: null },
+        { id: llmId, expectedRevision: llmSnapshot.revision, credential: null },
+      ]);
+      if (!cleared) throw new CredentialChangedError();
+      if (originalSource === 'cli' || !originalSource) {
+        migrationRequired = { reason: 'legacy_token', message: 'Your Claude authentication needs to be refreshed. Please sign in again.' };
       }
-
-      // Clear the incompatible credentials to force fresh authentication
-      // Clear from both legacy and LLM connection locations
-      await manager.setClaudeOAuthCredentials({
-        accessToken: '',
-        refreshToken: undefined,
-        expiresAt: undefined,
-      });
-
-      // Also clear from LLM connection (dual-clear for consistency)
-      await manager.deleteLlmCredentials(connectionSlug);
     }
-
-    // Token refresh failed - return null token with optional migration info
     return { accessToken: null, migrationRequired };
   }
 }

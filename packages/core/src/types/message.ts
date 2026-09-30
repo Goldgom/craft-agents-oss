@@ -248,7 +248,18 @@ export interface StoredAttachment {
 /**
  * Runtime message type (includes transient fields like isStreaming)
  */
+export interface RelayMessageIdentity {
+  groupId: string;
+  epoch: string;
+  operationId: string;
+  sequence: number;
+  targetMemberId: string;
+  digest: string;
+}
+
 export interface Message {
+  /** Durable inbox identity, persisted atomically with the accepted message. */
+  relayDelivery?: RelayMessageIdentity;
   id: string;
   role: MessageRole;
   content: string;
@@ -344,6 +355,7 @@ export interface Message {
  * Excludes transient runtime-only fields (isStreaming, isPending)
  */
 export interface StoredMessage {
+  relayDelivery?: RelayMessageIdentity;
   id: string;
   type: MessageRole;
   content: string;

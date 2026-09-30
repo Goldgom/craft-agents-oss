@@ -167,7 +167,7 @@ type InboundMessage =
   | { type: 'set_auto_compaction'; id: string; enabled: boolean }
   | RuntimeConfigUpdateMessage
   | { type: 'steer'; message: string }
-  | { type: 'token_update'; piAuth: { provider: string; credential: PiCredential } }
+  | { type: 'token_update'; id?: string; piAuth: { provider: string; credential: PiCredential } }
   | { type: 'shutdown' };
 
 /** Proxy tool definition from main process */
@@ -246,6 +246,7 @@ interface OutboundSessionIdUpdate { type: 'session_id_update'; sessionId: string
 interface OutboundError { type: 'error'; message: string; code?: string; id?: string }
 
 type OutboundMessage =
+  | { type: 'token_update_result'; id: string; success: boolean }
   | OutboundReady
   | OutboundEvent
   | OutboundPreToolUseReq
@@ -1922,18 +1923,19 @@ async function processMessage(msg: InboundMessage): Promise<void> {
       break;
 
     case 'token_update':
-      if (moduleCredentialStore) {
+      try {
+        if (!initConfig) throw new Error('Runtime is not initialized');
         const { provider, credential } = msg.piAuth;
         const adapted = adaptCredentialForPiSdk(provider, credential);
-        if (adapted) {
-          await moduleCredentialStore.modify(provider, async () => adapted);
-        }
-        if (initConfig) {
-          initConfig.piAuth = msg.piAuth;
-        }
-        debugLog(`Updated ${credential.type} credential for provider: ${provider}`);
-      } else {
-        debugLog('token_update received but no credential store initialized');
+        if (!adapted) throw new Error('Credential requires a fresh idle runtime');
+        if (!moduleCredentialStore) moduleCredentialStore = new InMemoryCredentialStore();
+        await moduleCredentialStore.modify(provider, async () => adapted);
+        initConfig.piAuth = msg.piAuth;
+        if (msg.id) send({ type: 'token_update_result', id: msg.id, success: true });
+      } catch {
+        // Never forward provider/credential details through protocol errors.
+        if (msg.id) send({ type: 'token_update_result', id: msg.id, success: false });
+        else debugLog('Credential update failed');
       }
       break;
 

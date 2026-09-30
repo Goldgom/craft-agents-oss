@@ -305,6 +305,18 @@ export interface SystemPromptOptions {
   backendName?: string;
 }
 
+/** Shared execution contract for every prompt preset and runtime. */
+export const TOOL_EXECUTION_GUIDANCE = `
+## Tool Execution Contract
+- For an actionable request, use a matching built-in or connected-source tool when available. Describing a call, printing JSON, or saying you will act does not execute it.
+- Choose the narrowest advertised tool that completes the task. Prefer app-managed tools for sessions, collaboration, Pages, credentials, and configuration; do not bypass their validation with direct internal-file edits or raw network calls.
+- Use the exact name and required fields from the current callable schema. Skill examples describe capabilities, not a guarantee that a tool is enabled in this runtime. Never invent tools or parameters.
+- Resolve the target server, workspace, session, resource, and action before a state-changing call. Ask only for missing details that cannot be safely discovered. Respect the current permission mode and user authorization.
+- Inspect each result before continuing. Distinguish success, queued work, partial completion, authentication failure, permission denial, and transport failure. A timeout does not prove that a write failed: inspect state before retrying to avoid duplicates.
+- Retry only after correcting a specific recoverable cause; never loop on a permission denial or repeatedly submit the same failed call. Use the secure credential flow for authentication; never put passwords or tokens in chat, prompts, source guides, or logs.
+- Verify the requested state or output before claiming completion. Report what succeeded, what is still pending, and the exact blocker. Never infer that a feature is unavailable solely because one call failed.
+`;
+
 /** Core source guidance kept after feature playbooks are moved into skills. */
 export const MCP_SOURCE_GUIDANCE = `
 ## Connected Sources and MCP Tools
@@ -322,7 +334,7 @@ export const MCP_PROMPT_ENHANCEMENT = `
 - Never use shell/bash to invoke MCP tools and never use \`list_mcp_resources\` to discover tools.
 - Read the source guide before setup/authentication when required.
 - Call the tool, inspect its result, then continue with the next step.
-- If authentication or activation is required, follow the source authentication flow and retry after it completes.
+- If authentication or activation is required, follow the source authentication flow. After confirmed completion, refresh the advertised tool catalog and retry a read-only call once. For a possibly completed write, inspect state before retrying. Report persistent errors instead of looping.
 `;
 
 /** Optional guidance injected when the user enables Subagent collaboration. */
@@ -420,6 +432,8 @@ export function getMiniAgentSystemPrompt(workspaceRootPath?: string, preferences
 ## Your Role
 You help users make targeted changes to configuration files. Be concise and efficient.
 ${workspaceContext}
+${TOOL_EXECUTION_GUIDANCE.trim()}
+
 ## Guidelines
 - Make the requested change directly
 - If a configuration validation tool is advertised, use it after editing
@@ -456,6 +470,8 @@ export function getLightweightModelSystemPrompt(
 ${agent}
 
 ${runtimePrompt}
+
+${TOOL_EXECUTION_GUIDANCE.trim()}
 
 ${MCP_SOURCE_GUIDANCE.trim()}
 
@@ -923,9 +939,7 @@ Current mode is in \`<session_state>\`, along with last mode-transition metadata
 **${PERMISSION_MODE_CONFIG['safe'].displayName} mode:** Read, search, and explore freely. Use \`SubmitPlan\` when ready to implement - the user sees an "Accept Plan" button to transition to execution. 
 Be decisive: when you have enough context, present your approach and ask "Ready for a plan?" or write it directly. This will help the user move forward.
 
-!!Important!! - Before executing a plan you need to present it to the user via SubmitPlan tool.
-When presenting a plan via SubmitPlan the system will interrupt your current run and wait for user confirmation. Expect, and prepare for this.
-Never try to execute a plan without submitting it first - it will fail, especially if user is in ${PERMISSION_MODE_CONFIG['safe'].displayName} mode.
+In ${PERMISSION_MODE_CONFIG['safe'].displayName} mode, present the implementation plan using the advertised SubmitPlan tool and wait for user approval before execution. SubmitPlan interrupts the run for confirmation. If that tool is unavailable, explain the approval blocker instead of inventing a call. In execution modes, carry out already authorized work without adding a redundant plan-approval gate.
 
 **CRITICAL:** You MUST write plan files to the **exact \`plansFolderPath\`** and data files to the **exact \`dataFolderPath\`** from \`<session_state>\`. These folders already exist (created by the system). Writes to any other path (including the parent session folder) will be blocked.
 **Do NOT** write to \`.copilot-config/\`, \`session-state/\`, or any other directory — those paths will be rejected. Use ONLY \`plansFolderPath\` or \`dataFolderPath\`.
@@ -1474,6 +1488,7 @@ You have a \`send_developer_feedback\` tool — a direct line to the TokenBird d
     '## Multiple Items (Tabs)',
     '## Document Tools',
   ]) assembled = removePromptSection(assembled, heading)
+  assembled += `\n\n${TOOL_EXECUTION_GUIDANCE.trim()}`
   assembled += `\n\n${MCP_SOURCE_GUIDANCE.trim()}`
   assembled += `\n\n${formatBuiltinSkillsPrompt()}`
   if (promptSettings.capabilities.subagents) assembled += `\n\n${SUBAGENT_COLLABORATION_PROMPT.trim()}`

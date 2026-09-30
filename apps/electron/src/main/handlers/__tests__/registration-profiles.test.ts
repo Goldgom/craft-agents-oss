@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
+import { ADDITIONAL_CORE_CHANNELS } from './additional-core-channels'
 
 const registeredChannels: string[] = []
 
@@ -130,6 +131,7 @@ async function getExpectedCoreChannels(): Promise<Set<string>> {
   ])
 
   return new Set([
+    ...ADDITIONAL_CORE_CHANNELS,
     ...auth.HANDLED_CHANNELS,
     ...automations.HANDLED_CHANNELS,
     ...files.HANDLED_CHANNELS,

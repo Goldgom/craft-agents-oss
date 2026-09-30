@@ -7,6 +7,7 @@
  */
 
 import { CraftMcpClient } from './client.js';
+import { sanitizeMcpConnectionError } from './connection-error.ts';
 import { debug } from '../utils/debug.ts';
 import { normalizeMcpUrl } from '../sources/server-builder.ts';
 import type { McpTransport } from '../sources/types.ts';
@@ -122,19 +123,11 @@ export interface McpValidationConfig {
 
 /**
  * Map a low-level connection error to a user-actionable result.
- * Heuristic — keep simple, the underlying message is preserved as the source of truth.
+ * Raw provider errors may echo credentials, so only return a safe category.
  */
 function classifyConnectionError(err: unknown): McpValidationResult {
-  const message = err instanceof Error ? err.message : String(err);
-  let errorType: McpValidationResult['errorType'] = 'failed';
-  if (/\b401\b|\b403\b|unauthorized|forbidden|authentication/i.test(message)) {
-    errorType = 'needs-auth';
-  }
-  return {
-    success: false,
-    error: message || 'Validation failed',
-    errorType,
-  };
+  const { needsAuth, message } = sanitizeMcpConnectionError(err);
+  return { success: false, error: message, errorType: needsAuth ? 'needs-auth' : 'failed' };
 }
 
 /**
@@ -145,7 +138,7 @@ function classifyConnectionError(err: unknown): McpValidationResult {
 export async function validateMcpConnection(
   config: McpValidationConfig
 ): Promise<McpValidationResult> {
-  debug('Validating MCP connection to', config.mcpUrl);
+  debug('Validating MCP connection');
 
   const mcpUrl = normalizeMcpUrl(config.mcpUrl);
 
@@ -155,10 +148,8 @@ export async function validateMcpConnection(
     ...(config.mcpAccessToken ? { Authorization: `Bearer ${config.mcpAccessToken}` } : {}),
   };
 
-  // SSE transport is not supported by CraftMcpClient (HTTP only). Streamable
-  // HTTP is the modern transport; SSE servers will surface a clear connect error.
   const mcpClient = new CraftMcpClient({
-    transport: 'http',
+    transport: config.mcpTransport === 'sse' ? 'sse' : 'http',
     url: mcpUrl,
     headers: Object.keys(headers).length > 0 ? headers : undefined,
   });
@@ -208,7 +199,7 @@ export async function validateMcpConnection(
       tools: toolNames,
     };
   } catch (err) {
-    debug('[mcp-validation] error:', err instanceof Error ? err.message : err);
+    debug('[mcp-validation] connection failed');
     return classifyConnectionError(err);
   } finally {
     await mcpClient.close().catch(() => {});

@@ -6,9 +6,12 @@
  */
 
 import type { CredentialBackend } from './backends/types.ts';
-import type { CredentialId, CredentialType, StoredCredential, CredentialHealthStatus, CredentialHealthIssue } from './types.ts';
+import type { CredentialId, CredentialType, StoredCredential, CredentialHealthStatus, CredentialHealthIssue, CredentialWrite, CredentialSnapshot, CredentialCompareAndSet } from './types.ts';
 import type { LlmAuthType, LlmProviderType } from '../config/llm-connections.ts';
+import { validateCredentialWrites } from './types.ts';
 import { SecureStorageBackend } from './backends/secure-storage.ts';
+import { CredentialVaultError } from './backends/vault-protection.ts';
+import type { NativeCredentialChange } from './native-types.ts';
 import { debug } from '../utils/debug.ts';
 
 export class CredentialManager {
@@ -16,6 +19,16 @@ export class CredentialManager {
   private writeBackend: CredentialBackend | null = null;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+
+  /** Host-owned initialization; no renderer or RPC endpoint exposes this. */
+  configureBackend(backend: CredentialBackend): void {
+    // Replace state in place so existing main-process references retain the
+    // configured host backend. Legacy access remains fully compatible.
+    this.backends = [backend];
+    this.writeBackend = backend;
+    this.initialized = true;
+    this.initPromise = null;
+  }
 
   /**
    * Explicitly initialize the credential manager.
@@ -119,11 +132,24 @@ export class CredentialManager {
           return cred;
         }
       } catch (err) {
+        if (err instanceof CredentialVaultError) throw err;
         debug(`[CredentialManager] Error reading from ${backend.name}:`, err);
       }
     }
 
     return null;
+  }
+
+  async getSnapshot(id: CredentialId): Promise<CredentialSnapshot> {
+    await this.ensureInitialized();
+    if (!this.writeBackend?.getSnapshot) throw new Error('Credential revisions are unavailable');
+    return this.writeBackend.getSnapshot(id);
+  }
+
+  async compareAndSetMany(changes: CredentialCompareAndSet[]): Promise<boolean> {
+    await this.ensureInitialized();
+    if (!this.writeBackend?.compareAndSetMany) throw new Error('Atomic credential comparisons are unavailable');
+    return this.writeBackend.compareAndSetMany(changes);
   }
 
   /**
@@ -141,6 +167,22 @@ export class CredentialManager {
     debug(`[CredentialManager] Saved ${id.type} to ${this.writeBackend.name}`);
   }
 
+  /** Save a complete batch in a single encrypted-store transaction. */
+  async setMany(entries: CredentialWrite[]): Promise<void> {
+    validateCredentialWrites(entries);
+    if (!entries.length) return;
+    await this.ensureInitialized();
+    if (!this.writeBackend?.setMany) throw new Error('Atomic credential batches are not supported by this backend');
+    await this.writeBackend.setMany(entries);
+    debug(`[CredentialManager] Saved credential batch to ${this.writeBackend.name}`);
+  }
+
+  async applyChanges(changes: NativeCredentialChange[]): Promise<{ upsertedCount: number; deletedCount: number }> {
+    await this.ensureInitialized();
+    if (!this.writeBackend?.applyChanges) throw new CredentialVaultError('VAULT_WRITE_FAILED');
+    return this.writeBackend.applyChanges(changes);
+  }
+
   /**
    * Delete a credential from all backends.
    * Automatically initializes if needed.
@@ -156,6 +198,7 @@ export class CredentialManager {
           debug(`[CredentialManager] Deleted ${id.type} from ${backend.name}`);
         }
       } catch (err) {
+        if (err instanceof CredentialVaultError) throw err;
         debug(`[CredentialManager] Error deleting from ${backend.name}:`, err);
       }
     }
@@ -179,6 +222,7 @@ export class CredentialManager {
           debug(`[CredentialManager] Deleted ${id.type} from ${backend.name}`);
         }
       } catch (err) {
+        if (err instanceof CredentialVaultError) throw err;
         debug(`[CredentialManager] Error deleting from ${backend.name}:`, err);
       }
     }
@@ -207,6 +251,7 @@ export class CredentialManager {
           }
         }
       } catch (err) {
+        if (err instanceof CredentialVaultError) throw err;
         debug(`[CredentialManager] Error listing from ${backend.name}:`, err);
       }
     }
@@ -638,7 +683,7 @@ export class CredentialManager {
 
       // 1. Try to list credentials - this triggers decryption
       // If file is corrupted or can't be decrypted, this will throw
-      await this.list({});
+      for (const backend of this.backends) await backend.list({});
 
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

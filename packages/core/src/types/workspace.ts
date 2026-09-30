@@ -14,7 +14,11 @@ export type McpAuthType = 'workspace_oauth' | 'workspace_bearer' | 'public';
  */
 export interface RemoteServerConfig {
   url: string;              // ws://host:port or wss://host:port
-  token: string;            // Auth token for the remote server
+  token: string;            // Legacy token; empty when tokenRef is present
+  tokenRef?: string;        // Immutable encrypted-vault reference, resolved only by Electron main
+  tokenRefKind?: 'profile' | 'workspace'; // Explicit vault namespace; no inferred association
+  profileId?: string;       // Explicit association only; never infer by URL or token
+  revision?: string;        // Changes whenever the stored connection snapshot changes
   remoteWorkspaceId: string; // ID of the workspace on the remote server
 }
 

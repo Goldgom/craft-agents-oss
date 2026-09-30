@@ -3,10 +3,23 @@
 import { loadShellEnv } from './shell-env'
 loadShellEnv()
 
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, safeStorage, shell } from 'electron'
 import { createHash, randomUUID } from 'crypto'
 import { hostname, homedir } from 'os'
 import { join, delimiter, basename } from 'path'
+import { pathToFileURL } from 'node:url'
+import { createNativeWindowAuthority, type NativeAuthorityEvent } from './native-window-authority'
+import { registerNativeWorkspaceSwitch } from './handlers/workspace-native'
+import { configureElectronCredentialVault } from './credential-vault'
+import { registerNativeCredentialIpcHandlers } from './handlers/credentials-native'
+import { configureRemoteCredentialProtection, hasPendingRemoteCredentialMigration, listManagedRemoteCredentialMetadata, migrateRemoteCredentials, prepareRemoteWorkspaceConfig, resolveRemoteProfile, resolveRemoteWorkspace, saveRemoteProfile, type ResolvedRemoteProfile } from './remote-credentials'
+import { reconcileSourceCredentialChanges } from '@craft-agent/shared/sources/credential-runtime'
+import { validateNativeRemoteUrl } from './remote-transport-policy'
+import { registerNativeRemoteTransport } from './native-remote-transport'
+import { NATIVE_REMOTE_TRANSPORT } from '../shared/native-remote-transport'
+import { WsRpcClient } from '@craft-agent/server-core/transport'
+import { redactWorkspaceRemoteCredentials } from '@craft-agent/server-core/handlers/rpc/workspace-remote-input'
+import { sourceCredentialWorkspaceId, workspaceForSourceCredentialId } from './credential-scope'
 import * as Sentry from '@sentry/electron/main'
 import { redactSensitiveHeadersInPlace, redactSensitiveKeysInPlace } from '@craft-agent/shared/utils'
 import { getLocalizedProductName } from '@craft-agent/shared/branding'
@@ -245,19 +258,41 @@ registerPiModelResolver((piAuthProvider) =>
 const DEEPLINK_SCHEME = process.env.CRAFT_DEEPLINK_SCHEME || 'tokenbird'
 
 let windowManager: WindowManager | null = null
+let startupRemoteTarget: ResolvedRemoteProfile | undefined
+let nativeAppAuthority: ReturnType<typeof createNativeWindowAuthority> | undefined
+function pinNativeApp(event: NativeAuthorityEvent): () => void {
+  if (!nativeAppAuthority) throw new Error('Application is not ready')
+  const binding = nativeAppAuthority(event).bindingId
+  return () => {
+    if (!nativeAppAuthority || nativeAppAuthority(event).bindingId !== binding) throw new Error('Application workspace changed. Retry.')
+  }
+}
+async function freshStartupRemoteTarget(): Promise<ResolvedRemoteProfile> {
+  const expected = startupRemoteTarget
+  const current = expected ? await resolveRemoteProfile(expected.profileId) : undefined
+  if (!current || !expected || current.revision !== expected.revision || current.url !== expected.url || current.token !== expected.token) {
+    throw new Error('Saved server changed. Reopen it from Remote Servers settings.')
+  }
+  return current
+}
 
-function getActiveRemoteProfile(webContentsId: number): RemoteServerProfile | undefined {
+async function getActiveRemoteProfile(webContentsId: number): Promise<ResolvedRemoteProfile | undefined> {
   const startupProfileId = process.env.CRAFT_SERVER_PROFILE_ID
-  if (startupProfileId) return getRemoteServerProfile(startupProfileId)
+  if (startupProfileId) {
+    const profile = await resolveRemoteProfile(startupProfileId)
+    return profile && startupRemoteTarget && profile.revision === startupRemoteTarget.revision && profile.url === startupRemoteTarget.url && profile.token === startupRemoteTarget.token ? profile : undefined
+  }
 
   const workspaceId = windowManager?.getWorkspaceForWindow(webContentsId)
   const remote = workspaceId ? getWorkspaceByNameOrId(workspaceId)?.remoteServer : undefined
-  if (!remote) return undefined
-  return loadRemoteServerProfiles().find((profile) =>
-    profile.url === remote.url && (!profile.token || profile.token === remote.token),
-  )
+  if (!remote?.profileId) return undefined
+  const profile = await resolveRemoteProfile(remote.profileId)
+  const bound = await resolveRemoteWorkspace(remote)
+  if (!profile || profile.url !== bound.url || profile.token !== bound.token) return undefined
+  return profile
 }
 let sessionManager: SessionManager | null = null
+let nativeRemoteTransport: ReturnType<typeof registerNativeRemoteTransport> | null = null
 let browserPaneManager: BrowserPaneManager | null = null
 let oauthFlowStore: OAuthFlowStore | null = null
 let moduleSink: EventSink | null = null
@@ -291,7 +326,7 @@ const STARTUP_LOCATION_LOCAL = 'local'
  * A relaunch with CRAFT_SERVER_URL set overrides picker mode (the user
  * already picked a remote service).
  */
-const pickerMode = getStartupServerLocation() === STARTUP_LOCATION_NONE && !process.env.CRAFT_SERVER_URL
+let pickerMode = getStartupServerLocation() === STARTUP_LOCATION_NONE && !process.env.CRAFT_SERVER_URL
 
 /** Resolve the persisted startup location to a remote profile (if any). */
 function resolveStartupRemoteProfile(): RemoteServerProfile | null {
@@ -306,7 +341,8 @@ function resolveStartupRemoteProfile(): RemoteServerProfile | null {
   const profile = resolveStartupRemoteProfile()
   if (profile) {
     process.env.CRAFT_SERVER_URL = profile.url
-    process.env.CRAFT_SERVER_TOKEN = profile.token
+    // OS-protected credentials can be opened only after Electron app.ready.
+    delete process.env.CRAFT_SERVER_TOKEN
     process.env.CRAFT_SERVER_PROFILE_ID = profile.id
     process.env.CRAFT_SERVER_PROFILE_NAME = profile.name
   }
@@ -338,7 +374,8 @@ function getServerContext(): StartupServerContext {
   return { mode: 'local' }
 }
 
-async function relaunchWithServer(target: string): Promise<void> {
+async function relaunchWithServer(target: string, assertCurrent?: () => void): Promise<void> {
+  assertCurrent?.()
   if (target === STARTUP_LOCATION_LOCAL || target === STARTUP_LOCATION_NONE) {
     delete process.env.CRAFT_SERVER_URL
     delete process.env.CRAFT_SERVER_TOKEN
@@ -346,11 +383,13 @@ async function relaunchWithServer(target: string): Promise<void> {
     delete process.env.CRAFT_SERVER_PROFILE_NAME
     setStartupServerLocation(target)
   } else {
-    const profile = getRemoteServerProfile(target)
+    const profile = await resolveRemoteProfile(target)
     if (!profile) throw new Error('Remote server profile not found')
+    assertCurrent?.()
     setStartupServerLocation(target)
     process.env.CRAFT_SERVER_URL = profile.url
-    process.env.CRAFT_SERVER_TOKEN = profile.token
+    // Saved credentials stay in main, never inherited by a renderer/subprocess.
+    delete process.env.CRAFT_SERVER_TOKEN
     process.env.CRAFT_SERVER_PROFILE_ID = profile.id
     process.env.CRAFT_SERVER_PROFILE_NAME = profile.name
   }
@@ -383,41 +422,62 @@ ipcMain.handle('__get-server-context', async () => {
   mainLog.info(`[server-context] mode=${ctx.mode}${ctx.profileName ? ` profile=${ctx.profileName}` : ''}`)
   return ctx
 })
-ipcMain.handle('__picker-get-profiles', async () => {
+ipcMain.handle('__picker-get-profiles', async (event) => {
+  pinNativeApp(event)()
   const profiles = loadRemoteServerProfiles().map(toProfileInfo)
   mainLog.info(`[picker] renderer requested profiles (${profiles.length})`)
   return profiles
 })
-ipcMain.handle('__remote-servers:save', async (_event, input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput }) => {
-  return toProfileInfo(upsertRemoteServerProfile(input))
+ipcMain.handle('__remote-servers:save', async (event, input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput }) => {
+  pinNativeApp(event)()
+  return toProfileInfo(await saveRemoteProfile(input))
 })
-ipcMain.handle('__remote-servers:delete', async (_event, id: string) => {
+ipcMain.handle('__remote-servers:delete', async (event, id: string) => {
+  pinNativeApp(event)()
   return { success: deleteRemoteServerProfile(id) }
 })
-ipcMain.handle('__remote-servers:test', async (_event, input: { id?: string; url?: string; token?: string }) => {
+ipcMain.handle('__remote-servers:test', async (event, input: { id?: string; url?: string; token?: string }) => {
+  const assertCurrent = pinNativeApp(event)
   const profile = input.id
-    ? getRemoteServerProfile(input.id)
+    ? await resolveRemoteProfile(input.id)
     : input.url
       ? { id: 'adhoc', name: 'adhoc', url: input.url, token: input.token ?? '', createdAt: 0, updatedAt: 0 }
       : undefined
   if (!profile) return { ok: false, error: 'Remote server profile not found' }
 
   const { connectToRemote } = await import('./handlers/workspace')
-  const { client, error } = await connectToRemote(profile.url, profile.token)
-  if (!client) return { ok: false, error: error ?? 'Connection failed' }
+  assertCurrent()
+  if (input.id && (await resolveRemoteProfile(input.id))?.revision !== (profile as ResolvedRemoteProfile).revision) throw new Error('Saved server changed. Retry.')
+  assertCurrent()
+  const { client } = await connectToRemote(validateNativeRemoteUrl(profile.url), profile.token, undefined, {
+    tlsRejectUnauthorized: true, useNodeWebSocket: true,
+    beforeHandshake: async () => {
+      assertCurrent()
+      if (input.id && (await resolveRemoteProfile(input.id))?.revision !== (profile as ResolvedRemoteProfile).revision) throw new Error('Saved server changed. Retry.')
+      assertCurrent()
+    },
+  })
+  if (!client) return { ok: false, error: 'Connection failed. Check Remote Servers settings.' }
   try {
+    assertCurrent()
+    if (profile.id !== 'adhoc' && (await resolveRemoteProfile(profile.id))?.revision !== (profile as ResolvedRemoteProfile).revision) throw new Error('Saved server changed. Retry.')
+    assertCurrent()
     if (profile.id !== 'adhoc') markRemoteServerConnected(profile.id)
-    return { ok: true, serverVersion: client.getServerVersion?.() ?? undefined }
+    const version = client.getServerVersion?.()
+    const safeVersion = typeof version === 'string' && version.length <= 128 && (!profile.token || !version.includes(profile.token)) ? version : undefined
+    return { ok: true, serverVersion: safeVersion }
   } finally {
     client.destroy()
   }
 })
-ipcMain.handle('__select-startup-server', async (_event, target: string) => {
-  await relaunchWithServer(target)
+ipcMain.handle('__select-startup-server', async (event, target: string) => {
+  const assertCurrent = pinNativeApp(event)
+  await relaunchWithServer(target, assertCurrent)
   return { success: true }
 })
 ipcMain.handle('__get-startup-location', async () => getStartupServerLocation() ?? STARTUP_LOCATION_LOCAL)
-ipcMain.handle('__set-startup-location', async (_event, value: string) => {
+ipcMain.handle('__set-startup-location', async (event, value: string) => {
+  pinNativeApp(event)()
   if (
     value !== STARTUP_LOCATION_NONE
     && value !== STARTUP_LOCATION_LOCAL
@@ -493,8 +553,8 @@ ipcMain.handle('data:importFromLocalFile', async (_event, filePath: string) => {
   const activeWorkspaceId = windowManager?.getWorkspaceForWindow(_event.sender.id)
   const activeWorkspace = activeWorkspaceId ? getWorkspaceByNameOrId(activeWorkspaceId) : undefined
   const remoteTarget = process.env.CRAFT_SERVER_URL
-    ? { url: process.env.CRAFT_SERVER_URL, token: process.env.CRAFT_SERVER_TOKEN ?? '' }
-    : activeWorkspace?.remoteServer
+    ? startupRemoteTarget ?? { url: process.env.CRAFT_SERVER_URL, token: process.env.CRAFT_SERVER_TOKEN ?? '' }
+    : activeWorkspace?.remoteServer ? await resolveRemoteWorkspace(activeWorkspace.remoteServer) : undefined
 
   if (!remoteTarget) {
     // Local mode — the embedded server owns the data and runs in THIS process.
@@ -660,7 +720,7 @@ async function createInitialWindows(): Promise<void> {
   // Thin clients do not own the local workspace registry, and switching
   // server locations must never carry a workspace selection across the
   // boundary. Open without an id so the renderer shows WorkspacePicker.
-  if (process.env.CRAFT_SERVER_URL || selectWorkspaceFirst) {
+  if (pickerMode || process.env.CRAFT_SERVER_URL || selectWorkspaceFirst) {
     windowManager.createWindow({ workspaceId: '' })
     mainLog.info('Created initial window without a workspace; waiting for explicit workspace selection')
     return
@@ -717,6 +777,34 @@ async function createInitialWindows(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // Native protection is optional for existing vaults. This adapter preserves
+  // full legacy read/write/refresh behavior until an explicit Settings upgrade.
+  const credentialVault = configureElectronCredentialVault({ safeStorage, remoteMigration: {
+    hasPending: hasPendingRemoteCredentialMigration,
+    listMetadata: listManagedRemoteCredentialMetadata,
+    migrate: migrateRemoteCredentials,
+  } })
+  configureRemoteCredentialProtection(() => credentialVault.backend.getProtectionFormat() === 'native')
+  if (process.env.CRAFT_SERVER_PROFILE_ID) {
+    try {
+      const startupProfile = await resolveRemoteProfile(process.env.CRAFT_SERVER_PROFILE_ID)
+      if (!startupProfile) throw new Error('Unavailable saved startup connection')
+      process.env.CRAFT_SERVER_URL = startupProfile.url
+      startupRemoteTarget = startupProfile
+      delete process.env.CRAFT_SERVER_TOKEN
+    } catch {
+      // Keep the saved profile and vault untouched, but make recovery reachable.
+      // No failed native vault is downgraded and no old token is sent.
+      pickerMode = true
+      startupRemoteTarget = undefined
+      delete process.env.CRAFT_SERVER_URL
+      delete process.env.CRAFT_SERVER_TOKEN
+      delete process.env.CRAFT_SERVER_PROFILE_ID
+      delete process.env.CRAFT_SERVER_PROFILE_NAME
+      mainLog.warn('Saved startup credentials are unavailable; opening the server picker')
+      dialog.showErrorBox('Saved server unavailable', 'TokenBird could not unlock the saved server credential. Unlock your operating-system credential store and reopen the app, or choose another server from the picker. Your saved configuration was preserved.')
+    }
+  }
   // Export packaged state as env var so logger.ts (and headless Bun) don't need 'electron'
   process.env.CRAFT_IS_PACKAGED = app.isPackaged ? 'true' : 'false'
 
@@ -790,6 +878,30 @@ app.whenReady().then(async () => {
   try {
     // Initialize window manager
     windowManager = new WindowManager()
+    const assertNativeWindow = createNativeWindowAuthority(windowManager, [
+      pathToFileURL(join(__dirname, 'renderer/index.html')).href,
+      ...(process.env.VITE_DEV_SERVER_URL ? [process.env.VITE_DEV_SERVER_URL] : []),
+    ])
+    const assertNativeAppWindow = createNativeWindowAuthority(windowManager, [
+      pathToFileURL(join(__dirname, 'renderer/index.html')).href,
+      ...(process.env.VITE_DEV_SERVER_URL ? [process.env.VITE_DEV_SERVER_URL] : []),
+    ], { allowUnboundWorkspace: true })
+    nativeAppAuthority = assertNativeAppWindow
+    registerNativeCredentialIpcHandlers(ipcMain, {
+      vault: credentialVault,
+      assertSender: assertNativeWindow,
+      isLocalWorkspace: id => getWorkspaces().some(workspace => workspace.id === id && !workspace.remoteServer),
+      getSourceWorkspaceId: id => sourceCredentialWorkspaceId(id, getWorkspaces()),
+      onApplied: async changes => {
+        const notified = await sessionManager?.notifyStoredCredentialChanges(changes)
+        const reconciled = await reconcileSourceCredentialChanges(changes, id => workspaceForSourceCredentialId(id, getWorkspaces()) ?? null)
+        const reloads = await Promise.allSettled(reconciled.workspaceIds.map(id => sessionManager?.reloadMcpServers(id)))
+        if (reconciled.failed || notified?.sessionIdsNeedingRestart.length
+          || reloads.some(result => result.status === 'rejected' || !!result.value?.failures.length)) {
+          throw new Error('Runtime credential reconciliation is pending')
+        }
+      },
+    })
 
     // Create the application menu (needs windowManager for New Window action)
     createApplicationMenu(windowManager)
@@ -809,6 +921,64 @@ app.whenReady().then(async () => {
     // Skip server-side initialization (SessionManager, model refresh, platform injection).
     const isClientOnly = !!process.env.CRAFT_SERVER_URL
     const isHeadless = !!process.env.CRAFT_HEADLESS
+
+    nativeRemoteTransport = registerNativeRemoteTransport(ipcMain, {
+      assertSender: assertNativeAppWindow,
+      resolveTarget: async authority => {
+        if (isClientOnly && startupRemoteTarget) {
+          const current = await resolveRemoteProfile(startupRemoteTarget.profileId)
+          // A stored edit invalidates this startup generation. Reopening the
+          // saved server is explicit; never silently retarget an existing tab.
+          if (!current || current.revision !== startupRemoteTarget.revision
+            || current.url !== startupRemoteTarget.url || current.token !== startupRemoteTarget.token) return null
+          return {
+            mode: 'thin', url: startupRemoteTarget.url, token: startupRemoteTarget.token,
+            remoteWorkspaceId: authority.workspaceId || undefined, revision: startupRemoteTarget.revision,
+            profileId: current.profileId, profileRevision: current.revision,
+          }
+        }
+        const workspace = getWorkspaceByNameOrId(authority.workspaceId)
+        const remote = workspace?.remoteServer
+        if (!remote) return null
+        const resolved = await resolveRemoteWorkspace(remote)
+        if (JSON.stringify(getWorkspaceByNameOrId(authority.workspaceId)?.remoteServer) !== JSON.stringify(remote)) {
+          throw new Error('Workspace connection changed. Reopen the workspace.')
+        }
+        const profile = remote.profileId ? await resolveRemoteProfile(remote.profileId) : undefined
+        if (JSON.stringify(getWorkspaceByNameOrId(authority.workspaceId)?.remoteServer) !== JSON.stringify(remote)) {
+          throw new Error('Workspace connection changed. Reopen the workspace.')
+        }
+        const matched = profile && profile.url === resolved.url && profile.token === resolved.token
+        return { mode: 'workspace', url: resolved.url, token: resolved.token,
+          remoteWorkspaceId: resolved.remoteWorkspaceId, revision: resolved.revision ?? 'legacy',
+          ...(matched ? { profileId: profile.profileId, profileRevision: profile.revision } : {}) }
+      },
+      createClient: (target, capabilities) => new WsRpcClient(validateNativeRemoteUrl(target.url), {
+        token: target.token, workspaceId: target.remoteWorkspaceId,
+        mode: 'remote', autoReconnect: true, tlsRejectUnauthorized: true, useNodeWebSocket: true,
+        clientCapabilities: [...capabilities],
+      }),
+      transferSftp: async (target, request, assertCurrent) => {
+        if (!target.profileId || !target.profileRevision) throw new Error('No SFTP profile is bound to this connection')
+        const profile = await resolveRemoteProfile(target.profileId)
+        if (!profile || profile.revision !== target.profileRevision || profile.url !== target.url || profile.token !== target.token) {
+          throw new Error('Saved server changed. Reopen the workspace.')
+        }
+        const { transferSftpFile } = await import('./sftp')
+        await assertCurrent()
+        return await transferSftpFile(profile, request as import('./sftp').SftpTransferRequest)
+      },
+      sendToSender: (sender, packet) => (sender as Electron.WebContents).send(NATIVE_REMOTE_TRANSPORT.EVENT, packet),
+      attachInvalidation: (sender, invalidate) => {
+        const contents = sender as Electron.WebContents
+        const navigate = (_event: Electron.Event, _url: string, isInPlace: boolean, isMainFrame: boolean) => {
+          if (isMainFrame && !isInPlace) invalidate()
+        }
+        contents.on('destroyed', invalidate)
+        contents.on('did-start-navigation', navigate)
+        return () => { contents.removeListener('destroyed', invalidate); contents.removeListener('did-start-navigation', navigate) }
+      },
+    })
 
     if (isClientOnly) {
       mainLog.info(`Client-only mode: CRAFT_SERVER_URL=${process.env.CRAFT_SERVER_URL} (server initialization skipped)`)
@@ -921,29 +1091,61 @@ app.whenReady().then(async () => {
       })
     })
 
-    ipcMain.handle('__sftp:test', async (_event, profileId: string) => {
-      const profile = getRemoteServerProfile(profileId)
-      if (!profile) return { ok: false, error: 'Remote server profile not found' }
+    // Native IPC proves the caller's window identity; WebSocket handshake
+    // webContentsId values are untrusted and cannot access saved profiles here.
+    const { registerRemoteCollaborationIpcHandlers } = await import('./handlers/collaboration-remote')
+    const { connectToRemote: connectCollaborationRemote } = await import('./handlers/workspace')
+    const { openSavedRemoteWorkspace } = await import('./handlers/remote-servers')
+    registerRemoteCollaborationIpcHandlers(ipcMain, {
+      getProfile: resolveRemoteProfile,
+      connect: (url, token, workspaceId, options) => connectCollaborationRemote(validateNativeRemoteUrl(url), token, workspaceId, { ...options, tlsRejectUnauthorized: true, useNodeWebSocket: true }),
+      assertSender: assertNativeWindow,
+      openWorkspace: (profileId, workspaceId, assertCurrent) => openSavedRemoteWorkspace(profileId, workspaceId, (id, bindingChanged) => {
+        if (bindingChanged) for (const win of windowManager?.getAllWindowsForWorkspace(id) ?? []) win.webContents.reload()
+        windowManager?.focusOrCreateWindow(id)
+      }, assertCurrent),
+    })
+
+    async function pinnedSftpProfile(event: NativeAuthorityEvent, profileId?: string) {
+      const assertCurrent = pinNativeApp(event)
+      const profile = profileId ? await resolveRemoteProfile(profileId) : await getActiveRemoteProfile(event.sender.id)
+      assertCurrent()
+      if (!profile) throw new Error('No SFTP profile is configured for this connection')
+      const snapshot = await resolveRemoteProfile(profile.id)
+      assertCurrent()
+      if (!snapshot || JSON.stringify(snapshot) !== JSON.stringify(profile)) throw new Error('Saved server changed. Retry.')
+      return { profile: snapshot, assertCurrent: async () => {
+        assertCurrent()
+        const current = await resolveRemoteProfile(snapshot.profileId)
+        assertCurrent()
+        if (!current || current.revision !== snapshot.revision) throw new Error('Saved server changed. Retry.')
+      } }
+    }
+    ipcMain.handle('__sftp:test', async (event, profileId: string) => {
       try {
+        const { profile, assertCurrent } = await pinnedSftpProfile(event, profileId)
         const { testSftpConnection } = await import('./sftp')
-        return await testSftpConnection(profile)
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        await assertCurrent()
+        const result = await testSftpConnection(profile)
+        await assertCurrent()
+        return result
+      } catch {
+        return { ok: false, error: 'SFTP connection failed. Check the saved profile and retry.' }
       }
     })
-
-    ipcMain.handle('__sftp:transfer-profile', async (_event, profileId: string, req: import('./sftp').SftpTransferRequest) => {
-      const profile = getRemoteServerProfile(profileId)
-      if (!profile) throw new Error('Remote server profile not found')
+    ipcMain.handle('__sftp:transfer-profile', async (event, profileId: string, req: import('./sftp').SftpTransferRequest) => {
+      const { profile, assertCurrent } = await pinnedSftpProfile(event, profileId)
       const { transferSftpFile } = await import('./sftp')
-      return await transferSftpFile(profile, req)
+      await assertCurrent()
+      try { return await transferSftpFile(profile, req) }
+      catch { throw new Error('SFTP transfer failed. Check the saved profile and selected paths.') }
     })
-
     ipcMain.handle('__sftp:transfer-active', async (event, req: import('./sftp').SftpTransferRequest) => {
-      const profile = getActiveRemoteProfile(event.sender.id)
-      if (!profile) throw new Error('No SFTP profile is configured for the active remote server')
+      const { profile, assertCurrent } = await pinnedSftpProfile(event)
       const { transferSftpFile } = await import('./sftp')
-      return await transferSftpFile(profile, req)
+      await assertCurrent()
+      try { return await transferSftpFile(profile, req) }
+      catch { throw new Error('SFTP transfer failed. Check the saved profile and selected paths.') }
     })
 
     if (!isClientOnly) {
@@ -1117,6 +1319,7 @@ app.whenReady().then(async () => {
             browserPaneManager: browserPaneManager ?? undefined,
             oauthFlowStore: ofs,
             messagingRegistry: messagingHandle.registry,
+            prepareRemoteWorkspaceConfig,
           }
         },
         // Headless: register only core handlers (no GUI handlers for browser, settings, etc.)
@@ -1158,6 +1361,26 @@ app.whenReady().then(async () => {
       if (!embeddedServerConfig.token) {
         setServerConfig({ ...embeddedServerConfig, token: serverToken })
       }
+
+
+      const { registerLocalCollaborationIpcHandlers } = await import('./handlers/collaboration-local')
+      registerLocalCollaborationIpcHandlers(ipcMain, instance.wsServer, {
+        sessionManager: instance.sessionManager,
+        platform: instance.platform,
+        oauthFlowStore: instance.oauthFlowStore,
+        windowManager: windowManager ?? undefined,
+      }, assertNativeWindow)
+      registerNativeWorkspaceSwitch(ipcMain, {
+        assertSender: assertNativeAppWindow,
+        getWorkspace: id => {
+          const workspace = getWorkspaceByNameOrId(id)
+          return workspace ? redactWorkspaceRemoteCredentials(workspace) : null
+        },
+        updateWindowWorkspace: (id, workspaceId) => windowManager?.updateWindowWorkspace(id, workspaceId) ?? false,
+        getAllWindowsForWorkspace: id => windowManager?.getAllWindowsForWorkspace(id) ?? [],
+        clearActiveViewingSession: id => instance.sessionManager.clearActiveViewingSession(id),
+        setupConfigWatcher: (rootPath, workspaceId) => instance.sessionManager.setupConfigWatcher(rootPath, workspaceId),
+      })
 
       // Capture module-level references for before-quit cleanup and deep-link handlers
       sessionManager = instance.sessionManager
@@ -1245,7 +1468,7 @@ app.whenReady().then(async () => {
         let bundle: any = null
 
         if (sourceWorkspace.remoteServer) {
-          const { url: sourceUrl, token: sourceToken, remoteWorkspaceId: sourceRemoteWorkspaceId } = sourceWorkspace.remoteServer
+          const { url: sourceUrl, token: sourceToken, remoteWorkspaceId: sourceRemoteWorkspaceId } = await resolveRemoteWorkspace(sourceWorkspace.remoteServer)
           console.log(`[Transfer] Exporting remote-owned session ${sessionId} from workspace ${sourceRemoteWorkspaceId}...`)
           const { client: sourceClient, error: sourceError } = await connectToRemote(sourceUrl, sourceToken, sourceRemoteWorkspaceId, { requestTimeout: TRANSFER_REQUEST_TIMEOUT_MS })
           if (!sourceClient) throw new Error(sourceError ?? 'Connection failed to source remote server')
@@ -1303,7 +1526,7 @@ app.whenReady().then(async () => {
           return result
         }
 
-        const { url, token, remoteWorkspaceId } = targetWorkspace.remoteServer
+        const { url, token, remoteWorkspaceId } = await resolveRemoteWorkspace(targetWorkspace.remoteServer)
         console.log(`[Transfer] Connecting to target remote server: ${url}`)
         const { client, error } = await connectToRemote(url, token, remoteWorkspaceId, { requestTimeout: TRANSFER_REQUEST_TIMEOUT_MS })
         if (!client) throw new Error(error ?? 'Connection failed to target remote server')
@@ -1383,7 +1606,7 @@ app.whenReady().then(async () => {
         const wsId = windowManager?.getWorkspaceForWindow(e.sender.id)
         if (!wsId) { e.returnValue = null; return }
         const ws = getWorkspaceByNameOrId(wsId)
-        e.returnValue = ws?.remoteServer ?? null
+        e.returnValue = ws ? redactWorkspaceRemoteCredentials(ws).remoteServer ?? null : null
       })
 
       // Server config RPC handlers (LOCAL_ONLY — Electron-specific)
@@ -1487,6 +1710,30 @@ app.whenReady().then(async () => {
         console.log(`CRAFT_SERVER_TOKEN=${instance.token}`)
       }
     }
+
+    if (isClientOnly && startupRemoteTarget) {
+      registerNativeWorkspaceSwitch(ipcMain, {
+        assertSender: assertNativeAppWindow,
+        getWorkspace: async id => {
+          const target = await freshStartupRemoteTarget()
+          const connection = new WsRpcClient(validateNativeRemoteUrl(target.url), { token: target.token, autoReconnect: false,
+            tlsRejectUnauthorized: true, useNodeWebSocket: true, requestTimeout: 10_000 })
+          connection.setHandshakeGuard(async () => { await freshStartupRemoteTarget() })
+          connection.connect()
+          try {
+            const rows = await connection.invoke(RPC_CHANNELS.server.GET_WORKSPACES) as Array<{ id: string }>
+            await freshStartupRemoteTarget()
+            return Array.isArray(rows) && rows.some(row => row.id === id) ? { id } : null
+          } finally { connection.destroy() }
+        },
+        updateWindowWorkspace: (id, workspaceId) => windowManager?.updateWindowWorkspace(id, workspaceId) ?? false,
+        getAllWindowsForWorkspace: id => windowManager?.getAllWindowsForWorkspace(id) ?? [],
+        clearActiveViewingSession: () => {}, setupConfigWatcher: () => {},
+      })
+    }
+    // Multi-server relay is not registered in this release while its separate
+    // interoperability/security acceptance remains incomplete. Existing
+    // same-server collaboration and saved-server transport remain available.
 
     // Create initial windows (restores from saved state or opens first workspace)
     // In headless mode the server runs without any UI — skip window creation.
@@ -1682,16 +1929,24 @@ async function performQuitCleanup(): Promise<void> {
     return
   }
   quitCleanupRan = true
+  nativeRemoteTransport?.dispose()
+  nativeRemoteTransport = null
+
 
   if (sessionManager) {
     try {
       await sessionManager.flushAllSessions()
-      mainLog.info('Flushed all pending session writes')
+      mainLog.info('Flushed pending session writes before runtime teardown')
     } catch (error) {
       mainLog.error('Failed to flush sessions:', error)
     }
-    // Clean up SessionManager resources (file watchers, timers, etc.)
-    await sessionManager.cleanup()
+    // Runtime teardown can publish final messages; cleanup performs a final flush.
+    try {
+      await sessionManager.cleanup()
+      mainLog.info('Flushed final session writes after runtime teardown')
+    } catch (error) {
+      mainLog.error('Final session persistence failed during shutdown:', error)
+    }
   }
 
   // Clean up browser pane instances

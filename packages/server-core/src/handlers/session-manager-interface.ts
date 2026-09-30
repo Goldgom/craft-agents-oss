@@ -49,12 +49,13 @@ export interface ISessionManager {
   createSession(
     workspaceId: string,
     options?: CreateSessionOptions,
-    internal?: { emitCreatedEvent?: boolean },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration },
   ): Promise<Session>
   /** Resolved working directory of a live session (Tasks Conductor uses it so children inherit
    *  the orchestrator's cwd). */
   getSessionWorkingDirectory(sessionId: string): string | undefined
   deleteSession(sessionId: string): Promise<void>
+  notifySessionCreated?(workspaceId: string, sessionId: string): void
 
   // ---------------------------------------------------------------------------
   // Session state
@@ -107,6 +108,8 @@ export interface ISessionManager {
   setSessionCollaboration?(sessionId: string, collaboration: SessionCollaboration | null): Promise<void>
   /** Shared coordinator used by RPC handlers and agent-facing collaboration tools. */
   getCollaborationManager?(): CollaborationManager
+  getCollaborationRelayManager?(): import('../collaboration/RelayParticipantManager').RelayParticipantManager
+  acceptCollaborationRelayMessage?(sessionId: string, delivery: import('@craft-agent/shared/protocol').CollaborationRelayDelivery): Promise<import('@craft-agent/shared/protocol').CollaborationRelayReceipt>
 
   // ---------------------------------------------------------------------------
   // Messaging

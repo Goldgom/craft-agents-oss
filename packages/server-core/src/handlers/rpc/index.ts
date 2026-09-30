@@ -42,6 +42,7 @@ export function registerCoreRpcHandlers(
   registerAgentsHandlers(server, deps)
   registerCatalogHandlers(server, deps)
   registerCollaborationHandlers(server, deps)
+  // Experimental multi-server relay RPCs are intentionally not registered.
   registerStudioHandlers(server)
   registerFilesHandlers(server, deps)
   registerLabelsHandlers(server, deps)

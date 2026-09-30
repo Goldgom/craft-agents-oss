@@ -46,6 +46,7 @@ interface ClientConnection {
   workspaceId: string | null
   webContentsId: number | null
   capabilities: Set<string>
+  authenticatedBy: 'bearer' | 'cookie' | null
   missedPongs: number
   alive: boolean
   /** Ring buffer of recent events for replay on reconnect. */
@@ -484,6 +485,8 @@ export class WsRpcServer implements RpcServer {
           return
         }
 
+        // Auth provenance is server-attested, not a client capability claim.
+        let authenticatedBy: 'bearer' | 'cookie' | null = null
         // Auth check — bearer token OR session cookie (web UI)
         if (this.requireAuth) {
           let authenticated = false
@@ -491,11 +494,13 @@ export class WsRpcServer implements RpcServer {
           // 1. Try bearer token (standard path)
           if (envelope.token && this.validateToken) {
             authenticated = await this.validateToken(envelope.token)
+            if (authenticated) authenticatedBy = 'bearer'
           }
 
           // 2. Fallback: try session cookie from HTTP upgrade request (web UI path)
           if (!authenticated && this.validateSessionCookie && upgradeRequestCookie) {
             authenticated = await this.validateSessionCookie(upgradeRequestCookie)
+            if (authenticated) authenticatedBy = 'cookie'
           }
 
           if (!authenticated) {
@@ -525,6 +530,7 @@ export class WsRpcServer implements RpcServer {
             // Identity must match (workspace + webContentsId)
             const identityMatch =
               prevClient.workspaceId === requestedWorkspaceId &&
+              prevClient.authenticatedBy === authenticatedBy &&
               prevClient.webContentsId === (envelope.webContentsId ?? null)
 
             if (identityMatch) {
@@ -537,6 +543,7 @@ export class WsRpcServer implements RpcServer {
               clearTimeout(entry.timer)
 
               prevClient.ws = ws
+              prevClient.authenticatedBy = authenticatedBy
               prevClient.alive = true
               prevClient.missedPongs = 0
               handshakeCompleted = true
@@ -632,6 +639,7 @@ export class WsRpcServer implements RpcServer {
           workspaceId: requestedWorkspaceId,
           webContentsId: envelope.webContentsId ?? null,
           capabilities: new Set(envelope.clientCapabilities ?? []),
+          authenticatedBy,
           missedPongs: 0,
           alive: true,
           eventBuffer: [],
@@ -733,6 +741,7 @@ export class WsRpcServer implements RpcServer {
       clientId: client.id,
       workspaceId: client.workspaceId,
       webContentsId: client.webContentsId,
+      authenticatedBy: client.authenticatedBy,
     }
 
     let rejectHandlerTimeout!: (reason: Error) => void

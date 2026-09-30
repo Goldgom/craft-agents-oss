@@ -16,6 +16,7 @@ let setCalls: unknown[][] = [];
 let mockGet = mock(() => Promise.resolve(null as unknown));
 let loadSpy: { mockRestore: () => void } | null = null;
 let saveSpy: { mockRestore: () => void } | null = null;
+let failureSpy: { mockRestore: () => void } | null = null;
 
 function createRenewSource(overrides: Partial<FolderSourceConfig> = {}) {
   const config: FolderSourceConfig = {
@@ -76,15 +77,21 @@ describe('refreshApiRenew via refresh()', () => {
     setCalls = [];
     fetchCalls = [];
     mockGet = mock(() => Promise.resolve(null as unknown));
-    loadSpy = spyOn(credManager, 'load').mockImplementation(async () => await mockGet() as never);
-    saveSpy = spyOn(credManager, 'save').mockImplementation(async (source, credential) => {
-      setCalls.push([credManager.getCredentialId(source), credential]);
+    loadSpy = spyOn(credManager as any, 'snapshotForRefresh').mockImplementation(async (source: any) => {
+      const credential = await mockGet();
+      return credential ? { id: credManager.getCredentialId(source), revision: 'dummy-revision', credential } : null;
     });
+    saveSpy = spyOn(credManager as any, 'saveRefreshed').mockImplementation(async (snapshot: any, credential: any) => {
+      setCalls.push([snapshot.id, credential]);
+    });
+    // Provider parsing/routing tests are separate from real-vault CAS regressions.
+    failureSpy = spyOn(credManager as any, 'refreshFailed').mockImplementation(async () => null);
   });
 
   afterEach(() => {
     loadSpy?.mockRestore();
     saveSpy?.mockRestore();
+    failureSpy?.mockRestore();
     loadSpy = null;
     saveSpy = null;
     globalThis.fetch = originalFetch;

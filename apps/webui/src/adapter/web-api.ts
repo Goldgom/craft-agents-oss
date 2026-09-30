@@ -342,6 +342,10 @@ export function createWebApi(options: WebApiOptions): {
     relaunchApp: () => { window.location.reload(); return Promise.resolve() },
     removeWorkspace: () => Promise.resolve(false), // not supported in web UI
     invokeOnServer: () => Promise.reject(new Error('Cross-server RPC not available in web UI')),
+    listRemoteCollaborationWorkspaces: () => Promise.reject(new Error('Saved server selection requires the desktop app')),
+    listRemoteCollaborationCandidates: () => Promise.reject(new Error('Saved server selection requires the desktop app')),
+    createRemoteCollaboration: () => Promise.reject(new Error('Saved server selection requires the desktop app')),
+    openRemoteCollaborationWorkspace: () => Promise.reject(new Error('Saved server selection requires the desktop app')),
   }
 
   // OAuth overrides — web-compatible browser opening

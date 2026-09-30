@@ -2098,17 +2098,36 @@ export class BrowserPaneManager implements IBrowserPaneManager {
   }
 
   private finalizeDestroyedInstance(instance: BrowserInstance, source: 'destroy' | 'closed'): void {
-    if (!this.instances.has(instance.id)) {
+    if (this.instances.get(instance.id) !== instance) {
       return
     }
 
-    this.destroyingIds.delete(instance.id)
-    this.closePopupsForParent(instance.id, 'parent_destroy')
-    this.applyAgentControlLock(instance, false)
-    this.updateNativeOverlayState(instance)
-    instance.cdp.detach()
+    // Claim teardown before invoking native cleanup or callbacks. Those may
+    // throw or synchronously emit another closed event; neither may retain the
+    // instance or notify its removal twice.
     this.instances.delete(instance.id)
-    this.removedCallback?.(instance.id)
+    this.destroyingIds.delete(instance.id)
+    if (instance.inPageThemeTimer) {
+      clearTimeout(instance.inPageThemeTimer)
+      instance.inPageThemeTimer = null
+    }
+    instance.themeObserverToken = null
+    instance.pendingShowOnReady = false
+    instance.pendingShowToken += 1
+    this.inFlightRequestsByWebContentsId.delete(instance.pageView.webContents.id)
+    this.lastNetworkActivityByWebContentsId.delete(instance.pageView.webContents.id)
+
+    const cleanup = (label: string, action: () => void): void => {
+      try { action() }
+      catch (error) {
+        mainLog.warn(`[browser-pane] finalize cleanup failed id=${instance.id} step=${label} error=${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    cleanup('closePopupsForParent', () => this.closePopupsForParent(instance.id, 'parent_destroy'))
+    cleanup('applyAgentControlLock', () => this.applyAgentControlLock(instance, false))
+    cleanup('updateNativeOverlayState', () => this.updateNativeOverlayState(instance))
+    cleanup('detach', () => instance.cdp.detach())
+    cleanup('removedCallback', () => this.removedCallback?.(instance.id))
     mainLog.info(`[browser-pane] Destroyed instance: ${instance.id} (${source})`)
   }
 
@@ -2229,6 +2248,7 @@ export class BrowserPaneManager implements IBrowserPaneManager {
     let lastError: unknown = null
 
     for (let attempt = 0; attempt <= TOOLBAR_LOAD_MAX_RETRIES; attempt++) {
+      if (this.instances.get(instance.id) !== instance || instance.window.isDestroyed() || instance.toolbarView.webContents.isDestroyed()) return
       try {
         if (VITE_DEV_SERVER_URL) {
           await instance.toolbarView.webContents.loadURL(`${VITE_DEV_SERVER_URL}/browser-toolbar.html?${query}`)
@@ -2741,7 +2761,7 @@ export class BrowserPaneManager implements IBrowserPaneManager {
   }
 
   private markToolbarReady(instance: BrowserInstance, reason: string): void {
-    if (instance.toolbarReady || instance.window.isDestroyed()) return
+    if (this.instances.get(instance.id) !== instance || instance.toolbarReady || instance.window.isDestroyed()) return
 
     instance.toolbarReady = true
     mainLog.info(`[browser-pane] toolbar ready id=${instance.id} reason=${reason}`)

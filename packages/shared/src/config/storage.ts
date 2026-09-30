@@ -14,7 +14,7 @@ import { extractWorkspaceSlugFromPath } from '../utils/workspace-slug.ts';
 import { initializeDocs } from '../docs/index.ts';
 import { expandPath, toPortablePath, getBundledAssetsDir } from '../utils/paths.ts';
 import { debug } from '../utils/debug.ts';
-import { readJsonFileSync } from '../utils/files.ts';
+import { readJsonFileSync, atomicWriteFileSync } from '../utils/files.ts';
 import { CONFIG_DIR } from './paths.ts';
 import type { StoredAttachment, StoredMessage } from '@craft-agent/core/types';
 import type { Plan } from '../agent/plan-types.ts';
@@ -38,7 +38,7 @@ export type {
 } from '@craft-agent/core/types';
 
 // Import for local use
-import type { Workspace, AuthType } from '@craft-agent/core/types';
+import type { Workspace, AuthType, RemoteServerConfig } from '@craft-agent/core/types';
 
 // Import LLM connection types and constants
 import type { LlmConnection } from './llm-connections.ts';
@@ -334,7 +334,7 @@ export function saveConfig(config: StoredConfig): void {
     })),
   };
 
-  writeFileSync(CONFIG_FILE, JSON.stringify(storageConfig, null, 2), 'utf-8');
+  atomicWriteFileSync(CONFIG_FILE, JSON.stringify(storageConfig, null, 2));
 }
 
 // Legacy updateApiKey() removed - use setupLlmConnection IPC handler instead.
@@ -809,13 +809,31 @@ export function getWorkspaceByNameOrId(nameOrId: string): Workspace | null {
 
 export function updateWorkspaceRemoteServer(
   workspaceId: string,
-  remoteServer: { url: string; token: string; remoteWorkspaceId: string },
+  remoteServer: RemoteServerConfig,
 ): void {
   const config = loadStoredConfig();
   if (!config) return;
   const ws = config.workspaces.find(w => w.id === workspaceId);
   if (!ws) throw new Error('Workspace not found');
   ws.remoteServer = remoteServer;
+  saveConfig(config);
+}
+
+/** Atomically publish multiple remote-stub revisions after their secrets are staged. */
+export function publishWorkspaceRemoteServerUpdates(
+  updates: Array<{ workspaceId: string; expected: RemoteServerConfig; next: RemoteServerConfig }>,
+): void {
+  if (!updates.length) return;
+  if (new Set(updates.map(update => update.workspaceId)).size !== updates.length) throw new Error('Remote workspace updates must be unique');
+  const config = loadStoredConfig();
+  if (!config) throw new Error('Workspace configuration is unavailable');
+  for (const update of updates) {
+    const workspace = config.workspaces.find(item => item.id === update.workspaceId);
+    if (!workspace || JSON.stringify(workspace.remoteServer) !== JSON.stringify(update.expected)) {
+      throw new Error('Remote workspace configuration changed. Retry.');
+    }
+  }
+  for (const update of updates) config.workspaces.find(item => item.id === update.workspaceId)!.remoteServer = update.next;
   saveConfig(config);
 }
 

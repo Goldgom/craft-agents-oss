@@ -73,6 +73,8 @@ export interface SessionCollaboration {
   memberId: string;
   role: 'primary' | 'secondary';
   coordinatorWorkspaceId: string;
+  /** Present only for negotiated multi-server groups. Contains no endpoints or credentials. */
+  relay?: import('../protocol/collaboration-relay').CollaborationRelayMembership;
 }
 
 /**

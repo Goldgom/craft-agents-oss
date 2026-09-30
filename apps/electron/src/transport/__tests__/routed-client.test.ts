@@ -128,8 +128,19 @@ describe('RoutedClient', () => {
   })
 
   describe('workspace switch', () => {
-    // SWITCH_WORKSPACE is LOCAL_ONLY — the switch result mock goes on localClient
-    it('swaps workspaceClient when SWITCH_WORKSPACE returns remoteServer', async () => {
+    it('ignores remote credentials and routing instructions in a network switch response', async () => {
+      const local = stubClient({ invoke: mock(async () => ({ workspaceId: 'spoofed', remoteServer: { url: 'wss://untrusted.invalid', token: 'synthetic', remoteWorkspaceId: 'wrong' } })) })
+      const workspace = stubClient()
+      const factory = mock(() => stubClient())
+      const routed = new RoutedClient(local, workspace)
+      routed.setClientFactory(factory)
+      await routed.invoke(SWITCH_CHANNEL, 'requested')
+      expect(factory).not.toHaveBeenCalled()
+      expect(workspace.destroy).not.toHaveBeenCalled()
+    })
+
+    // Only validated native IPC results can replace the workspace connection.
+    it('swaps workspaceClient when native switch returns remoteServer', async () => {
       const local = stubClient({
         invoke: mock(async () => ({
           workspaceId: 'ws-2',
@@ -142,7 +153,7 @@ describe('RoutedClient', () => {
       const routed = new RoutedClient(local, workspace)
       routed.setClientFactory(() => newRemote)
 
-      await routed.invoke(SWITCH_CHANNEL)
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'ws-2', remoteServer: { url: 'wss://remote:9001', token: 'tok', remoteWorkspaceId: 'rw-1' } })
 
       // New client should have been connected
       expect(newRemote.connect).toHaveBeenCalled()
@@ -160,7 +171,7 @@ describe('RoutedClient', () => {
       const remoteWs = stubClient()
 
       const routed = new RoutedClient(local, remoteWs)
-      await routed.invoke(SWITCH_CHANNEL)
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'ws-local', remoteServer: null })
 
       // Remote client should be destroyed
       expect(remoteWs.destroy).toHaveBeenCalled()
@@ -189,7 +200,7 @@ describe('RoutedClient', () => {
       const routedCallback = (workspace.on as any).mock.calls[0]![1]
 
       // Trigger switch
-      await routed.invoke(SWITCH_CHANNEL)
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'ws-2', remoteServer: { url: 'wss://remote:9001', token: 'tok', remoteWorkspaceId: 'rw-1' } })
 
       // Listener should be re-subscribed on the new client
       expect(newRemote.on).toHaveBeenCalledWith(REMOTE_CHANNEL, routedCallback)
@@ -211,7 +222,7 @@ describe('RoutedClient', () => {
       const handler = mock(async () => 'capability-result')
       routed.handleCapability('test:capability', handler)
 
-      await routed.invoke(SWITCH_CHANNEL)
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'ws-2', remoteServer: { url: 'wss://remote:9001', token: 'tok', remoteWorkspaceId: 'rw-1' } })
 
       expect(newRemote.handleCapability).toHaveBeenCalledWith('test:capability', handler)
     })
@@ -237,7 +248,7 @@ describe('RoutedClient', () => {
       const routed = new RoutedClient(local, workspace)
       routed.setClientFactory(() => newRemote)
 
-      await routed.invoke(SWITCH_CHANNEL)
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'ws-2', remoteServer: { url: 'wss://remote:9001', token: 'tok', remoteWorkspaceId: 'rw-1' } })
 
       expect(subscriptionCount).toBe(2)
       expect(syntheticUnsub).toHaveBeenCalledTimes(1)

@@ -23,6 +23,10 @@
  */
 
 export { CredentialManager, getCredentialManager } from './manager.ts';
-export type { CredentialId, CredentialType, StoredCredential } from './types.ts';
-export { credentialIdToAccount, accountToCredentialId, SOURCE_CREDENTIAL_TYPES } from './types.ts';
+export type { CredentialId, CredentialType, StoredCredential, CredentialWrite, CredentialSnapshot, CredentialCompareAndSet } from './types.ts';
+export { CredentialChangedError } from './types.ts';
+export { credentialIdToAccount, accountToCredentialId, SOURCE_CREDENTIAL_TYPES, REMOTE_CREDENTIAL_TYPES } from './types.ts';
 export type { CredentialBackend } from './backends/types.ts';
+export * from './native-types.ts';
+export { CredentialVaultError } from './backends/vault-protection.ts';
+export type { CredentialKeyProtection } from './backends/vault-protection.ts';

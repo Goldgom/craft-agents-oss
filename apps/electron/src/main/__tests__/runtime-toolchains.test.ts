@@ -24,10 +24,10 @@ describe('runtime toolchain path resolution', () => {
     expect(resolveRuntimeToolExecutable('node', executable)).toBe(executable)
   })
 
-  test('resolves a JDK home directory to bin/java.exe', () => {
+  test('resolves a JDK home directory to its platform executable', () => {
     const root = fixture()
     mkdirSync(join(root, 'bin'))
-    const executable = join(root, 'bin', 'java.exe')
+    const executable = join(root, 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
     writeFileSync(executable, '')
     expect(resolveRuntimeToolExecutable('java', root)).toBe(executable)
   })

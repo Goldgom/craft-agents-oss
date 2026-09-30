@@ -344,6 +344,9 @@ export type SdkMcpServerConfig =
  * 4. Allow capability-based UI adaptation
  */
 export interface AgentBackend {
+  /** Explicit Settings edits only; metadata/identifiers, never secret values.
+   * Returns true when a live runtime needs user-visible next-session guidance. */
+  notifyStoredCredentialChanges?(changes: import('../../credentials/native-types.ts').NativeCredentialAppliedChange[]): Promise<boolean>;
   // ============================================================
   // Chat & Lifecycle
   // ============================================================

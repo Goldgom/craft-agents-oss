@@ -1,4 +1,5 @@
-import { writeFile, rename, unlink } from 'fs/promises'
+import { open, rename, unlink } from 'fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname } from 'path'
 import type { StoredSession, SessionHeader } from './types.js'
 import { getSessionFilePath, ensureSessionsDir, ensureSessionDir } from './storage.js'
@@ -6,9 +7,18 @@ import { toPortablePath } from '../utils/paths.js'
 import { createSessionHeader, makeSessionPathPortable, readSessionHeader } from './jsonl.js'
 import { debug } from '../utils/debug.js'
 
+/** Narrow filesystem seam for failure-boundary tests; production uses Node fs. */
+export interface SessionPersistenceFileOperations {
+  open(path: string, flags: string, mode?: number): Promise<{ writeFile(data: string, encoding: 'utf8'): Promise<void>; sync(): Promise<void>; close(): Promise<void> }>
+  rename(from: string, to: string): Promise<void>
+  unlink(path: string): Promise<void>
+}
+
 interface PendingWrite {
   data: StoredSession
-  timer: ReturnType<typeof setTimeout>
+  timer?: ReturnType<typeof setTimeout>
+  version: number
+  cancelled?: boolean
 }
 
 interface HeaderMetadataSignature {
@@ -58,11 +68,13 @@ function mergeHeaderWithExternalMetadata(localHeader: SessionHeader, diskHeader:
  */
 class SessionPersistenceQueue {
   private pending = new Map<string, PendingWrite>()
-  private writeInProgress = new Map<string, Promise<void>>()
+  private writeInProgress = new Map<string, { promise: Promise<void>; entry: PendingWrite }>()
+  private writtenVersions = new Map<string, number>()
+  private nextVersion = 1
   private lastWrittenHeaderSignature = new Map<string, string>()
   private debounceMs: number
 
-  constructor(debounceMs = 500) {
+  constructor(debounceMs = 500, private readonly fileOperations: SessionPersistenceFileOperations = { open, rename, unlink }) {
     this.debounceMs = debounceMs
   }
 
@@ -72,27 +84,26 @@ class SessionPersistenceQueue {
    */
   enqueue(session: StoredSession): void {
     const existing = this.pending.get(session.id)
-    if (existing) {
-      clearTimeout(existing.timer)
-    }
-
-    const timer = setTimeout(() => {
-      void this.write(session.id)
+    if (existing?.timer) clearTimeout(existing.timer)
+    const entry: PendingWrite = { data: session, version: this.nextVersion++ }
+    entry.timer = setTimeout(() => {
+      // Debounced callers remain best-effort; strict flush callers observe the
+      // same rejection. Failed snapshots stay dirty for a later explicit retry.
+      void this.flush(session.id).catch(error => {
+        if (!entry.cancelled) console.error(`[PersistenceQueue] Failed to write session ${session.id}:`, error)
+      })
     }, this.debounceMs)
-
-    this.pending.set(session.id, { data: session, timer })
+    this.pending.set(session.id, entry)
   }
 
   /**
    * Write a session to disk immediately in JSONL format.
    * Uses atomic write (write-to-temp-then-rename) to prevent corruption on crash.
    */
-  private async write(sessionId: string): Promise<void> {
-    const entry = this.pending.get(sessionId)
-    if (!entry) return
-
-    this.pending.delete(sessionId)
-
+  private async write(sessionId: string, entry: PendingWrite): Promise<void> {
+    let tmpFile: string | undefined
+    const previousSignature = this.lastWrittenHeaderSignature.get(sessionId)
+    let signaturePublished = false
     try {
       const { data } = entry
       ensureSessionsDir(data.workspaceRootPath)
@@ -143,52 +154,67 @@ class SessionPersistenceQueue {
         ...persistableMessages.map(m => makeSessionPathPortable(JSON.stringify(m), sessionDir)),
       ]
 
-      // Atomic write: write to .tmp then rename over the real file.
-      // If the process crashes mid-write, only the .tmp is corrupted —
-      // the original session.jsonl remains intact.
-      //
-      // Update signature BEFORE the write so that fs.watch events fired
-      // during unlink/rename are correctly identified as self-writes.
-      // Without this, onSessionMetadataChange sees the stale signature
-      // and reverts in-memory metadata on idle sessions.
-      const finalSignature = getHeaderMetadataSignature(header)
-      this.lastWrittenHeaderSignature.set(sessionId, finalSignature)
-
-      const tmpFile = filePath + '.tmp'
-      await writeFile(tmpFile, lines.join('\n') + '\n', 'utf-8')
-      // On Windows, rename fails if target exists. Delete first for cross-platform compatibility.
-      try { await unlink(filePath) } catch { /* ignore if doesn't exist */ }
-      await rename(tmpFile, filePath)
+      // Each writer owns its temp name. Never unlink the destination: rename
+      // atomically replaces it, and failure must leave the old session intact.
+      tmpFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+      const handle = await this.fileOperations.open(tmpFile, 'wx', 0o600)
+      try {
+        await handle.writeFile(lines.join('\n') + '\n', 'utf8')
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      if (entry.cancelled) throw new Error('Session persistence was cancelled')
+      // Set immediately before publication so fs.watch sees the new signature.
+      this.lastWrittenHeaderSignature.set(sessionId, getHeaderMetadataSignature(header))
+      signaturePublished = true
+      await this.fileOperations.rename(tmpFile, filePath)
+      tmpFile = undefined
+      if (entry.cancelled) throw new Error('Session persistence was cancelled')
       debug(`[PersistenceQueue] Wrote session ${sessionId}`)
     } catch (error) {
-      console.error(`[PersistenceQueue] Failed to write session ${sessionId}:`, error)
+      if (signaturePublished && !entry.cancelled) {
+        if (previousSignature === undefined) this.lastWrittenHeaderSignature.delete(sessionId)
+        else this.lastWrittenHeaderSignature.set(sessionId, previousSignature)
+      }
+      throw error
+    } finally {
+      if (tmpFile) await this.fileOperations.unlink(tmpFile).catch(() => {})
     }
   }
 
   /**
-   * Immediately flush a specific session if pending.
-   * Waits for any in-progress write to complete before starting a new one
-   * to prevent race conditions on the shared .tmp file.
+   * Strict completion boundary for the snapshot visible when flush is called.
+   * Timer-triggered writes use this same serialized path. A pending or failed
+   * write cannot disappear into a successful no-op flush.
    */
   async flush(sessionId: string): Promise<void> {
-    const entry = this.pending.get(sessionId)
-    if (entry) {
-      clearTimeout(entry.timer)
-
-      // Wait for any in-progress write to complete first
-      const inProgress = this.writeInProgress.get(sessionId)
-      if (inProgress) {
-        await inProgress
+    const target = this.pending.get(sessionId)?.version ?? this.writeInProgress.get(sessionId)?.entry.version
+    if (target === undefined) return
+    while ((this.writtenVersions.get(sessionId) ?? 0) < target) {
+      const active = this.writeInProgress.get(sessionId)
+      if (active) {
+        await active.promise
+        continue
       }
-
-      // Start new write and track it
-      const writePromise = this.write(sessionId)
-      this.writeInProgress.set(sessionId, writePromise)
-
-      try {
-        await writePromise
-      } finally {
-        this.writeInProgress.delete(sessionId)
+      const entry = this.pending.get(sessionId)
+      if (!entry) throw new Error('Session persistence was cancelled before completion')
+      if (entry.timer) clearTimeout(entry.timer)
+      entry.timer = undefined
+      this.pending.delete(sessionId)
+      const promise = this.write(sessionId, entry).then(() => {
+        if (entry.cancelled) throw new Error('Session persistence was cancelled')
+        this.writtenVersions.set(sessionId, entry.version)
+      }).catch(error => {
+        // A newer snapshot supersedes the failed one. Otherwise retain this
+        // dirty snapshot without a retry timer, avoiding a background loop.
+        if (!entry.cancelled && !this.pending.has(sessionId)) this.pending.set(sessionId, entry)
+        throw error
+      })
+      this.writeInProgress.set(sessionId, { promise, entry })
+      try { await promise }
+      finally {
+        if (this.writeInProgress.get(sessionId)?.promise === promise) this.writeInProgress.delete(sessionId)
       }
     }
   }
@@ -199,19 +225,40 @@ class SessionPersistenceQueue {
   cancel(sessionId: string): void {
     const entry = this.pending.get(sessionId)
     if (entry) {
-      clearTimeout(entry.timer)
+      if (entry.timer) clearTimeout(entry.timer)
+      entry.cancelled = true
       this.pending.delete(sessionId)
       debug(`[PersistenceQueue] Cancelled pending write for session ${sessionId}`)
     }
+    const active = this.writeInProgress.get(sessionId)
+    if (active) active.entry.cancelled = true
     this.lastWrittenHeaderSignature.delete(sessionId)
+    this.writtenVersions.delete(sessionId)
+  }
+
+  /**
+   * Stop admission at the caller, then await every already-started filesystem
+   * write before deleting the session directory. cancel() alone cannot retract
+   * a rename submitted to the OS. Cancellation failures are expected here.
+   */
+  async cancelAndWait(sessionId: string): Promise<void> {
+    this.cancel(sessionId)
+    let active = this.writeInProgress.get(sessionId)
+    while (active) {
+      await active.promise.catch(() => {})
+      this.cancel(sessionId)
+      active = this.writeInProgress.get(sessionId)
+    }
   }
 
   /**
    * Flush all pending sessions. Call this on app quit.
    */
   async flushAll(): Promise<void> {
-    const sessionIds = [...this.pending.keys()]
-    await Promise.all(sessionIds.map(id => this.flush(id)))
+    const sessionIds = [...new Set([...this.pending.keys(), ...this.writeInProgress.keys()])]
+    const results = await Promise.allSettled(sessionIds.map(id => this.flush(id)))
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failed) throw failed.reason
   }
 
   /**

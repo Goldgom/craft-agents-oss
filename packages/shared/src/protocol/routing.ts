@@ -242,6 +242,7 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
 // ---------------------------------------------------------------------------
 
 export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
+  ...Object.values(RPC_CHANNELS.collaborationRelay),
   // workspace agents and collaboration state live with the workspace server
   RPC_CHANNELS.agents.LIST,
   RPC_CHANNELS.agents.SAVE,
@@ -252,6 +253,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.collaborations.GET,
   RPC_CHANNELS.collaborations.LIST,
   RPC_CHANNELS.collaborations.LIST_CANDIDATES,
+  RPC_CHANNELS.collaborations.LIST_WORKSPACES,
   RPC_CHANNELS.collaborations.PUT_FILE,
   RPC_CHANNELS.collaborations.GET_FILE,
   RPC_CHANNELS.collaborations.REPORT,
@@ -438,6 +440,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.sources.DELETE,
   RPC_CHANNELS.sources.START_OAUTH,
   RPC_CHANNELS.sources.SAVE_CREDENTIALS,
+  RPC_CHANNELS.sources.SAVE_CREDENTIALS_BATCH,
   RPC_CHANNELS.sources.CHANGED,
   RPC_CHANNELS.sources.GET_PERMISSIONS,
   RPC_CHANNELS.sources.GET_MCP_TOOLS,

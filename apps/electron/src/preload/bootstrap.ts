@@ -21,7 +21,9 @@ import { contextBridge, ipcRenderer, shell, webUtils } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { extname, isAbsolute } from 'node:path'
 import { WsRpcClient, type TransportConnectionState } from '../transport/client'
-import { RoutedClient } from '../transport/routed-client'
+import { RoutedClient, type WorkspaceTransportClient } from '../transport/routed-client'
+import { NativeRemoteClient } from './native-remote-client'
+import { createNativeWorkspaceSwitcher } from './native-workspace-switch'
 import { buildClientApi } from '../transport/build-api'
 import { CHANNEL_MAP } from '../transport/channel-map'
 import { createCallbackServer } from '@craft-agent/shared/auth/callback-server'
@@ -44,6 +46,7 @@ import type { ConfirmDialogSpec, FileDialogSpec, BrowserCapabilityRequest } from
 import type { RpcClient } from '@craft-agent/server-core/transport'
 import type { RemoteServerConfig } from '@craft-agent/core/types'
 import type { ElectronAPI } from '../shared/types'
+import { NATIVE_CREDENTIAL_IPC } from '@craft-agent/shared/credentials/native-types'
 
 // ---------------------------------------------------------------------------
 // Client interface — common surface for both RoutedClient and WsRpcClient
@@ -116,12 +119,18 @@ const isClientOnly = !!process.env.CRAFT_SERVER_URL
 
 let client: TransportClient
 let routedClient: RoutedClient | null = null
+let nativeThinClient: NativeRemoteClient | null = null
 
 if (isClientOnly) {
   // ── Thin-client mode ───────────────────────────────────────────────────
   // Single WsRpcClient connected directly to the remote server.
   // No local server, no routing — all channels go to remote.
 
+  if (process.env.CRAFT_SERVER_PROFILE_ID) {
+    nativeThinClient = new NativeRemoteClient(ipcRenderer)
+    nativeThinClient.connect()
+    client = nativeThinClient
+  } else {
   const wsUrl = process.env.CRAFT_SERVER_URL!
   const wsToken = process.env.CRAFT_SERVER_TOKEN ?? ''
 
@@ -150,6 +159,8 @@ if (isClientOnly) {
   wsClient.connect()
   client = wsClient
 
+  }
+
 } else {
   // ── Normal mode ────────────────────────────────────────────────────────
   // RoutedClient routes LOCAL_ONLY to local server, REMOTE_ELIGIBLE to
@@ -165,24 +176,16 @@ if (isClientOnly) {
     webContentsId,
     autoReconnect: true,
     mode: 'local',
-    clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES],
+    clientCapabilities: LOCAL_CLIENT_CAPABILITIES.filter(channel => channel !== CLIENT_SFTP_TRANSFER),
   })
 
   // Check if the current workspace is remote (synchronous IPC during preload eval)
   const remoteConfig: RemoteServerConfig | null = ipcRenderer.sendSync('__get-workspace-remote-config')
 
-  let initialWorkspaceClient: WsRpcClient
+  let initialWorkspaceClient: WorkspaceTransportClient
   if (remoteConfig && typeof remoteConfig.url === 'string') {
-    // Workspace is remote — create a direct connection to the remote server
-    initialWorkspaceClient = new WsRpcClient(remoteConfig.url, {
-      token: remoteConfig.token,
-      workspaceId: remoteConfig.remoteWorkspaceId,
-      webContentsId,
-      autoReconnect: true,
-      mode: 'remote',
-      clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES],
-      tlsRejectUnauthorized: false,
-    })
+    // Saved/stub credentials are resolved and used only in main.
+    initialWorkspaceClient = new NativeRemoteClient(ipcRenderer)
     initialWorkspaceClient.connect()
   } else {
     // Workspace is local — workspace client IS the local client
@@ -197,17 +200,7 @@ if (isClientOnly) {
   }
 
   // Factory for creating remote workspace clients on switch
-  routedClient.setClientFactory((remoteServer: RemoteServerConfig) => {
-    return new WsRpcClient(remoteServer.url, {
-      token: remoteServer.token,
-      workspaceId: remoteServer.remoteWorkspaceId,
-      webContentsId,
-      autoReconnect: true,
-      mode: 'remote',
-      clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES],
-      tlsRejectUnauthorized: false,
-    })
-  })
+  routedClient.setClientFactory(() => new NativeRemoteClient(ipcRenderer))
 
   localClient.connect()
   client = routedClient
@@ -368,17 +361,14 @@ client.onConnectionStateChanged((state) => {
 }
 ;(api as any).reconnectTransport = async () => {
   if (isClientOnly) {
-    client.reconnectNow()
+    if (nativeThinClient) await nativeThinClient.rebind()
+    else client.reconnectNow()
     return
   }
 
-  // The workspace client holds a snapshot of the remote server config taken
-  // when the window opened. If the user edited the server link since then,
-  // rebuild the remote client from the CURRENT config instead of re-dialing
-  // the stale URL.
-  const remoteConfig: RemoteServerConfig | null = ipcRenderer.sendSync('__get-workspace-remote-config')
-  if (remoteConfig && typeof remoteConfig.url === 'string' && routedClient) {
-    routedClient.rebuildRemoteClient(remoteConfig)
+  if (routedClient) {
+    const workspaceId = ipcRenderer.sendSync('__get-workspace-id')
+    await (api as ElectronAPI).switchWorkspace(workspaceId)
   } else {
     client.reconnectNow()
   }
@@ -580,6 +570,44 @@ client.onConnectionStateChanged((state) => {
     callbackServer?.close()
   }
 }
+
+// Same-server cross-workspace authority is available only through native IPC.
+// Remote-owned workspaces and thin clients use the scoped network handlers.
+;(api as ElectronAPI).switchWorkspace = createNativeWorkspaceSwitcher(async (workspaceId: string) => {
+  if (!routedClient) {
+    if (nativeThinClient) {
+      await ipcRenderer.invoke('__workspace:switch', workspaceId)
+      await nativeThinClient.rebind()
+    } else {
+      await client.invoke(RPC_CHANNELS.window.SWITCH_WORKSPACE, workspaceId)
+    }
+    return
+  }
+  const target = await ipcRenderer.invoke('__workspace:switch', workspaceId)
+  await routedClient.applyNativeWorkspaceSwitch(target)
+})
+
+const invokeCurrentCollaboration = (nativeChannel: string, rpcChannel: string, ...args: unknown[]) => {
+  const remoteWorkspace = isClientOnly || !!ipcRenderer.sendSync('__get-workspace-remote-config')
+  return remoteWorkspace ? client.invoke(rpcChannel, ...args) : ipcRenderer.invoke(nativeChannel, ...args)
+}
+;(api as ElectronAPI).listCollaborationWorkspaces = () => invokeCurrentCollaboration('__collaboration:localWorkspaces', RPC_CHANNELS.collaborations.LIST_WORKSPACES)
+;(api as ElectronAPI).listCollaborationCandidates = () => invokeCurrentCollaboration('__collaboration:localCandidates', RPC_CHANNELS.collaborations.LIST_CANDIDATES)
+;(api as ElectronAPI).createCollaboration = (primaryId, selections) => invokeCurrentCollaboration('__collaboration:createLocal', RPC_CHANNELS.collaborations.CREATE, primaryId, selections)
+
+// Credential management has the same native-only boundary. Main validates the
+// real sender's current local workspace; no caller-supplied workspace or RPC fallback.
+;(api as ElectronAPI).getNativeCredentialStatus = () => ipcRenderer.invoke(NATIVE_CREDENTIAL_IPC.STATUS)
+;(api as ElectronAPI).listNativeCredentials = () => ipcRenderer.invoke(NATIVE_CREDENTIAL_IPC.LIST)
+;(api as ElectronAPI).applyNativeCredentialChanges = request => ipcRenderer.invoke(NATIVE_CREDENTIAL_IPC.APPLY, request)
+;(api as ElectronAPI).migrateNativeCredentials = request => ipcRenderer.invoke(NATIVE_CREDENTIAL_IPC.MIGRATE, request)
+
+// Saved-profile collaboration calls require native Electron sender identity.
+// Never route these through WebSocket handlers or send profile tokens to renderer.
+;(api as ElectronAPI).listRemoteCollaborationWorkspaces = profileId => ipcRenderer.invoke('__collaboration:remoteWorkspaces', profileId)
+;(api as ElectronAPI).listRemoteCollaborationCandidates = (profileId, workspaceId) => ipcRenderer.invoke('__collaboration:remoteCandidates', profileId, workspaceId)
+;(api as ElectronAPI).createRemoteCollaboration = (profileId, workspaceId, primaryId, selections) => ipcRenderer.invoke('__collaboration:createRemote', profileId, workspaceId, primaryId, selections)
+;(api as ElectronAPI).openRemoteCollaborationWorkspace = (profileId, workspaceId) => ipcRenderer.invoke('__collaboration:openRemoteWorkspace', profileId, workspaceId)
 
 // App lifecycle — direct IPC (not WS RPC) since it restarts the server itself
 ;(api as ElectronAPI).relaunchApp = () => ipcRenderer.invoke('app:relaunch')

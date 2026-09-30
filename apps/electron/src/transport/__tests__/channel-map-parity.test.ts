@@ -21,8 +21,24 @@ type ApiToChannelMapKeys = Exclude<
   | 'reconnectTransport'
   | 'isChannelAvailable'
   | 'getSystemWarnings' // reads env var set at startup — no IPC needed
+  | 'getNativeCredentialStatus' // native IPC; never expose credential management over WS
+  | 'listNativeCredentials'
+  | 'applyNativeCredentialChanges'
+  | 'migrateNativeCredentials'
   | 'relaunchApp' // direct IPC to main process — not through WS RPC
   | 'removeWorkspace' // direct IPC to main process — modifies local config
+  | 'listRemoteCollaborationWorkspaces'
+  | 'getCollaborationSetupContext' // main-only relay; never a generic network proxy
+  | 'listCollaborationRelayWorkspaces'
+  | 'listCollaborationRelayCandidates'
+  | 'createMultiServerCollaboration'
+  | 'getCollaborationRelayStatus'
+  | 'endMultiServerCollaboration'
+  | 'listMultiServerCollaborations'
+  | 'getCollaborationRelayFile'
+  | 'listRemoteCollaborationCandidates'
+  | 'createRemoteCollaboration'
+  | 'openRemoteCollaborationWorkspace'
   | 'invokeOnServer' // direct IPC to main process — cross-server RPC
   | 'transferSessionToWorkspace' // direct IPC to main process — orchestrated remote transfer
   | 'onTransferProgress' // direct IPC listener — chunk upload progress

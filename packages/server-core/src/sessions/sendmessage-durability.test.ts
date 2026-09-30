@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { getSessionFilePath } from '@craft-agent/shared/sessions/storage'
+import { sessionPersistenceQueue } from '@craft-agent/shared/sessions'
 import { SessionManager, createManagedSession } from './SessionManager.ts'
 
 // Regression test for the High-severity finding in eb81086e:
@@ -26,6 +27,7 @@ describe('sendMessage durability', () => {
   })
 
   afterEach(() => {
+    for (const id of (sm as any).sessions.keys()) sessionPersistenceQueue.cancel(id)
     rmSync(tmpRoot, { recursive: true, force: true })
   })
 
@@ -110,5 +112,57 @@ describe('sendMessage durability', () => {
 
     expect(ackedMessageId).not.toBeNull()
     expect(onDiskAtAck).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('normal send rejects a real disk failure before ACK or agent initialization', async () => {
+    const sessionId = 'durability-disk-failure'
+    const managed = buildSession(sessionId)
+    ;(sm as any).persistSession(managed, true)
+    await sm.flushSession(sessionId)
+    const path = getSessionFilePath(tmpRoot, sessionId)
+    let original = readFileSync(path, 'utf8')
+    let acknowledged = false, agentInitializations = 0
+    ;(sm as any).getOrCreateAgent = () => { agentInitializations++; throw new Error('Unexpected agent initialization') }
+    const persist = (sm as any).persistSession.bind(sm)
+    ;(sm as any).persistSession = (...args: unknown[]) => {
+      persist(...args)
+      if (managed.messages.length) {
+        // Let the earlier pending-plan metadata save finish, then fail the
+        // actual user-message snapshot at the real filesystem boundary.
+        original = readFileSync(path, 'utf8')
+        chmodSync(dirname(path), 0o500)
+      }
+    }
+    try {
+      await expect(sm.sendMessage(sessionId, 'owned message', undefined, undefined, undefined, undefined, undefined,
+        () => { acknowledged = true })).rejects.toThrow()
+      expect(acknowledged).toBe(false)
+      expect(agentInitializations).toBe(0)
+      expect(readFileSync(path, 'utf8')).toBe(original)
+      expect(sessionPersistenceQueue.hasPending(sessionId)).toBe(true)
+      chmodSync(dirname(path), 0o700)
+      await sm.flushSession(sessionId)
+      expect(readPersistedMessageIds(sessionId)).toEqual([managed.messages[0]!.id])
+    } finally { chmodSync(dirname(path), 0o700) }
+  })
+
+  it('best-effort SDK metadata flush catches disk rejection and keeps the dirty snapshot retryable', async () => {
+    const sessionId = 'durability-metadata-failure'
+    const managed = buildSession(sessionId)
+    ;(sm as any).persistSession(managed, true)
+    await sm.flushSession(sessionId)
+    const originalFlush = sm.flushSession.bind(sm)
+    const reported = spyOn(console, 'error').mockImplementation(() => {})
+    managed.name = 'Updated metadata'
+    ;(sm as any).persistSession(managed)
+    sm.flushSession = async () => { throw new Error('Owned metadata flush failure') }
+    try {
+      expect((sm as any).flushSessionBestEffort(sessionId)).toBeUndefined()
+      await Bun.sleep(10)
+      expect(reported.mock.calls.length).toBeGreaterThan(0)
+      expect(sessionPersistenceQueue.hasPending(sessionId)).toBe(true)
+      await originalFlush(sessionId)
+      expect(sessionPersistenceQueue.hasPending(sessionId)).toBe(false)
+    } finally { reported.mockRestore(); sm.flushSession = originalFlush }
   })
 })

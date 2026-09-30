@@ -22,6 +22,10 @@ export interface RemoteServerProfile {
   url: string;
   /** Bearer token for the remote server. */
   token: string;
+  /** Immutable encrypted-vault key; token is empty when present. Main resolves it. */
+  tokenRef?: string;
+  /** Identifies this complete endpoint/credential snapshot. */
+  revision?: string;
   createdAt: number;
   updatedAt: number;
   /** Last successful connection attempt (epoch ms). */
@@ -39,8 +43,10 @@ export interface RemoteServerSftpConfig {
   username: string;
   authMethod: RemoteServerSftpAuthMethod;
   password?: string;
+  passwordRef?: string;
   privateKeyPath?: string;
   passphrase?: string;
+  passphraseRef?: string;
   /** Remote paths are restricted to this root. Empty means the SSH home directory. */
   remoteRoot?: string;
 }
@@ -145,8 +151,10 @@ function isValidSftpConfig(value: unknown): value is RemoteServerSftpConfig {
     && typeof config.username === 'string'
     && (config.authMethod === 'password' || config.authMethod === 'privateKey')
     && (config.password === undefined || typeof config.password === 'string')
+    && (config.passwordRef === undefined || isRemoteSecretRef(config.passwordRef))
     && (config.privateKeyPath === undefined || typeof config.privateKeyPath === 'string')
     && (config.passphrase === undefined || typeof config.passphrase === 'string')
+    && (config.passphraseRef === undefined || isRemoteSecretRef(config.passphraseRef))
     && (config.remoteRoot === undefined || typeof config.remoteRoot === 'string');
 }
 
@@ -171,33 +179,68 @@ export function normalizeServerUrl(input: string): string {
   return trimmed;
 }
 
-export function upsertRemoteServerProfile(
-  input: { id?: string; name: string; url: string; token?: string; sftp?: RemoteServerSftpInput },
-): RemoteServerProfile {
+export interface RemoteServerProfileInput {
+  id?: string;
+  name: string;
+  url: string;
+  token?: string;
+  sftp?: RemoteServerSftpInput;
+}
+
+/** References are opaque, bounded identifiers, never filesystem paths. */
+export function isRemoteSecretRef(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256
+    && !value.includes('::') && !/[\x00-\x1f\x7f]/.test(value);
+}
+
+export function prepareRemoteServerProfile(input: RemoteServerProfileInput, existing?: RemoteServerProfile): RemoteServerProfile {
   const name = input.name.trim();
   if (!name) throw new Error('Server name is required');
   const url = normalizeServerUrl(input.url);
-
-  const profiles = loadRemoteServerProfiles();
-  const existing = input.id ? profiles.find((p) => p.id === input.id) : undefined;
   const now = Date.now();
   const sftp = normalizeSftpConfig(input.sftp, existing?.sftp, url);
-
-  const profile: RemoteServerProfile = {
+  const hasNewToken = input.token !== undefined && input.token !== '';
+  return {
+    ...existing,
     id: existing?.id ?? crypto.randomUUID(),
-    name,
-    url,
-    // Keep the old token when the input leaves it blank on update.
-    token: input.token !== undefined && input.token !== '' ? input.token : (existing?.token ?? ''),
+    name, url,
+    token: hasNewToken ? input.token! : (existing?.token ?? ''),
+    tokenRef: hasNewToken ? undefined : existing?.tokenRef,
+    revision: crypto.randomUUID(),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     lastConnectedAt: existing?.lastConnectedAt,
     ...(sftp ? { sftp } : {}),
   };
+}
 
-  const next = profiles.filter((p) => p.id !== profile.id);
-  next.push(profile);
-  persistProfiles(next);
+/** Publish only after staging immutable vault values. No plaintext backup is made. */
+export function publishRemoteServerProfiles(profiles: RemoteServerProfile[], expected: RemoteServerProfile[]): void {
+  // The reader tolerates invalid records for normal browsing. A migration/save
+  // must not silently drop those records or replace an unreadable document.
+  const path = getRemoteServersPath();
+  if (existsSync(path)) {
+    let raw: unknown;
+    try { raw = JSON.parse(readFileSync(path, 'utf-8')); } catch { throw new Error('Remote server configuration is unreadable'); }
+    if (!Array.isArray(raw) || raw.length !== expected.length
+      || raw.some(value => value && typeof value === 'object' && value.sftp !== undefined && !isValidSftpConfig(value.sftp))) {
+      throw new Error('Remote server configuration contains invalid entries');
+    }
+  }
+  if (new Set(profiles.map(profile => profile.id)).size !== profiles.length) throw new Error('Remote server profile identifiers must be unique');
+  if (JSON.stringify(loadRemoteServerProfiles()) !== JSON.stringify(expected)) throw new Error('Remote server configuration changed. Retry.');
+  persistProfiles(profiles);
+}
+
+/** Legacy sync writer. Protected profiles must use Electron's async secret writer. */
+export function upsertRemoteServerProfile(input: RemoteServerProfileInput): RemoteServerProfile {
+  const profiles = loadRemoteServerProfiles();
+  const existing = input.id ? profiles.find(profile => profile.id === input.id) : undefined;
+  if (existing?.tokenRef || existing?.sftp?.passwordRef || existing?.sftp?.passphraseRef) {
+    throw new Error('This remote profile requires the desktop credential resolver');
+  }
+  const profile = prepareRemoteServerProfile(input, existing);
+  persistProfiles([...profiles.filter(item => item.id !== profile.id), profile]);
   return profile;
 }
 
@@ -220,14 +263,18 @@ function normalizeSftpConfig(
   }
   if (input.enabled && !username) throw new Error('SFTP username is required');
 
-  const password = input.password?.trim() || existing?.password;
+  const hasNewPassword = input.password !== undefined && input.password !== '';
+  const password = hasNewPassword ? input.password : existing?.password;
+  const passwordRef = hasNewPassword ? undefined : existing?.passwordRef;
   const privateKeyPath = input.privateKeyPath?.trim() || existing?.privateKeyPath;
-  const passphrase = input.passphrase?.trim() || existing?.passphrase;
+  const hasNewPassphrase = input.passphrase !== undefined && input.passphrase !== '';
+  const passphrase = hasNewPassphrase ? input.passphrase : existing?.passphrase;
+  const passphraseRef = hasNewPassphrase ? undefined : existing?.passphraseRef;
   const remoteRoot = input.remoteRoot !== undefined
     ? input.remoteRoot.trim()
     : existing?.remoteRoot;
 
-  if (input.enabled && authMethod === 'password' && !password) {
+  if (input.enabled && authMethod === 'password' && !password && !passwordRef) {
     throw new Error('SFTP password is required');
   }
   if (input.enabled && authMethod === 'privateKey' && !privateKeyPath) {
@@ -241,8 +288,10 @@ function normalizeSftpConfig(
     username,
     authMethod,
     ...(password ? { password } : {}),
+    ...(passwordRef ? { passwordRef } : {}),
     ...(privateKeyPath ? { privateKeyPath } : {}),
     ...(passphrase ? { passphrase } : {}),
+    ...(passphraseRef ? { passphraseRef } : {}),
     ...(remoteRoot ? { remoteRoot } : {}),
   };
 }
@@ -276,7 +325,7 @@ export function toProfileInfo(profile: RemoteServerProfile): RemoteServerProfile
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
     lastConnectedAt: profile.lastConnectedAt,
-    hasToken: profile.token.length > 0,
+    hasToken: !!profile.token || !!profile.tokenRef,
     ...(profile.sftp
       ? {
           sftp: {
@@ -287,8 +336,8 @@ export function toProfileInfo(profile: RemoteServerProfile): RemoteServerProfile
             authMethod: profile.sftp.authMethod,
             ...(profile.sftp.privateKeyPath ? { privateKeyPath: profile.sftp.privateKeyPath } : {}),
             ...(profile.sftp.remoteRoot ? { remoteRoot: profile.sftp.remoteRoot } : {}),
-            hasPassword: Boolean(profile.sftp.password),
-            hasPassphrase: Boolean(profile.sftp.passphrase),
+            hasPassword: Boolean(profile.sftp.password || profile.sftp.passwordRef),
+            hasPassphrase: Boolean(profile.sftp.passphrase || profile.sftp.passphraseRef),
           },
         }
       : {}),

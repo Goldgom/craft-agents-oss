@@ -138,8 +138,8 @@ describe('getApiCredential with multi-header sources', () => {
 
     const result = await credManager.getApiCredential(source);
 
-    // Should fall through to returning raw string since not all headers present
-    expect(result).toBe(storedCredential);
+    // Incomplete secrets must not fall through as a raw bearer/header value.
+    expect(result).toBeNull();
 
     loadSpy.mockRestore();
   });
@@ -160,8 +160,8 @@ describe('getApiCredential with multi-header sources', () => {
 
     const result = await credManager.getApiCredential(source);
 
-    // Should fall through and return raw string
-    expect(result).toBe('not-valid-json{{{');
+    // Reject malformed secrets without logging or transmitting their contents
+    expect(result).toBeNull();
 
     loadSpy.mockRestore();
   });

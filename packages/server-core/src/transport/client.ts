@@ -110,7 +110,16 @@ export interface WsRpcClientOptions {
   mode?: TransportMode
   /** Accept self-signed TLS certificates for wss:// connections. Default: false. Only works in Node.js (main process). */
   tlsRejectUnauthorized?: boolean
+  /** Main-process relay: use Node TLS independently of Electron renderer certificate policies. */
+  useNodeWebSocket?: boolean
+  /** Optional hard frame bound for dedicated Node clients. */
+  maxPayloadBytes?: number
+  /** Host/main-only pre-send revalidation. Never serialized or exposed by RPC.
+   * False or rejection prevents the token handshake; guard errors are redacted. */
+  beforeHandshake?: WsRpcHandshakeGuard
 }
+
+export type WsRpcHandshakeGuard = () => void | boolean | Promise<void | boolean>
 
 // ---------------------------------------------------------------------------
 // WsRpcClient
@@ -146,6 +155,9 @@ export class WsRpcClient implements RpcClient {
   private permanentlyClosed = false
   private connectStarted = false
   private connectError: Error | null = null
+  private authenticationBlocked = false
+  private handshakeGuard: WsRpcHandshakeGuard | undefined
+  private handshakeGuardVersion = 0
   private readyPromise: Promise<void> | null = null
   private resolveReady: (() => void) | null = null
   private rejectReady: ((error: Error) => void) | null = null
@@ -165,6 +177,8 @@ export class WsRpcClient implements RpcClient {
   private readonly heartbeatTimeoutMs: number
   private readonly mode: TransportMode
   private readonly tlsRejectUnauthorized: boolean
+  private readonly useNodeWebSocket: boolean
+  private readonly maxPayloadBytes: number | undefined
 
   constructor(url: string, opts?: WsRpcClientOptions) {
     this.url = url
@@ -180,6 +194,9 @@ export class WsRpcClient implements RpcClient {
     this.heartbeatTimeoutMs = opts?.heartbeatTimeoutMs ?? CLIENT_HEARTBEAT_TIMEOUT_MS
     this.mode = opts?.mode ?? this.inferMode(url)
     this.tlsRejectUnauthorized = opts?.tlsRejectUnauthorized ?? true
+    this.useNodeWebSocket = opts?.useNodeWebSocket ?? false
+    this.maxPayloadBytes = opts?.maxPayloadBytes
+    this.handshakeGuard = opts?.beforeHandshake
 
     this.connectionState = {
       mode: this.mode,
@@ -301,6 +318,18 @@ export class WsRpcClient implements RpcClient {
   reconnectNow(): void {
     if (this.destroyed) return
 
+    const retryFailedConnection = this.connectionState.status === 'failed'
+    // A close event can synchronously start the replacement socket. Repeated
+    // Retry clicks must not close that still-CONNECTING socket: some native
+    // runtimes do not emit its close event, leaving the retry stranded.
+    // A failed attempt remains explicitly retryable even with a stale socket.
+    if (!retryFailedConnection && (this.manualReconnectRequested
+      || (this.ws && this.ws.readyState === this.ws.CONNECTING))) return
+    if (retryFailedConnection) {
+      this.manualReconnectRequested = false
+      this.failReady(this.connectError ?? new Error('Connection restarted'))
+    }
+
     if (this.clientId) {
       this.pendingReconnect = {
         clientId: this.clientId,
@@ -315,8 +344,9 @@ export class WsRpcClient implements RpcClient {
 
     this.connectStarted = false
     this.connectError = null
+    this.authenticationBlocked = false
 
-    if (!this.ws) {
+    if (!this.ws || retryFailedConnection) {
       this.setConnectionState({
         status: 'reconnecting',
         attempt: this.reconnectAttempt,
@@ -345,6 +375,14 @@ export class WsRpcClient implements RpcClient {
   // Connection lifecycle
   // -------------------------------------------------------------------------
 
+  /** Install a native host revalidation hook before connection/reconnection.
+   * Replacing a pending hook invalidates its result; the new hook must pass. */
+  setHandshakeGuard(guard: WsRpcHandshakeGuard | undefined): void {
+    if (this.destroyed) return
+    this.handshakeGuard = guard
+    this.handshakeGuardVersion++
+  }
+
   /**
    * Create a WebSocket instance. In Node.js (main process), uses the `ws` library
    * to support TLS options (e.g. rejectUnauthorized for self-signed certs).
@@ -353,14 +391,15 @@ export class WsRpcClient implements RpcClient {
   private createWebSocket(url: string): WebSocket {
     const needsTlsOptions = url.startsWith('wss://') && !this.tlsRejectUnauthorized
 
-    if (needsTlsOptions && typeof process !== 'undefined' && process.versions?.node) {
+    if ((needsTlsOptions || this.useNodeWebSocket) && typeof process !== 'undefined' && process.versions?.node) {
       // Node.js / Electron main process — use `ws` library for TLS options
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { WebSocket: WsWebSocket } = require('ws') as typeof import('ws')
-        return new WsWebSocket(url, { rejectUnauthorized: false }) as unknown as WebSocket
+        return new WsWebSocket(url, { rejectUnauthorized: this.tlsRejectUnauthorized, ...(this.maxPayloadBytes !== undefined ? { maxPayload: this.maxPayloadBytes } : {}) }) as unknown as WebSocket
       } catch {
-        // Fallback if ws not available
+        if (this.useNodeWebSocket) throw new Error('Verified Node WebSocket transport is unavailable')
+        // Legacy renderer-compatible fallback. Dedicated relay clients fail closed.
         return new WebSocket(url)
       }
     }
@@ -369,8 +408,14 @@ export class WsRpcClient implements RpcClient {
   }
 
   connect(): void {
-    if (this.destroyed) return
+    if (this.destroyed || this.authenticationBlocked) return
 
+    // A public/direct reconnect must not retain an admitted old connection or
+    // orphan readiness while its replacement awaits host revalidation.
+    this.failReady(new Error('Connection restarted'))
+    this.connected = false
+    for (const [, request] of this.pending) { clearTimeout(request.timeout); request.reject(new Error('Connection lost')) }
+    this.pending.clear()
     this.connectStarted = true
     this.connectError = null
     this.createReadyPromise()
@@ -401,25 +446,49 @@ export class WsRpcClient implements RpcClient {
       try { oldWs.close() } catch { /* best effort */ }
     }
 
+    let handshakeAttemptActive = true
+    let handshakeSent = false
+    let ws: WebSocket
+    try { ws = this.createWebSocket(this.url) }
+    catch {
+      const err = this.createConnectionError('network', 'WebSocket transport could not be created', 'WS_ERROR')
+      this.connectError = err
+      this.failReady(err)
+      this.setConnectionState({ status: 'failed', lastError: this.toErrorState(err), nextRetryInMs: undefined })
+      return
+    }
+    this.ws = ws
     this.connectTimer = setTimeout(() => {
-      if (!this.connected) {
+      if (this.ws === ws && !this.connected) {
+        this.connectTimer = null
+        handshakeAttemptActive = false
         const err = this.createConnectionError('timeout', `Connection timeout after ${this.connectTimeout}ms`, 'HANDSHAKE_TIMEOUT')
         this.connectError = err
+        this.failReady(err)
         this.setConnectionState({
           status: 'failed',
           lastError: this.toErrorState(err),
           attempt: this.reconnectAttempt,
         })
-        this.failReady(err)
-        this.ws?.close()
+        try { ws.close() } catch { /* owner teardown remains safe after an explicit retry */ }
       }
     }, this.connectTimeout)
 
-    const ws = this.createWebSocket(this.url)
-    this.ws = ws
-
-    ws.onopen = () => {
-      if (this.ws !== ws) return // stale socket — ignore
+    const ownsOpenAttempt = () => !this.destroyed && handshakeAttemptActive && this.ws === ws && ws.readyState === ws.OPEN
+    const rejectGuard = () => {
+      if (!ownsOpenAttempt()) return
+      handshakeAttemptActive = false
+      this.authenticationBlocked = true
+      const err = this.createConnectionError('auth', 'Connection credentials or target changed. Reconnect after checking the saved connection.', 'HANDSHAKE_GUARD_REJECTED')
+      this.connectError = err
+      if (this.connectTimer) { clearTimeout(this.connectTimer); this.connectTimer = null }
+      this.failReady(err)
+      this.setConnectionState({ status: 'failed', lastError: this.toErrorState(err), nextRetryInMs: undefined, attempt: this.reconnectAttempt })
+      try { ws.close(4005, 'Handshake guard rejected') }
+      catch { if (this.ws === ws) this.onDisconnect({ code: 4005, reason: 'Handshake guard rejected' }) }
+    }
+    const sendHandshake = () => {
+      if (!ownsOpenAttempt()) return
       const reconnectSnapshot = this.pendingReconnect
       this.currentHandshakeWasReconnect = reconnectSnapshot !== null
 
@@ -435,11 +504,35 @@ export class WsRpcClient implements RpcClient {
         reconnectClientId: reconnectSnapshot?.clientId,
         lastSeq: reconnectSnapshot?.lastSeq,
       }
-      this.trySendEnvelope(ws, handshake)
+      handshakeSent = true
+      if (!this.trySendEnvelope(ws, handshake)) handshakeSent = false
     }
+    const authorizeHandshake = async () => {
+      while (ownsOpenAttempt()) {
+        const guard = this.handshakeGuard
+        const version = this.handshakeGuardVersion
+        if (guard) {
+          let allowed: void | boolean
+          try { allowed = await guard() }
+          catch {
+            if (!ownsOpenAttempt()) return
+            if (version !== this.handshakeGuardVersion) continue
+            rejectGuard()
+            return
+          }
+          if (!ownsOpenAttempt()) return
+          if (version !== this.handshakeGuardVersion) continue
+          if (allowed !== undefined && allowed !== true) { rejectGuard(); return }
+        }
+        // No await between the final ownership/guard check and token send.
+        sendHandshake()
+        return
+      }
+    }
+    ws.onopen = () => { void authorizeHandshake() }
 
     ws.onmessage = (event) => {
-      if (this.ws !== ws) return // stale socket — ignore
+      if (this.ws !== ws || !handshakeAttemptActive || !handshakeSent) return // stale/unauthorized socket — ignore
       this.onMessage(typeof event.data === 'string' ? event.data : event.data.toString())
     }
 
@@ -473,6 +566,8 @@ export class WsRpcClient implements RpcClient {
 
   destroy(): void {
     this.destroyed = true
+    this.handshakeGuard = undefined
+    this.handshakeGuardVersion++
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -691,13 +786,18 @@ export class WsRpcClient implements RpcClient {
         if (envelope.error?.message) {
           const kind = this.classifyErrorKindFromCode(envelope.error.code)
           const err = this.createConnectionError(kind, envelope.error.message, envelope.error.code)
+          const failedSocket = this.ws
           this.connectError = err
+          if (kind === 'auth') this.authenticationBlocked = true
+          this.failReady(err)
           this.setConnectionState({
             status: 'failed',
             lastError: this.toErrorState(err),
             attempt: this.reconnectAttempt,
           })
-          this.failReady(err)
+          if (kind === 'auth' && this.ws === failedSocket) {
+            try { failedSocket?.close(4005, 'Auth failed') } catch { /* close handler performs cleanup */ }
+          }
         }
         break
       }
@@ -860,6 +960,14 @@ export class WsRpcClient implements RpcClient {
         )
       }
     }
+    const authenticationFailed = this.authenticationBlocked || closeInfo?.code === 4005
+      || (this.connectError ? this.toErrorState(this.connectError).kind === 'auth' : false)
+    if (authenticationFailed) {
+      this.authenticationBlocked = true
+      if (!this.connectError || this.toErrorState(this.connectError).kind !== 'auth') {
+        this.connectError = this.createConnectionError('auth', 'Authentication failed. Check the saved connection.', 'WS_CLOSE_4005')
+      }
+    }
 
     // Reject all pending requests
     if (wasConnected) {
@@ -870,9 +978,11 @@ export class WsRpcClient implements RpcClient {
       this.pending.clear()
 
       this.setConnectionState({
-        status: 'disconnected',
+        status: authenticationFailed ? 'failed' : 'disconnected',
+        ...(authenticationFailed && this.connectError ? { lastError: this.toErrorState(this.connectError) } : {}),
         lastClose: closeInfo,
         attempt: this.reconnectAttempt,
+        nextRetryInMs: undefined,
       })
     } else {
       const err = this.connectError ?? new Error('Connection lost before handshake')
@@ -886,18 +996,21 @@ export class WsRpcClient implements RpcClient {
       })
     }
 
+    // A state listener may have explicitly started a replacement already.
+    if (this.ws) return
     if (manualReconnect && !this.destroyed) {
+      this.authenticationBlocked = false
       this.connect()
       return
     }
 
-    if (!this.destroyed && !this.permanentlyClosed && this.autoReconnect) {
+    if (!this.destroyed && !this.permanentlyClosed && !this.authenticationBlocked && this.autoReconnect) {
       this.scheduleReconnect()
     }
   }
 
   private scheduleReconnect(): void {
-    if (this.permanentlyClosed) return
+    if (this.permanentlyClosed || this.authenticationBlocked) return
 
     const delay = Math.min(
       1000 * Math.pow(2, this.reconnectAttempt),
@@ -975,6 +1088,9 @@ export class WsRpcClient implements RpcClient {
   private async ensureConnected(channel: string): Promise<void> {
     if (this.destroyed) {
       throw new Error(`Client destroyed (channel: ${channel})`)
+    }
+    if (this.authenticationBlocked) {
+      throw this.connectError ?? new Error('Authentication failed. Reconnect after checking the saved connection.')
     }
 
     if (this.connected && this.ws) return
