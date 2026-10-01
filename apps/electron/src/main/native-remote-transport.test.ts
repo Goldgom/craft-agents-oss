@@ -30,7 +30,7 @@ async function fixture(options: { auth?: boolean; thin?: boolean; maxHandles?: n
   const bridge = registerNativeRemoteTransport({ handle: (channel, handler) => { handlers.set(channel, handler) } }, {
     assertSender, resolveTarget: async () => { await resolveHook(); return { ...target } },
     createClient: (resolved, capabilities, authority) => {
-      const client = new WsRpcClient(resolved.url, { token: resolved.token, workspaceId: resolved.remoteWorkspaceId, webContentsId: authority.webContentsId, clientCapabilities: [...capabilities], autoReconnect: true, connectTimeout: 500, requestTimeout: 1000, maxReconnectDelay: 30, heartbeatIntervalMs: 0 })
+      const client = new WsRpcClient(resolved.url, { token: resolved.token, workspaceId: resolved.remoteWorkspaceId, webContentsId: authority.webContentsId, clientCapabilities: [...capabilities], autoReconnect: true, connectTimeout: 500, requestTimeout: 1000, maxReconnectDelay: 30, useNodeWebSocket: true })
       clients.push(client); return client
     },
     sendToSender: (sender, packet) => { snapshots.push(structuredClone(packet)); for (const receive of receivers.get(sender) ?? []) receive({}, packet) },
@@ -107,7 +107,11 @@ describe('main-owned remote transport boundary with real WebSocket peers', () =>
     expect((await two.ipc.invoke(IPC.CAPABILITY_RESULT, (two.adapter as any).handle, packet.callId, { ok: true, value: 'forged' })).ok).toBe(false)
     gate.resolve('approved'); expect(await pending).toBe('approved')
     one.adapter.handleCapability(CLIENT_OPEN_EXTERNAL, async () => new Promise(() => {}))
-    await expect(f.server.invokeClient(id, CLIENT_OPEN_EXTERNAL, 'https://example.invalid')).rejects.toThrow()
+    // Await settlement before asserting: Bun's promise matcher can stall this
+    // nested IPC/WebSocket rejection on Windows.
+    const abandoned = await f.server.invokeClient(id, CLIENT_OPEN_EXTERNAL, 'https://example.invalid').then(() => null, error => error)
+    expect(abandoned).toBeInstanceOf(Error)
+    expect(abandoned.code).toBe('HANDLER_ERROR')
     expect(f.bridge.getStats().capabilities).toBe(0)
     expect(JSON.stringify(f.snapshots)).not.toContain(f.token)
   })
@@ -223,6 +227,46 @@ test('short legacy auth tokens never alter handles or protocol names', async () 
   expect(f.bridge.getStats().handles).toBe(1)
 })
 
+test('startup network failure remains distinguishable from version incompatibility', async () => {
+  const f = await fixture({ thin: true })
+  f.target.url = 'ws://127.0.0.1:1'
+  const w = f.window(1)
+  const error = await w.adapter.invoke(RPC_CHANNELS.server.GET_WORKSPACES).catch(error => error)
+  expect(error.code).toBe('NETWORK')
+  expect(error.message).toContain('Cannot connect')
+  expect(w.adapter.getConnectionState().lastError?.kind).toBe('network')
+  expect(JSON.stringify(f.snapshots)).not.toContain(f.token)
+})
+
+test('incompatible handshake reports a protocol error without forwarding peer text', async () => {
+  const f = await fixture({ thin: true })
+  ;(f.server as any).onConnection = (socket: any) => {
+    socket.once('message', (raw: any) => {
+      const handshake = JSON.parse(raw.toString())
+      socket.send(JSON.stringify({ id: handshake.id, type: 'error', error: {
+        code: 'PROTOCOL_VERSION_UNSUPPORTED', message: `Peer rejected ${f.token}`,
+      } }))
+      socket.close(4004, 'Protocol mismatch')
+    })
+  }
+  const w = f.window(1)
+  const error = await w.adapter.invoke(RPC_CHANNELS.server.GET_WORKSPACES).catch(error => error)
+  expect(error.code).toBe('PROTOCOL')
+  expect(error.message).toContain('protocol versions are incompatible')
+  expect(w.adapter.getConnectionState().lastError?.kind).toBe('protocol')
+  expect(error.message).not.toContain(f.token)
+  expect(JSON.stringify(f.snapshots)).not.toContain(f.token)
+})
+
+test('missing older-server interface reports an unsupported operation without forwarding peer text', async () => {
+  const f = await fixture({ thin: true }); const w = f.window(1)
+  const error = await w.adapter.invoke(RPC_CHANNELS.server.GET_WORKSPACES).catch(error => error)
+  expect(error.code).toBe('UNSUPPORTED')
+  expect(error.message).toContain('Update the server')
+  expect(w.adapter.isConnected).toBe(true)
+  expect(JSON.stringify(f.snapshots)).not.toContain(f.token)
+})
+
 test('adapter drops an already-produced IPC result after rebind or destroy', async () => {
   for (const action of ['rebind', 'destroy'] as const) {
     const f = await fixture(); const w = f.window(action === 'rebind' ? 1 : 2)
@@ -312,7 +356,9 @@ test('SFTP fails closed without a main hook or a profile pin', async () => {
     w.adapter.handleCapability(CLIENT_SFTP_TRANSFER, async () => { rendererCalls++; return {} })
     await w.adapter.invoke(RPC_CHANNELS.sessions.GET)
     const id = f.server.findClientsWithCapability(CLIENT_SFTP_TRANSFER)[0]!
-    await expect(f.server.invokeClient(id, CLIENT_SFTP_TRANSFER, { direction: 'upload', localPath: '/dummy', remotePath: '/dummy' })).rejects.toThrow()
+    const denied = await f.server.invokeClient(id, CLIENT_SFTP_TRANSFER, { direction: 'upload', localPath: '/dummy', remotePath: '/dummy' }).then(() => null, error => error)
+    expect(denied).toBeInstanceOf(Error)
+    expect(denied.message).toBe('This remote transport action is not allowed.')
     expect(mainCalls).toBe(0); expect(rendererCalls).toBe(0)
     expect((await w.adapter.invoke(RPC_CHANNELS.sessions.GET)).workspace).toBe('remote-main')
   }

@@ -12,7 +12,11 @@ export interface NativeRemoteIpcClient {
 const knownChannels = new Set(getAllChannelValues())
 const knownCapabilities = new Set(LOCAL_CLIENT_CAPABILITIES)
 function unwrap<T>(result: NativeRemoteResult<T>): T {
-  if (!result || result.ok !== true) throw new Error(result && result.ok === false ? result.message : 'Remote transport is unavailable')
+  if (!result || result.ok !== true) {
+    const error = new Error(result && result.ok === false ? result.message : 'Remote transport is unavailable')
+    if (result?.ok === false) Object.assign(error, { code: result.code })
+    throw error
+  }
   return result.value
 }
 export class NativeRemoteClient implements RpcClient {

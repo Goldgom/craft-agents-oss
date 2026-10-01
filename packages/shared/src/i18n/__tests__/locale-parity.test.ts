@@ -45,6 +45,17 @@ function pluralBase(key: string): string {
 // ---------------------------------------------------------------------------
 
 describe("i18n locale parity", () => {
+  // Encoding damage can preserve every key and interpolation variable while
+  // replacing the visible translation with question marks. Check the values.
+  for (const [lang, translations] of Object.entries(locales)) {
+    it(`${lang} translations contain no damaged characters or question-mark placeholders`, () => {
+      const damaged = Object.entries(translations)
+        .filter(([, value]) => /\uFFFD|\?{2,}/u.test(value))
+        .map(([key]) => key);
+      expect(damaged).toEqual([]);
+    });
+  }
+
   // Key parity — run for each non-EN locale
   for (const [lang, translations] of otherLangs) {
     const langKeys = Object.keys(translations);

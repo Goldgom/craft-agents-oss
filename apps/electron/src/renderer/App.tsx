@@ -855,11 +855,13 @@ export default function App() {
   // Check server context + auth state and get window's workspace ID on mount
   useEffect(() => {
     const initialize = async () => {
+      let remoteStartup = false
       try {
         // Server context first — in picker mode no local service is running and
         // none of the server APIs below would answer.
         const ctx = await window.electronAPI.getStartupContext().catch(() => null)
         setServerContext(ctx)
+        remoteStartup = ctx?.mode === 'remote'
         if (ctx?.mode === 'picker') {
           setAppState('server-picker')
           return
@@ -878,8 +880,9 @@ export default function App() {
         setAppState(resolveAuthGatedAppState(needs.isFullyConfigured, wsId))
       } catch (error) {
         console.error('Failed to check auth state:', error)
-        // If check fails, show onboarding to be safe
-        setAppState('onboarding')
+        // An unreachable remote server cannot report its setup state. Keep
+        // retry/server selection available; check setup again after selection.
+        setAppState(remoteStartup ? 'workspace-picker' : 'onboarding')
       }
     }
 
@@ -2211,7 +2214,9 @@ export default function App() {
             onSelectWorkspace={async (id) => {
               await window.electronAPI.switchWorkspace(id)
               setWindowWorkspaceId(id)
-              setAppState('ready')
+              const needs = await window.electronAPI.getSetupNeeds()
+              setSetupNeeds(needs)
+              setAppState(resolveAuthGatedAppState(needs.isFullyConfigured, id))
             }}
           />
         </ModalProvider>

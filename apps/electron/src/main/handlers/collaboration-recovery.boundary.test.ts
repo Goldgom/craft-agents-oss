@@ -183,14 +183,16 @@ describe('collaboration interruption and retry boundaries over real loopback Web
       if (channel === RPC_CHANNELS.collaborations.REQUEST && !lost) { lost = true; f.drop(ctx) }
     }
     const first = (await f.connect()).client!
-    await expect(first.invoke(RPC_CHANNELS.collaborations.REQUEST, input)).rejects.toThrow('Connection lost')
+    const lostRequest = await first.invoke(RPC_CHANNELS.collaborations.REQUEST, input).then(() => null, error => error)
+    expect(lostRequest).toBeInstanceOf(Error)
+    expect(lostRequest.message).toContain('Connection lost')
     first.destroy()
     const second = (await f.connect()).client!
     const retried = await second.invoke(RPC_CHANNELS.collaborations.REQUEST, input)
     expect(retried).toMatchObject({ applied: false, delivery: 'delivered' })
     expect(retried.group.events.filter((event: { operationId: string }) => event.operationId === input.operationId)).toHaveLength(1)
     expect(retried.group.events.find((event: { operationId: string }) => event.operationId === input.operationId).delivery).toMatchObject({ status: 'delivered', attempts: 1 })
-    await expect(second.invoke(RPC_CHANNELS.collaborations.RETRY_DELIVERY, group.id, 'main', input.operationId)).resolves.toMatchObject({ delivery: 'delivered' })
+    expect(await second.invoke(RPC_CHANNELS.collaborations.RETRY_DELIVERY, group.id, 'main', input.operationId)).toMatchObject({ delivery: 'delivered' })
     expect(f.deliveries).toEqual(['primary', 'secondary'])
   })
 

@@ -54,6 +54,20 @@ const failureMessages: Record<NativeRemoteFailureCode, string> = {
   TARGET_CHANGED: 'The saved remote connection changed. Reopen the workspace to use its new settings.',
   LIMIT: 'Too many remote transport operations are pending. Retry after they finish.',
   FAILED: 'The remote workspace operation failed. Check the connection and retry.',
+  NETWORK: 'Cannot connect to the remote server. Check that the server is running and the network is available.',
+  AUTH: 'Remote authentication failed. Check Remote Servers settings.',
+  PROTOCOL: 'The client and server protocol versions are incompatible. Update the client or server.',
+  TIMEOUT: 'The remote server did not respond in time. Check the connection and retry.',
+  UNSUPPORTED: 'The remote server does not support this operation. Update the server.',
+}
+function connectionFailureCode(kind: unknown): NativeRemoteFailureCode {
+  switch (kind) {
+    case 'network': return 'NETWORK'
+    case 'auth': return 'AUTH'
+    case 'protocol': return 'PROTOCOL'
+    case 'timeout': return 'TIMEOUT'
+    default: return 'FAILED'
+  }
 }
 class BoundaryError extends Error {
   constructor(readonly code: NativeRemoteFailureCode) { super(failureMessages[code]) }
@@ -154,7 +168,7 @@ export function registerNativeRemoteTransport(ipc: NativeRegistrar, deps: Native
       ...(state.nextRetryInMs !== undefined ? { nextRetryInMs: state.nextRetryInMs } : {}),
       ...(state.lastHeartbeatAt !== undefined ? { lastHeartbeatAt: state.lastHeartbeatAt } : {}),
       updatedAt: state.updatedAt,
-      ...(state.lastError ? { lastError: { kind, message: kind === 'auth' ? 'Remote authentication failed. Check Remote Servers settings.' : 'Remote connection interrupted. Retry or reopen the workspace.' } } : {}),
+      ...(state.lastError ? { lastError: { kind, code: connectionFailureCode(kind), message: failureMessages[connectionFailureCode(kind)] } } : {}),
       ...(state.lastClose ? { lastClose: { code: state.lastClose.code, wasClean: state.lastClose.wasClean } } : {}),
     }
   }
@@ -253,6 +267,14 @@ export function registerNativeRemoteTransport(ipc: NativeRegistrar, deps: Native
       const result = await entry.client.invoke(channel, ...args)
       await revalidate(entry)
       return safePayload(result, [entry.target.token, ...(entry.target.secrets ?? [])])
+    } catch (error) {
+      if (error instanceof BoundaryError) throw error
+      // Use structured error categories only; provider messages may echo secrets.
+      const code = (error as { code?: unknown } | null)?.code
+      if (code === 'CHANNEL_NOT_FOUND') throw new BoundaryError('UNSUPPORTED')
+      const kind = (error as { kind?: unknown } | null)?.kind
+        ?? (code === 'REQUEST_TIMEOUT' ? 'timeout' : entry.client.getConnectionState().lastError?.kind)
+      throw new BoundaryError(connectionFailureCode(kind))
     } finally { entry.pendingRequests-- }
   })
   handler(IPC.SUBSCRIBE, async (event, id, requested) => {

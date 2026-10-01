@@ -12,7 +12,7 @@ export const NATIVE_REMOTE_TRANSPORT = {
   EVENT: '__remoteWorkspaceTransport:event',
 } as const
 export type NativeRemoteMode = 'workspace' | 'thin'
-export type NativeRemoteFailureCode = 'DENIED' | 'EXPIRED' | 'TARGET_CHANGED' | 'LIMIT' | 'FAILED'
+export type NativeRemoteFailureCode = 'DENIED' | 'EXPIRED' | 'TARGET_CHANGED' | 'LIMIT' | 'FAILED' | 'NETWORK' | 'AUTH' | 'PROTOCOL' | 'TIMEOUT' | 'UNSUPPORTED'
 export type NativeRemoteResult<T> = { ok: true; value: T } | { ok: false; code: NativeRemoteFailureCode; message: string }
 export interface NativeRemoteOpened {
   handle: string

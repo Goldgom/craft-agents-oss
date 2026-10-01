@@ -72,12 +72,17 @@ describe('collaboration real-transport smoke with synthetic servers', () => {
       client.connect()
     })
     for (const channel of [...Object.values(REMOTE_COLLABORATION_IPC), ...Object.values(LOCAL_COLLABORATION_IPC)]) {
-      await expect(client.invoke(channel, 'saved-profile', 'main', 'primary', [{ createNew: true, workspaceId: 'main' }])).rejects.toThrow()
+      // Settle the nested RPC promise before Bun's matcher inspects it.
+      const denied = await client.invoke(channel, 'saved-profile', 'main', 'primary', [{ createNew: true, workspaceId: 'main' }]).then(() => null, error => error)
+      expect(denied).toBeInstanceOf(Error)
+      expect(denied.code).toBe('CHANNEL_NOT_FOUND')
     }
     expect(await client.invoke(RPC_CHANNELS.collaborations.LIST_WORKSPACES)).toEqual([{ id: 'main', name: 'spoof-target' }])
     const visible = await client.invoke(RPC_CHANNELS.collaborations.LIST_CANDIDATES) as Session[]
     expect(visible.map(session => session.workspaceId)).toEqual(['main', 'main'])
-    await expect(client.invoke(RPC_CHANNELS.collaborations.CREATE, 'primary', [{ createNew: true, workspaceId: 'other' }])).rejects.toThrow('trusted local desktop')
+    const crossWorkspace = await client.invoke(RPC_CHANNELS.collaborations.CREATE, 'primary', [{ createNew: true, workspaceId: 'other' }]).then(() => null, error => error)
+    expect(crossWorkspace).toBeInstanceOf(Error)
+    expect(crossWorkspace.message).toContain('trusted local desktop')
     expect(remote.messages).toEqual([])
     expect(remote.sessions.size).toBe(3)
     expect(await remote.manager.list('main')).toEqual([])

@@ -150,11 +150,20 @@ export function registerRemoteServersGuiHandlers(server: RpcServer, deps: Handle
             : undefined
       if (!profile) return { ok: false, error: 'Server profile not found' }
 
-      const { client } = await connectToRemote(profile.url, profile.token)
+      const assertCurrent = async () => {
+        if (input.id != null && (await resolveRemoteProfile(input.id))?.revision !== (profile as ResolvedRemoteProfile).revision) {
+          throw new Error('Saved server changed. Retry.')
+        }
+      }
+      const { client } = await connectToRemote(validateNativeRemoteUrl(profile.url), profile.token, undefined, {
+        tlsRejectUnauthorized: true, useNodeWebSocket: true, beforeHandshake: assertCurrent,
+      })
       if (!client) return { ok: false, error: 'Connection failed. Check Remote Servers settings.' }
       try {
-        const serverVersion = client.getServerVersion?.() ?? undefined
-        if (profile.id !== 'adhoc') markRemoteServerConnected(profile.id)
+        await assertCurrent()
+        const version = client.getServerVersion?.()
+        const serverVersion = typeof version === 'string' && version.length <= 128 && (!profile.token || !version.includes(profile.token)) ? version : undefined
+        if (input.id != null) markRemoteServerConnected(profile.id)
         return { ok: true, serverVersion }
       } finally {
         client.destroy()
