@@ -58,6 +58,24 @@ async function fixture(options: { auth?: boolean; thin?: boolean; maxHandles?: n
 }
 
 describe('main-owned remote transport boundary with real WebSocket peers', () => {
+  test('preserves Studio recovery categories without exposing provider error text', async () => {
+    for (const code of ['STUDIO_TOKENNEST_REAUTH_REQUIRED', 'STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE'] as const) {
+      const f = await fixture(); const w = f.window(1)
+      f.server.handle(RPC_CHANNELS.studio.GENERATE_IMAGE, async () => {
+        throw Object.assign(new Error(`Provider echoed ${f.token}`), { code })
+      })
+      try {
+        await w.adapter.invoke(RPC_CHANNELS.studio.GENERATE_IMAGE, {})
+        throw new Error('Expected image generation to fail')
+      } catch (error) {
+        expect((error as Error & { code: string }).code).toBe(code)
+        expect((error as Error).message).toContain(code)
+        expect((error as Error).message).not.toContain(f.token)
+        expect((error as Error).message).not.toContain('Provider echoed')
+      }
+      expect(JSON.stringify(f.snapshots)).not.toContain(f.token)
+    }
+  })
   test('routes known workspace calls/pushes without exposing tokens and preserves binary values', async () => {
     const f = await fixture(); const w = f.window(1); const pushes: unknown[] = []
     w.adapter.on(RPC_CHANNELS.sessions.EVENT, (...args) => { pushes.push(args) }); w.adapter.connect()

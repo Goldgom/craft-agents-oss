@@ -1,0 +1,172 @@
+/* Android-only chrome. Solid colors also work on older system WebViews.
+   The extra root class increases specificity over legacy compact overrides. */
+html[data-mobile-app="android"]:root #root {
+  padding-top: 56px;
+}
+
+html[data-mobile-app="android"]:root .h-screen {
+  height: 100% !important;
+}
+
+.mobile-app-bar {
+  position: fixed;
+  top: env(safe-area-inset-top, 0px);
+  left: env(safe-area-inset-left, 0px);
+  right: env(safe-area-inset-right, 0px);
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+  z-index: 30;
+}
+
+.mobile-app-bar__brand {
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .2px;
+}
+
+html[data-mobile-app="android"]:root .mobile-controls,
+html[data-mobile-app="android"]:root .mobile-workspace-controls {
+  top: calc(env(safe-area-inset-top, 0px) + 6px);
+}
+
+html[data-mobile-app="android"]:root .mobile-controls__pill,
+html[data-mobile-app="android"]:root .mobile-workspace-controls__trigger {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+html[data-mobile-app="android"]:root .mobile-controls__quick-trigger {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+}
+
+html[data-mobile-app="android"]:root .mobile-controls__quick-trigger svg {
+  width: 21px;
+  height: 21px;
+}
+
+html[data-mobile-app="android"]:root [data-mobile-panel-header] {
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+  min-height: 56px;
+}
+
+html[data-mobile-app="android"]:root .mobile-controls__backdrop,
+html[data-mobile-app="android"]:root .mobile-workspace-controls__backdrop {
+  background: rgba(0, 0, 0, .48);
+}
+
+html[data-mobile-app="android"]:root .mobile-controls__panel {
+  top: env(safe-area-inset-top, 0px);
+  right: env(safe-area-inset-right, 0px);
+  left: auto;
+  bottom: env(safe-area-inset-bottom, 0px);
+  width: min(336px, calc(100vw - 32px));
+  max-height: var(--app-viewport-height, 100vh);
+  padding: 8px 12px 20px;
+  border-radius: 20px 0 0 20px;
+  background: rgb(19, 20, 23);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, .2);
+  z-index: 5;
+}
+
+html[data-mobile-app="android"]:root .mobile-controls__header {
+  min-height: 80px;
+  padding: 8px 4px 16px 12px;
+  background: rgb(19, 20, 23);
+  backdrop-filter: none;
+}
+
+html[data-mobile-app="android"]:root .mobile-controls__header > span { gap: 6px; }
+html[data-mobile-app="android"]:root .mobile-controls__header strong { font-size: 20px; }
+html[data-mobile-app="android"]:root .mobile-controls__header small { font-size: 12px; }
+html[data-mobile-app="android"]:root .mobile-controls__header button { width: 44px; height: 44px; }
+
+.mobile-controls__destinations { display: grid; gap: 4px; }
+.mobile-controls__group { position: relative; }
+
+.mobile-controls__destinations button,
+html[data-mobile-app="android"]:root .mobile-controls__panel > button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--foreground-dimmed);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mobile-controls__group > button { width: calc(100% - 48px); }
+.mobile-controls__destinations svg { width: 19px; height: 19px; flex: none; }
+.mobile-controls__group summary {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  list-style: none;
+  border-radius: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.mobile-controls__group summary::-webkit-details-marker { display: none; }
+.mobile-controls__group details[open] summary svg { transform: rotate(180deg); }
+.mobile-controls__children {
+  margin: 2px 0 8px 20px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.mobile-controls__children button { font-size: 13px; }
+.mobile-controls__destinations button:active,
+.mobile-controls__group summary:active { background: rgba(237, 236, 240, .06); }
+
+html[data-mobile-app="android"]:root .mobile-workspace-controls__panel {
+  top: 50px;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgb(25, 27, 32);
+}
+html[data-mobile-app="android"]:root .mobile-workspace-controls__item {
+  border: 0;
+  border-radius: 10px;
+  font-size: 14px;
+}
+html[data-mobile-app="android"]:root .mobile-workspace-controls__item.is-active {
+  color: var(--accent);
+  background: rgba(129, 140, 248, .1);
+}
+.mobile-workspace-controls__empty { padding: 12px 16px; color: var(--foreground-dimmed); font-size: 14px; }
+
+html[data-mobile-app="android"]:root .header-icon-btn,
+html[data-mobile-app="android"]:root .input-toolbar-btn,
+html[data-mobile-app="android"]:root .send-btn { min-width: 44px; width: 44px; height: 44px; }
+
+html[data-mobile-app="android"]:root .mobile-controls button:focus-visible,
+html[data-mobile-app="android"]:root .mobile-controls summary:focus-visible,
+html[data-mobile-app="android"]:root .mobile-workspace-controls button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+html[data-mobile-app="android"].keyboard-open:root #root { padding-top: 0; }
+html.keyboard-open .mobile-app-bar { display: none; }

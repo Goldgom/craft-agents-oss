@@ -59,7 +59,7 @@ export function resolveMarkdownLinkTarget(target: string): ResolvedMarkdownLinkT
     return { kind: 'file', path: fileUrlPath }
   }
 
-  if (isFilePathTarget(trimmed)) {
+  if (isFilePathTarget(trimmed) || isFilePathTarget(decodeFilePath(trimmed))) {
     return { kind: 'file', path: decodeFilePath(trimmed) }
   }
 

@@ -22,7 +22,7 @@ import { StyledDropdownMenuContent, StyledDropdownMenuItem, StyledDropdownMenuSu
 import { useAppShellContext, usePendingPermission, usePendingCredential, useSessionOptionsFor, useSession as useSessionData } from '@/context/AppShellContext'
 import { rendererPerf } from '@/lib/perf'
 import { isAbsolutePath } from '@/lib/drafts'
-import { findSessionDataLink, workspaceDataRelativePath } from '@/lib/session-data-link'
+import { findSessionDataLink, resolveSessionFileLink, workspaceDataRelativePath } from '@/lib/session-data-link'
 import { navigate, routes } from '@/lib/navigate'
 import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
@@ -357,22 +357,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   const handleOpenFile = React.useCallback(
     async (path: string) => {
-      // Resolve bare relative paths against session working directory,
-      // or workspace root as a fallback when workingDirectory is not set.
-      const resolved = (() => {
-        // Absolute paths (POSIX `/…`, Windows `C:\…`) and `~/…` are used as-is.
-        // Using a cross-platform check here fixes Windows preview failures where a
-        // `C:\…` path was wrongly treated as relative and re-prefixed with the
-        // workspace root, producing a doubled, non-existent path (#922/#875).
-        if (isAbsolutePath(path) || path.startsWith('~/')) return path
-
-        const baseDir = workingDirectory || activeWorkspace?.rootPath
-        if (!baseDir) return path
-
-        const cleanedBase = baseDir.replace(/\/+$/, '')
-        const cleanedPath = path.replace(/^\.\//, '')
-        return `${cleanedBase}/${cleanedPath}`
-      })()
+      const resolved = resolveSessionFileLink(path, workingDirectory, activeWorkspace?.rootPath, sessionId)
 
       // Smart fallback for missing files in AI output:
       // if the exact path doesn't exist, search nearby for same basename

@@ -24,6 +24,7 @@ export const CONTENT_PERSIST_CAP = 20 * 1024 * 1024
 export function isAbsolutePath(p: string): boolean {
   if (!p) return false
   if (p.startsWith('/')) return true
+  if (/^\\\\[^\\]+\\[^\\]+/.test(p)) return true
   if (/^[A-Za-z]:[\\/]/.test(p)) return true
   return false
 }

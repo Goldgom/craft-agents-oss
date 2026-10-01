@@ -8,6 +8,24 @@
 
 import { describe, it, expect } from 'bun:test'
 import { preprocessLinks, detectLinks, isPlaceholderUrl, isFilePathTarget } from '../linkify'
+import { resolveMarkdownLinkTarget } from '../link-target'
+
+describe('Windows filesystem links', () => {
+  it('detects the entire drive or UNC path rather than a suffix/domain', () => {
+    for (const path of ['E:/Projects/report.md', 'E:\\Projects\\report.md', '\\\\server\\share\\report.pdf']) {
+      const links = detectLinks(`See ${path} for details`)
+      expect(links).toHaveLength(1)
+      expect(links[0]?.url).toBe(path)
+      expect(links[0]?.type).toBe('file')
+      expect(isFilePathTarget(path)).toBe(true)
+    }
+  })
+  it('encodes backslashes so Markdown does not consume them as escapes', () => {
+    const output = preprocessLinks('See E:\\Projects\\report.md')
+    expect(output).toContain('(E:%5CProjects%5Creport.md)')
+    expect(resolveMarkdownLinkTarget('E:%5CProjects%5Creport.md')).toEqual({ kind: 'file', path: 'E:\\Projects\\report.md' })
+  })
+})
 
 // ============================================================================
 // preprocessLinks — existing markdown links should NOT be corrupted

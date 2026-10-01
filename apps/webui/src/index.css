@@ -26,6 +26,7 @@
  * inherit across @import boundaries.
  */
 @import "../../electron/src/renderer/index.css";
+@import "./android-ui.css";
 
 /*
  * Web UI responsive layout is handled by container queries and isAutoCompact
@@ -117,8 +118,8 @@ html[data-mobile-app="android"] {
   --foreground-rgb: 237, 236, 240 !important;
   --user-message-bubble: rgba(237, 236, 240, 0.05) !important;
   --user-message-bubble-dimmed: rgba(237, 236, 240, 0.03) !important;
-  --accent: rgb(180, 127, 255) !important;
-  --accent-rgb: 130, 75, 185 !important;
+  --accent: rgb(129, 140, 248) !important;
+  --accent-rgb: 129, 140, 248 !important;
   --info: rgb(246, 187, 86) !important;
   --info-rgb: 210, 155, 55 !important;
   --success: rgb(60, 190, 105) !important;
@@ -983,7 +984,4 @@ html[data-mobile-app="android"] [data-list-role="sessions"] {
   padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
 }
 
-/* The global Android menu replaces the compact panel back button. */
-html[data-mobile-app="android"] [data-mobile-panel-back] {
-  display: none !important;
-}
+/* Keep the final Android chrome overrides after the legacy compact rules. */

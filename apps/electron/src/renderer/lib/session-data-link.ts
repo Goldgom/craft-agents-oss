@@ -1,4 +1,20 @@
 import type { SessionFile } from '@craft-agent/shared/protocol'
+import { isAbsolutePath } from './drafts'
+
+/** Resolve against the owning session, independent of the client's OS/home. */
+export function resolveSessionFileLink(
+  path: string,
+  workingDirectory: string | undefined,
+  workspaceRootPath: string | undefined,
+  sessionId: string,
+): string {
+  if (isAbsolutePath(path) || /^(?:~(?:[\\/]|$)|\$\{HOME\}(?:[\\/]|$)|\$HOME(?:[\\/]|$))/.test(path)) return path
+  const base = workingDirectory || (workspaceRootPath
+    ? `${workspaceRootPath.replace(/[\\/]+$/, '')}/sessions/${sessionId}`
+    : undefined)
+  if (!base) return path
+  return `${base.replace(/[\\/]+$/, '')}/${path.replace(/^\.[\\/]/, '')}`
+}
 
 export function workspaceDataRelativePath(linkedPath: string, workspaceRootPath: string): string | null {
   const normalize = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '')

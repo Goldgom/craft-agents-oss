@@ -781,7 +781,10 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
       const next = [...assistantHistoryRef.current, { role: 'assistant' as const, text: suggestion.reply, suggestion }].slice(-100)
       assistantHistoryRef.current = next
       setAssistantHistory(next)
-      if (assistantMode === 'execute' && suggestion.operation !== 'none') await applyCanvasSuggestion(next.length - 1)
+      if (assistantMode === 'execute' && suggestion.operation !== 'none') {
+        try { await applyCanvasSuggestion(next.length - 1) }
+        catch { setError('GPT 已回复，但绘画建议执行失败。请检查绘画连接后重新应用建议。') }
+      }
       return suggestion
     } catch (cause) { setAssistantError(`GPT 辅助失败：${String(cause)}`); return null }
     finally { setAssistantBusy(false) }
@@ -816,6 +819,10 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
     applyingSuggestions.current.add(index)
     try {
       const result = await generate(suggestion.operation, suggestion.prompt)
+      if (result?.status === 'error') {
+        const issue = classifyStudioConnectionError(result.message, connection?.oauthProvider === 'tokennest')
+        if (!issue) setError('GPT 已回复，但图片生成失败。请检查绘画连接、图片分组和模型，然后重新应用建议。')
+      }
       if (result?.status === 'applied' || (result?.status === 'candidates' && result.candidates?.some(candidate => !candidate.issue))) {
         const current = assistantHistoryRef.current
         if (current[index]?.suggestion !== suggestion) return

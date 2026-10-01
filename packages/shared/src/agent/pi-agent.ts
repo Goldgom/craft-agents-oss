@@ -90,7 +90,7 @@ import type { McpClientPool, ProxyToolDef } from '../mcp/mcp-pool.ts';
 
 // Path utilities
 import { join } from 'path';
-import { homedir } from 'os';
+import { expandPath } from '../utils/paths.ts';
 
 // Session storage (plans folder path)
 import { getSessionDataPath, getSessionPath, getSessionPlansPath } from '../sessions/storage.ts';
@@ -203,6 +203,7 @@ export class PiAgent extends BaseAgent {
 
   // Subprocess process handle
   private subprocess: ChildProcess | null = null;
+  private subprocessWorkingDirectory: string | null = null;
   private readonly stoppingSubprocesses = new WeakSet<ChildProcess>();
   private readline: ReadlineInterface | null = null;
   private subprocessReady: Promise<void> | null = null;
@@ -406,6 +407,14 @@ export class PiAgent extends BaseAgent {
     const modelDef = getModelById(resolvedModel);
     super(config, resolvedModel, modelDef?.contextWindow);
 
+    // The prompt advertises the session root when no project is selected.
+    // File tools and bash must use that same directory, not the workspace root.
+    if (!config.session?.workingDirectory && config.session?.id) {
+      this.workingDirectory = getSessionPath(config.workspace.rootPath, config.session.id);
+      this.permissionManager.updateWorkingDirectory(this.workingDirectory);
+    }
+    this.promptBuilder.setExecutionWorkingDirectory(this.resolvedCwd());
+
     this._supportsBranching = true;
 
     this.piSessionId = config.session?.sdkSessionId || null;
@@ -472,6 +481,15 @@ export class PiAgent extends BaseAgent {
     if (this.subprocessStarting) {
       await this.subprocessStarting;
       return;
+    }
+
+    // Built-in tools capture cwd at initialization. At an idle/turn boundary,
+    // respawn with the existing Pi session ID so history is preserved. Never
+    // interrupt a tool already running in the middle of a turn.
+    if (this.subprocess && this.subprocessWorkingDirectory !== this.resolvedCwd()
+      && !this._isProcessing) {
+      this.killSubprocess();
+      this._sessionToolContext = null;
     }
 
     if (this.subprocess && this.subprocessReady) {
@@ -576,6 +594,8 @@ export class PiAgent extends BaseAgent {
     });
 
     this.subprocess = child;
+    this.subprocessWorkingDirectory = cwd;
+    this.promptBuilder.setExecutionWorkingDirectory(cwd);
 
     // Set up readline for JSONL parsing from stdout
     this.readline = createInterface({
@@ -2293,6 +2313,13 @@ export class PiAgent extends BaseAgent {
     }
 
     try {
+      // Pi's built-in tools capture cwd at initialization. Recreate them at a
+      // turn boundary after a directory change, preserving the session ID for
+      // history resume. Never kill a subprocess in the middle of a tool call.
+      if (this.subprocess && this.subprocessWorkingDirectory !== this.resolvedCwd()) {
+        this.killSubprocess();
+        this._sessionToolContext = null;
+      }
       // A running subprocess can outlive a short access token. Renew at the
       // turn boundary and push rotated credentials before sending the prompt.
       await this.ensureOAuthCredentialsFresh();
@@ -2961,10 +2988,7 @@ export class PiAgent extends BaseAgent {
    * BaseAgent stores paths with tilde (~) but Node.js spawn doesn't expand tilde.
    */
   private resolvedCwd(): string {
-    const wd = this.workingDirectory;
-    if (wd.startsWith('~/')) return join(homedir(), wd.slice(2));
-    if (wd === '~') return homedir();
-    return wd;
+    return expandPath(this.workingDirectory);
   }
 
   // ============================================================

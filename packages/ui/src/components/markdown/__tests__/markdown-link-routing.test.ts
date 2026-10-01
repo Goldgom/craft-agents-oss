@@ -6,6 +6,12 @@ import { classifyMarkdownLinkTarget, resolveMarkdownLinkTarget } from '../link-t
 import { markdownUrlTransform } from '../url-transform'
 
 describe('resolveMarkdownLinkTarget', () => {
+  it('preserves Windows drive and UNC paths, including encoded backslashes', () => {
+    for (const path of ['E:/Projects/report.md', 'E:\\Projects\\report.md', '\\\\server\\share\\report.pdf', 'E:/My Documents/report.md']) {
+      expect(resolveMarkdownLinkTarget(path)).toEqual({ kind: 'file', path })
+      expect(resolveMarkdownLinkTarget(path.replace(/\\/g, '%5C'))).toEqual({ kind: 'file', path })
+    }
+  })
   it('resolves absolute unix file paths as file targets', () => {
     expect(resolveMarkdownLinkTarget('/Users/balintorosz/.tokenbird/sessions/abc/image.jpg')).toEqual({
       kind: 'file',

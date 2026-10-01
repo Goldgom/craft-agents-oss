@@ -45,6 +45,12 @@ export class PromptBuilder {
   private config: PromptBuilderConfig;
   private workspaceRootPath: string;
   private pinnedPreferencesPrompt: string | null = null;
+  private executionWorkingDirectory: string | undefined;
+
+  /** Actual tool cwd, distinct from the SDK transcript storage location. */
+  setExecutionWorkingDirectory(path: string): void {
+    this.executionWorkingDirectory = path;
+  }
 
   constructor(config: PromptBuilderConfig) {
     this.config = config;
@@ -188,7 +194,7 @@ export class PromptBuilder {
     return getWorkingDirectoryContext(
       effectiveWorkingDir,
       isSessionRoot,
-      this.config.session?.sdkCwd
+      this.executionWorkingDirectory ?? this.config.session?.sdkCwd
     );
   }
 

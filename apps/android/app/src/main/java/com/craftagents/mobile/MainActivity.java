@@ -15,6 +15,7 @@ import android.graphics.Insets;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
@@ -75,10 +76,10 @@ public final class MainActivity extends Activity {
     private static final int COLOR_BACKGROUND = Color.rgb(16, 17, 20);
     private static final int COLOR_SURFACE = Color.rgb(25, 27, 32);
     private static final int COLOR_SURFACE_ALT = Color.rgb(31, 34, 40);
-    private static final int COLOR_BORDER = Color.rgb(52, 56, 66);
+    private static final int COLOR_BORDER = Color.rgb(42, 45, 54);
     private static final int COLOR_TEXT = Color.rgb(244, 245, 247);
     private static final int COLOR_MUTED = Color.rgb(164, 169, 180);
-    private static final int COLOR_ACCENT = Color.rgb(99, 102, 241);
+    private static final int COLOR_ACCENT = Color.rgb(129, 140, 248);
     private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
     private static final int PERMISSION_REQUEST_CODE_START = 4100;
     private static final String ANDROID_BACK_SCRIPT =
@@ -333,7 +334,7 @@ public final class MainActivity extends Activity {
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.ic_launcher);
         logo.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(76), dp(76));
+        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(64), dp(64));
         logoParams.gravity = Gravity.CENTER_HORIZONTAL;
         logoParams.setMargins(0, 0, 0, dp(24));
         page.addView(logo, 0, logoParams);
@@ -444,7 +445,7 @@ public final class MainActivity extends Activity {
         page.setPadding(dp(24), dp(44), dp(24), dp(32));
         applyServerPageInsets(page);
 
-        TextView title = textView(titleRes, 27, COLOR_TEXT);
+        TextView title = textView(titleRes, 24, COLOR_TEXT);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
         page.addView(title, matchWrap());
@@ -462,6 +463,8 @@ public final class MainActivity extends Activity {
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
         scrollView.setClipToPadding(false);
+        scrollView.setVerticalScrollBarEnabled(false);
+        scrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         scrollView.setBackgroundColor(COLOR_BACKGROUND);
         scrollView.addView(page, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -477,11 +480,14 @@ public final class MainActivity extends Activity {
     ) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(18), dp(17), dp(18), dp(17));
+        card.setPadding(dp(20), dp(20), dp(20), dp(20));
         card.setClickable(true);
         card.setFocusable(true);
         card.setAlpha(available ? 1f : 0.58f);
-        card.setBackground(roundedBackground(COLOR_SURFACE, preferred ? COLOR_ACCENT : COLOR_BORDER, 16, preferred ? 2 : 1));
+        card.setBackground(new RippleDrawable(
+            ColorStateList.valueOf(Color.argb(24, 129, 140, 248)),
+            roundedBackground(COLOR_SURFACE, preferred ? COLOR_ACCENT : COLOR_BORDER, 16, 1),
+            roundedBackground(Color.WHITE, Color.TRANSPARENT, 16, 0)));
 
         LinearLayout heading = new LinearLayout(this);
         heading.setOrientation(LinearLayout.HORIZONTAL);
@@ -489,10 +495,10 @@ public final class MainActivity extends Activity {
         TextView title = textView(titleRes, 17, COLOR_TEXT);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView badge = textView(badgeRes, 11, preferred ? Color.WHITE : COLOR_MUTED);
+        TextView badge = textView(badgeRes, 11, preferred ? COLOR_ACCENT : COLOR_MUTED);
         badge.setGravity(Gravity.CENTER);
         badge.setPadding(dp(9), dp(5), dp(9), dp(5));
-        badge.setBackground(roundedBackground(preferred ? COLOR_ACCENT : COLOR_SURFACE_ALT, Color.TRANSPARENT, 12, 0));
+        badge.setBackground(roundedBackground(preferred ? Color.rgb(36, 40, 64) : COLOR_SURFACE_ALT, Color.TRANSPARENT, 8, 0));
         heading.addView(badge);
         card.addView(heading, matchWrap());
 
@@ -515,6 +521,8 @@ public final class MainActivity extends Activity {
         input.setPadding(dp(15), 0, dp(15), 0);
         input.setMinHeight(dp(54));
         input.setBackground(roundedBackground(COLOR_SURFACE, COLOR_BORDER, 13, 1));
+        input.setOnFocusChangeListener((view, focused) ->
+            view.setBackground(roundedBackground(COLOR_SURFACE, focused ? COLOR_ACCENT : COLOR_BORDER, 13, 1)));
         return input;
     }
 
@@ -530,9 +538,14 @@ public final class MainActivity extends Activity {
         button.setAllCaps(false);
         button.setTextSize(16);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        button.setTextColor(Color.WHITE);
+        button.setTextColor(COLOR_BACKGROUND);
         button.setMinHeight(dp(54));
-        button.setBackground(roundedBackground(COLOR_ACCENT, Color.TRANSPARENT, 14, 0));
+        button.setElevation(0);
+        button.setStateListAnimator(null);
+        button.setBackground(new RippleDrawable(
+            ColorStateList.valueOf(Color.argb(28, 16, 17, 20)),
+            roundedBackground(COLOR_ACCENT, Color.TRANSPARENT, 14, 0),
+            roundedBackground(Color.WHITE, Color.TRANSPARENT, 14, 0)));
         return button;
     }
 

@@ -25,6 +25,18 @@ function connection() {
 }
 
 describe('Studio server requests', () => {
+  it('returns a transport-safe recovery code when image generation has no TokenNest group', async () => {
+    spyOn(config, 'getLlmConnection').mockReturnValue({
+      slug: 'tokennest', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth',
+      oauthProvider: 'tokennest', channelGroups: [{ id: 'chat', models: ['gpt-text'] }], createdAt: 1,
+    } as never)
+    try {
+      await harness()(RPC_CHANNELS.studio.GENERATE_IMAGE, { connectionSlug: 'tokennest', model: 'gpt-image-1', prompt: 'A cat' })
+      throw new Error('Expected missing image group')
+    } catch (error) {
+      expect((error as Error & { code: string }).code).toBe('STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE')
+    }
+  })
   it('asks GPT about one canvas session and validates the suggested adjustment', async () => {
     connection()
     let body: any

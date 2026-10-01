@@ -17,6 +17,9 @@ const linkify = new LinkifyIt()
 const FILE_PATH_REGEX_SOURCE = `(?:^|[\\s([\\{<])((?:/|~/|\\./|\\.\\./|[A-Za-z0-9_][\\w\\-./@%]*)[\\w\\-./@%]*\\.(?:${FILE_EXTENSIONS_PATTERN}))(?=[\\s)\\]}\\.,:;!?>]|$)`
 const FILE_PATH_REGEX = new RegExp(FILE_PATH_REGEX_SOURCE, 'gi')
 const FILE_PATH_PRETEST_REGEX = new RegExp(FILE_PATH_REGEX_SOURCE, 'i')
+const WINDOWS_PATH_SOURCE = `(?:[A-Za-z]:[\\\\/]|\\\\\\\\)[^\\s<>"|?*]*\\.(?:${FILE_EXTENSIONS_PATTERN})`
+const WINDOWS_PATH_REGEX = new RegExp(`(?:^|[\\s([{<])(${WINDOWS_PATH_SOURCE})(?=[\\s)\\]}.,:;!?>]|$)`, 'gi')
+const WINDOWS_PATH_TARGET_REGEX = new RegExp(`^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)[^<>"|?*\\r\\n]*\\.(?:${FILE_EXTENSIONS_PATTERN})$`, 'i')
 
 // File-path regex for markdown anchor targets (entire href/text value)
 // Used by Markdown.tsx click handler to route file links to onFileClick.
@@ -122,6 +125,13 @@ function rangesOverlap(a: { start: number; end: number }, b: { start: number; en
  */
 export function detectLinks(text: string): DetectedLink[] {
   const links: DetectedLink[] = []
+  WINDOWS_PATH_REGEX.lastIndex = 0
+  let windowsMatch
+  while ((windowsMatch = WINDOWS_PATH_REGEX.exec(text)) !== null) {
+    const path = windowsMatch[1]!
+    const start = windowsMatch.index + windowsMatch[0].indexOf(path)
+    links.push({ type: 'file', text: path, url: path, start, end: start + path.length })
+  }
 
   // 1. Detect URLs and emails with linkify-it
   const urlMatches = linkify.match(text) || []
@@ -130,6 +140,7 @@ export function detectLinks(text: string): DetectedLink[] {
   // Note: _ and ~ are valid URL chars so we only strip *
   const trailingMarkdownRe = /\*+$/
   for (const match of urlMatches) {
+    if (links.some(link => rangesOverlap(link, { start: match.index, end: match.lastIndex }))) continue
     let matchText = match.text
     let matchUrl = match.url
     let matchEnd = match.lastIndex
@@ -231,7 +242,7 @@ export function preprocessLinks(text: string): string {
   text = stripPlaceholderLinks(text)
 
   // Quick check - if no potential links, return early
-  if (!linkify.pretest(text) && !FILE_PATH_PRETEST_REGEX.test(text)) {
+  if (!linkify.pretest(text) && !FILE_PATH_PRETEST_REGEX.test(text) && !/[A-Za-z]:[\\/]|\\\\/.test(text)) {
     return text
   }
 
@@ -256,7 +267,9 @@ export function preprocessLinks(text: string): string {
     result += text.slice(lastIndex, link.start)
 
     // Convert to markdown link
-    result += `[${link.text}](${link.url})`
+    const label = link.type === 'file' ? link.text.replace(/\\/g, '\\\\') : link.text
+    const destination = link.type === 'file' ? link.url.replace(/\\/g, '%5C') : link.url
+    result += `[${label}](${destination})`
 
     lastIndex = link.end
   }
@@ -272,7 +285,7 @@ export function preprocessLinks(text: string): string {
  * Useful for optimization - skip preprocessing if no links present
  */
 export function hasLinks(text: string): boolean {
-  return linkify.pretest(text) || FILE_PATH_PRETEST_REGEX.test(text)
+  return linkify.pretest(text) || FILE_PATH_PRETEST_REGEX.test(text) || /[A-Za-z]:[\\/]|\\\\/.test(text)
 }
 
 /**
@@ -280,5 +293,5 @@ export function hasLinks(text: string): boolean {
  * Used by click handlers to route local paths to onFileClick instead of onUrlClick.
  */
 export function isFilePathTarget(target: string): boolean {
-  return FILE_PATH_TARGET_REGEX.test(target.trim())
+  return FILE_PATH_TARGET_REGEX.test(target.trim()) || WINDOWS_PATH_TARGET_REGEX.test(target.trim())
 }

@@ -23,6 +23,10 @@ type StudioThinkingLevel = ThinkingLevel | 'auto'
 type MindMapRequest = { connectionSlug: string; model: string; channelGroup?: string; prompt: string; currentXml?: string; workspaceContext?: string; priorRequests?: string[]; history?: Array<{ role: 'user' | 'assistant'; text: string }>; thinkingLevel?: StudioThinkingLevel; mode?: 'execute' | 'ask' }
 type CanvasAssistRequest = { connectionSlug: string; model: string; channelGroup?: string; sessionId: string; sessionTitle: string; question: string; imageBase64?: string; selection?: { x: number; y: number; width: number; height: number }; priorQuestions?: string[]; history?: Array<{ role: 'user' | 'assistant'; text: string }>; thinkingLevel?: StudioThinkingLevel }
 
+function studioConnectionError(code: typeof STUDIO_TOKENNEST_REAUTH_REQUIRED | typeof STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE, message: string): Error {
+  return Object.assign(new Error(`${code}: ${message}`), { code })
+}
+
 function studioReasoningEffort(value: unknown): string | undefined {
   if (value === undefined || value === 'auto') return undefined
   if (!isValidThinkingLevel(value)) throw new Error('Invalid Studio thinking level')
@@ -58,7 +62,7 @@ async function getToken(connection: LlmConnection, refresh = false): Promise<str
   const manager = getCredentialManager()
   if (connection.oauthProvider === 'tokennest') {
     const credentials = await getValidTokenNestCredentials(connection.slug, manager, refresh)
-    if (!credentials?.accessToken) throw new Error('TokenNest login expired. Please sign in again.')
+    if (!credentials?.accessToken) throw studioConnectionError(STUDIO_TOKENNEST_REAUTH_REQUIRED, 'TokenNest login expired. Please sign in again.')
     return credentials.accessToken
   }
   const key = await manager.getLlmApiKey(connection.slug)
@@ -119,23 +123,23 @@ async function post(
     })
     if (response.status === 401 && connection.oauthProvider === 'tokennest') {
       if (attempt === 0) continue
-      throw new Error(`${STUDIO_TOKENNEST_REAUTH_REQUIRED}: TokenNest 登录已失效，请重新登录`)
+      throw studioConnectionError(STUDIO_TOKENNEST_REAUTH_REQUIRED, 'TokenNest 登录已失效，请重新登录')
     }
     if (!response.ok) {
       const payload = await response.json().catch(() => ({})) as Record<string, any>
       const message = typeof payload.error?.message === 'string' ? payload.error.message : `HTTP ${response.status}`
       if (connection.oauthProvider === 'tokennest') {
         if (response.status === 403 && (payload.error?.code === 'insufficient_scope' || payload.error === 'insufficient_scope')) {
-          throw new Error(`${STUDIO_TOKENNEST_REAUTH_REQUIRED}: TokenNest 授权权限不足，请重新登录`)
+          throw studioConnectionError(STUDIO_TOKENNEST_REAUTH_REQUIRED, 'TokenNest 授权权限不足，请重新登录')
         }
         if (/无可用渠道|no available channel|no_available_channel/i.test(message)) {
           try { await fetchTokenNestChannelGroups(token) }
           catch (cause) {
             if (cause instanceof TokenNestGroupsScopeError) {
-              throw new Error(`${STUDIO_TOKENNEST_REAUTH_REQUIRED}: 当前 TokenNest 授权缺少分组读取权限，请重新登录`)
+              throw studioConnectionError(STUDIO_TOKENNEST_REAUTH_REQUIRED, '当前 TokenNest 授权缺少分组读取权限，请重新登录')
             }
           }
-          throw new Error(`${STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE}: ${message.slice(0, 500)}`)
+          throw studioConnectionError(STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE, message.slice(0, 500))
         }
       }
       throw new Error(`Studio request failed: ${message.slice(0, 500)}`)
@@ -145,7 +149,7 @@ async function post(
     }
     return await response.json() as Record<string, any>
   }
-  throw new Error('TokenNest login expired. Please sign in again.')
+  throw studioConnectionError(STUDIO_TOKENNEST_REAUTH_REQUIRED, 'TokenNest login expired. Please sign in again.')
 }
 
 function imageBytes(value: unknown, label: string): Blob {
@@ -209,7 +213,7 @@ export async function generateStudioImage(input: ImageInput): Promise<{ imageBas
       ? connection.channelGroups?.find(group => group.id === input.channelGroup && group.models?.includes(model))?.id
       : undefined
     if (connection.oauthProvider === 'tokennest' && !imageGroup) {
-      throw new Error(`${STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE}: 当前账户没有可用于此模型的图片分组，请检查 TokenNest 分组权限并刷新连接`)
+      throw studioConnectionError(STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE, '当前账户没有可用于此模型的图片分组，请检查 TokenNest 分组权限并刷新连接')
     }
     if (input.maskBase64 && !editing) throw new Error('A mask requires a source image')
     let payload: Record<string, any>
@@ -256,7 +260,7 @@ export function registerStudioHandlers(server: RpcServer): void {
       ? matchingGroups.find(group => group.id === input.channelGroup)?.id
       : matchingGroups.find(group => group.id === connection.channelGroup)?.id ?? matchingGroups[0]?.id
     if (connection.oauthProvider === 'tokennest' && connection.channelGroups?.length && !textGroup) {
-      throw new Error(`${STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE}: 当前账户没有可用于 ${model} 的文本分组`)
+      throw studioConnectionError(STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE, `当前账户没有可用于 ${model} 的文本分组`)
     }
     const image = input.imageBase64 ? imageBytes(input.imageBase64, 'Canvas snapshot') : undefined
     const imageUrl = image ? `data:image/png;base64,${input.imageBase64}` : undefined
@@ -317,7 +321,7 @@ export function registerStudioHandlers(server: RpcServer): void {
       ? matchingGroups.find(group => group.id === input.channelGroup)?.id
       : matchingGroups.find(group => group.id === connection.channelGroup)?.id ?? matchingGroups[0]?.id
     if (connection.oauthProvider === 'tokennest' && connection.channelGroups?.length && !textGroup) {
-      throw new Error(`${STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE}: 当前账户没有可用于 ${model} 的文本分组，请刷新连接`)
+      throw studioConnectionError(STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE, `当前账户没有可用于 ${model} 的文本分组，请刷新连接`)
     }
     const normalizedXml = input.currentXml ? requireDrawioXml(uncompressDrawio(input.currentXml)) : undefined
     // draw.io opens a new session with root cells only; those are editor scaffolding,

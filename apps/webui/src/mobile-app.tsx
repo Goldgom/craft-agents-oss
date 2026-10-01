@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Archive,
   Bot,
+  ChevronDown,
   Database,
   FileCode,
   Flag,
@@ -95,10 +96,19 @@ const MOBILE_NAVIGATION_ITEMS: MobileNavigationItem[] = [
   { label: '设置', route: routes.view.settings('app'), icon: Settings },
 ]
 
+// Secondary destinations stay available without overwhelming the first view.
+const MOBILE_NAVIGATION_GROUPS = MOBILE_NAVIGATION_ITEMS.reduce<MobileNavigationItem[][]>((groups, item) => {
+  if (item.subitem || ['已标记', '已归档', '标签'].includes(item.label)) {
+    groups[groups.length - 1]!.push(item)
+  } else {
+    groups.push([item])
+  }
+  return groups
+}, [])
+
 /**
- * Android compact controls. These are intentionally separate buttons in one
- * fixed row: frequent destinations are one tap away, while the menu button
- * opens the complete navigation drawer.
+ * Android app-bar controls. Workspace selection and grouped navigation live
+ * above the shared page headers so page titles and back actions stay clear.
  */
 export function MobileControls() {
   const [navigationOpen, setNavigationOpen] = useState(false)
@@ -106,18 +116,40 @@ export function MobileControls() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState<string | null>(null)
+  const navigationRef = useRef<HTMLElement>(null)
+  const workspaceRef = useRef<HTMLElement>(null)
   const android = isAndroidApp()
 
   useEffect(() => {
     if (!android || (!navigationOpen && !workspaceOpen)) return
 
     const root = document.documentElement
+    const previousFocus = document.activeElement
+    const panel = navigationOpen ? navigationRef.current : workspaceRef.current
+    panel?.focus()
     const closeOverlays = () => {
       setNavigationOpen(false)
       setWorkspaceOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') closeOverlays()
+      if (event.key !== 'Tab' || !panel) return
+      const controls = Array.from(panel.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), summary, [tabindex="0"]',
+      )).filter(element => element.getClientRects().length > 0)
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (!first || !last) {
+        event.preventDefault()
+        return
+      }
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === panel)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === panel)) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     const handleAndroidBack = (event: Event) => {
       event.preventDefault()
@@ -131,6 +163,7 @@ export function MobileControls() {
       root.classList.remove('mobile-overlay-open')
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('craft-agent-android-back', handleAndroidBack)
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus()
     }
   }, [android, navigationOpen, workspaceOpen])
 
@@ -208,6 +241,9 @@ export function MobileControls() {
 
   return (
     <>
+      <div className="mobile-app-bar" aria-label="TokenBird">
+        <span className="mobile-app-bar__brand">TokenBird</span>
+      </div>
       <div className="mobile-workspace-controls" data-open={workspaceOpen || undefined}>
         {workspaceOpen && (
           <button
@@ -236,11 +272,16 @@ export function MobileControls() {
 
         {workspaceOpen && (
           <section
+            ref={workspaceRef}
+            role="dialog"
+            aria-modal="true"
+            tabIndex={-1}
             id="mobile-workspace-controls-panel"
             className="mobile-workspace-controls__panel"
             aria-label="切换工作区"
           >
             <div className="mobile-workspace-controls__header">切换工作区</div>
+            {workspaces.length === 0 && <p className="mobile-workspace-controls__empty">正在加载工作区…</p>}
             {workspaces.map(workspace => {
               const selected = workspace.id === activeWorkspaceId
               const switching = workspace.id === switchingWorkspaceId
@@ -288,12 +329,15 @@ export function MobileControls() {
           }}
         >
           {navigationOpen ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
-          <span>菜单</span>
         </button>
       </div>
 
       {navigationOpen && (
-        <nav
+        <section
+          ref={navigationRef}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
           id="mobile-controls-panel"
           className="mobile-controls__panel"
           aria-label="应用菜单"
@@ -301,24 +345,40 @@ export function MobileControls() {
           <div className="mobile-controls__header">
             <span>
               <strong>TokenBird</strong>
-              <small>应用菜单</small>
+              <small>你的 AI 工作空间</small>
             </span>
             <button type="button" onClick={closeNavigation} aria-label="关闭菜单">
               <X aria-hidden="true" />
             </button>
           </div>
 
-          {MOBILE_NAVIGATION_ITEMS.map(({ label, route, icon: Icon, subitem }) => (
-            <button
-              key={label}
-              type="button"
-              className={subitem ? 'mobile-controls__subitem' : undefined}
-              onClick={() => navigateTo(route)}
-            >
-              <Icon aria-hidden="true" />
-              <span>{label}</span>
-            </button>
-          ))}
+          <nav aria-label="主要导航" className="mobile-controls__destinations">
+            {MOBILE_NAVIGATION_GROUPS.map(([item, ...children]) => {
+              if (!item) return null
+              const Icon = item.icon
+              const entry = (
+                <button type="button" onClick={() => navigateTo(item.route)}>
+                  <Icon aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+              )
+              return children.length ? (
+                <div key={item.label} className="mobile-controls__group">
+                  {entry}
+                  <details>
+                    <summary aria-label={`${item.label}分类`}><ChevronDown aria-hidden="true" /></summary>
+                    <div className="mobile-controls__children">
+                      {children.map(({ label, route, icon: ChildIcon }) => (
+                        <button key={label} type="button" onClick={() => navigateTo(route)}>
+                          <ChildIcon aria-hidden="true" /><span>{label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              ) : <div key={item.label}>{entry}</div>
+            })}
+          </nav>
 
           <div className="mobile-controls__separator" />
           <button
@@ -341,7 +401,7 @@ export function MobileControls() {
             <Server aria-hidden="true" />
             <span>服务器配置</span>
           </button>
-        </nav>
+        </section>
       )}
       </div>
     </>

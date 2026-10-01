@@ -2,6 +2,13 @@ import { describe, expect, it } from 'bun:test'
 import { classifyStudioConnectionError } from './studio-connection-error'
 
 describe('Studio connection recovery', () => {
+  it('uses structured remote codes even when messages are generic', () => {
+    const error = Object.assign(new Error('Remote operation failed'), { code: 'STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE' })
+    expect(classifyStudioConnectionError(error, true)).toBe('channel')
+    expect(classifyStudioConnectionError(error, false)).toBeNull()
+    error.code = 'STUDIO_TOKENNEST_REAUTH_REQUIRED'
+    expect(classifyStudioConnectionError(error, true)).toBe('reauth')
+  })
   it('asks for reauthorization when TokenNest confirms an old OAuth grant', () => {
     expect(classifyStudioConnectionError(new Error('STUDIO_TOKENNEST_REAUTH_REQUIRED: missing groups:read'), true)).toBe('reauth')
   })

@@ -54,6 +54,8 @@ const failureMessages: Record<NativeRemoteFailureCode, string> = {
   TARGET_CHANGED: 'The saved remote connection changed. Reopen the workspace to use its new settings.',
   LIMIT: 'Too many remote transport operations are pending. Retry after they finish.',
   FAILED: 'The remote workspace operation failed. Check the connection and retry.',
+  STUDIO_TOKENNEST_REAUTH_REQUIRED: 'STUDIO_TOKENNEST_REAUTH_REQUIRED: TokenNest authorization expired or lacks required permissions. Sign in again.',
+  STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE: 'STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE: No available TokenNest channel for this model. Check the group and model settings.',
   NETWORK: 'Cannot connect to the remote server. Check that the server is running and the network is available.',
   AUTH: 'Remote authentication failed. Check Remote Servers settings.',
   PROTOCOL: 'The client and server protocol versions are incompatible. Update the client or server.',
@@ -272,6 +274,10 @@ export function registerNativeRemoteTransport(ipc: NativeRegistrar, deps: Native
       // Use structured error categories only; provider messages may echo secrets.
       const code = (error as { code?: unknown } | null)?.code
       if (code === 'CHANNEL_NOT_FOUND') throw new BoundaryError('UNSUPPORTED')
+      if (['studio:generateImage', 'studio:assistCanvas', 'studio:generateMindMap'].includes(channel)
+        && (code === 'STUDIO_TOKENNEST_REAUTH_REQUIRED' || code === 'STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE')) {
+        throw new BoundaryError(code)
+      }
       const kind = (error as { kind?: unknown } | null)?.kind
         ?? (code === 'REQUEST_TIMEOUT' ? 'timeout' : entry.client.getConnectionState().lastError?.kind)
       throw new BoundaryError(connectionFailureCode(kind))
