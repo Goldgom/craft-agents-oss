@@ -824,7 +824,7 @@
   "overlay.zoomToFit": "适应窗口",
   "pages.askAgent": "让智能体创建",
   "pages.askAgentPrompt": "帮我创建一个页面，用来展示",
-  "pages.auth.credentialDescription": "输入此数据源的新凭据。凭据将加密存储在这台计算机上。",
+  "pages.auth.credentialDescription": "输入此数据源的新凭据。凭据将加密存储。",
   "pages.auth.credentialLabel": "API 密钥或令牌",
   "pages.auth.credentialSave": "保存",
   "pages.auth.credentialTitle": "重新连接“{{name}}”",

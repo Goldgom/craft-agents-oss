@@ -824,7 +824,7 @@
   "overlay.zoomToFit": "Zoom to Fit",
   "pages.askAgent": "Ask an agent",
   "pages.askAgentPrompt": "Create a page for me that shows ",
-  "pages.auth.credentialDescription": "Enter a new credential for this source. It's stored encrypted on this computer.",
+  "pages.auth.credentialDescription": "Enter a new credential for this source. It is stored encrypted.",
   "pages.auth.credentialLabel": "API key or token",
   "pages.auth.credentialSave": "Save",
   "pages.auth.credentialTitle": "Reconnect “{{name}}”",

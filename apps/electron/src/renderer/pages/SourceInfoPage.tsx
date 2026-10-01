@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopover'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { SourceMenu } from '@/components/app-shell/SourceMenu'
+import { McpReconnectButton } from '@/components/sources/McpReconnectButton'
 import { cn } from '@/lib/utils'
 import { routes, navigate } from '@/lib/navigate'
 import { useNavigation } from '@/contexts/NavigationContext'
@@ -422,15 +423,22 @@ export default function SourceInfoPage({ sourceSlug, workspaceId, onDelete }: So
             title={t('sourceInfo.connection')}
             description={getConnectionDescription(source, t)}
             actions={
-              // EditPopover for AI-assisted config.json editing with "Edit File" as secondary action
-              <EditPopover
-                trigger={<EditButton />}
-                {...getEditConfig('source-config', source.folderPath)}
-                secondaryAction={{
-                  label: t('common.editFile'),
-                  filePath: `${source.folderPath}/config.json`,
-                }}
-              />
+              <div className="flex items-center gap-2">
+                <McpReconnectButton
+                  key={`${workspaceId}:${sourceSlug}`}
+                  workspaceId={workspaceId}
+                  source={source}
+                  onReconnect={handleRefreshMcp}
+                />
+                <EditPopover
+                  trigger={<EditButton />}
+                  {...getEditConfig('source-config', source.folderPath)}
+                  secondaryAction={{
+                    label: t('common.editFile'),
+                    filePath: `${source.folderPath}/config.json`,
+                  }}
+                />
+              </div>
             }
           >
             <Info_Table
