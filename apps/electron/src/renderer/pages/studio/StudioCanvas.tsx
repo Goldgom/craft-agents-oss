@@ -7,6 +7,7 @@ import { GenerationImage, StudioGenerationHistory } from './StudioGenerationHist
 import { deleteStudioGeneration, getStudioGeneration, listStudioGenerations, saveStudioGeneration, type StudioGeneration } from './studio-generation-history'
 import { assessEditOutput, composeInpaint, composeOutpaint, fillTransparentForEdit, referenceCoverage, type EditOutputIssue } from './studio-image-composite'
 import { classifyStudioConnectionError, type StudioConnectionIssue } from './studio-connection-error'
+import { rechargeOnInsufficientBalance } from '@/lib/tokennest-recharge'
 import { StudioSessionWorkspace, type StudioSessionEditorProps } from './StudioSessionWorkspace'
 import { StudioCanvasChat, type CanvasChatMessage, type CanvasSuggestion } from './StudioCanvasChat'
 import { studioThinkingLevel, type StudioThinkingLevel } from './StudioThinkingPicker'
@@ -732,6 +733,7 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
         candidates: records.map((record, index) => ({ index, id: record.id, issue: issues.get(record.id) ?? null })) }
     } catch (cause) {
       const issue = classifyStudioConnectionError(cause, connection?.oauthProvider === 'tokennest')
+      rechargeOnInsufficientBalance(cause, connection)
       if (issue) { setConnectionIssue(issue); setConnectionSettingsOpen(true); setError('') }
       else setError(String(cause))
       return { status: 'error', message: String(cause) }
@@ -786,7 +788,7 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
         catch { setError('GPT 已回复，但绘画建议执行失败。请检查绘画连接后重新应用建议。') }
       }
       return suggestion
-    } catch (cause) { setAssistantError(`GPT 辅助失败：${String(cause)}`); return null }
+    } catch (cause) { rechargeOnInsufficientBalance(cause, assistantConnection.connection); setAssistantError(`GPT 辅助失败：${String(cause)}`); return null }
     finally { setAssistantBusy(false) }
   }
   async function applyCanvasSuggestion(index: number) {

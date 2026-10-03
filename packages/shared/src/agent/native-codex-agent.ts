@@ -50,6 +50,7 @@ import { attachSessionSelfManagementBindings } from './session-self-management-b
 import { getSessionScopedToolCallbacks, setLastPlanFilePath } from './session-scoped-tools.ts';
 import { executeBrowserToolCommand } from './browser-tool-runtime.ts';
 import { runPreToolUseChecks } from './core/pre-tool-use.ts';
+import { checkSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { LLM_QUERY_TIMEOUT_MS, withTimeout, type LLMQueryRequest, type LLMQueryResult } from './llm-tool.ts';
 import { parseError } from './errors.ts';
 import { SourceActivationDrainController } from './source-activation-drain.ts';
@@ -401,6 +402,12 @@ export class NativeCodexAgent extends BaseAgent {
   }
 
   protected async *chatImpl(message: string, attachments?: FileAttachment[], options?: ChatOptions): AsyncGenerator<AgentEvent> {
+    // app-server's built-in shell/file tools do not pass through Craft's path gate.
+    if (hasSessionExecutionPolicy(this._sessionId)) {
+      yield { type: 'error', message: 'Super Agent nodes require the Pi compatibility runtime for Codex connections; native Codex does not expose the required filesystem policy gate.' };
+      yield { type: 'complete' };
+      return;
+    }
     if (this.processing) {
       yield { type: 'error', message: 'Codex is already processing a turn' };
       yield { type: 'complete' };
@@ -855,6 +862,8 @@ export class NativeCodexAgent extends BaseAgent {
   }
 
   private async routeToolCall(toolName: string, args: Record<string, unknown>): Promise<{ content: string; isError: boolean }> {
+    const policy = checkSessionExecutionPolicy(this._sessionId, toolName, args, this.workingDirectory);
+    if (!policy.allowed) return { content: policy.reason, isError: true };
     const stripped = toolName.startsWith('mcp__session__') ? toolName.slice('mcp__session__'.length) : toolName;
     if (SESSION_TOOL_NAMES.has(stripped)) {
       if (stripped === 'call_llm') {

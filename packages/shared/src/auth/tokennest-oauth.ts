@@ -7,6 +7,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { CredentialManager } from '../credentials/manager.ts';
 import { CredentialChangedError } from '../credentials/types.ts';
+import { TOKENNEST_RECHARGE_URL, validateTokenNestRechargeUrl } from '../utils/billing.ts';
 
 export const TOKENNEST_OAUTH_CONFIG = {
   issuer: 'https://openai.goldgom.top',
@@ -15,6 +16,7 @@ export const TOKENNEST_OAUTH_CONFIG = {
   tokenUrl: 'https://openai.goldgom.top/api/oauth2/token',
   revocationUrl: 'https://openai.goldgom.top/api/oauth2/revoke',
   balanceUrl: 'https://openai.goldgom.top/api/oauth2/balance',
+  rechargeSessionUrl: 'https://openai.goldgom.top/api/oauth2/recharge-session',
   groupsUrl: 'https://openai.goldgom.top/api/oauth2/groups',
   usageSummaryUrl: 'https://openai.goldgom.top/api/oauth2/usage/summary',
   usageRecordsUrl: 'https://openai.goldgom.top/api/oauth2/usage/records',
@@ -75,8 +77,9 @@ export class TokenNestRequestError extends Error {
   }
 }
 
-async function tokenNestJson(accessToken: string, url: URL | string): Promise<Record<string, unknown>> {
+async function tokenNestJson(accessToken: string, url: URL | string, method = 'GET'): Promise<Record<string, unknown>> {
   const response = await fetch(url, {
+    method,
     headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
   });
   const body = await response.text();
@@ -100,6 +103,28 @@ async function tokenNestJson(accessToken: string, url: URL | string): Promise<Re
   }
   const data = root.data;
   return data && typeof data === 'object' ? data as Record<string, unknown> : root;
+}
+
+export async function createTokenNestRechargeSession(accessToken: string): Promise<{ url: string; requiresWebsiteLogin: boolean }> {
+  let data: Record<string, unknown>
+  try {
+    data = await tokenNestJson(accessToken, TOKENNEST_OAUTH_CONFIG.rechargeSessionUrl, 'POST')
+  } catch (error) {
+    // Older deployments can still recharge through the regular wallet login.
+    if (error instanceof TokenNestRequestError && error.status === 404) {
+      return { url: TOKENNEST_RECHARGE_URL, requiresWebsiteLogin: true }
+    }
+    throw error
+  }
+  if (typeof data.url !== 'string' || typeof data.expires_in !== 'number' || data.expires_in <= 0 || data.expires_in > 60) {
+    throw new Error('TokenNest returned an invalid recharge session')
+  }
+  const url = validateTokenNestRechargeUrl(data.url)
+  const parsed = new URL(url)
+  if (parsed.pathname !== '/oauth/recharge' || !parsed.searchParams.get('ticket')) {
+    throw new Error('TokenNest returned an invalid recharge session')
+  }
+  return { url, requiresWebsiteLogin: false }
 }
 
 function finiteNumber(value: unknown): number {

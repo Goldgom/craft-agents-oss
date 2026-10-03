@@ -78,6 +78,7 @@ import {
   type PreToolUseCheckResult,
   BUILT_IN_TOOLS,
 } from './core/pre-tool-use.ts';
+import { checkSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -1311,7 +1312,7 @@ export class ClaudeAgent extends BaseAgent {
         // Workspace agents are isolated definitions exposed through Claude's
         // native Agent/Task tool. The built-in `compact` agent is intentionally
         // not passed here: /compact must use the SDK's native compaction flow.
-        agents: await loadClaudeSubagents(this.workspaceRootPath),
+        agents: hasSessionExecutionPolicy(sessionId) ? {} : await loadClaudeSubagents(this.workspaceRootPath),
         model: effectiveModel,
         // Capture stderr from SDK subprocess for error diagnostics
         // This helps identify why sessions fail with "process exited with code 1"
@@ -1415,7 +1416,7 @@ export class ClaudeAgent extends BaseAgent {
         // User hooks from automations.json are merged with internal hooks
         hooks: (() => {
           // Build user-defined hooks from automations.json using the workspace-level AutomationSystem
-          const userHooks: Partial<Record<string, SdkAutomationCallbackMatcher[]>> = this.automationSystem?.buildSdkHooks() ?? {};
+          const userHooks: Partial<Record<string, SdkAutomationCallbackMatcher[]>> = hasSessionExecutionPolicy(sessionId) ? {} : (this.automationSystem?.buildSdkHooks() ?? {});
           if (Object.keys(userHooks).length > 0) {
             debug('[CraftAgent] User SDK hooks loaded:', Object.keys(userHooks).join(', '));
           }
@@ -1430,9 +1431,14 @@ export class ClaudeAgent extends BaseAgent {
               }
               // Validate the fields we depend on are actually present
               if (!_hookInput.tool_name || !_hookInput.tool_use_id) {
+                if (hasSessionExecutionPolicy(sessionId)) return blockWithReason('Super Agent policy: malformed tool request cannot be authorized');
                 return { continue: true };
               }
               const input = _hookInput as Required<Pick<typeof _hookInput, 'tool_name' | 'tool_use_id'>> & typeof _hookInput;
+
+              // The image-resize fast path below reads host files before the usual pipeline.
+              const nodePolicy = checkSessionExecutionPolicy(sessionId, input.tool_name, input.tool_input as Record<string, unknown>, this.config.session?.workingDirectory);
+              if (!nodePolicy.allowed) return blockWithReason(nodePolicy.reason);
 
               // Track Read tool calls for prerequisite checking
               if (input.tool_name === 'Read') {
@@ -1455,7 +1461,7 @@ export class ClaudeAgent extends BaseAgent {
                         const sizeMB = (stats.size / (1024 * 1024)).toFixed(1);
                         this.onDebug?.(`Image ${filePath} is ${sizeMB}MB, attempting resize...`);
 
-                        if (this.config.onImageResize) {
+                        if (this.config.onImageResize && !hasSessionExecutionPolicy(sessionId)) {
                           const resizedPath = await this.config.onImageResize(filePath, IMAGE_LIMITS.MAX_RAW_SIZE);
                           if (resizedPath) {
                             this.onDebug?.(`Image resized, redirecting Read to: ${resizedPath}`);
@@ -1748,6 +1754,13 @@ export class ClaudeAgent extends BaseAgent {
         // No plugins — skills are handled by BaseAgent.chat() via read-before-execute
         // (the model reads SKILL.md files directly, enforced by PrerequisiteManager)
         plugins: [],
+        // Filesystem settings can run command hooks, and discovered MCP servers
+        // can spawn host programs before any PreToolUse callback is invoked.
+        ...(hasSessionExecutionPolicy(sessionId) ? {
+          settingSources: [],
+          strictMcpConfig: true,
+          skills: [],
+        } : {}),
       };
 
       // Capture the binary path the SDK will actually use (Electron-bundled custom

@@ -37,7 +37,7 @@ import { attachmentFromContentRef, toDraftRef } from './lib/drafts'
 import { stripMarkdown } from './utils/text'
 import { coerceInputText } from './lib/input-text'
 import { getSessionsToRefreshAfterStaleReconnect } from './lib/reconnect-recovery'
-import { formatSessionLoadFailure, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
+import { createSessionListRequestGuard, formatSessionLoadFailure, retryExpiredSessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
 import { extractWorkspaceSlugFromPath } from '@craft-agent/shared/utils/workspace-slug'
 import { DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 import { initRendererPerf } from './lib/perf'
@@ -95,6 +95,7 @@ import {
   shouldShowGettingStartedGuide,
 } from '@/lib/getting-started-guide'
 import { resolveAuthGatedAppState } from '@/lib/app-startup'
+import { getTokenNestRechargeConnection, rechargeOnInsufficientBalance } from '@/lib/tokennest-recharge'
 
 // PDF previews are opened on demand. Loading the renderer lazily keeps pdf.js
 // and its worker off the startup path.
@@ -103,6 +104,7 @@ const PDFPreviewOverlay = React.lazy(() =>
 )
 const StudioCanvas = React.lazy(() => import('./pages/studio/StudioCanvas'))
 const StudioMindMap = React.lazy(() => import('./pages/studio/StudioMindMap'))
+const SuperAgentPage = React.lazy(() => import('./pages/super-agent/SuperAgentPage'))
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'server-picker' | 'ready'
 
@@ -297,8 +299,8 @@ function SessionLoadErrorScreen({
 
 export default function App() {
   const { t } = useTranslation()
-  const [studioMode, setStudioMode] = useState<'agent' | 'canvas' | 'mindmap'>('agent')
-  const [studioVisited, setStudioVisited] = useState({ canvas: true, mindmap: false })
+  const [studioMode, setStudioMode] = useState<'agent' | 'canvas' | 'mindmap' | 'super-agent'>('agent')
+  const [studioVisited, setStudioVisited] = useState({ canvas: true, mindmap: false, 'super-agent': false })
   const isAndroidEmbedded = useMemo(
     () => new URLSearchParams(window.location.search).get('embedded') === 'android',
     [],
@@ -391,6 +393,15 @@ export default function App() {
   const [llmConnections, setLlmConnections] = useState<LlmConnectionWithStatus[]>([])
   // Workspace default LLM connection (for new sessions)
   const [workspaceDefaultLlmConnection, setWorkspaceDefaultLlmConnection] = useState<string | undefined>()
+
+  useEffect(() => window.electronAPI.onSessionEvent(event => {
+    if (event.type !== 'typed_error' && event.type !== 'error') return
+    const session = store.get(sessionAtomFamily(event.sessionId))
+    if (session?.hidden) return
+    const sessionConnection = session?.llmConnection ?? store.get(sessionMetaMapAtom).get(event.sessionId)?.llmConnection
+    const connection = getTokenNestRechargeConnection(llmConnections, sessionConnection, workspaceDefaultLlmConnection)
+    rechargeOnInsufficientBalance(event.error, connection)
+  }), [llmConnections, workspaceDefaultLlmConnection, store])
   // Global default LLM connection slug (from app config)
   const [defaultLlmConnectionSlug, setDefaultLlmConnectionSlug] = useState<string | undefined>()
 
@@ -451,6 +462,14 @@ export default function App() {
   // Splash screen state - tracks when app is fully ready (all data loaded)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
   const [sessionLoadError, setSessionLoadError] = useState<string | null>(null)
+  const sessionListRequestsRef = useRef(createSessionListRequestGuard())
+  const sessionListRecoveryPendingRef = useRef(true)
+
+  useEffect(() => {
+    sessionListRecoveryPendingRef.current = true
+    return () => { sessionListRequestsRef.current.invalidate() }
+  }, [windowWorkspaceId])
+
   const [splashExiting, setSplashExiting] = useState(false)
   const [splashHidden, setSplashHidden] = useState(false)
   const [showGettingStartedGuide, setShowGettingStartedGuide] = useState(false)
@@ -637,10 +656,17 @@ export default function App() {
   }, [clearStreamingState, replaceLoadedSession, syncSessionOptionsFromSession, reconcilePermissionModeState, store])
 
   const loadSessionsFromServer = useCallback(async () => {
+    const isCurrent = sessionListRequestsRef.current.begin()
+    sessionListRecoveryPendingRef.current = true
     setSessionLoadError(null)
 
     try {
-      const loadedSessions = await window.electronAPI.getSessions()
+      const loadedSessions = await retryExpiredSessionListRequest(
+        () => window.electronAPI.getSessions(), isCurrent,
+      )
+      if (!isCurrent()) return
+      sessionListRecoveryPendingRef.current = false
+      setSessionLoadError(null)
 
       // Initialize per-session atoms and metadata map
       // NOTE: No sessionsAtom used - sessions are only in per-session atoms
@@ -663,6 +689,7 @@ export default function App() {
       await Promise.allSettled(
         loadedSessions.map((s) => reconcilePermissionModeState(s.id))
       )
+      if (!isCurrent()) return
 
       setSessionsLoaded(true)
 
@@ -673,8 +700,10 @@ export default function App() {
         }
       }
     } catch (err) {
+      if (!isCurrent()) return
       console.error('[App] Failed to load sessions:', err)
       const transportState = await window.electronAPI.getTransportConnectionState().catch(() => null)
+      if (!isCurrent()) return
 
       if (shouldTreatSessionLoadFailureAsTransportFallback(transportState)) {
         console.error('[App] Treating session load failure as transport fallback:', transportState)
@@ -683,10 +712,29 @@ export default function App() {
         return
       }
 
+      sessionListRecoveryPendingRef.current = false
       setSessionLoadError(formatSessionLoadFailure(err))
       setSessionsLoaded(true)
     }
   }, [initializeSessions, initialSessionId, reconcilePermissionModeState, windowWorkspaceId])
+
+  // A newly rebound client may never emit onReconnected: its handshake is
+  // considered the first connection. Recover initial reads on connected too.
+  useEffect(() => {
+    if (appState !== 'ready') return
+    return window.electronAPI.onTransportConnectionStateChanged((state) => {
+      if (state.mode !== 'remote') return
+      if (state.status !== 'connected') {
+        sessionListRequestsRef.current.invalidate()
+        sessionListRecoveryPendingRef.current = true
+        // The transport banner owns disconnected/loading states. An invalidated
+        // initial read will no longer reach its catch to release the splash.
+        setSessionsLoaded(true)
+      } else if (sessionListRecoveryPendingRef.current) {
+        void loadSessionsFromServer()
+      }
+    })
+  }, [appState, loadSessionsFromServer])
 
   const refreshSessionListMetadataFromServer = useCallback(async (options: SessionListRefreshOptions = {}): Promise<Map<string, SessionMeta> | null> => {
     const {
@@ -694,12 +742,17 @@ export default function App() {
       reason = 'manual-or-authoritative',
       selectedSessionId = null,
     } = options
+    const isCurrent = sessionListRequestsRef.current.begin()
     const beforeMetaMap = store.get(sessionMetaMapAtom)
     const beforeIds = new Set(beforeMetaMap.keys())
     const transportState = await window.electronAPI.getTransportConnectionState().catch(() => null)
 
     try {
-      const sessions = await window.electronAPI.getSessions()
+      if (!isCurrent()) return null
+      const sessions = await retryExpiredSessionListRequest(
+        () => window.electronAPI.getSessions(), isCurrent,
+      )
+      if (!isCurrent()) return null
       const returnedIds = new Set(sessions.map(s => s.id))
       const missingIds = Array.from(beforeIds).filter(id => !returnedIds.has(id))
       const addedIds = sessions.map(s => s.id).filter(id => !beforeIds.has(id))
@@ -731,6 +784,9 @@ export default function App() {
       // inside one Jotai write function so React subscribers see one
       // consistent update instead of intermediate states.
       const nextMetaMap = store.set(refreshSessionsMetadataAtom, { sessions, loadedSessionIds, removeMissing })
+      sessionListRecoveryPendingRef.current = false
+      setSessionLoadError(null)
+      setSessionsLoaded(true)
 
       // Sync app-level state (React hooks / non-atom concerns) after the atom transaction
       for (const session of sessions) {
@@ -738,8 +794,9 @@ export default function App() {
       }
       await Promise.allSettled(sessions.map(s => reconcilePermissionModeState(s.id)))
 
-      return nextMetaMap
+      return isCurrent() ? nextMetaMap : null
     } catch (err) {
+      if (!isCurrent()) return null
       rendererLog.error('[App] Failed to refresh session list metadata after reconnect:', {
         reason,
         removeMissing,
@@ -1261,6 +1318,9 @@ export default function App() {
       })
 
       if (!isStale) {
+        if (sessionListRecoveryPendingRef.current) {
+          await loadSessionsFromServer()
+        }
         // Server replayed buffered events — we're caught up, nothing to do
         console.info('[App] Reconnected with event replay — no refresh needed')
         return
@@ -1309,7 +1369,7 @@ export default function App() {
     })
 
     return cleanup
-  }, [store, sessionSelection.selected, refreshSessionFromServer, refreshSessionListMetadataFromServer, refreshLlmConnections])
+  }, [store, sessionSelection.selected, refreshSessionFromServer, refreshSessionListMetadataFromServer, refreshLlmConnections, loadSessionsFromServer])
 
   // Listen for menu bar events
   useEffect(() => {
@@ -2303,6 +2363,17 @@ export default function App() {
                       {studioVisited.mindmap && (
                         <div className={studioMode === 'mindmap' ? 'h-full' : 'hidden'}>
                           <React.Suspense fallback={null}><StudioMindMap /></React.Suspense>
+                        </div>
+                      )}
+                      {studioVisited['super-agent'] && (
+                        <div className={studioMode === 'super-agent' ? 'h-full' : 'hidden'}>
+                          <React.Suspense fallback={null}>
+                            <SuperAgentPage
+                              active={studioMode === 'super-agent'}
+                              onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }}
+                              onOpenSession={id => { setStudioMode('agent'); navigate(routes.view.allSessions(id)) }}
+                            />
+                          </React.Suspense>
                         </div>
                       )}
                     </>

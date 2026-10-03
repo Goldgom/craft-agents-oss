@@ -17,6 +17,10 @@ function listener(channel: string) {
 }
 
 export const CHANNEL_MAP = {
+  // Workspace-scoped Super Agent configuration and orchestration
+  getSuperAgent: invoke(RPC_CHANNELS.superAgent.GET),
+  saveSuperAgent: invoke(RPC_CHANNELS.superAgent.SAVE),
+  superAgentCommand: invoke(RPC_CHANNELS.superAgent.COMMAND),
   // Session management
   getSessions: invoke(RPC_CHANNELS.sessions.GET),
   getUnreadSummary: invoke(RPC_CHANNELS.sessions.GET_UNREAD_SUMMARY),
@@ -447,6 +451,7 @@ export const CHANNEL_MAP = {
   getShowApiBalances: invoke(RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES),
   setShowApiBalances: invoke(RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES),
   getTokenNestUsage: invoke(RPC_CHANNELS.tokennest.GET_USAGE),
+  getTokenNestRechargeUrl: invoke(RPC_CHANNELS.tokennest.GET_RECHARGE_URL),
 
   // Projects
   getProjects: invoke(RPC_CHANNELS.projects.GET),

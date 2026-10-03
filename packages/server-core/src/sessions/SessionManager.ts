@@ -10,6 +10,9 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
+import { setSessionExecutionPolicy, setSessionProgramExecutor, clearSessionExecutionPolicy, checkSessionPolicyPath, type SessionExecutionPolicy } from '@craft-agent/shared/agent'
+import type { SuperAgentSessionPolicy } from '@craft-agent/shared/super-agent'
+import { cleanupSuperAgents } from '../super-agent/registry'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@craft-agent/shared/agent'
 import {
   resolveSessionConnection,
@@ -393,7 +396,8 @@ async function buildServersFromSources(
 
 /** Apply an Agent's independent MCP/API source switches. Ordinary sessions
  * have no policy and retain the workspace behaviour unchanged. */
-function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'agentSessionSettings'>): LoadedSource[] {
+function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'agentSessionSettings' | 'executionPolicy'>): LoadedSource[] {
+  if (managed?.executionPolicy) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
   const settings = managed?.agentSessionSettings
   if (!settings) return sources
   const mcp = settings.mcpSourceSlugs ? new Set(settings.mcpSourceSlugs) : null
@@ -767,6 +771,8 @@ interface ManagedSession {
   archivedAt?: number
   /** Permission mode for this session ('safe', 'ask', 'allow-all') */
   permissionMode?: PermissionMode
+  /** Durable permission ceiling independent of the user-selectable mode. */
+  executionPolicy?: SessionExecutionPolicy
   /** Previous permission mode (preserved across restarts for session_state modeTransition context) */
   previousPermissionMode?: PermissionMode
   /** Centralized MCP client pool for this session's source connections */
@@ -836,6 +842,7 @@ interface ManagedSession {
   /** Agent-created session provenance and effective system instructions. */
   agentId?: string
   agentPrompt?: string
+  agentSystemPrompt?: string
   agentSessionSettings?: AgentSessionSettings
   collaboration?: SessionCollaboration
   // Role/type of the last message (for badge display without loading messages)
@@ -1062,6 +1069,11 @@ export function createManagedSession(
     managed.branchSeedApplied = !!managed.sdkSessionId
   }
 
+  if (managed.agentSystemPrompt) managed.agentPrompt = managed.agentSystemPrompt
+  if (managed.executionPolicy) {
+    try { setSessionExecutionPolicy(managed.id, managed.executionPolicy) }
+    catch (error) { sessionLog.error(`Invalid restored node policy for session ${managed.id}:`, error) }
+  }
   return managed
 }
 
@@ -2942,7 +2954,7 @@ export class SessionManager implements ISessionManager {
     const effectiveConnection = agentSettings?.llmConnection ?? options?.llmConnection
     const effectiveSources = agentSettings?.enabledSourceSlugs ?? options?.enabledSourceSlugs
     const effectiveHidden = agentSettings?.showInSessionList === undefined ? options?.hidden : !agentSettings.showInSessionList
-    const effectiveAgentPrompt = agentSettings?.systemPrompt ?? selectedAgent?.prompt
+    const effectiveAgentPrompt = options?.agentSystemPrompt ?? agentSettings?.systemPrompt ?? selectedAgent?.prompt
 
     // Read permission mode from workspace config, fallback to global defaults
     const defaultPermissionMode = options?.permissionMode
@@ -3248,6 +3260,7 @@ export class SessionManager implements ISessionManager {
       // re-resolved from workspace defaults on the next start.
       enabledSourceSlugs: effectiveSources,
       agentId: selectedAgent?.id,
+      agentSystemPrompt: options?.agentSystemPrompt,
     })
 
     // Branch: copy messages from source session up to and including the branch point
@@ -3454,6 +3467,22 @@ export class SessionManager implements ISessionManager {
    *  sessions inherit the orchestrator's cwd). Undefined if the session has none or is unknown. */
   getSessionWorkingDirectory(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.workingDirectory
+  }
+
+  /** Apply a durable permission ceiling; verified executors are runtime-only and reattached per dispatch. */
+  async applySessionPolicy(sessionId: string, input: SuperAgentSessionPolicy): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (managed.isProcessing) throw new Error('Stop the node before changing its execution policy')
+    const previous = JSON.stringify(managed.executionPolicy)
+    const policy = setSessionExecutionPolicy(sessionId, input)
+    setSessionProgramExecutor(sessionId, input.containerExecutor)
+    managed.executionPolicy = policy
+    managed.workingDirectory = policy.rootPath
+    managed.enabledSourceSlugs = [...policy.allowSources]
+    if (managed.agent && previous !== JSON.stringify(policy)) await this.disposeManagedAgentRuntime(managed, 'node execution policy changed')
+    this.persistSession(managed, true)
+    await sessionPersistenceQueue.flush(sessionId)
   }
 
   private async disposeManagedAgentRuntime(managed: ManagedSession, reason: string): Promise<void> {
@@ -3746,6 +3775,8 @@ export class SessionManager implements ISessionManager {
    * 4. fallback: no connection configured
    */
   private async getOrCreateAgent(managed: ManagedSession): Promise<AgentInstance> {
+    // Also covers direct sends to a restored node session before the Super Agent page is opened.
+    if (managed.executionPolicy) setSessionExecutionPolicy(managed.id, managed.executionPolicy)
     const existing = this.agentCreationLocks.get(managed.id)
     if (existing) return existing
     const creation = this.createAgentRuntime(managed)
@@ -3849,7 +3880,7 @@ export class SessionManager implements ISessionManager {
       if (managed.agentId && !managed.agentSessionSettings) {
         try {
           const restoredAgent = (await listAgents(managed.workspace.rootPath)).find(agent => agent.id === managed.agentId)
-          managed.agentPrompt = restoredAgent?.session?.systemPrompt ?? restoredAgent?.prompt
+          managed.agentPrompt = managed.agentSystemPrompt ?? restoredAgent?.session?.systemPrompt ?? restoredAgent?.prompt
           managed.agentSessionSettings = restoredAgent?.session
         } catch (error) {
           sessionLog.warn(`Failed to restore Agent settings for session ${managed.id}:`, error)
@@ -4030,7 +4061,7 @@ export class SessionManager implements ISessionManager {
         // Claude-specific
         isHeadless: !AGENT_FLAGS.defaultModesEnabled,
         skipConfigWatcher: true, // Server owns workspace-level ConfigWatcher — don't duplicate in agents
-        automationSystem: this.automationSystems.get(managed.workspace.rootPath),
+        automationSystem: managed.executionPolicy ? undefined : this.automationSystems.get(managed.workspace.rootPath),
         systemPromptPreset: managed.systemPromptPreset,
         agentPrompt: [managed.agentPrompt, managed.collaboration && buildCollaborationPrompt(managed.collaboration)].filter(Boolean).join('\n\n') || undefined,
         debugMode: _platform?.isDebugMode ? { enabled: true, logFilePath: _platform.getLogFilePath?.() } : undefined,
@@ -5662,6 +5693,9 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session not found: ${sessionId}`)
     }
+    if (managed.executionPolicy && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
+      throw new Error('Super Agent policy: data source is not assigned to this node')
+    }
 
     const workspaceRootPath = managed.workspace.rootPath
     sessionLog.info(`Setting sources for session ${sessionId}:`, sourceSlugs)
@@ -6091,6 +6125,9 @@ export class SessionManager implements ISessionManager {
   updateWorkingDirectory(sessionId: string, path: string): void {
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      if (managed.executionPolicy && checkSessionPolicyPath(managed.executionPolicy, path)) {
+        throw new Error('Super Agent policy: working directory is outside the node environment')
+      }
       const validation = isValidWorkingDirectory(path)
       if (!validation.valid) {
         sessionLog.warn(`Session ${sessionId}: rejected working directory "${path}" — ${validation.reason}`)
@@ -6457,6 +6494,7 @@ export class SessionManager implements ISessionManager {
     }
 
     this.sessions.delete(sessionId)
+    clearSessionExecutionPolicy(sessionId)
 
     // Clean up session metadata in AutomationSystem (prevents memory leak)
     const automationSystem = this.automationSystems.get(workspaceRootPath)
@@ -6508,6 +6546,15 @@ export class SessionManager implements ISessionManager {
       throw new Error(`Session ${sessionId} not found`)
     }
     this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
+    if (managed.executionPolicy) {
+      setSessionExecutionPolicy(sessionId, managed.executionPolicy)
+      for (const attachment of attachments ?? []) {
+        const path = attachment.path
+        if (!managed.executionPolicy.readFiles || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory))) {
+          throw new Error('Super Agent policy: attachment is outside the node environment or file reading is disabled')
+        }
+      }
+    }
 
     // Source-activation auto-retry dedup (craft-agents-oss#804). When the server
     // has just scheduled or committed a "[<slug> activated]" retry, drop a matching
@@ -8453,6 +8500,7 @@ export class SessionManager implements ISessionManager {
    * If no agent exists, creates a temporary one using the session's connection.
    */
   private async generateTitle(managed: ManagedSession, userMessage: string): Promise<void> {
+    if (managed.executionPolicy) return
     sessionLog.info(`[generateTitle] Starting for session ${managed.id}`)
 
     // Use existing agent or create temporary one
@@ -9973,6 +10021,8 @@ export class SessionManager implements ISessionManager {
    * Should be called on app shutdown to prevent resource leaks.
    */
   async cleanup(): Promise<void> {
+    try { await cleanupSuperAgents(this) }
+    catch (error) { sessionLog.error('Failed to stop every Super Agent environment; continuing session teardown:', error) }
     sessionLog.info('Cleaning up resources...')
 
     // Stop all ConfigWatchers (file system watchers)
@@ -10036,6 +10086,7 @@ export class SessionManager implements ISessionManager {
     // Clean up session-scoped tool callbacks for all sessions
     for (const sessionId of this.sessions.keys()) {
       unregisterSessionScopedToolCallbacks(sessionId)
+      clearSessionExecutionPolicy(sessionId)
     }
     await this.collaborationManager.cleanup()
     await this.collaborationRelayManager?.cleanup()

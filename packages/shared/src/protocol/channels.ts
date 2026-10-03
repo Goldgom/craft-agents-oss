@@ -256,6 +256,11 @@ export const RPC_CHANNELS = {
     GENERATE_MIND_MAP: 'studio:generateMindMap',
     EXPORT_VISIO: 'studio:exportVisio',
   },
+  superAgent: {
+    GET: 'superAgent:get',
+    SAVE: 'superAgent:save',
+    COMMAND: 'superAgent:command',
+  },
   chatgpt: {
     START_OAUTH: 'chatgpt:startOAuth',
     COMPLETE_OAUTH: 'chatgpt:completeOAuth',
@@ -269,6 +274,7 @@ export const RPC_CHANNELS = {
     CANCEL_OAUTH: 'tokennest:cancelOAuth',
     CHECK_AUTH: 'tokennest:checkAuth',
     GET_USAGE: 'tokennest:getUsage',
+    GET_RECHARGE_URL: 'tokennest:getRechargeUrl',
   },
   copilot: {
     START_OAUTH: 'copilot:startOAuth',

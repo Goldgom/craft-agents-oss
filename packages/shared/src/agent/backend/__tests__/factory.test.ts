@@ -34,6 +34,7 @@ import { ClaudeAgent } from '../../claude-agent.ts';
 import { PiAgent } from '../../pi-agent.ts';
 import { CodexCompatibilityAgent } from '../../codex-agent.ts';
 import { NativeCodexAgent } from '../../native-codex-agent.ts';
+import { clearSessionExecutionPolicy, setSessionExecutionPolicy } from '../../core/session-execution-policy.ts';
 import { resolveNativeCodexBinary } from '../../../codex/binary-resolver.ts';
 import { isValidProviderAuthCombination } from '../../../config/llm-connections.ts';
 
@@ -108,6 +109,28 @@ describe('createBackend / createAgent', () => {
   });
 
   describe('Explicit runtime protocol', () => {
+    it('routes restricted nodes through policy-enforced tools even when native Codex is installed', () => {
+      const sessionId = 'restricted-codex-factory-test';
+      setSessionExecutionPolicy(sessionId, {
+        nodeId: 'worker', role: 'worker', rootPath: process.cwd(),
+        readFiles: true, writeFiles: false, runPrograms: false, browser: false,
+        allowSources: [], allowSubagents: false,
+      });
+      try {
+        const config = createTestConfig({
+          provider: 'pi', agentRuntime: 'codex', authType: 'oauth',
+          session: { ...createTestSession(), id: sessionId },
+        });
+        const binary = { path: 'codex', source: 'PATH' as const, version: '0.154.0', testedProtocol: true };
+        const agent = createCodexBackend(config, binary);
+        expect(agent).toBeInstanceOf(CodexCompatibilityAgent);
+        agent.destroy();
+        expect(() => createCodexBackend({ ...config, authType: 'none' }, binary)).toThrow('policy-enforced compatibility runtime');
+      } finally {
+        clearSessionExecutionPolicy(sessionId);
+      }
+    });
+
     it('prefers native Codex and falls back to the isolated compatibility runtime', () => {
       const agent = createBackend(createTestConfig({ provider: 'pi', agentRuntime: 'codex' }));
       const native = resolveNativeCodexBinary();

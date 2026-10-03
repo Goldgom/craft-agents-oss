@@ -365,6 +365,9 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.studio.ASSIST_CANVAS,
   RPC_CHANNELS.studio.GENERATE_MIND_MAP,
   RPC_CHANNELS.studio.EXPORT_VISIO,
+  RPC_CHANNELS.superAgent.GET,
+  RPC_CHANNELS.superAgent.SAVE,
+  RPC_CHANNELS.superAgent.COMMAND,
 
   // chatgpt — OAuth via capability passthrough
   RPC_CHANNELS.chatgpt.START_OAUTH,
@@ -379,6 +382,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
   RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
+  RPC_CHANNELS.tokennest.GET_RECHARGE_URL,
 
   // copilot — OAuth via capability passthrough
   RPC_CHANNELS.copilot.START_OAUTH,

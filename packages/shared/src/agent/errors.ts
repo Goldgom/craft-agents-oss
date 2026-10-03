@@ -11,6 +11,7 @@
 
 import type { ErrorCode } from '@craft-agent/core/types';
 import { getProviderMetadata } from '../config/provider-metadata.ts';
+import { isInsufficientBalanceError } from '../utils/billing.ts';
 
 export type { ErrorCode };
 
@@ -454,6 +455,7 @@ export function parseError(
     code = 'proxy_error';
   // Check for specific HTTP status codes or patterns
   } else if (
+    isInsufficientBalanceError(lowerMessage) ||
     lowerMessage.includes('402') ||
     lowerMessage.includes('payment required') ||
     lowerMessage.includes('insufficient_quota') ||

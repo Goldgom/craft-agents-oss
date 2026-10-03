@@ -84,3 +84,32 @@ export function formatSessionLoadFailure(error: unknown): string {
   if (typeof error === 'string' && error.trim()) return error
   return 'Unknown error'
 }
+
+/** Ignore replies from superseded requests or a previous workspace. */
+export function createSessionListRequestGuard() {
+  let revision = 0
+  return {
+    begin: () => {
+      const requestRevision = ++revision
+      return () => requestRevision === revision
+    },
+    invalidate: () => { revision++ },
+  }
+}
+
+/** A generation change cancels a read, not the underlying session data. */
+export async function retryExpiredSessionListRequest<T>(
+  request: () => Promise<T>,
+  isCurrent: () => boolean,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await request()
+    } catch (error) {
+      if (!isCurrent() || attempt >= 2
+        || formatSessionLoadFailure(error) !== 'Remote client generation expired') {
+        throw error
+      }
+    }
+  }
+}

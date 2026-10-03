@@ -100,6 +100,7 @@ import { parseError, type AgentError } from './errors.ts';
 
 // Centralized PreToolUse pipeline
 import { runPreToolUseChecks, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
+import { checkSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled, getBrowserToolEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -1017,18 +1018,6 @@ export class PiAgent extends BaseAgent {
           } }])) throw new CredentialChangedError();
         }
         this.debug('Token refresh successful');
-
-        // Push refreshed credentials to running subprocess
-        if (this.subprocess) {
-          const piAuth = await this.getPiAuth();
-          if (piAuth) {
-            await this.pushAuthUpdate(piAuth);
-            if (this.authFingerprint(await this.readAuthAfterUpdate()) !== this.authFingerprint(piAuth)) throw new CredentialChangedError();
-            this.lastInjectedAuthFingerprint = this.authFingerprint(piAuth);
-            this.lastInjectedAuthHadCredential = true;
-            this.debug('Pushed refreshed credentials to subprocess');
-          }
-        }
       } catch (error) {
         const current = await credentialManager.getSnapshot(id);
         if (error instanceof CredentialChangedError || current.revision !== snapshot.revision) throw new CredentialChangedError();
@@ -1038,6 +1027,20 @@ export class PiAgent extends BaseAgent {
           throw new OAuthReauthenticationRequiredError();
         }
         throw new Error('Token refresh failed. Try again.');
+      }
+
+      // Persistence has succeeded and changed the revision ourselves. Keep
+      // runtime delivery failures out of the refresh catch above so an ACK
+      // timeout cannot be misreported as a conflicting credential replacement.
+      if (this.subprocess) {
+        const piAuth = await this.getPiAuth();
+        if (piAuth) {
+          await this.pushAuthUpdate(piAuth);
+          if (this.authFingerprint(await this.readAuthAfterUpdate()) !== this.authFingerprint(piAuth)) throw new CredentialChangedError();
+          this.lastInjectedAuthFingerprint = this.authFingerprint(piAuth);
+          this.lastInjectedAuthHadCredential = true;
+          this.debug('Pushed refreshed credentials to subprocess');
+        }
       }
     })();
 
@@ -1784,6 +1787,8 @@ export class PiAgent extends BaseAgent {
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<{ content: string; isError: boolean }> {
+    const nodePolicy = checkSessionExecutionPolicy(this._sessionId, `mcp__session__${toolName}`, args, this.workingDirectory);
+    if (!nodePolicy.allowed) return { content: nodePolicy.reason, isError: true };
     try {
       // call_llm uses the shared pre-execution pipeline from BaseAgent
       if (toolName === 'call_llm') {

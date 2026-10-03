@@ -49,6 +49,8 @@ import type { Workspace } from '../config/storage.ts';
 
 // Core modules
 import { PermissionManager } from './core/permission-manager.ts';
+import { checkSessionExecutionPolicy, getSessionExecutionPolicy, hasSessionExecutionPolicy, setSessionReferenceFiles } from './core/session-execution-policy.ts';
+import { CONFIG_DIR } from '../config/paths.ts';
 import { SourceManager } from './core/source-manager.ts';
 import { PromptBuilder } from './core/prompt-builder.ts';
 import { PathProcessor } from './core/path-processor.ts';
@@ -320,6 +322,7 @@ export abstract class BaseAgent implements AgentBackend {
 
     // AutomationSystem: workspace-level automations from automations.json
     this.automationSystem = config.automationSystem;
+    this.refreshNodeReferenceFiles([]);
   }
 
   // ============================================================
@@ -397,6 +400,8 @@ export abstract class BaseAgent implements AgentBackend {
    * @param signal - Optional AbortSignal for cancelling automation execution on abort
    */
   protected async emitAutomationEvent(event: AutomationAgentEvent, input: SdkAutomationInput, signal?: AbortSignal): Promise<void> {
+    // Workspace hooks can run unrestricted host commands; node scripts use the controlled runtime.
+    if (hasSessionExecutionPolicy(this._sessionId)) return;
     try {
       await this.automationSystem?.executeAgentEvent(event, input, signal);
     } catch (err) {
@@ -654,6 +659,15 @@ export abstract class BaseAgent implements AgentBackend {
    */
   setAllSources(sources: LoadedSource[]): void {
     this.sourceManager.setAllSources(sources);
+    this.refreshNodeReferenceFiles(sources);
+  }
+
+  private refreshNodeReferenceFiles(sources: LoadedSource[]): void {
+    const policy = getSessionExecutionPolicy(this._sessionId);
+    if (!policy) return;
+    const paths = sources.filter(source => policy.allowSources.includes(source.config.slug)).map(source => join(source.folderPath, 'guide.md'));
+    if (policy.browser) paths.push(join(CONFIG_DIR, 'docs', 'browser-tools.md'));
+    setSessionReferenceFiles(this._sessionId, paths);
   }
 
   /**
@@ -1153,6 +1167,8 @@ ${formattedMessages}
    * Shared across all backends. Codex overrides validateCallLlmModel() for provider filtering.
    */
   protected async preExecuteCallLlm(input: Record<string, unknown>): Promise<LLMQueryResult> {
+    const policy = checkSessionExecutionPolicy(this._sessionId, 'mcp__session__call_llm', input, this.workingDirectory);
+    if (!policy.allowed) throw new Error(policy.reason);
     const sessionPath = getSessionPath(this.config.workspace.rootPath, this._sessionId);
     const request = await buildCallLlmRequest(input, {
       backendName: this.backendName,
@@ -1176,6 +1192,8 @@ ${formattedMessages}
   protected async preExecuteSpawnSession(
     input: Record<string, unknown>
   ): Promise<SpawnSessionResult | SpawnSessionHelpResult> {
+    const policy = checkSessionExecutionPolicy(this._sessionId, 'mcp__session__spawn_session', input, this.workingDirectory);
+    if (!policy.allowed) throw new Error(policy.reason);
     // Help mode — return available config info
     if (input.help) {
       return this.getSpawnSessionHelp();

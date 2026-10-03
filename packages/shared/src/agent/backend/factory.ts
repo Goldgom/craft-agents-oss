@@ -27,6 +27,7 @@ import { ClaudeAgent } from '../claude-agent.ts';
 import { PiAgent } from '../pi-agent.ts';
 import { CodexCompatibilityAgent } from '../codex-agent.ts';
 import { NativeCodexAgent } from '../native-codex-agent.ts';
+import { hasSessionExecutionPolicy } from '../core/session-execution-policy.ts';
 import { configureNativeCodexResourcesPath, resolveNativeCodexBinary } from '../../codex/binary-resolver.ts';
 import {
   getLlmConnection,
@@ -285,6 +286,10 @@ export function createCodexBackend(
   config: BackendConfig,
   nativeBinary = resolveNativeCodexBinary(),
 ): AgentBackend {
+  if (config.session?.id && hasSessionExecutionPolicy(config.session.id)) {
+    if (config.authType === 'none') throw new Error('Super Agent nodes require configured Codex API or OAuth credentials for the policy-enforced compatibility runtime.');
+    return new CodexCompatibilityAgent(config);
+  }
   const runtime = getBackendRuntime(config);
   // Native app-server currently owns OpenAI transports only. Other connections
   // can still select the Codex agent protocol, but must use the Pi compatibility

@@ -66,7 +66,7 @@ function createOfflineEnvironment(): NodeJS.ProcessEnv {
 }
 
 /** Spawn the bundle, send JSONL messages, and collect output until `done` matches or timeout. */
-function driveBundle(messages: object[], done: (output: string) => boolean): Promise<string> {
+function driveBundle(messages: object[], done: (output: string) => boolean, afterReady: object[] = []): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--preload', blockNetworkPreloadPath, bundlePath], {
       cwd: scratchDir,
@@ -74,6 +74,7 @@ function driveBundle(messages: object[], done: (output: string) => boolean): Pro
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let output = '';
+    let sentAfterReady = false;
     const finish = (error?: Error) => {
       clearTimeout(timer);
       child.kill();
@@ -86,6 +87,10 @@ function driveBundle(messages: object[], done: (output: string) => boolean): Pro
     );
     const onData = (chunk: Buffer) => {
       output += chunk.toString();
+      if (!sentAfterReady && output.includes('"type":"ready"')) {
+        sentAfterReady = true;
+        for (const msg of afterReady) child.stdin.write(`${JSON.stringify(msg)}\n`);
+      }
       if (done(output)) finish();
     };
     child.stdout.on('data', onData);
@@ -101,6 +106,26 @@ function driveBundle(messages: object[], done: (output: string) => boolean): Pro
 }
 
 describe('pi-agent-server bundle', () => {
+  it('acknowledges credential updates by request id in the built runtime', async () => {
+    const output = await driveBundle(
+      [{
+        type: 'init', apiKey: '', model: 'pi/gpt-6-astra', cwd: scratchDir,
+        workspaceRootPath: scratchDir, sessionId: 'bundle-auth-ack',
+        sessionPath: scratchDir, workingDirectory: scratchDir,
+        plansFolderPath: join(scratchDir, 'plans'), providerType: 'pi', authType: 'oauth',
+        piAuth: { provider: 'openai-codex', credential: { type: 'api_key', key: 'dummy-old' } },
+      }],
+      out => out.includes('"id":"auth-accepted","success":true') && out.includes('"id":"auth-rejected","success":false'),
+      [
+        { type: 'token_update', id: 'auth-accepted', piAuth: { provider: 'openai-codex', credential: { type: 'api_key', key: 'dummy-replacement' } } },
+        { type: 'token_update', id: 'auth-rejected', piAuth: { provider: 'amazon-bedrock', credential: { type: 'iam', accessKeyId: 'dummy-id', secretAccessKey: 'dummy-secret' } } },
+      ],
+    );
+    expect(output).not.toContain('dummy-replacement');
+    expect(output).not.toContain('dummy-secret');
+    expect(output).not.toContain('OFFLINE_FETCH_BLOCKED');
+  }, RUN_TIMEOUT_MS + 130_000);
+
   it('resolves a ChatGPT Plus credential for Astra through the bundled auth pipeline offline', async () => {
     const output = await driveBundle(
       [

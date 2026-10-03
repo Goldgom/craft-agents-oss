@@ -16,6 +16,7 @@ export {
 export type { NativeCodexStatus, ManagedCodexInstallResult } from '../codex/binary-resolver.ts';
 export * from './errors.ts';
 export * from './options.ts';
+export * from './core/session-execution-policy.ts';
 
 // Export session-scoped-tools - tools scoped to a specific session
 export {

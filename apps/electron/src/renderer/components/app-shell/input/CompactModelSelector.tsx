@@ -45,6 +45,7 @@ import {
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
+import { openTokenNestRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
 
 type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
 
@@ -173,7 +174,7 @@ export function CompactModelSelector({
   React.useEffect(() => {
     if (!open) return
     let cancelled = false
-    void (async () => {
+    const refresh = async () => {
       try {
         const enabled = await window.electronAPI.getShowApiBalances()
         if (!enabled || cancelled) {
@@ -185,8 +186,10 @@ export function CompactModelSelector({
       } catch {
         if (!cancelled) setApiBalances([])
       }
-    })()
-    return () => { cancelled = true }
+    }
+    void refresh()
+    window.addEventListener(TOKENNEST_BALANCE_REFRESH_EVENT, refresh)
+    return () => { cancelled = true; window.removeEventListener(TOKENNEST_BALANCE_REFRESH_EVENT, refresh) }
   }, [open])
 
   const handlePickFlatModel = React.useCallback(
@@ -260,6 +263,11 @@ export function CompactModelSelector({
       <DrawerContent>
         <DrawerHeader>
           <DrawerTitle>{t('common.model')}</DrawerTitle>
+          {effectiveConnectionDetails?.oauthProvider === 'tokennest' && effectiveConnectionDetails.isAuthenticated && (
+            <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setOpen(false); void openTokenNestRecharge(effectiveConnectionDetails.slug) }}>
+              {t('settings.ai.tokenNestRecharge')}
+            </button>
+          )}
           {activeBalance && effectiveConnectionDetails && (
             <div className="text-xs text-muted-foreground">
               {effectiveConnectionDetails.name} · {t('chat.modelPicker.apiBalance', { balance: formatApiBalance(activeBalance) })}

@@ -15,6 +15,7 @@ type BrowserPaneKeys = `browserPane.${FunctionKeys<ElectronAPI['browserPane']>}`
 type ApiToChannelMapKeys = Exclude<
   FunctionKeys<ElectronAPI>,
   | 'performOAuth'
+  | 'openTokenNestRecharge' // direct native IPC; opens a window on the user's device
   | 'getTransportConnectionState'
   | 'getRuntimeEnvironment'
   | 'onTransportConnectionStateChanged'

@@ -79,6 +79,7 @@ export interface ISessionManager {
   // ---------------------------------------------------------------------------
 
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void
+  applySessionPolicy(sessionId: string, policy: import('@craft-agent/shared/super-agent').SuperAgentSessionPolicy): Promise<void>
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>

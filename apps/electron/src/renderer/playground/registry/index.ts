@@ -27,6 +27,7 @@ import { mobileWebUIComponents } from './mobile-webui'
 import { kanbanComponents } from './kanban'
 import { taskEditorComponents } from './task-editor'
 import { collaborationComponents } from './collaboration'
+import { superAgentComponents } from './super-agent'
 
 export * from './types'
 
@@ -49,6 +50,7 @@ export const componentRegistry: ComponentEntry[] = [
   ...kanbanComponents,
   ...taskEditorComponents,
   ...collaborationComponents,
+  ...superAgentComponents,
   ...projectColorsComponents,
   ...editPopoverComponents,
   ...automationComponents,

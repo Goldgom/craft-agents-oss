@@ -56,7 +56,13 @@ function stubStorage(existing: config.LlmConnection | null = null) {
   const getLlmOAuth = mock(async (_slug: string) => oauth)
   const setLlmOAuth = mock(async (_slug: string, tokens: typeof oauth) => { oauth = { ...oauth, ...tokens } })
   const deleteLlmCredentials = mock(async (_slug: string) => {})
-  const credentialManager = { getLlmOAuth, setLlmOAuth, deleteLlmCredentials }
+  const getSnapshot = mock(async () => ({ credential: { value: oauth.accessToken, refreshToken: oauth.refreshToken, expiresAt: oauth.expiresAt }, revision: 'test-revision' }))
+  const compareAndSetMany = mock(async (changes: import('@craft-agent/shared/credentials').CredentialCompareAndSet[]) => {
+    const credential = changes[0]!.credential!
+    oauth = { accessToken: credential.value, refreshToken: credential.refreshToken!, expiresAt: credential.expiresAt! }
+    return true
+  })
+  const credentialManager = { getLlmOAuth, setLlmOAuth, deleteLlmCredentials, getSnapshot, compareAndSetMany }
   spyOn(credentials, 'getCredentialManager').mockReturnValue(credentialManager as never)
   spyOn(config, 'getLlmConnection').mockImplementation(slug => existing?.slug === slug ? existing : null)
   spyOn(config, 'getDefaultLlmConnection').mockReturnValue(null)
@@ -106,6 +112,26 @@ async function startAndComplete(harness: ReturnType<typeof createHarness>, conne
 }
 
 describe('TokenNest OAuth RPC handlers', () => {
+  it('refreshes a rejected OAuth token before creating the recharge entry', async () => {
+    stubStorage({ slug: 'account', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth', oauthProvider: 'tokennest', createdAt: 1 })
+    const harness = createHarness()
+    const authorizations: string[] = []
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).endsWith('/token')) return Response.json({ access_token: 'renewed', refresh_token: 'rotated', expires_in: 3600 })
+      authorizations.push(new Headers(init?.headers).get('authorization')!)
+      return authorizations.length === 1 ? Response.json({ error: 'invalid_token' }, { status: 401 })
+        : Response.json({ data: { url: 'https://openai.goldgom.top/oauth/recharge?ticket=opaque', expires_in: 60 } })
+    }) as typeof fetch
+    await expect(harness.getHandler(RPC_CHANNELS.tokennest.GET_RECHARGE_URL)(harness.context, 'account')).resolves.toMatchObject({ requiresWebsiteLogin: false })
+    expect(authorizations).toEqual(['Bearer stored-access-token', 'Bearer renewed'])
+  })
+
+  it('rejects recharge requests for a non-TokenNest connection', async () => {
+    stubStorage({ slug: 'other', name: 'Other', providerType: 'pi', authType: 'api_key', createdAt: 1 })
+    const harness = createHarness()
+    await expect(harness.getHandler(RPC_CHANNELS.tokennest.GET_RECHARGE_URL)(harness.context, 'other')).rejects.toThrow('TokenNest OAuth connection not found')
+  })
+
   it('defaults the Agent connection to the TokenBird group and a text model', async () => {
     const storage = stubStorage()
     stubTokenNestFetch({

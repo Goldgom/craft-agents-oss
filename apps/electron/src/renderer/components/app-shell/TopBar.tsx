@@ -35,12 +35,13 @@ import { AppMenu } from "../AppMenu"
 
 const RIGHT_SLOT_FULL_BADGES_THRESHOLD = 420
 const RIGHT_SLOT_TWO_BADGES_THRESHOLD = 300
-type StudioMode = 'agent' | 'canvas' | 'mindmap'
+type StudioMode = 'agent' | 'canvas' | 'mindmap' | 'super-agent'
 
 const STUDIO_MODES = [
   { value: 'agent', label: '智能体', Icon: Icons.Bot },
   { value: 'canvas', label: '绘画', Icon: Icons.Paintbrush },
   { value: 'mindmap', label: '思维导图', Icon: Icons.Network },
+  { value: 'super-agent', label: '超级智能体', Icon: Icons.Sparkles },
 ] as const
 
 function StudioModeSwitcher({ value, onChange, compact = false }: {

@@ -48,6 +48,7 @@ import { evaluateApiEndpointPolicy, evaluateMcpToolPolicy } from '../source-poli
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
+import { checkSessionExecutionPolicy, hasSessionExecutionPolicy, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
 
 // ============================================================
 // TYPES
@@ -717,6 +718,9 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     onDebug,
   } = ctx;
 
+  const executionPolicy = checkSessionExecutionPolicy(sessionId, toolName, input, workingDirectory);
+  if (!executionPolicy.allowed) return { type: 'block', reason: executionPolicy.reason };
+
   // Build permissions context for custom permissions.json rules
   const permissionsContext: PermissionsContext = {
     workspaceRootPath,
@@ -858,7 +862,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // ORIGINAL `input` parameter, so the LLM still believes it ran the original
   // command and our permission system gates the original command — only the
   // SDK's actual execution sees the rewritten form.
-  if (ctx.rtkContext?.enabled && ctx.rtkContext.path) {
+  if (ctx.rtkContext?.enabled && ctx.rtkContext.path && !hasSessionExecutionPolicy(sessionId)) {
     const rtkResult = rewriteBashWithRtk(
       toolName,
       currentInput,
@@ -875,6 +879,19 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // ============================================================
   // 6. ASK MODE PROMPT DECISION
   // ============================================================
+  // Apply isolation last, so RTK and model input cannot execute on the host.
+  const finalPolicy = checkSessionExecutionPolicy(sessionId, toolName, currentInput, workingDirectory);
+  if (!finalPolicy.allowed) return { type: 'block', reason: finalPolicy.reason };
+  const pinnedInput = normalizeSessionPolicyInput(sessionId, toolName, currentInput, workingDirectory);
+  if (pinnedInput) {
+    currentInput = pinnedInput;
+    wasModified = true;
+  }
+  const isolatedInput = wrapSessionProgramInput(sessionId, toolName, currentInput);
+  if (isolatedInput) {
+    currentInput = isolatedInput;
+    wasModified = true;
+  }
   if (effectivePermissionMode === 'ask') {
     const promptInfo = shouldPromptInAskMode(
       toolName,
@@ -887,6 +904,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     if (promptInfo) {
       const adminWrappedInput =
         promptInfo.promptType === 'admin_approval' &&
+        !hasSessionExecutionPolicy(sessionId) &&
         promptInfo.command &&
         typeof currentInput.command === 'string' &&
         process.platform === 'darwin'
@@ -895,14 +913,14 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
 
       return {
         type: 'prompt',
-        promptType: promptInfo.promptType,
+        promptType: hasSessionExecutionPolicy(sessionId) && toolName === 'Bash' ? 'bash' : promptInfo.promptType,
         description: promptInfo.description,
         command: promptInfo.command,
         modifiedInput: adminWrappedInput ?? (wasModified ? currentInput : undefined),
         appName: promptInfo.appName,
         reason: promptInfo.reason,
         impact: promptInfo.impact,
-        requiresSystemPrompt: promptInfo.requiresSystemPrompt,
+        requiresSystemPrompt: hasSessionExecutionPolicy(sessionId) ? undefined : promptInfo.requiresSystemPrompt,
         rememberForMinutes: promptInfo.rememberForMinutes,
         commandHash: promptInfo.commandHash,
         approvalTtlSeconds: promptInfo.approvalTtlSeconds,

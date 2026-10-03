@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowUp, Clipboard, Download, FileUp, LoaderCircle, MessageCircle, PanelRightClose, PanelRightOpen, RotateCcw, Sparkles } from 'lucide-react'
 import { StudioConnectionPicker, useStudioConnections } from './useStudioConnections'
+import { rechargeOnInsufficientBalance } from '@/lib/tokennest-recharge'
 import { jpegToPdf } from './studio-pdf'
 import { isWebUI } from '@/lib/platform'
 import { useTheme } from '@/context/ThemeContext'
@@ -257,6 +258,7 @@ function MindMapEditor({ session, onSave, createSession, bindWorkDirectory, flus
       suggestTitle(instruction.slice(0, 40))
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
+      rechargeOnInsufficientBalance(cause, connection)
       setError(message)
       setPrompt(instruction)
       setMessages(current => [...current, { id: crypto.randomUUID(), role: 'assistant' as const, content: `修改失败：${message}`, createdAt: Date.now(), failed: true }].slice(-100))

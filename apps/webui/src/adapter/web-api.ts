@@ -194,6 +194,16 @@ export function createWebApi(options: WebApiOptions): {
 
   // Override LOCAL_ONLY methods with web-compatible implementations
   const webOverrides: Partial<ElectronAPI> = {
+    openTokenNestRecharge: (url: string) => {
+      const popup = window.open(url, 'tokennest-recharge', 'popup,width=1000,height=760')
+      if (!popup) return Promise.reject(new Error('Please allow pop-ups to open TokenNest.'))
+      popup.focus()
+      return new Promise<void>(resolve => {
+        const timer = window.setInterval(() => {
+          if (popup.closed) { window.clearInterval(timer); resolve() }
+        }, 1000)
+      })
+    },
     // Shell operations — use browser APIs
     openUrl: (url: string) => {
       const result = openExternalUrl(url)

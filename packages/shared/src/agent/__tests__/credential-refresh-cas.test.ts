@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, jest, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,7 +9,7 @@ import { NativeCodexAgent } from '../native-codex-agent.ts';
 import { performTokenRefresh } from '../../auth/state.ts';
 const originalFetch = globalThis.fetch;
 const cleanups: Array<() => void> = [];
-afterEach(() => { globalThis.fetch = originalFetch; for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
+afterEach(() => { jest.useRealTimers(); globalThis.fetch = originalFetch; for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 function gate() { let resolve!: () => void; const promise = new Promise<void>(done => resolve = done); return { promise, resolve }; }
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'llm-refresh-cas-'));
@@ -40,6 +40,39 @@ for (const provider of ['chatgpt', 'copilot']) for (const mutation of ['replace'
   remote.release.resolve(); const error = await pending;
   expect(error).toBeInstanceOf(CredentialChangedError); expect(String(error)).not.toContain('dummy-secret-echo');
   expect((await f.backend.get(f.id))?.value).toBe(mutation === 'delete' ? undefined : 'dummy-user'); expect(remote.requests()).toBe(1);
+});
+for (const provider of ['chatgpt', 'copilot', 'tokennest']) for (const outcome of ['timeout', 'rejected', 'replaced'] as const) test(`Pi ${provider} saved refresh retains the ${outcome} runtime outcome`, async () => {
+  const f = fixture(); await f.backend.set(f.id, f.credential);
+  const agent: any = new PiAgent({ ...f.config, runtime: {
+    piAuthProvider: provider === 'copilot' ? 'github-copilot' : 'openai-codex',
+    ...(provider === 'tokennest' ? { oauthProvider: 'tokennest' } : {}),
+  } });
+  const sent: any[] = [];
+  agent.subprocess = { kill() { return true; } };
+  agent.send = (command: any) => sent.push(command);
+  cleanups.push(() => agent.destroy());
+  jest.useFakeTimers();
+  const remote = remoteGate();
+  const pending = agent.refreshAndPushTokens().then(() => null, (error: unknown) => error);
+  await remote.entered.promise; remote.release.resolve();
+  for (let n = 0; n < 100 && !sent.length; n++) await Promise.resolve();
+  expect(sent).toHaveLength(1); expect(sent[0].type).toBe('token_update');
+  const saved = await f.backend.get(f.id);
+  expect(saved?.value).not.toBe(f.credential.value);
+  if (outcome === 'timeout') jest.advanceTimersByTime(15001);
+  else {
+    if (outcome === 'replaced') await f.backend.set(f.id, { value: 'dummy-user', refreshToken: 'dummy-user-refresh' });
+    agent.handleLine(JSON.stringify({ type: 'token_update_result', id: sent[0].id, success: outcome === 'replaced', message: 'dummy-secret-echo' }));
+  }
+  const error = await pending;
+  if (outcome === 'replaced') expect(error).toBeInstanceOf(CredentialChangedError);
+  else {
+    expect(error).not.toBeInstanceOf(CredentialChangedError);
+    expect(String(error)).toContain(outcome === 'timeout' ? 'not acknowledged' : 'Credential update failed in the local runtime');
+  }
+  expect(String(error)).not.toContain('dummy-secret-echo');
+  expect((await f.backend.get(f.id))?.value).toBe(outcome === 'replaced' ? 'dummy-user' : saved?.value);
+  expect(remote.requests()).toBe(1); expect(agent.pendingAuthUpdates.size).toBe(0);
 });
 for (const mutation of ['replace', 'delete', 'failed-old-grant'] as const) test(`native Codex refresh returns safe changed outcome after ${mutation}`, async () => {
   const f = fixture(); await f.backend.set(f.id, f.credential);

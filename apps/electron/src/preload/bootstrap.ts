@@ -46,6 +46,7 @@ import type { ConfirmDialogSpec, FileDialogSpec, BrowserCapabilityRequest } from
 import type { RpcClient } from '@craft-agent/server-core/transport'
 import type { RemoteServerConfig } from '@craft-agent/core/types'
 import type { ElectronAPI } from '../shared/types'
+import { TOKENNEST_RECHARGE_IPC } from '../shared/tokennest-recharge'
 import { NATIVE_CREDENTIAL_IPC } from '@craft-agent/shared/credentials/native-types'
 
 // ---------------------------------------------------------------------------
@@ -291,6 +292,7 @@ const api = buildClientApi(client, CHANNEL_MAP, (ch) => client.isChannelAvailabl
 }
 
 ;(api as any).getRuntimeEnvironment = (): 'electron' | 'web' => 'electron'
+;(api as any).openTokenNestRecharge = (url: string): Promise<void> => ipcRenderer.invoke(TOKENNEST_RECHARGE_IPC, url)
 
 // ---------------------------------------------------------------------------
 // Transport connection state logging (for remote connections)

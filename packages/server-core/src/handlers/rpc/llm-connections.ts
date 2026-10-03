@@ -157,6 +157,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
   RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
+  RPC_CHANNELS.tokennest.GET_RECHARGE_URL,
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
   RPC_CHANNELS.copilot.GET_AUTH_STATUS,
@@ -868,6 +869,25 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // Refresh available models for a connection (dynamic model discovery)
   server.handle(RPC_CHANNELS.llmConnections.REFRESH_MODELS, async (_ctx, slug: string): Promise<{ success: boolean; error?: string }> => {
     return refreshConnectionModels(slug, deps)
+  })
+
+  server.handle(RPC_CHANNELS.tokennest.GET_RECHARGE_URL, async (_ctx, connectionSlug: string) => {
+    const connection = getLlmConnection(connectionSlug)
+    if (!connection || connection.authType !== 'oauth' || connection.oauthProvider !== 'tokennest') {
+      throw new Error('TokenNest OAuth connection not found')
+    }
+    const { createTokenNestRechargeSession, getValidTokenNestCredentials, TokenNestRequestError } = await import('@craft-agent/shared/auth')
+    const manager = getCredentialManager()
+    let credentials = await getValidTokenNestCredentials(connectionSlug, manager)
+    if (!credentials) throw new Error('TokenNest authentication has expired. Please sign in again.')
+    try {
+      return await createTokenNestRechargeSession(credentials.accessToken)
+    } catch (error) {
+      if (!(error instanceof TokenNestRequestError) || error.status !== 401) throw error
+      credentials = await getValidTokenNestCredentials(connectionSlug, manager, true)
+      if (!credentials) throw new Error('TokenNest authentication has expired. Please sign in again.')
+      return createTokenNestRechargeSession(credentials.accessToken)
+    }
   })
 
   server.handle(RPC_CHANNELS.tokennest.GET_USAGE, async (_ctx, args: {

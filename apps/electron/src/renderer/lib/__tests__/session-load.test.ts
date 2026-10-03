@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { Session, TransportConnectionState } from '../../../shared/types'
-import { deriveSessionMessagesLoadState, formatSessionLoadFailure, shouldTreatSessionLoadFailureAsTransportFallback } from '../session-load'
+import { createSessionListRequestGuard, deriveSessionMessagesLoadState, formatSessionLoadFailure, retryExpiredSessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from '../session-load'
 
 function createState(overrides?: Partial<TransportConnectionState>): TransportConnectionState {
   return {
@@ -140,5 +140,72 @@ describe('formatSessionLoadFailure', () => {
 
   it('falls back to a generic message', () => {
     expect(formatSessionLoadFailure(null)).toBe('Unknown error')
+  })
+})
+
+describe('session list request recovery', () => {
+  it('rejects old request ownership when a newer refresh starts', () => {
+    const guard = createSessionListRequestGuard()
+    const oldRequest = guard.begin()
+    const newRequest = guard.begin()
+    expect(oldRequest()).toBe(false)
+    expect(newRequest()).toBe(true)
+    guard.invalidate()
+    expect(newRequest()).toBe(false)
+  })
+
+  it('retries an expired read on the current client', async () => {
+    let calls = 0
+    const sessions = ['session-1']
+    const result = await retryExpiredSessionListRequest(async () => {
+      if (++calls === 1) throw new Error('Remote client generation expired')
+      return sessions
+    }, () => true)
+    expect(result).toBe(sessions)
+    expect(calls).toBe(2)
+  })
+
+  it('does not retry a superseded read', async () => {
+    let calls = 0
+    await expect(retryExpiredSessionListRequest(async () => {
+      calls++
+      throw new Error('Remote client generation expired')
+    }, () => false)).rejects.toThrow('Remote client generation expired')
+    expect(calls).toBe(1)
+  })
+
+  it('does not hide real server or data errors', async () => {
+    let calls = 0
+    await expect(retryExpiredSessionListRequest(async () => {
+      calls++
+      throw new Error('Invalid session data')
+    }, () => true)).rejects.toThrow('Invalid session data')
+    expect(calls).toBe(1)
+  })
+
+  it('bounds retries if the current client keeps expiring', async () => {
+    let calls = 0
+    await expect(retryExpiredSessionListRequest(async () => {
+      calls++
+      throw new Error('Remote client generation expired')
+    }, () => true)).rejects.toThrow('Remote client generation expired')
+    expect(calls).toBe(3)
+  })
+
+  it('prevents a late rejection from overwriting a successful refresh', async () => {
+    const guard = createSessionListRequestGuard()
+    const oldRequest = guard.begin()
+    let rejectOld!: (error: Error) => void
+    let error: string | null = null
+    const oldRead = new Promise<void>((_, reject) => { rejectOld = reject })
+      .catch(failure => {
+        if (oldRequest()) error = formatSessionLoadFailure(failure)
+      })
+    const refresh = guard.begin()
+    expect(refresh()).toBe(true)
+    error = null
+    rejectOld(new Error('Remote client generation expired'))
+    await oldRead
+    expect(error).toBe(null)
   })
 })

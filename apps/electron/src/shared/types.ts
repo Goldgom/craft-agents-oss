@@ -301,6 +301,9 @@ import type {
 } from '@craft-agent/shared/protocol'
 
 export interface ElectronAPI {
+  getSuperAgent(workspaceId: string): Promise<import('@craft-agent/shared/super-agent').SuperAgentSnapshot>
+  saveSuperAgent(workspaceId: string, config: import('@craft-agent/shared/super-agent').SuperAgentConfig): Promise<import('@craft-agent/shared/super-agent').SuperAgentSnapshot>
+  superAgentCommand(workspaceId: string, command: import('@craft-agent/shared/super-agent').SuperAgentCommand): Promise<import('@craft-agent/shared/super-agent').SuperAgentSnapshot>
   // Session management
   getSessions(): Promise<Session[]>
   getUnreadSummary(): Promise<UnreadSummary>
@@ -539,6 +542,9 @@ export interface ElectronAPI {
 
   // TokenNest OAuth (PKCE through the user's system browser)
   startTokenNestOAuth(connectionSlug?: string): Promise<{ success: boolean; error?: string }>
+  /** Open the wallet in an isolated app window; resolves when the window closes. */
+  openTokenNestRecharge(url: string): Promise<void>
+  getTokenNestRechargeUrl(connectionSlug: string): Promise<{ url: string; requiresWebsiteLogin: boolean }>
   checkTokenNestAuth(): Promise<import('@craft-agent/shared/auth').TokenNestAuthorizationIssue[]>
 
   // GitHub Copilot OAuth

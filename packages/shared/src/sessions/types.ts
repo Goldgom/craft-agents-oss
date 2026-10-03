@@ -33,11 +33,11 @@ export const SESSION_PERSISTENT_FIELDS = [
   // Read tracking
   'lastReadMessageId', 'hasUnread',
   // Config
-  'enabledSourceSlugs', 'permissionMode', 'previousPermissionMode', 'workingDirectory',
+  'enabledSourceSlugs', 'permissionMode', 'previousPermissionMode', 'workingDirectory', 'executionPolicy',
   // Model/Connection
   'model', 'llmConnection', 'connectionLocked', 'thinkingLevel',
   // Agent-created session identity/config provenance
-  'agentId', 'collaboration',
+  'agentId', 'agentSystemPrompt', 'collaboration',
   // Plan execution
   'pendingPlanExecution',
   // Archive
@@ -117,6 +117,10 @@ export type { StoredMessage } from '@craft-agent/core/types';
  * Session configuration (persisted metadata)
  */
 export interface SessionConfig {
+  /** Explicit instructions for an independent node, retained across runtime recreation/restart. */
+  agentSystemPrompt?: string;
+  /** Durable node capability limits; missing container executors fail closed after restart. */
+  executionPolicy?: import('../agent/core/session-execution-policy.ts').SessionExecutionPolicy;
   id: string;
   /** SDK session ID (captured after first message) */
   sdkSessionId?: string;
@@ -250,6 +254,8 @@ export interface StoredSession extends SessionConfig {
  * This enables fast session listing without parsing message content.
  */
 export interface SessionHeader {
+  agentSystemPrompt?: string;
+  executionPolicy?: import('../agent/core/session-execution-policy.ts').SessionExecutionPolicy;
   id: string;
   /** SDK session ID (captured after first message) */
   sdkSessionId?: string;
@@ -355,6 +361,8 @@ export interface SessionHeader {
  * Session metadata (lightweight, for lists)
  */
 export interface SessionMetadata {
+  agentSystemPrompt?: string;
+  executionPolicy?: import('../agent/core/session-execution-policy.ts').SessionExecutionPolicy;
   id: string;
   workspaceRootPath: string;
   name?: string;

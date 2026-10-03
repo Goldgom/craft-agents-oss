@@ -42,6 +42,7 @@ import {
 import { cn } from '@/lib/utils'
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
+import { openTokenNestRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
 
 import {
   SettingsSection,
@@ -485,6 +486,11 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
       description={getDescription()}
     >
       <div className="flex items-center gap-1.5">
+        {connection.oauthProvider === 'tokennest' && connection.isAuthenticated && (
+          <Button size="sm" variant="outline" onClick={() => void openTokenNestRecharge(connection.slug)}>
+            {t('settings.ai.tokenNestRecharge')}
+          </Button>
+        )}
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <button
@@ -869,6 +875,16 @@ export default function AiSettingsPage() {
   const [rtkGain, setRtkGain] = useState<{ totalCommands: number; totalInput: number; totalOutput: number; totalSaved: number; avgSavingsPct: number; totalTimeMs: number; avgTimeMs: number } | null>(null)
   const [showApiBalances, setShowApiBalances] = useState(true)
   const [apiBalances, setApiBalances] = useState<ApiBalance[]>([])
+  useEffect(() => {
+    let cancelled = false
+    const refresh = () => {
+      if (showApiBalances) void window.electronAPI.getLlmConnectionBalances()
+        .then(balances => { if (!cancelled) setApiBalances(balances) })
+        .catch(error => console.warn('Failed to refresh balances after recharge', error))
+    }
+    window.addEventListener(TOKENNEST_BALANCE_REFRESH_EVENT, refresh)
+    return () => { cancelled = true; window.removeEventListener(TOKENNEST_BALANCE_REFRESH_EVENT, refresh) }
+  }, [showApiBalances])
   const [tokenNestSigningIn, setTokenNestSigningIn] = useState(false)
 
   // Validation state per connection

@@ -31,6 +31,7 @@ import { registerMessagingHandlers } from './messaging'
 import { registerAgentsHandlers } from './agents'
 import { registerCollaborationHandlers } from './collaborations'
 import { registerStudioHandlers } from './studio'
+import { registerSuperAgentHandlers } from './super-agent'
 
 export function registerCoreRpcHandlers(
   server: RpcServer,
@@ -44,6 +45,7 @@ export function registerCoreRpcHandlers(
   registerCollaborationHandlers(server, deps)
   // Experimental multi-server relay RPCs are intentionally not registered.
   registerStudioHandlers(server)
+  registerSuperAgentHandlers(server, deps)
   registerFilesHandlers(server, deps)
   registerLabelsHandlers(server, deps)
   registerLlmConnectionsHandlers(server, deps)
