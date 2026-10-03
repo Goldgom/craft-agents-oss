@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   rmSync,
+  chmodSync,
   copyFileSync,
   cpSync,
   lstatSync,
@@ -418,6 +419,35 @@ interface GitHubRelease {
 }
 
 /**
+ * Clear the Windows read-only attribute from every entry in a directory tree.
+ *
+ * PortableGit ships read-only files (notably `etc/hosts`). Windows preserves
+ * that attribute when the archive is extracted and copied into
+ * `vendor/git-bash`, which then breaks packaging: electron-builder copies the
+ * tree into the app again (files + extraResources), and overwriting an
+ * existing read-only file fails with
+ * `EPERM: operation not permitted, copyfile ... etc/hosts`.
+ * Clearing the flag also keeps later `rmSync` cleanups from leaving files behind.
+ */
+function clearReadOnlyAttributes(dir: string): void {
+  if (process.platform !== 'win32') return;
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      clearReadOnlyAttributes(entryPath);
+    }
+    if (!entry.isDirectory() && !entry.isFile()) continue;
+
+    // Windows maps FILE_ATTRIBUTE_READONLY to a mode without S_IWUSR.
+    const stats = lstatSync(entryPath);
+    if ((stats.mode & 0o200) === 0) {
+      chmodSync(entryPath, stats.mode | 0o200);
+    }
+  }
+}
+
+/**
  * Download, verify, and extract the official PortableGit runtime used by the
  * Windows desktop app. The extracted tree contains bin/bash.exe plus Git and
  * the standard Unix command-line tools expected by agent Bash sessions.
@@ -440,6 +470,7 @@ export async function downloadGitBash(config: BuildConfig): Promise<void> {
     && existsSync(licensePath)
     && hasExpectedGitForWindowsVersion(gitPath)
   ) {
+    clearReadOnlyAttributes(targetDir);
     console.log(`Git Bash already present at ${bashPath}`);
     return;
   }
@@ -501,6 +532,7 @@ export async function downloadGitBash(config: BuildConfig): Promise<void> {
 
     rmSync(targetDir, { recursive: true, force: true });
     cpSync(extractDir, targetDir, { recursive: true });
+    clearReadOnlyAttributes(targetDir);
     console.log(`  Git Bash installed to ${targetDir} ✓`);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -802,6 +834,9 @@ export function copyInterceptor(config: BuildConfig): void {
   if (existsSync(requestUtilsSource)) {
     copyFileSync(requestUtilsSource, join(destDir, 'interceptor-request-utils.ts'));
   }
+
+  // Copy diagnostics used by the raw interceptor in Pi subprocesses.
+  copyFileSync(join(sourceDir, 'network-diagnostics.ts'), join(destDir, 'network-diagnostics.ts'));
 
   // Copy feature flags (imported by unified-network-interceptor.ts for fast mode / source templates)
   const featureFlagsSource = join(sourceDir, 'feature-flags.ts');

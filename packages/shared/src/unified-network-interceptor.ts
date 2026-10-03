@@ -32,6 +32,7 @@ import {
 } from './interceptor-common.ts';
 import { FEATURE_FLAGS } from './feature-flags.ts';
 import { resolveRequestContext } from './interceptor-request-utils.ts';
+import { fetchWithNetworkDiagnostics } from './network-diagnostics.ts';
 
 // Type alias for fetch's HeadersInit
 type HeadersInitType = Headers | Record<string, string> | string[][];
@@ -2146,9 +2147,10 @@ function synthesizeMalformedBodyResponse(
 
 const originalFetch = globalThis.fetch.bind(globalThis);
 
-async function interceptedFetch(
+export async function interceptedFetch(
   input: string | URL | Request,
-  init?: RequestInit
+  init?: RequestInit,
+  fetcher: typeof fetch = originalFetch,
 ): Promise<Response> {
   const url =
     typeof input === 'string'
@@ -2172,6 +2174,7 @@ async function interceptedFetch(
     adapter &&
     ((init?.method ?? (input instanceof Request ? input.method : undefined))?.toUpperCase() === 'POST')
   ) {
+    let requestSent = false;
     try {
       const { bodyStr, normalizedInit } = await resolveRequestContext(input, init);
       if (bodyStr) {
@@ -2221,7 +2224,8 @@ async function interceptedFetch(
         rememberLastOutgoingRequest(url, parsed, adapter);
 
         debugLog(`[${adapter.name}] Intercepted request to ${url}`);
-        const response = await originalFetch(url, finalInit);
+        requestSent = true;
+        const response = await fetchWithNetworkDiagnostics(fetcher, url, finalInit);
 
         // Process SSE response through adapter's stream processor
         const contentType = response.headers.get('content-type') ?? '';
@@ -2251,13 +2255,18 @@ async function interceptedFetch(
         return logResponse(response, url, startTime, adapter);
       }
     } catch (e) {
+      // A transport/response failure is not a modification failure. Retrying
+      // here duplicates POSTs and hides the first cause from the SDK.
+      if (requestSent) throw e;
       debugLog(`[${adapter?.name}] FETCH modification failed:`, e);
     }
   }
 
   const proxy = getProxyForUrl(url);
   const proxyInit = proxy ? { ...init, proxy } : init;
-  const response = await originalFetch(input, proxyInit);
+  const response = adapter
+    ? await fetchWithNetworkDiagnostics(fetcher, input, proxyInit)
+    : await fetcher(input, proxyInit);
   return logResponse(response, url, startTime);
 }
 

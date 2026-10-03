@@ -83,3 +83,6 @@ credentials.enc
 .build-all
 /release/
 /apps/electron/release-test/
+
+# Local Electron installer builds and diagnostics
+/apps/electron/release-*/

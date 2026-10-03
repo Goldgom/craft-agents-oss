@@ -280,7 +280,7 @@ if (-not (Test-Path $InterceptorSource)) {
 Write-Host "Copying interceptor (for Pi subprocess)..."
 New-Item -ItemType Directory -Force -Path "$ElectronDir\packages\shared\src" | Out-Null
 Copy-Item $InterceptorSource "$ElectronDir\packages\shared\src\"
-foreach ($dep in @("interceptor-common.ts", "feature-flags.ts", "interceptor-request-utils.ts")) {
+foreach ($dep in @("interceptor-common.ts", "feature-flags.ts", "interceptor-request-utils.ts", "network-diagnostics.ts")) {
     $depPath = "$RootDir\packages\shared\src\$dep"
     if (Test-Path $depPath) {
         Copy-Item $depPath "$ElectronDir\packages\shared\src\"

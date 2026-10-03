@@ -33,6 +33,7 @@ files:
   - packages/shared/src/interceptor-common.ts
   - packages/shared/src/feature-flags.ts
   - packages/shared/src/interceptor-request-utils.ts
+  - packages/shared/src/network-diagnostics.ts
   # Include CLI tool Python scripts (platform-independent)
   - resources/scripts/**/*
   # Include CLI tool shell wrappers (platform-independent, both Unix and Windows)
