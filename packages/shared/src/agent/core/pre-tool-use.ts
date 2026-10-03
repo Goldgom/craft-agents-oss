@@ -48,7 +48,7 @@ import { evaluateApiEndpointPolicy, evaluateMcpToolPolicy } from '../source-poli
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
-import { checkSessionExecutionPolicy, hasSessionExecutionPolicy, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionPolicyToolGrant, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
 
 // ============================================================
 // TYPES
@@ -698,6 +698,23 @@ function withPermissionModeContext(reason: string, sessionId: string, effectiveM
   ].join('\n');
 }
 
+/** Keep the original tool call suspended while a missing node permission is reviewed. */
+export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): Promise<PreToolUseCheckResult> {
+  const policy = await authorizeSessionPolicyTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory);
+  if (!policy.allowed) return { type: 'block', reason: policy.reason };
+  if (hasSessionExecutionPolicy(ctx.sessionId)) {
+    const modeResult = shouldAllowToolInMode(ctx.toolName, ctx.input, getPermissionModeDiagnostics(ctx.sessionId).permissionMode, {
+      plansFolderPath: ctx.plansFolderPath, dataFolderPath: ctx.dataFolderPath,
+      permissionsContext: { workspaceRootPath: ctx.workspaceRootPath, activeSourceSlugs: ctx.activeSourceSlugs },
+    });
+    if (!modeResult.allowed) {
+      const grant = await authorizeSessionPolicyTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory, modeResult.reason);
+      if (!grant.allowed) return { type: 'block', reason: grant.reason };
+    }
+  }
+  return runPreToolUseChecks(ctx);
+}
+
 export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult {
   const {
     toolName,
@@ -749,7 +766,8 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     { plansFolderPath, dataFolderPath, permissionsContext }
   );
 
-  if (!modeResult.allowed) {
+  const explicitlyGranted = hasSessionPolicyToolGrant(sessionId, toolName, input, workingDirectory);
+  if (!modeResult.allowed && !explicitlyGranted) {
     const reasonWithContext = withPermissionModeContext(modeResult.reason, sessionId, effectivePermissionMode);
     onDebug?.(`Permission mode ${effectivePermissionMode}: blocking ${toolName} — ${reasonWithContext}`);
     return { type: 'block', reason: reasonWithContext };
@@ -892,7 +910,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     currentInput = isolatedInput;
     wasModified = true;
   }
-  if (effectivePermissionMode === 'ask') {
+  if (effectivePermissionMode === 'ask' && !explicitlyGranted) {
     const promptInfo = shouldPromptInAskMode(
       toolName,
       input, // Use original input for permission decisions (before stripping)

@@ -14,6 +14,7 @@ import type { AuthResult } from '@craft-agent/shared/agent'
 import type {
   Session,
   SessionStatus,
+  SessionEvent,
   CreateSessionOptions,
   FileAttachment,
   SendMessageOptions,
@@ -80,6 +81,7 @@ export interface ISessionManager {
 
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void
   applySessionPolicy(sessionId: string, policy: import('@craft-agent/shared/super-agent').SuperAgentSessionPolicy): Promise<void>
+  ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void>
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
@@ -140,6 +142,8 @@ export interface ISessionManager {
   onSessionComplete(
     listener: (evt: import('../sessions/SessionManager').SessionCompletionEvent) => void,
   ): () => void
+  /** Observe real, workspace-scoped session events independently of the transport sink. */
+  onSessionEvent(listener: (event: SessionEvent, workspaceId: string) => void): () => void
   /** Read a session's final assistant message text (Conductor output reader). */
   getSessionFinalText(sessionId: string): string | undefined
   addMessageAnnotation(sessionId: string, messageId: string, annotation: AnnotationV1): void

@@ -522,6 +522,16 @@ export interface TypedError {
  */
 export type PermissionRequestType = 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval';
 
+/** An explicit, temporary exception for one node's exact operation in its current turn. */
+export interface SessionPolicyPermissionScope {
+  kind: 'file_read' | 'file_write' | 'program' | 'browser' | 'source';
+  target: string;
+  toolName: string;
+  operation: string;
+  boundary: 'environment' | 'outside-environment' | 'client' | 'host' | 'source';
+  expiresAt: number;
+}
+
 /**
  * Permission request from agent (e.g., bash command approval)
  */
@@ -545,6 +555,8 @@ export interface PermissionRequest {
   commandHash?: string;
   /** Approval validity window */
   approvalTtlSeconds?: number;
+  /** No persistent or command-name-wide permission can be granted for this request. */
+  policyScope?: SessionPolicyPermissionScope;
 }
 
 /**

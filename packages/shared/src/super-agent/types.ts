@@ -1,5 +1,8 @@
 import type { ThinkingLevel } from '../agent/thinking-levels'
 import type { PermissionMode } from '../agent/mode-types'
+import type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
+
+export type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
 
 /** One persistent model session, with no concurrent turn or delegated subprocess. */
 export interface SuperAgentNode {
@@ -23,6 +26,7 @@ export interface SuperAgentNode {
 export interface SuperAgentEnvironment {
   kind: 'folder' | 'sandbox' | 'vm'
   workingDirectory: string
+  /** Super Agent normalizes legacy modes to allow-all; capability grants are independent. */
   permissionMode: PermissionMode
   permissions: {
     readFiles: boolean
@@ -147,6 +151,47 @@ export interface SuperAgentSnapshot {
   config: SuperAgentConfig | null
   state: SuperAgentState
   environment: SuperAgentEnvironmentStatus
+  /** Live provider output and tool events; deliberately not persisted as a second transcript. */
+  activity?: SuperAgentNodeActivity[]
+  permissionRequests?: SuperAgentPermissionRequest[]
+}
+
+export interface SuperAgentActivityEntry {
+  id: string
+  kind: 'thinking' | 'text' | 'tool' | 'status' | 'error'
+  text: string
+  createdAt: number
+  updatedAt: number
+  toolName?: string
+  toolUseId?: string
+  status?: 'running' | 'completed' | 'failed'
+  turnId?: string
+}
+
+export interface SuperAgentNodeActivity {
+  nodeId: string
+  sessionId: string
+  taskId?: string
+  status: 'working' | 'waiting_permission' | 'error'
+  startedAt: number
+  updatedAt: number
+  entries: SuperAgentActivityEntry[]
+}
+
+export interface SuperAgentPermissionRequest {
+  id: string
+  nodeId: string
+  coordinatorId: string
+  sessionId: string
+  taskId?: string
+  toolName: string
+  description: string
+  command?: string
+  reason?: string
+  scope?: SessionPolicyPermissionScope
+  status: 'pending' | 'approved' | 'denied' | 'expired'
+  createdAt: number
+  resolvedAt?: number
 }
 
 /** Model output uses the same bounded operations as the user-facing control API. */
@@ -155,6 +200,7 @@ export type SuperAgentCommand =
   | { type: 'task'; title: string; instructions: string; nodeId?: string }
   | { type: 'cancel'; taskId?: string }
   | { type: 'inspect' }
+  | { type: 'permission-response'; requestId: string; allowed: boolean }
   | { type: 'message'; fromNodeId: string; toNodeId: string; body: string }
   | { type: 'board-upsert'; item: { id?: string; title: string; content: string }; expectedRevision?: number }
   | { type: 'board-delete'; id: string; expectedRevision?: number }

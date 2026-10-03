@@ -49,7 +49,7 @@ import { createClaudeContext, type SessionToolContext } from './claude-context.t
 import { attachSessionSelfManagementBindings } from './session-self-management-bindings.ts';
 import { getSessionScopedToolCallbacks, setLastPlanFilePath } from './session-scoped-tools.ts';
 import { executeBrowserToolCommand } from './browser-tool-runtime.ts';
-import { runPreToolUseChecks } from './core/pre-tool-use.ts';
+import { runPreToolUseChecksWithPermissions } from './core/pre-tool-use.ts';
 import { checkSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { LLM_QUERY_TIMEOUT_MS, withTimeout, type LLMQueryRequest, type LLMQueryResult } from './llm-tool.ts';
 import { parseError } from './errors.ts';
@@ -800,7 +800,7 @@ export class NativeCodexAgent extends BaseAgent {
 
   private async authorizeDynamicTool(toolName: string, input: Record<string, unknown>): Promise<{ input?: Record<string, unknown>; error?: string }> {
     const root = this.config.workspace.rootPath || this.workingDirectory;
-    const run = () => runPreToolUseChecks({
+    const run = () => runPreToolUseChecksWithPermissions({
       toolName,
       input,
       sessionId: this._sessionId,
@@ -817,11 +817,11 @@ export class NativeCodexAgent extends BaseAgent {
       prerequisiteManager: this.prerequisiteManager,
       onDebug: message => this.debug(message),
     });
-    let checked = run();
+    let checked = await run();
     if (checked.type === 'source_activation_needed') {
       const activated = await this.onSourceActivationRequest?.(checked.sourceSlug);
       if (!activated) return { error: `Source "${checked.sourceSlug}" is not active.` };
-      checked = run();
+      checked = await run();
     }
     if (checked.type === 'block') return { error: checked.reason };
     if (checked.type === 'prompt') {

@@ -74,11 +74,11 @@ import {
 } from '../config/watcher.ts';
 // Centralized PreToolUse pipeline
 import {
-  runPreToolUseChecks,
+  runPreToolUseChecksWithPermissions,
   type PreToolUseCheckResult,
   BUILT_IN_TOOLS,
 } from './core/pre-tool-use.ts';
-import { checkSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
+import { authorizeSessionPolicyTool, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -1437,7 +1437,7 @@ export class ClaudeAgent extends BaseAgent {
               const input = _hookInput as Required<Pick<typeof _hookInput, 'tool_name' | 'tool_use_id'>> & typeof _hookInput;
 
               // The image-resize fast path below reads host files before the usual pipeline.
-              const nodePolicy = checkSessionExecutionPolicy(sessionId, input.tool_name, input.tool_input as Record<string, unknown>, this.config.session?.workingDirectory);
+              const nodePolicy = await authorizeSessionPolicyTool(sessionId, input.tool_name, input.tool_input as Record<string, unknown>, this.config.session?.workingDirectory);
               if (!nodePolicy.allowed) return blockWithReason(nodePolicy.reason);
 
               // Track Read tool calls for prerequisite checking
@@ -1502,7 +1502,7 @@ export class ClaudeAgent extends BaseAgent {
                 : undefined;
 
               // Run centralized PreToolUse checks
-              const checkResult = runPreToolUseChecks({
+              const checkResult = await runPreToolUseChecksWithPermissions({
                 toolName: input.tool_name,
                 input: toolInput,
                 sessionId,

@@ -100,8 +100,8 @@ export function SuperAgentScripts({ snapshot, onSave, onCommand }: {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const hostScriptGranted = config.environment.kind !== 'folder'
-    || (Object.values(config.environment.permissions).every(Boolean) && config.environment.permissionMode === 'allow-all')
-  const canRun = snapshot.environment.available && config.environment.permissions.runPrograms && config.environment.permissionMode === 'allow-all' && hostScriptGranted
+    || Object.values(config.environment.permissions).every(Boolean)
+  const canRun = snapshot.environment.available && config.environment.permissions.runPrograms && hostScriptGranted
   async function run(action: () => Promise<void>, after?: () => void) {
     setPending(true); setError('')
     try { await action(); after?.() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
@@ -114,7 +114,7 @@ export function SuperAgentScripts({ snapshot, onSave, onCommand }: {
     <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">{text('scripts')}</h2><p className="mt-1 max-w-lg text-xs leading-5 text-muted-foreground">{text('scriptHint')}</p></div>
       <Button size="sm" variant="outline" disabled={pending} onClick={() => editScript()}><Plus className="size-3.5" />{text('addScript')}</Button></div>
     {config.environment.kind === 'folder' && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5 text-muted-foreground">{text('hostScriptPermissions')}</p>}
-    {config.environment.kind !== 'folder' && (!config.environment.permissions.runPrograms || config.environment.permissionMode !== 'allow-all')
+    {config.environment.kind !== 'folder' && !config.environment.permissions.runPrograms
       && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5 text-muted-foreground">{text('manualScriptPermissions')}</p>}
     {config.scripts.length === 0 ? <div className="rounded-xl border border-border/70 p-8"><EmptyResource icon={Code2} message={text('noScripts')} /></div>
       : config.scripts.map(item => {

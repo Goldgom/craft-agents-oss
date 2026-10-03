@@ -98,7 +98,7 @@ export function NodeEditor({ node, connections, onChange, onRemove, sources = []
   }
   return <div className="space-y-5">
     <div className="flex items-center justify-between gap-3">
-      <span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', node.role === 'coordinator' ? 'bg-primary/10 text-primary' : 'bg-foreground/5 text-muted-foreground')}>{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span>
+      <div className="flex flex-wrap items-center gap-2"><span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', node.role === 'coordinator' ? 'bg-primary/10 text-primary' : 'bg-foreground/5 text-muted-foreground')}>{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span><span className="text-xs text-muted-foreground">{text('allowAll')}</span></div>
       {onRemove && <Button variant="ghost" size="sm" className="text-destructive" onClick={onRemove}><Trash2 className="size-3.5" />{text('removeNode')}</Button>}
     </div>
     <AvatarEditor avatar={node.avatar} name={node.name} onChange={avatar => patch({ avatar })} />
@@ -190,9 +190,7 @@ export function EnvironmentEditor({ environment, onChange, status }: {
             onChange={event => onChange({ ...environment, permissions: { ...environment.permissions, [key]: event.target.checked } })} />
         </label>)}
       </div>
-      <FormField label={text('permissionMode')}><select className={selectClass} value={environment.permissionMode} onChange={event => onChange({ ...environment, permissionMode: event.target.value as SuperAgentEnvironment['permissionMode'] })}>
-        <option value="safe">{text('safe')}</option><option value="ask">{text('ask')}</option><option value="allow-all">{text('allowAll')}</option>
-      </select></FormField>
+      <FormField label={text('permissionMode')} hint={text('executionModeHint')}><Input value={text('allowAll')} readOnly /></FormField>
     </FormSection>
     <ServerDirectoryBrowser open={picker.showServerBrowser} mode={picker.serverBrowserMode} initialPath={environment.workingDirectory}
       onSelect={picker.confirmServerBrowser} onCancel={picker.cancelServerBrowser} />

@@ -99,8 +99,8 @@ import { getSessionDataPath, getSessionPath, getSessionPlansPath } from '../sess
 import { parseError, type AgentError } from './errors.ts';
 
 // Centralized PreToolUse pipeline
-import { runPreToolUseChecks, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
-import { checkSessionExecutionPolicy } from './core/session-execution-policy.ts';
+import { runPreToolUseChecksWithPermissions, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
+import { checkSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled, getBrowserToolEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -1508,7 +1508,7 @@ export class PiAgent extends BaseAgent {
       ? { enabled: true, path: getRtkPath(), exclude: [] }
       : undefined;
 
-    const checkResult = runPreToolUseChecks({
+    const checkResult = await runPreToolUseChecksWithPermissions({
       toolName,
       input,
       sessionId,
@@ -1581,7 +1581,7 @@ export class PiAgent extends BaseAgent {
         }
 
         // Re-run pipeline after activation
-        const postResult = runPreToolUseChecks({
+        const postResult = await runPreToolUseChecksWithPermissions({
           toolName,
           input,
           sessionId,
@@ -1618,6 +1618,10 @@ export class PiAgent extends BaseAgent {
 
       case 'prompt': {
         if (!this.onPermissionRequest) {
+          if (hasSessionExecutionPolicy(sessionId)) {
+            this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason: 'Super Agent policy: no permission handler is available' });
+            return;
+          }
           // No permission handler — allow
           if (checkResult.modifiedInput) {
             this.send({ type: 'pre_tool_use_response', requestId, action: 'modify', input: checkResult.modifiedInput });

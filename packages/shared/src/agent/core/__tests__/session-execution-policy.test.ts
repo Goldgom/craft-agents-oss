@@ -3,9 +3,9 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'shell-quote';
-import { checkSessionExecutionPolicy, clearSessionExecutionPolicy, getSessionExecutionPolicy, normalizeSessionPolicyInput, setSessionExecutionPolicy, setSessionProgramExecutor, setSessionReferenceFiles, wrapSessionProgramInput, type SessionExecutionPolicy } from '../session-execution-policy.ts';
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, clearSessionPolicyGrants, getSessionExecutionPolicy, getSessionPolicyGrantTarget, normalizeSessionPolicyInput, setSessionExecutionPolicy, setSessionPolicyPermissionHandler, setSessionProgramExecutor, setSessionReferenceFiles, wrapSessionProgramInput, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '../session-execution-policy.ts';
 import { PermissionManager } from '../permission-manager.ts';
-import { runPreToolUseChecks } from '../pre-tool-use.ts';
+import { runPreToolUseChecks, runPreToolUseChecksWithPermissions } from '../pre-tool-use.ts';
 import { setPermissionMode, cleanupModeState } from '../../mode-manager.ts';
 import { writeSessionJsonl, readSessionJsonl } from '../../../sessions/jsonl.ts';
 import type { StoredSession } from '../../../sessions/types.ts';
@@ -31,6 +31,109 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('Super Agent permission ceiling', () => {
+  test('pauses an outside read for approval and grants only its exact operation in the current turn', async () => {
+    const input = { file_path: join(outside, 'secret.txt'), offset: 1 };
+    let request: SessionPolicyPermissionRequest | undefined;
+    let approve!: (allowed: boolean) => void;
+    setSessionPolicyPermissionHandler(sessionId, pending => {
+      request = pending;
+      return new Promise(resolve => { approve = resolve; });
+    });
+    const manager = new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root });
+    const pending = runPreToolUseChecksWithPermissions({ toolName: 'Read', input, sessionId, permissionMode: 'allow-all', workingDirectory: root,
+      workspaceRootPath: root, workspaceId: 'workspace', activeSourceSlugs: [], allSourceSlugs: [], hasSourceActivation: false, permissionManager: manager });
+    expect(request?.scope.kind).toBe('file_read');
+    expect(request?.scope.boundary).toBe('outside-environment');
+    expect(request?.scope.target).toBe(input.file_path);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', input).allowed).toBe(false);
+    approve(true);
+    expect((await pending).type).toBe('modify');
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', input).allowed).toBe(true);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { ...input, offset: 2 }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Write', { ...input, content: 'changed' }).allowed).toBe(false);
+    clearSessionPolicyGrants(sessionId);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', input).allowed).toBe(false);
+  });
+
+  test('approved local command retains exact cwd, timeout, command and pinned execution target', async () => {
+    const input = { command: 'Get-ChildItem', timeoutMs: 1000, _intent: 'list files' };
+    setSessionPolicyPermissionHandler(sessionId, async request => {
+      expect(JSON.parse(request.scope.operation)).toEqual({ command: input.command, cwd: root, timeoutMs: 1000 });
+      request.scope.target = 'client:desktop-a';
+      return true;
+    });
+    expect((await authorizeSessionPolicyTool(sessionId, 'mcp__session__localbash', input)).allowed).toBe(true);
+    const normalized = normalizeSessionPolicyInput(sessionId, 'mcp__session__localbash', input)!;
+    expect(normalized.cwd).toBe(root);
+    expect(getSessionPolicyGrantTarget(sessionId, 'mcp__session__localbash', normalized)).toBe('client:desktop-a');
+    expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__localbash', { ...normalized, command: 'Remove-Item anything' }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__localbash', { ...normalized, cwd: outside }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__localbash', { ...normalized, timeoutMs: 2000 }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__runshell', normalized).allowed).toBe(false);
+    setSessionExecutionPolicy(sessionId, policy);
+    expect(getSessionPolicyGrantTarget(sessionId, 'mcp__session__localbash', normalized)).toBeUndefined();
+  });
+
+  test('denial, expiry, cancellation and a policy change cannot install grants', async () => {
+    const input = { file_path: join(outside, 'secret.txt') };
+    setSessionPolicyPermissionHandler(sessionId, async () => false);
+    expect((await authorizeSessionPolicyTool(sessionId, 'Read', input)).allowed).toBe(false);
+    setSessionPolicyPermissionHandler(sessionId, async request => { request.scope.expiresAt = Date.now() - 1; return true; });
+    expect((await authorizeSessionPolicyTool(sessionId, 'Read', input)).allowed).toBe(false);
+    for (const change of [() => clearSessionPolicyGrants(sessionId), () => setSessionExecutionPolicy(sessionId, policy)]) {
+      let approve!: (allowed: boolean) => void;
+      setSessionPolicyPermissionHandler(sessionId, () => new Promise(resolve => { approve = resolve; }));
+      const pending = authorizeSessionPolicyTool(sessionId, 'Read', input);
+      change(); approve(true);
+      expect((await pending).allowed).toBe(false);
+      expect(checkSessionExecutionPolicy(sessionId, 'Read', input).allowed).toBe(false);
+    }
+  });
+
+  test('structural restrictions are never converted into approval exceptions', async () => {
+    let calls = 0;
+    setSessionPolicyPermissionHandler(sessionId, async () => { calls++; return true; });
+    for (const [tool, input] of [
+      ['mcp__unassigned__read', { path: outside }],
+      ['mcp__unassigned__write', { path: outside, content: 'x' }],
+      ['mcp__assigned__execute_code', { code: 'run code' }],
+      ['mcp__session__call_llm', { prompt: 'delegate' }],
+      ['mcp__session__spawn_session', {}],
+      ['mcp__session__sftp_transfer', { direction: 'download' }],
+      ['mcp__session__browser_tool', { command: ['navigate', 'file:///etc/passwd'] }],
+      ['Read', { file_path: `${root}/../outside/secret.txt` }],
+      ['Bash', { command: 'echo x', run_in_background: true }],
+    ] as const) expect((await authorizeSessionPolicyTool(sessionId, tool, input)).allowed).toBe(false);
+    setSessionExecutionPolicy(sessionId, { ...policy, role: 'coordinator' });
+    expect((await authorizeSessionPolicyTool(sessionId, 'Write', { file_path: join(root, 'allowed.txt'), content: 'x' })).allowed).toBe(false);
+    expect((await authorizeSessionPolicyTool(sessionId, 'mcp__session__localbash', { command: 'echo x' })).allowed).toBe(false);
+    expect(calls).toBe(0);
+  });
+
+  test('a host Bash exception quotes the entire command as one argument behind a successful cwd change', async () => {
+    const command = `printf '%s' "$(touch marker)"; echo 'quoted'\nfalse`;
+    expect(() => wrapSessionProgramInput(sessionId, 'Bash', { command })).toThrow();
+    setSessionPolicyPermissionHandler(sessionId, async () => true);
+    expect((await authorizeSessionPolicyTool(sessionId, 'Bash', { command })).allowed).toBe(true);
+    const wrapped = wrapSessionProgramInput(sessionId, 'Bash', { command })!;
+    expect(parse(wrapped.command as string)).toEqual(['cd', '--', root.replace(/\\/g, '/'), { op: '&&' }, '/bin/bash', '-c', command]);
+    expect(checkSessionExecutionPolicy(sessionId, 'Bash', { command: `${command}\necho another` }).allowed).toBe(false);
+  });
+
+  test('safe-mode operations use an exact approval instead of blocking again or asking twice', async () => {
+    setPermissionMode(sessionId, 'safe');
+    let calls = 0;
+    setSessionPolicyPermissionHandler(sessionId, async () => { calls++; return true; });
+    const manager = new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root });
+    const input = { file_path: join(root, 'new.txt'), content: 'new file' };
+    const result = await runPreToolUseChecksWithPermissions({ toolName: 'Write', input, sessionId, permissionMode: 'safe', workingDirectory: root,
+      workspaceRootPath: root, workspaceId: 'workspace', activeSourceSlugs: [], allSourceSlugs: [], hasSourceActivation: false, permissionManager: manager });
+    expect(result.type).toBe('modify');
+    expect(calls).toBe(1);
+    expect(manager.evaluateToolCall('Write', input).allowed).toBe(true);
+    expect(manager.evaluateToolCall('Write', { ...input, content: 'other content' }).allowed).toBe(false);
+  });
+
   test('contains reads, new writes, searches and traversal despite Allow All', () => {
     expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(root, 'allowed.txt') }).allowed).toBe(true);
     expect(checkSessionExecutionPolicy(sessionId, 'Write', { file_path: join(root, 'new', 'file.txt') }).allowed).toBe(true);

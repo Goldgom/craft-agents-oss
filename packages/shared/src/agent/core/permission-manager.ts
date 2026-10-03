@@ -27,7 +27,7 @@ import { createLogger } from '../../utils/debug.ts';
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PermissionMode } from '../mode-types.ts';
 import type { PermissionManagerConfig, ToolPermissionResult } from './types.ts';
-import { checkSessionExecutionPolicy } from './session-execution-policy.ts';
+import { checkSessionExecutionPolicy, hasSessionPolicyToolGrant } from './session-execution-policy.ts';
 
 const log = createLogger('permissions');
 
@@ -132,6 +132,7 @@ export class PermissionManager {
   ): ToolPermissionResult {
     const policyResult = checkSessionExecutionPolicy(this.config.sessionId, toolName, toolInput, this.config.workingDirectory);
     if (!policyResult.allowed) return policyResult;
+    if (hasSessionPolicyToolGrant(this.config.sessionId, toolName, toolInput, this.config.workingDirectory)) return { allowed: true };
     const mode = this.getPermissionMode();
 
     // Use shouldAllowToolInMode which handles all the complex logic
@@ -188,6 +189,7 @@ export class PermissionManager {
   checkBashCommand(command: string): string | null {
     const policyResult = checkSessionExecutionPolicy(this.config.sessionId, 'Bash', { command }, this.config.workingDirectory);
     if (!policyResult.allowed) return policyResult.reason;
+    if (hasSessionPolicyToolGrant(this.config.sessionId, 'Bash', { command }, this.config.workingDirectory)) return null;
     const mode = this.getPermissionMode();
 
     // In execute mode, all commands are allowed

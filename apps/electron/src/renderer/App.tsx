@@ -1153,6 +1153,17 @@ export default function App() {
       const sessionId = event.sessionId
       const workspaceId = windowWorkspaceId ?? ''
 
+      if (event.type === 'permission_resolved') {
+        setPendingPermissions(previous => {
+          const remaining = (previous.get(sessionId) ?? []).filter(request => request.requestId !== event.requestId)
+          const next = new Map(previous)
+          if (remaining.length) next.set(sessionId, remaining)
+          else next.delete(sessionId)
+          return next
+        })
+        return
+      }
+
       // Session lifecycle events are handled explicitly (not by the agent event processor).
       if (event.type === 'session_created') {
         window.electronAPI.getSessionMessages(sessionId)

@@ -133,6 +133,7 @@ export {
   validateConfigWrite,
   // Centralized pipeline
   runPreToolUseChecks,
+  runPreToolUseChecksWithPermissions,
   shouldPromptInAskMode,
 } from './pre-tool-use.ts';
 

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { AgentAvatar, AvatarEditor, EnvironmentEditor, FormField, FormSection, NodeEditor } from './SuperAgentForms'
-import { configError, createNode, useSuperAgentText } from './super-agent-ui'
+import { configError, createNode, useSuperAgentText, withExecuteMode } from './super-agent-ui'
 
 export function SuperAgentConfiguration({ config, connections, sources, environmentStatus, onSave, onOpenAiSettings, initialNodeId }: {
   config: SuperAgentConfig
@@ -18,7 +18,7 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
   initialNodeId?: string
 }) {
   const text = useSuperAgentText()
-  const [draft, setDraft] = useState(() => structuredClone(config))
+  const [draft, setDraft] = useState(() => withExecuteMode(structuredClone(config)))
   const [selectedNodeId, setSelectedNodeId] = useState(initialNodeId ?? config.nodes[0].id)
   const [section, setSection] = useState<'identity' | 'team' | 'environment'>(initialNodeId ? 'team' : 'identity')
   const [pending, setPending] = useState(false)

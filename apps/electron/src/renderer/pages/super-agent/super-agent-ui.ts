@@ -68,7 +68,7 @@ const strings = {
   vmDescription: ['连接虚拟机内的 TokenBird 服务工作区；服务端需设置 TOKENBIRD_EXECUTION_HOST=vm。', 'Connect a TokenBird server workspace inside your VM. The server must set TOKENBIRD_EXECUTION_HOST=vm.'],
   unavailableEnvironment: ['当前服务端尚未连接此执行环境。配置后不能启动工作。', 'This execution environment is not connected to the server yet. Work cannot start in it.'],
   folderIsolation: ['文件夹权限控制不提供操作系统级隔离。需要强隔离时请连接沙箱或虚拟机执行端。', 'Folder permissions do not provide operating system isolation. Connect a sandbox or VM executor for stronger isolation.'],
-  folderPrograms: ['文件夹模式的程序权限用于已登记的脚本。需要节点运行通用程序时，请选择容器沙箱。', 'In folder mode, program permission applies to registered scripts. Use a container sandbox for general program tools.'],
+  folderPrograms: ['文件夹模式中的宿主程序操作可能需要单独授权。容器沙箱可隔离程序执行。', 'Host program operations in folder mode may need scoped approval. A container sandbox isolates program execution.'],
   workingDirectory: ['工作目录', 'Working directory'],
   pickDirectory: ['选择文件夹', 'Choose folder'],
   containerImage: ['容器镜像', 'Container image'],
@@ -79,11 +79,10 @@ const strings = {
   writeFiles: ['修改文件', 'Write files'],
   runPrograms: ['运行程序和脚本', 'Run programs and scripts'],
   browser: ['操作浏览器', 'Control browser'],
-  permissionMode: ['审批方式', 'Approval mode'],
-  safe: ['只读', 'Read only'],
-  ask: ['需要时审批', 'Ask when needed'],
-  allowAll: ['按已授权权限执行', 'Execute granted permissions'],
-  permissionHint: ['关闭的能力始终禁止；需要审批时可从节点会话处理请求。', 'Disabled capabilities remain blocked. Handle approval requests in the node session.'],
+  permissionMode: ['执行模式', 'Execution mode'],
+  allowAll: ['执行（Execute）', 'Execute'],
+  executionModeHint: ['主节点与所有工作节点统一使用执行模式；具体操作仍受能力开关、工作环境和单次授权约束。', 'The coordinator and all workers use Execute. Capability switches, the work environment and scoped approvals still control access.'],
+  permissionHint: ['已开启的能力在授权范围内直接执行，需要额外授权的操作会显示在主聊天中。', 'Enabled capabilities execute within their authorized scope. Operations needing additional approval appear in the main chat.'],
   next: ['下一步', 'Continue'],
   back: ['上一步', 'Back'],
   create: ['创建超级智能体', 'Create Super Agent'],
@@ -92,6 +91,11 @@ const strings = {
   setupComplete: ['已准备创建', 'Ready to create'],
   setupSummary: ['{{workers}} 个工作节点 · 1 个主节点 · 每 {{minutes}} 分钟检查', '{{workers}} workers · 1 coordinator · inspect every {{minutes}} minutes'],
   settings: ['设置', 'Settings'],
+  settingsTitle: ['超级智能体设置', 'Super Agent settings'],
+  generalSettings: ['基本设置', 'General settings'],
+  backToAssistant: ['返回助手', 'Back to assistant'],
+  workProgress: ['工作进展', 'Work progress'],
+  progressSummary: ['{{working}} 进行中 · {{queued}} 排队 · {{completed}} 完成', '{{working}} active · {{queued}} queued · {{completed}} completed'],
   conversation: ['助手', 'Assistant'],
   board: ['共享数据板', 'Shared board'],
   communication: ['节点通信', 'Node messages'],
@@ -119,6 +123,31 @@ const strings = {
   messagePlaceholder: ['告诉主智能体你想完成什么…', 'Tell the coordinator what you want to accomplish…'],
   send: ['发送', 'Send'],
   introMessage: ['助手已准备就绪。向主智能体描述目标，它会通过工作节点完成任务并向你汇报。', 'Your assistant is ready. Describe your goal to the coordinator; workers will execute it and report back.'],
+  liveActivity: ['实时工作动态', 'Live activity'],
+  nodeActivity: ['节点动态', 'Node activity'],
+  thinkingSummary: ['思考摘要', 'Thinking summary'],
+  toolActivity: ['工具操作', 'Tool activity'],
+  waitingPermission: ['等待授权', 'Waiting for approval'],
+  permissionInbox: ['需要你的授权', 'Your approval is needed'],
+  permissionHistory: ['最近授权记录', 'Recent approval decisions'],
+  approved: ['已授权此操作', 'Operation approved'],
+  denied: ['已拒绝', 'Denied'],
+  expired: ['已过期', 'Expired'],
+  approvalCount: ['{{count}} 项操作等待授权', '{{count}} operations await approval'],
+  approvalOwner: ['{{name}} 请求授权', '{{name}} requests approval'],
+  approvalTarget: ['操作目标', 'Target'],
+  approvalOperation: ['操作内容', 'Operation'],
+  approvalScope: ['权限范围', 'Permission boundary'],
+  outsideEnvironment: ['工作环境之外', 'Outside the work environment'],
+  hostOperation: ['宿主系统', 'Host system'],
+  clientOperation: ['当前客户端', 'Current client'],
+  sourceOperation: ['指定数据源', 'Specified source'],
+  environmentOperation: ['当前工作环境', 'Current work environment'],
+  exactApprovalHint: ['只授权当前节点执行所示操作，本轮结束或授权过期后失效。', 'Authorize only this node and operation. The grant ends with the current turn or its expiry.'],
+  approveThisTurn: ['授权此操作（本轮）', 'Approve operation for this turn'],
+  allowOnce: ['允许一次', 'Allow once'],
+  deny: ['拒绝', 'Deny'],
+  sendWhileWorking: ['工作继续进行，你可以补充目标或要求', 'Work continues. You can add goals or instructions.'],
   noTasks: ['尚未分配工作', 'No tasks assigned yet'],
   createTask: ['分配任务', 'Assign task'],
   taskTitle: ['任务标题', 'Task title'],
@@ -160,8 +189,8 @@ const strings = {
   scriptName: ['脚本名字', 'Script name'],
   scriptPath: ['脚本路径', 'Script path'],
   scriptPathHint: ['必须位于工作目录内，支持 .js、.mjs、.cjs、.py、.sh、.ps1。', 'Must be inside the work folder. Supports .js, .mjs, .cjs, .py, .sh and .ps1.'],
-  hostScriptPermissions: ['在宿主文件夹运行脚本需要明确授予全部能力，并选择“按已授权权限执行”。脚本有宿主权限；需要隔离时选择容器沙箱。', 'Host scripts require all capabilities and Execute granted permissions. They run with host access; use a container sandbox for isolation.'],
-  manualScriptPermissions: ['手动运行脚本需要开启“运行程序和脚本”，并将审批方式设为“按已授权权限执行”。', 'Manual scripts require Run programs and scripts plus Execute granted permissions.'],
+  hostScriptPermissions: ['在宿主文件夹运行脚本需要明确开启全部能力。脚本有宿主权限；需要隔离时选择容器沙箱。', 'Host scripts require all capabilities to be explicitly enabled. They run with host access; use a container sandbox for isolation.'],
+  manualScriptPermissions: ['手动运行脚本需要开启“运行程序和脚本”。', 'Manual scripts require Run programs and scripts to be enabled.'],
   scriptArgs: ['参数（每行一个）', 'Arguments (one per line)'],
   timeout: ['运行超时（秒）', 'Timeout (seconds)'],
   syncNode: ['同步给节点', 'Notify node'],
@@ -186,7 +215,7 @@ const strings = {
   unsaved: ['修改后保存才会应用到节点。', 'Save changes to apply them to the nodes.'],
   lastInspection: ['上次检查', 'Last inspection'],
   teamStatus: ['团队状态', 'Team status'],
-  pendingApproval: ['有审批请求时，打开对应节点会话处理。', 'Open the node session to handle pending approval requests.'],
+  pendingApproval: ['所有节点的授权请求会汇总到主聊天中。', 'Approval requests from all nodes appear in the main chat.'],
   confirmDelete: ['确认删除“{{name}}”？', 'Delete “{{name}}”?'],
   inspectionKind: ['检查', 'Inspection'],
   messageKind: ['消息', 'Message'],
@@ -250,7 +279,7 @@ export function createConfig(connections: LlmConnectionWithStatus[], text: Super
     nodes: [createNode('coordinator', connections, text, preferredSlug), createNode('worker', connections, text, preferredSlug)],
     idleInspectionMinutes: 15,
     environment: {
-      kind: 'folder', workingDirectory: '', permissionMode: 'ask',
+      kind: 'folder', workingDirectory: '', permissionMode: 'allow-all',
       permissions: { readFiles: true, writeFiles: false, runPrograms: false, browser: false },
     },
     sourceSlugs: [], abilityProfiles: [], scripts: [],
@@ -259,8 +288,14 @@ export function createConfig(connections: LlmConnectionWithStatus[], text: Super
 
 export type SuperAgentPreset = 'custom' | 'balanced' | 'fast' | 'deep'
 
+/** Execution mode is shared by the whole team; it never enables capabilities. */
+export function withExecuteMode(config: SuperAgentConfig): SuperAgentConfig {
+  return { ...config, environment: { ...config.environment, permissionMode: 'allow-all' } }
+}
+
 export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, connection: LlmConnectionWithStatus, text: SuperAgentText): SuperAgentConfig {
-  if (preset === 'custom') return config
+  const executionConfig = withExecuteMode(config)
+  if (preset === 'custom') return executionConfig
   const models = nodeModels(connection)
   const preferred = connection.defaultModel && models.includes(connection.defaultModel) ? connection.defaultModel : models[0] ?? ''
   const fast = models.find(id => /haiku|flash|mini|nano|luna/i.test(id)) ?? preferred
@@ -274,7 +309,7 @@ export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, 
   worker.maxCallsPerMinute = preset === 'fast' ? 12 : 6
   const nodes = [coordinator, worker]
   if (preset === 'deep') nodes.push({ ...createNode('worker', [connection], text, connection.slug), name: text('researcherName'), model: deep, thinkingLevel: 'high' })
-  return { ...config, nodes }
+  return { ...executionConfig, nodes }
 }
 
 export function configError(config: SuperAgentConfig, connections: LlmConnectionWithStatus[], text: SuperAgentText): string | null {

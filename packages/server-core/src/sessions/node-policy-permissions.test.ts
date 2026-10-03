@@ -1,0 +1,280 @@
+import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy,
+  getSessionPolicyGrantTarget, hasSessionPolicyToolGrant, setSessionExecutionPolicy,
+  type SessionExecutionPolicy, type SessionPolicyPermissionRequest,
+} from '@craft-agent/shared/agent'
+import type { SessionEvent } from '@craft-agent/shared/protocol'
+import type { ShellExecArgs } from '@craft-agent/session-tools-core'
+import { CLIENT_RUN_SHELL, type ClientShellResult } from '../transport'
+import { SessionManager } from './SessionManager'
+
+type ManagedTestSession = {
+  id: string
+  workspace: { id: string; rootPath: string }
+  workingDirectory: string
+  executionPolicy?: SessionExecutionPolicy
+  isProcessing: boolean
+  stopRequested: boolean
+  persistenceRetired?: boolean
+  runtimeTeardown?: Promise<void>
+  agent?: { forceAbort(reason: unknown): void }
+}
+type PermissionEvent = Extract<SessionEvent, { type: 'permission_request' }>
+type NodePermissionHarness = {
+  sessions: Map<string, ManagedTestSession>
+  pendingPermissionRequests: Map<string, { sessionId: string }>
+  pendingNodePermissions: Map<string, {
+    sessionId: string; expiresAt: number; timer: ReturnType<typeof setTimeout>; resolve: (allowed: boolean) => void
+  }>
+  sessionEventListeners: Set<(event: SessionEvent, workspaceId: string) => void>
+  rpcServer: {
+    findClientsWithCapability(capability: string, scope: { workspaceId: string }): string[]
+    invokeClientWithTimeout(clientId: string, capability: string, timeoutMs: number, args: ShellExecArgs): Promise<ClientShellResult>
+  } | null
+  setEventSink(sink: (...args: any[]) => void): void
+  onSessionEvent(listener: (event: SessionEvent, workspaceId: string) => void): () => void
+  attachNodePermissionHandler(managed: ManagedTestSession): void
+  requestNodePermission(managed: ManagedTestSession, request: SessionPolicyPermissionRequest): Promise<boolean>
+  clearPendingPermissionRequestsForSession(sessionId: string): void
+  respondToPermission(sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean): boolean
+  runSessionLocalShell(managed: ManagedTestSession, args: ShellExecArgs): Promise<ClientShellResult>
+  deleteSession(sessionId: string): Promise<void>
+}
+
+const sessionId = 'node-policy-manager-test'
+const otherSessionId = 'node-policy-other-test'
+const localTool = 'mcp__session__localbash'
+let temp: string
+let root: string
+let outside: string
+let managed: ManagedTestSession
+let manager: NodePermissionHarness
+let events: SessionEvent[]
+let clients: string[]
+let invocations: Array<{ clientId: string; capability: string; args: ShellExecArgs }>
+let usingFakeTimers: boolean
+
+beforeEach(() => {
+  usingFakeTimers = false
+  temp = mkdtempSync(join(tmpdir(), 'node-policy-manager-'))
+  root = join(temp, 'environment')
+  outside = join(temp, 'outside')
+  mkdirSync(root); mkdirSync(outside)
+  writeFileSync(join(outside, 'requested.txt'), 'requested')
+  writeFileSync(join(outside, 'other.txt'), 'other')
+  const policy = setSessionExecutionPolicy(sessionId, {
+    nodeId: 'worker', role: 'worker', rootPath: root, readFiles: true, writeFiles: true,
+    runPrograms: true, browser: false, allowSources: [], allowSubagents: false,
+  })
+  managed = { id: sessionId, workspace: { id: 'workspace', rootPath: root }, workingDirectory: root,
+    executionPolicy: policy, isProcessing: true, stopRequested: false }
+  manager = Object.create(SessionManager.prototype) as NodePermissionHarness
+  manager.sessions = new Map([
+    [sessionId, managed], [otherSessionId, { ...managed, id: otherSessionId }],
+  ])
+  manager.pendingPermissionRequests = new Map()
+  manager.pendingNodePermissions = new Map()
+  manager.sessionEventListeners = new Set()
+  manager.setEventSink(() => {})
+  events = []
+  manager.onSessionEvent(event => { events.push(event) })
+  clients = ['client-a']
+  invocations = []
+  manager.rpcServer = {
+    findClientsWithCapability: (capability, scope) =>
+      capability === CLIENT_RUN_SHELL && scope.workspaceId === managed.workspace.id ? [...clients] : [],
+    invokeClientWithTimeout: async (clientId, capability, _timeoutMs, args) => {
+      invocations.push({ clientId, capability, args })
+      return { command: args.command, cwd: args.cwd ?? root, stdout: clientId, stderr: '',
+        exitCode: 0, timedOut: false, truncated: false }
+    },
+  }
+  manager.attachNodePermissionHandler(managed)
+})
+
+afterEach(() => {
+  manager.clearPendingPermissionRequestsForSession(sessionId)
+  clearSessionExecutionPolicy(sessionId)
+  clearSessionExecutionPolicy(otherSessionId)
+  if (usingFakeTimers) { jest.clearAllTimers(); jest.useRealTimers() }
+  rmSync(temp, { recursive: true, force: true })
+})
+
+function beginPermission(toolName: string, input: Record<string, unknown>) {
+  const result = authorizeSessionPolicyTool(sessionId, toolName, input, root)
+  const event = events.findLast((item): item is PermissionEvent => item.type === 'permission_request')
+  if (!event) throw new Error('Expected a permission request from the real session manager')
+  return { result, request: event.request }
+}
+
+async function approveLocalShell(args: ShellExecArgs) {
+  const pending = beginPermission(localTool, { ...args })
+  expect(manager.respondToPermission(sessionId, pending.request.requestId, true, true)).toBe(true)
+  expect((await pending.result).allowed).toBe(true)
+  return pending.request
+}
+
+describe('node permission lifecycle in SessionManager', () => {
+  test('a response from another session leaves the original request pending', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    const { result, request } = beginPermission('Read', input)
+    expect(manager.respondToPermission(otherSessionId, request.requestId, true, true)).toBe(false)
+    expect(manager.pendingNodePermissions.has(request.requestId)).toBe(true)
+    expect(manager.pendingPermissionRequests.has(request.requestId)).toBe(true)
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(false)
+    expect(manager.respondToPermission(sessionId, request.requestId, true, false)).toBe(true)
+    expect((await result).allowed).toBe(true)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.pendingPermissionRequests.size).toBe(0)
+  })
+
+  test('alwaysAllow grants only the requested operation in the current turn', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    const { result, request } = beginPermission('Read', input)
+    expect(manager.respondToPermission(sessionId, request.requestId, true, true)).toBe(true)
+    expect((await result).allowed).toBe(true)
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', input, root).allowed).toBe(true)
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(outside, 'other.txt') }, root).allowed).toBe(false)
+    manager.clearPendingPermissionRequestsForSession(sessionId)
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', input, root).allowed).toBe(false)
+    expect(manager.respondToPermission(sessionId, request.requestId, true, true)).toBe(false)
+  })
+
+  test('an expired reply denies and resolves the suspended tool', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    const { result, request } = beginPermission('Read', input)
+    manager.pendingNodePermissions.get(request.requestId)!.expiresAt = Date.now() - 1
+    expect(manager.respondToPermission(sessionId, request.requestId, true, true)).toBe(false)
+    expect((await result).allowed).toBe(false)
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(false)
+    expect(events.at(-1)).toMatchObject({ type: 'permission_resolved', requestId: request.requestId, allowed: false, reason: 'expired' })
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.pendingPermissionRequests.size).toBe(0)
+  })
+
+  test('the approval deadline resolves without a renderer response', async () => {
+    jest.useFakeTimers()
+    usingFakeTimers = true
+    const { result, request } = beginPermission('Read', { file_path: join(outside, 'requested.txt') })
+    jest.advanceTimersByTime(10 * 60_000 + 1)
+    expect((await result).allowed).toBe(false)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.pendingPermissionRequests.size).toBe(0)
+    expect(events.at(-1)).toMatchObject({ type: 'permission_resolved', requestId: request.requestId, allowed: false, reason: 'expired' })
+  })
+
+  test('cancellation resolves the waiting call and invalidates approvals already given', async () => {
+    const args = { command: 'echo granted', cwd: root }
+    await approveLocalShell(args)
+    const { result, request } = beginPermission('Read', { file_path: join(outside, 'requested.txt') })
+    manager.clearPendingPermissionRequestsForSession(sessionId)
+    expect((await result).allowed).toBe(false)
+    expect(hasSessionPolicyToolGrant(sessionId, localTool, args, root)).toBe(false)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.pendingPermissionRequests.size).toBe(0)
+    expect(events.at(-1)).toMatchObject({ type: 'permission_resolved', requestId: request.requestId, allowed: false, reason: 'cancelled' })
+    expect(manager.respondToPermission(sessionId, request.requestId, true, true)).toBe(false)
+  })
+
+  test('stopped or replaced managed sessions cannot create new approvals', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    managed.stopRequested = true
+    expect((await authorizeSessionPolicyTool(sessionId, 'Read', input, root)).allowed).toBe(false)
+    managed.stopRequested = false
+    manager.sessions.set(sessionId, { ...managed })
+    expect((await authorizeSessionPolicyTool(sessionId, 'Read', input, root)).allowed).toBe(false)
+    expect(events).toHaveLength(0)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+  })
+
+  test('retired sessions reject pending replies and new requests', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    const { result, request } = beginPermission('Read', input)
+    managed.persistenceRetired = true
+    expect(manager.respondToPermission(sessionId, request.requestId, true, true)).toBe(false)
+    expect((await result).allowed).toBe(false)
+    expect((await authorizeSessionPolicyTool(sessionId, 'Read', input, root)).allowed).toBe(false)
+    expect(events.filter(event => event.type === 'permission_request')).toHaveLength(1)
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(false)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+  })
+
+  test('a runtime being torn down cannot approve or create an operation', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    const { result, request } = beginPermission('Read', input)
+    managed.runtimeTeardown = Promise.resolve()
+    expect(manager.respondToPermission(sessionId, request.requestId, true, true)).toBe(false)
+    expect((await result).allowed).toBe(false)
+    expect((await authorizeSessionPolicyTool(sessionId, 'Read', input, root)).allowed).toBe(false)
+    expect(events.filter(event => event.type === 'permission_request')).toHaveLength(1)
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(false)
+  })
+
+  test('deletion cancels permissions before attempting to abort a failing backend', async () => {
+    const args = { command: 'echo previously-approved', cwd: root }
+    await approveLocalShell(args)
+    const { result, request } = beginPermission('Read', { file_path: join(outside, 'requested.txt') })
+    managed.agent = { forceAbort: () => { throw new Error('Backend abort failure') } }
+    await expect(manager.deleteSession(sessionId)).rejects.toThrow('Backend abort failure')
+    expect((await result).allowed).toBe(false)
+    expect(managed.persistenceRetired).toBe(true)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.pendingPermissionRequests.size).toBe(0)
+    expect(hasSessionPolicyToolGrant(sessionId, localTool, args, root)).toBe(false)
+    expect(manager.respondToPermission(sessionId, request.requestId, true, true)).toBe(false)
+  })
+})
+
+describe('localbash approval binds the real execution destination', () => {
+  test('client reordering cannot redirect an approved operation', async () => {
+    const args = { command: 'echo requested', cwd: root, timeoutMs: 1000 }
+    const request = await approveLocalShell(args)
+    expect(request.policyScope).toMatchObject({ target: 'client:client-a', boundary: 'client' })
+    expect(JSON.parse(request.policyScope!.operation)).toEqual(args)
+    clients = ['client-b', 'client-a']
+    expect((await manager.runSessionLocalShell(managed, args)).stdout).toBe('client-a')
+    expect(invocations).toEqual([{ clientId: 'client-a', capability: CLIENT_RUN_SHELL, args }])
+  })
+
+  test('a disappearing approved client cannot fall back to the host or another client', async () => {
+    const args = { command: 'echo requested', cwd: root }
+    await approveLocalShell(args)
+    clients = ['client-b']
+    await expect(manager.runSessionLocalShell(managed, args)).rejects.toThrow('approved localbash execution target is no longer available')
+    clients = []
+    await expect(manager.runSessionLocalShell(managed, args)).rejects.toThrow('approved localbash execution target is no longer available')
+    expect(invocations).toHaveLength(0)
+  })
+
+  test('changed commands cannot reuse a client approval', async () => {
+    const args = { command: 'echo requested', cwd: root }
+    await approveLocalShell(args)
+    await expect(manager.runSessionLocalShell(managed, { ...args, command: 'echo different' })).rejects.toThrow('request permission again')
+    expect(invocations).toHaveLength(0)
+  })
+
+  test('host approval remains on the host when a new client connects', async () => {
+    clients = []
+    const args = { command: 'echo host-policy-dispatch', cwd: root, timeoutMs: 1000 }
+    const request = await approveLocalShell(args)
+    expect(request.policyScope).toMatchObject({ target: 'host:workspace', boundary: 'host' })
+    expect(getSessionPolicyGrantTarget(sessionId, localTool, args, root)).toBe('host:workspace')
+    clients = ['client-b']
+    const result = await manager.runSessionLocalShell(managed, args)
+    expect(result.stdout.trim()).toBe('host-policy-dispatch')
+    expect(result.exitCode).toBe(0)
+    expect(invocations).toHaveLength(0)
+  })
+
+  test('ordinary sessions retain client dispatch without a node grant', async () => {
+    const ordinary = { ...managed, executionPolicy: undefined }
+    const args = { command: 'echo ordinary', cwd: root }
+    expect((await manager.runSessionLocalShell(ordinary, args)).stdout).toBe('client-a')
+    expect(invocations).toHaveLength(1)
+    expect(events).toHaveLength(0)
+  })
+})

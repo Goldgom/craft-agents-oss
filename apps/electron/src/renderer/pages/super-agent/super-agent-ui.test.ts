@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
-import { applyPreset, configError, createConfig, nodeModels, type SuperAgentText } from './super-agent-ui'
+import { applyPreset, configError, createConfig, nodeModels, withExecuteMode, type SuperAgentText } from './super-agent-ui'
 
 const text: SuperAgentText = key => key
 const tokenNest: LlmConnectionWithStatus = {
@@ -16,6 +16,25 @@ const tokenNest: LlmConnectionWithStatus = {
 }
 
 describe('Super Agent model authorization and setup', () => {
+  it('starts the whole team in Execute without enabling ungranted capabilities', () => {
+    const config = createConfig([tokenNest], text)
+    expect(config.environment.permissionMode).toBe('allow-all')
+    expect(config.environment.permissions).toEqual({ readFiles: true, writeFiles: false, runPrograms: false, browser: false })
+  })
+
+  it('keeps legacy environment boundaries and capabilities when editing or choosing any preset', () => {
+    const legacy = createConfig([tokenNest], text)
+    legacy.environment.permissionMode = 'safe'
+    legacy.environment.workingDirectory = 'C:\\limited-work'
+    legacy.environment.permissions = { readFiles: false, writeFiles: true, runPrograms: false, browser: false }
+    const edited = withExecuteMode(legacy)
+    expect(edited.environment).toEqual({ ...legacy.environment, permissionMode: 'allow-all' })
+    expect(legacy.environment.permissionMode).toBe('safe')
+    for (const preset of ['custom', 'balanced', 'fast', 'deep'] as const) {
+      expect(applyPreset(legacy, preset, tokenNest, text).environment).toEqual(edited.environment)
+    }
+  })
+
   it('keeps TokenNest node models within the inherited text group', () => {
     expect(nodeModels(tokenNest)).toEqual(['available-model', 'available-mini'])
   })

@@ -46,6 +46,7 @@ export type {
   ErrorCode,
   TypedError,
   PermissionRequest,
+  SessionPolicyPermissionScope,
   AgentEvent,
   // Auth-related types
   CredentialInputMode,

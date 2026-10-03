@@ -2,6 +2,7 @@ import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { expandPath } from '../../utils/paths.ts';
 import type { SuperAgentSessionPolicy } from '../../super-agent/types.ts';
+import type { SessionPolicyPermissionScope } from '@craft-agent/core/types';
 
 export interface SessionProgramExecutor {
   runtimePath: string;
@@ -12,7 +13,22 @@ export interface SessionProgramExecutor {
 /** Persist the grants, never a stale container handle. The runtime reattaches executors. */
 export type SessionExecutionPolicy = Omit<SuperAgentSessionPolicy, 'containerExecutor'>;
 
-type RegisteredPolicy = { policy: SessionExecutionPolicy | null; executor?: SessionProgramExecutor; referenceFiles?: Set<string> };
+export interface SessionPolicyPermissionRequest {
+  toolName: string;
+  input: Record<string, unknown>;
+  reason: string;
+  scope: SessionPolicyPermissionScope;
+}
+
+type OperationGrant = { key: string; pathIdentity: string; scope: SessionPolicyPermissionScope };
+type RegisteredPolicy = {
+  policy: SessionExecutionPolicy | null;
+  executor?: SessionProgramExecutor;
+  referenceFiles?: Set<string>;
+  requestPermission?: (request: SessionPolicyPermissionRequest) => Promise<boolean>;
+  grants?: Map<string, OperationGrant>;
+  generation?: number;
+};
 const policies = new Map<string, RegisteredPolicy>();
 
 function contained(root: string, path: string): boolean {
@@ -50,7 +66,12 @@ export function setSessionExecutionPolicy(sessionId: string, input: SessionExecu
   policies.set(sessionId, { policy: null });
   const policy = normalizeSessionExecutionPolicy(input);
   const unchanged = JSON.stringify(existing?.policy) === JSON.stringify(policy);
-  policies.set(sessionId, { policy, executor: unchanged ? existing?.executor : undefined, referenceFiles: unchanged ? existing?.referenceFiles : undefined });
+  policies.set(sessionId, {
+    policy, executor: unchanged ? existing?.executor : undefined,
+    referenceFiles: unchanged ? existing?.referenceFiles : undefined,
+    requestPermission: existing?.requestPermission,
+    generation: (existing?.generation ?? 0) + 1,
+  });
   return policy;
 }
 
@@ -73,6 +94,20 @@ export function getSessionExecutionPolicy(sessionId: string): SessionExecutionPo
 
 export function hasSessionExecutionPolicy(sessionId: string): boolean { return policies.has(sessionId); }
 export function clearSessionExecutionPolicy(sessionId: string): void { policies.delete(sessionId); }
+
+export function setSessionPolicyPermissionHandler(sessionId: string, handler: (request: SessionPolicyPermissionRequest) => Promise<boolean>): void {
+  const registered = policies.get(sessionId);
+  if (!registered?.policy) throw new Error('Apply a valid node policy before attaching a permission handler');
+  registered.requestPermission = handler;
+}
+
+/** Exceptions never survive a model turn, cancellation, policy change or restart. */
+export function clearSessionPolicyGrants(sessionId: string): void {
+  const registered = policies.get(sessionId);
+  if (!registered) return;
+  registered.grants?.clear();
+  registered.generation = (registered.generation ?? 0) + 1;
+}
 
 /** Host-selected source/browser instruction files are a separate, exact, read-only grant. */
 export function setSessionReferenceFiles(sessionId: string, paths: string[]): void {
@@ -140,6 +175,142 @@ const BROWSER_COMMANDS = new Set(['--help', 'open', 'navigate', 'snapshot', 'fin
 
 function deny(reason: string): SessionPolicyToolResult { return { allowed: false, reason: `Super Agent policy: ${reason}` }; }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+
+function operationInput(policy: SessionExecutionPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): Record<string, unknown> {
+  const output = { ...input };
+  delete output._intent; delete output._displayName;
+  const name = toolName.split('__').at(-1)!.toLowerCase().replace(/_/g, '');
+  if (READ_TOOLS.has(name) || WRITE_TOOLS.has(name)) {
+    for (const field of ['file_path', 'path', 'notebook_path']) if (typeof output[field] === 'string') output[field] = resolve(expandPath(output[field] as string, cwd || policy.rootPath));
+    if (!output.file_path && !output.path && !output.notebook_path) output.path = cwd || policy.rootPath;
+  }
+  if (['bash', 'localbash', 'runshell'].includes(name)) output.cwd = typeof output.cwd === 'string'
+    ? resolve(expandPath(output.cwd, cwd || policy.rootPath)) : cwd || policy.rootPath;
+  return output;
+}
+
+function operationKey(policy: SessionExecutionPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): string {
+  return canonicalJson([toolName.toLowerCase(), operationInput(policy, toolName, input, cwd)]);
+}
+
+/** Bind filesystem approvals to canonical ancestors as well as the literal operation. */
+function operationPathIdentity(policy: SessionExecutionPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): string | undefined {
+  const normalized = operationInput(policy, toolName, input, cwd);
+  const paths = [normalized.file_path, normalized.path, normalized.notebook_path, normalized.cwd].filter(value => typeof value === 'string') as string[];
+  try {
+    return canonicalJson(paths.map(path => {
+      if (path.includes('\0') || /^(?:[a-z]+:\/\/|\\\\)/i.test(path)) throw new Error('Invalid path');
+      let ancestor = path;
+      const missing: string[] = [];
+      while (true) {
+        try { lstatSync(ancestor); break; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(ancestor) === ancestor) throw error;
+          missing.unshift(basename(ancestor)); ancestor = dirname(ancestor);
+        }
+      }
+      const canonical = resolve(realpathSync(ancestor), ...missing);
+      if (relative(canonical, path) !== '') throw new Error('Linked paths require a canonical path');
+      // Creating a previously missing target is allowed; replacing it with an escaping link is not.
+      return canonical;
+    }));
+  } catch { return undefined; }
+}
+
+function getOperationGrant(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string): OperationGrant | undefined {
+  const registered = policies.get(sessionId);
+  if (!registered?.policy || !input || typeof input !== 'object' || Array.isArray(input)) return;
+  const key = operationKey(registered.policy, toolName, input, cwd);
+  const grant = registered.grants?.get(key);
+  if (!grant || grant.scope.expiresAt <= Date.now() || grant.pathIdentity !== operationPathIdentity(registered.policy, toolName, input, cwd)) {
+    registered.grants?.delete(key);
+    return;
+  }
+  return grant;
+}
+
+export function getSessionPolicyGrantTarget(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string): string | undefined {
+  return getOperationGrant(sessionId, toolName, input, cwd)?.scope.target;
+}
+
+export function hasSessionPolicyToolGrant(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
+  return !!getOperationGrant(sessionId, toolName, input, cwd);
+}
+
+/** Only known operations can be requested; delegation and malformed inputs stay blocked. */
+function permissionScope(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): SessionPolicyPermissionScope | undefined {
+  const policy = registered.policy!;
+  const parts = toolName.split('__');
+  const canonical = parts.at(-1)!.toLowerCase();
+  const name = canonical.replace(/_/g, '');
+  const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
+  if (slug && slug !== 'session') return;
+  if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return;
+  const normalized = operationInput(policy, toolName, input, cwd);
+  const expiresAt = Date.now() + 10 * 60_000;
+  if (READ_TOOLS.has(name) || WRITE_TOOLS.has(name)) {
+    const writing = WRITE_TOOLS.has(name);
+    if (writing && policy.role !== 'worker') return;
+    const paths = [normalized.file_path, normalized.path, normalized.notebook_path].filter(value => value !== undefined);
+    if (paths.some(value => typeof value !== 'string') || !paths.length || operationPathIdentity(policy, toolName, input, cwd) === undefined
+      || [input.file_path, input.path, input.notebook_path].some(value => typeof value === 'string' && /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(value))) return;
+    if (typeof input.pattern === 'string' && (isAbsolute(input.pattern) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(input.pattern))) return;
+    if (['glob', 'grep', 'find', 'ls'].includes(name)) {
+      for (const path of paths as string[]) {
+        if (checkSessionPolicyPath({ ...policy, rootPath: path }, path, path, true)) return;
+      }
+    }
+    return { kind: writing ? 'file_write' : 'file_read', target: (paths as string[]).join('\n'), toolName,
+      operation: canonicalJson(normalized), boundary: paths.every(path => contained(policy.rootPath, path as string)) ? 'environment' : 'outside-environment', expiresAt };
+  }
+  if (['bash', 'localbash', 'runshell'].includes(name) && (!slug || slug === 'session')) {
+    if (policy.role !== 'worker' || typeof input.command !== 'string' || !input.command.trim() || input.command.includes('\0') || input.run_in_background || input.background
+      || (input.cwd !== undefined && typeof input.cwd !== 'string') || operationPathIdentity(policy, toolName, input, cwd) === undefined) return;
+    return { kind: 'program', target: normalized.cwd as string, toolName, operation: canonicalJson(normalized),
+      boundary: name === 'localbash' ? 'client' : registered.executor && name === 'bash' ? 'environment' : 'host', expiresAt };
+  }
+  if (canonical === 'browser_tool') {
+    // Check the same command/path restrictions with just the missing browser flag enabled.
+    const original = registered.policy;
+    registered.policy = { ...policy, browser: true };
+    try {
+      if (!checkPolicyRules(registered, toolName, input, cwd).allowed) return;
+    } finally { registered.policy = original; }
+    return { kind: 'browser', target: 'browser_tool', toolName, operation: canonicalJson(input.command), boundary: 'environment', expiresAt };
+  }
+  // Unassigned sources need binding/authentication through settings, not an invisible temporary source.
+  return;
+}
+
+/** Called by provider hooks before the synchronous pipeline, so the original call can wait and resume. */
+export async function authorizeSessionPolicyTool(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string, deniedReason?: string): Promise<SessionPolicyToolResult> {
+  const result = deniedReason ? deny(deniedReason) : checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
+  if (result.allowed || hasSessionPolicyToolGrant(sessionId, toolName, input, cwd)) return { allowed: true };
+  const registered = policies.get(sessionId);
+  if (!registered?.policy || !registered.requestPermission || !input || typeof input !== 'object' || Array.isArray(input)) return result;
+  const scope = permissionScope(registered, toolName, input, cwd);
+  if (!scope) return result;
+  const generation = registered.generation;
+  const key = operationKey(registered.policy, toolName, input, cwd);
+  const pathIdentity = operationPathIdentity(registered.policy, toolName, input, cwd);
+  if (pathIdentity === undefined) return result;
+  const request = { toolName, input: operationInput(registered.policy, toolName, input, cwd), reason: result.reason, scope };
+  let allowed = false;
+  try { allowed = await registered.requestPermission(request); } catch { /* Fail closed. */ }
+  if (!allowed) return deny('permission was denied or expired; report the blocked operation to the main agent');
+  if (policies.get(sessionId) !== registered || generation !== registered.generation || scope.expiresAt <= Date.now()
+    || pathIdentity !== operationPathIdentity(registered.policy, toolName, input, cwd)) return deny('the operation or node policy changed while awaiting approval; request again');
+  registered.grants ??= new Map();
+  if (registered.grants.size >= 128) registered.grants.delete(registered.grants.keys().next().value!);
+  registered.grants.set(key, { key, pathIdentity, scope: Object.freeze({ ...scope }) });
+  return { allowed: true };
+}
+
 /** Runs before mode overrides, source activation, interceptors, automations or input transforms. */
 export function checkSessionExecutionPolicy(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string): SessionPolicyToolResult {
   const registered = policies.get(sessionId);
@@ -147,6 +318,12 @@ export function checkSessionExecutionPolicy(sessionId: string, toolName: string,
   const policy = registered.policy;
   if (!policy) return deny('the persisted execution policy is invalid; configure the node again');
   if (!input || typeof input !== 'object' || Array.isArray(input)) return deny('tool input must be an object');
+  if (getOperationGrant(sessionId, toolName, input, cwd)) return { allowed: true };
+  return checkPolicyRules(registered, toolName, input, cwd);
+}
+
+function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): SessionPolicyToolResult {
+  const policy = registered.policy!;
   const parts = toolName.split('__');
   const name = parts[parts.length - 1]!.toLowerCase().replace(/_/g, '');
   const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
@@ -222,6 +399,7 @@ export function normalizeSessionPolicyInput(sessionId: string, toolName: string,
   const policy = policies.get(sessionId)?.policy;
   if (!policy) return undefined;
   const name = toolName.split('__').at(-1)!.toLowerCase().replace(/_/g, '');
+  if (name === 'localbash' || name === 'runshell') return operationInput(policy, toolName, input, cwd);
   if (!READ_TOOLS.has(name) && !WRITE_TOOLS.has(name)) return undefined;
   const output = { ...input };
   let hasPath = false;
@@ -240,7 +418,13 @@ export function wrapSessionProgramInput(sessionId: string, toolName: string, inp
   const registered = policies.get(sessionId);
   if (!registered || toolName.toLowerCase() !== 'bash') return undefined;
   const executor = registered.executor;
-  if (!executor || typeof input.command !== 'string') throw new Error('Verified sandbox program executor is unavailable');
+  if (!executor) {
+    if (!hasSessionPolicyToolGrant(sessionId, toolName, input) || typeof input.command !== 'string') throw new Error('Verified sandbox program executor is unavailable');
+    // An explicit exact-command host exception is the only way a folder node can run Bash.
+    const directory = operationInput(registered.policy!, toolName, input).cwd as string;
+    return { ...input, command: `cd -- ${quotePosix(process.platform === 'win32' ? directory.replace(/\\/g, '/') : directory)} && /bin/bash -c ${quotePosix(input.command)}` };
+  }
+  if (typeof input.command !== 'string') throw new Error('Verified sandbox program executor is unavailable');
   const executable = process.platform === 'win32' ? executor.runtimePath.replace(/\\/g, '/') : executor.runtimePath;
   // Git Bash must pass Linux container paths through to docker.exe unchanged.
   const prefix = process.platform === 'win32' ? "MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' " : '';

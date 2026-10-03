@@ -10,7 +10,7 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
-import { setSessionExecutionPolicy, setSessionProgramExecutor, clearSessionExecutionPolicy, checkSessionPolicyPath, type SessionExecutionPolicy } from '@craft-agent/shared/agent'
+import { setSessionExecutionPolicy, setSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, checkSessionPolicyPath, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
 import type { SuperAgentSessionPolicy } from '@craft-agent/shared/super-agent'
 import { cleanupSuperAgents } from '../super-agent/registry'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@craft-agent/shared/agent'
@@ -1071,6 +1071,8 @@ export function createManagedSession(
 
   if (managed.agentSystemPrompt) managed.agentPrompt = managed.agentSystemPrompt
   if (managed.executionPolicy) {
+    managed.permissionMode = 'allow-all'
+    setPermissionMode(managed.id, 'allow-all', { changedBy: 'restore' })
     try { setSessionExecutionPolicy(managed.id, managed.executionPolicy) }
     catch (error) { sessionLog.error(`Invalid restored node policy for session ${managed.id}:`, error) }
   }
@@ -1236,6 +1238,12 @@ export class SessionManager implements ISessionManager {
     type?: 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval'
     commandHash?: string
   }> = new Map()
+  private pendingNodePermissions = new Map<string, {
+    sessionId: string
+    expiresAt: number
+    timer: ReturnType<typeof setTimeout>
+    resolve: (allowed: boolean) => void
+  }>()
   // Privileged approval binding + audit logger
   private privilegedExecutionBroker = new PrivilegedExecutionBroker(sessionLog)
   // Session-local admin remember windows (exact command hash binding)
@@ -1280,6 +1288,8 @@ export class SessionManager implements ISessionManager {
   private agentRefreshLocks: Map<string, Promise<void>> = new Map()
   /** Serializes lazy runtime creation so maintenance/eviction cannot tear down a half-registered Pi process. */
   private agentCreationLocks: Map<string, Promise<AgentInstance>> = new Map()
+  /** Reconcile node prompts/modes before the next model turn without racing lazy startup. */
+  private nodeSettingsLocks: Map<string, Promise<void>> = new Map()
   /** Monotonic clock to ensure strictly increasing message timestamps */
   private lastTimestamp = 0
 
@@ -1633,6 +1643,35 @@ export class SessionManager implements ISessionManager {
     return candidates[0] ?? null
   }
 
+  private async runSessionLocalShell(managed: ManagedSession, args: ShellExecArgs): Promise<ClientShellResult> {
+    let clientId: string | null
+    if (managed.executionPolicy) {
+      const { getSessionPolicyGrantTarget } = await import('@craft-agent/shared/agent')
+      const target = getSessionPolicyGrantTarget(managed.id, 'mcp__session__localbash', { ...args }, managed.workingDirectory)
+      // The permission dialog names one execution target. Do not switch
+      // to a different client or the host after the user approves it.
+      if (target === `host:${managed.workspace.id}`) return await executeShell(args)
+      clientId = target?.startsWith('client:') ? target.slice('client:'.length) : null
+      if (!clientId || !this.rpcServer?.findClientsWithCapability(CLIENT_RUN_SHELL, { workspaceId: managed.workspace.id }).includes(clientId)) {
+        throw new Error('The approved localbash execution target is no longer available; request permission again')
+      }
+    } else {
+      clientId = this.getRunShellClient(managed.id)
+    }
+    if (clientId && this.rpcServer) {
+      // Allow the client a bit more time than the shell timeout itself.
+      const timeoutMs = Math.min((args.timeoutMs ?? 120_000) + 15_000, 600_000)
+      const result = (await this.rpcServer.invokeClientWithTimeout!(
+        clientId,
+        CLIENT_RUN_SHELL,
+        timeoutMs,
+        { command: args.command, cwd: args.cwd, timeoutMs: args.timeoutMs },
+      )) as ClientShellResult
+      return result
+    }
+    return await executeShell(args)
+  }
+
   private getSftpTransferClient(sid: string): string | null {
     if (!this.rpcServer) return null
     const session = this.sessions.get(sid)
@@ -1718,11 +1757,63 @@ export class SessionManager implements ISessionManager {
   }
 
   private clearPendingPermissionRequestsForSession(sessionId: string): void {
+    clearSessionPolicyGrants(sessionId)
     for (const [requestId, metadata] of this.pendingPermissionRequests.entries()) {
       if (metadata.sessionId === sessionId) {
         this.pendingPermissionRequests.delete(requestId)
+        const pending = this.pendingNodePermissions.get(requestId)
+        if (pending) {
+          clearTimeout(pending.timer)
+          this.pendingNodePermissions.delete(requestId)
+          pending.resolve(false)
+        }
+        const workspaceId = this.sessions.get(sessionId)?.workspace.id
+        if (workspaceId) this.sendEvent({ type: 'permission_resolved', sessionId, requestId, allowed: false, reason: 'cancelled' }, workspaceId)
       }
     }
+  }
+
+  private attachNodePermissionHandler(managed: ManagedSession): void {
+    if (!managed.executionPolicy) return
+    setSessionPolicyPermissionHandler(managed.id, request => this.requestNodePermission(managed, request))
+  }
+
+  private requestNodePermission(managed: ManagedSession, request: SessionPolicyPermissionRequest): Promise<boolean> {
+    if (this.sessions.get(managed.id) !== managed || managed.persistenceRetired || managed.runtimeTeardown || !managed.isProcessing || managed.stopRequested) return Promise.resolve(false)
+    if ([...this.pendingNodePermissions.values()].filter(item => item.sessionId === managed.id).length >= 20) return Promise.resolve(false)
+    const tool = request.toolName.split('__').at(-1)!.toLowerCase()
+    if (tool === 'localbash') {
+      const clientId = this.getRunShellClient(managed.id)
+      request.scope.target = clientId ? `client:${clientId}` : `host:${managed.workspace.id}`
+      request.scope.boundary = clientId ? 'client' : 'host'
+    } else if (request.scope.kind === 'program' && request.scope.boundary === 'host') {
+      request.scope.target = `host:${managed.workspace.id}`
+    }
+    const requestId = `node-perm-${randomUUID()}`
+    return new Promise<boolean>(resolve => {
+      const timer = setTimeout(() => {
+        const pending = this.pendingNodePermissions.get(requestId)
+        if (!pending) return
+        this.pendingNodePermissions.delete(requestId)
+        this.pendingPermissionRequests.delete(requestId)
+        this.sendEvent({ type: 'permission_resolved', sessionId: managed.id, requestId, allowed: false, reason: 'expired' }, managed.workspace.id)
+        resolve(false)
+      }, Math.max(1, request.scope.expiresAt - Date.now()))
+      timer.unref?.()
+      this.pendingNodePermissions.set(requestId, { sessionId: managed.id, expiresAt: request.scope.expiresAt, timer, resolve })
+      this.pendingPermissionRequests.set(requestId, { sessionId: managed.id })
+      this.sendEvent({ type: 'permission_request', sessionId: managed.id, request: {
+        requestId, sessionId: managed.id, toolName: request.toolName,
+        type: request.scope.kind === 'program' ? 'bash' : request.scope.kind === 'file_write' ? 'file_write' : 'mcp_mutation',
+        description: `Node ${managed.executionPolicy!.nodeId} requests ${request.scope.kind}: ${request.scope.target}`,
+        command: typeof request.input.command === 'string' ? request.input.command : undefined,
+        reason: request.reason,
+        impact: request.scope.kind === 'program' && request.scope.boundary !== 'environment'
+          ? `Runs this complete command on the ${request.scope.boundary} machine with cwd ${request.input.cwd}. A working folder does not isolate shell access. The exception is limited to this exact operation in the current turn.`
+          : 'Temporarily permits this exact operation in the current node turn. Other operations remain subject to the node policy.',
+        policyScope: { ...request.scope },
+      } }, managed.workspace.id)
+    })
   }
 
   /**
@@ -3480,9 +3571,64 @@ export class SessionManager implements ISessionManager {
     managed.executionPolicy = policy
     managed.workingDirectory = policy.rootPath
     managed.enabledSourceSlugs = [...policy.allowSources]
+    this.attachNodePermissionHandler(managed)
+    this.setSessionPermissionMode(sessionId, 'allow-all')
     if (managed.agent && previous !== JSON.stringify(policy)) await this.disposeManagedAgentRuntime(managed, 'node execution policy changed')
     this.persistSession(managed, true)
     await sessionPersistenceQueue.flush(sessionId)
+  }
+
+  /** Reuse a node's conversation while updating the effective prompt and Execute mode. */
+  async ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void> {
+    if (settings?.permissionMode !== 'allow-all' || typeof settings.agentSystemPrompt !== 'string' || !settings.agentSystemPrompt.trim()) {
+      throw new Error('Super Agent nodes require Execute mode and a non-empty system prompt')
+    }
+    const systemPrompt = settings.agentSystemPrompt
+    const previous = this.nodeSettingsLocks.get(sessionId) ?? Promise.resolve()
+    const work = previous.catch(() => undefined).then(async () => {
+      const managed = this.sessions.get(sessionId)
+      if (!managed?.executionPolicy) throw new Error('Super Agent node session not found')
+      const assertIdle = () => {
+        if (this.sessions.get(sessionId) !== managed || managed.persistenceRetired) throw new Error('Node session is being removed')
+        if (managed.isProcessing || managed.stopRequested || managed.agent?.isProcessing?.()
+          || managed.messageQueue.length || managed.pendingAuthRequest || this.hasPendingPermissionRequest(sessionId)
+          || Array.from(managed.backgroundTaskRegistry?.values() ?? []).some(task => task.status === 'running')) {
+          throw new Error('Stop active and queued node work before updating its session settings')
+        }
+      }
+      assertIdle()
+      for (;;) {
+        const creating = this.agentCreationLocks.get(sessionId)
+        const refreshing = this.agentRefreshLocks.get(sessionId)
+        const teardown = managed.runtimeTeardown
+        if (!creating && !refreshing && !teardown) break
+        await Promise.allSettled([creating, refreshing, teardown])
+        assertIdle()
+      }
+      // Hydrate before mutating so a cold session's existing transcript and
+      // queued messages remain authoritative; never overwrite them with [].
+      await this.ensureMessagesLoaded(managed)
+      assertIdle()
+      const promptChanged = managed.agentSystemPrompt !== systemPrompt || managed.agentPrompt !== systemPrompt
+      managed.agentSystemPrompt = systemPrompt
+      managed.agentPrompt = systemPrompt
+      this.setSessionPermissionMode(sessionId, 'allow-all')
+      if (promptChanged && managed.agent) await this.disposeManagedAgentRuntime(managed, 'Super Agent system prompt changed')
+      this.persistSession(managed, true)
+      await sessionPersistenceQueue.flush(sessionId)
+    })
+    this.nodeSettingsLocks.set(sessionId, work)
+    try { await work }
+    finally { if (this.nodeSettingsLocks.get(sessionId) === work) this.nodeSettingsLocks.delete(sessionId) }
+  }
+
+  private async waitForNodeSettings(sessionId: string, ignoreErrors = false): Promise<void> {
+    for (;;) {
+      const update = this.nodeSettingsLocks?.get(sessionId)
+      if (!update) return
+      if (ignoreErrors) await update.catch(() => undefined)
+      else await update
+    }
   }
 
   private async disposeManagedAgentRuntime(managed: ManagedSession, reason: string): Promise<void> {
@@ -3613,6 +3759,11 @@ export class SessionManager implements ISessionManager {
    *     can't apply the update.
    */
   private async tryRefreshAgentRuntime(managed: ManagedSession, reason: string): Promise<void> {
+    if (reason !== 'send-path refresh') {
+      // Existing lazy creation may itself be awaited by reconciliation; only
+      // external refreshes wait here, avoiding a creation/settings lock cycle.
+      if (this.nodeSettingsLocks?.has(managed.id)) await this.waitForNodeSettings(managed.id, true)
+    }
     // A connection/config watcher may fire while lazy Pi startup is still
     // registering tools. Wait for that startup to finish before deciding that
     // the runtime needs to be replaced; disposing it here produces the
@@ -3775,8 +3926,13 @@ export class SessionManager implements ISessionManager {
    * 4. fallback: no connection configured
    */
   private async getOrCreateAgent(managed: ManagedSession): Promise<AgentInstance> {
+    if (this.nodeSettingsLocks?.has(managed.id)) await this.waitForNodeSettings(managed.id)
     // Also covers direct sends to a restored node session before the Super Agent page is opened.
-    if (managed.executionPolicy) setSessionExecutionPolicy(managed.id, managed.executionPolicy)
+    if (managed.executionPolicy) {
+      this.setSessionPermissionMode(managed.id, 'allow-all')
+      setSessionExecutionPolicy(managed.id, managed.executionPolicy)
+      this.attachNodePermissionHandler(managed)
+    }
     const existing = this.agentCreationLocks.get(managed.id)
     if (existing) return existing
     const creation = this.createAgentRuntime(managed)
@@ -4560,6 +4716,10 @@ export class SessionManager implements ISessionManager {
 
       // Set up mode change handlers
       managed.agent.onPermissionModeChange = (mode) => {
+        if (managed.executionPolicy && mode !== 'allow-all') {
+          this.setSessionPermissionMode(managed.id, 'allow-all')
+          return
+        }
         if (managed.permissionMode === mode) {
           return
         }
@@ -4790,21 +4950,7 @@ export class SessionManager implements ISessionManager {
         // localbash — execute a shell command on the CLIENT machine when one
         // is connected (remote mode). Falls back to this host (embedded/local
         // server shares the client's machine) so local sessions keep working.
-        runLocalShellFn: async (args: ShellExecArgs): Promise<ClientShellResult> => {
-          const clientId = this.getRunShellClient(managed.id)
-          if (clientId && this.rpcServer) {
-            // Allow the client a bit more time than the shell timeout itself.
-            const timeoutMs = Math.min((args.timeoutMs ?? 120_000) + 15_000, 600_000)
-            const result = (await this.rpcServer.invokeClientWithTimeout!(
-              clientId,
-              CLIENT_RUN_SHELL,
-              timeoutMs,
-              { command: args.command, cwd: args.cwd, timeoutMs: args.timeoutMs },
-            )) as ClientShellResult
-            return result
-          }
-          return await executeShell(args)
-        },
+        runLocalShellFn: (args: ShellExecArgs): Promise<ClientShellResult> => this.runSessionLocalShell(managed, args),
         transferSftpFileFn: async (args: SftpTransferArgs): Promise<ClientSftpTransferResult> => {
           const clientId = this.getSftpTransferClient(managed.id)
           if (!clientId || !this.rpcServer) {
@@ -6427,6 +6573,7 @@ export class SessionManager implements ISessionManager {
     // Teardown callbacks can still hold this object after it leaves the map.
     // Fence their persistence before waiting on any runtime work.
     managed.persistenceRetired = true
+    this.clearPendingPermissionRequestsForSession(sessionId)
 
     // If processing is in progress, force-abort via Query.close() and wait for cleanup
     if (managed.isProcessing && managed.agent) {
@@ -6469,6 +6616,7 @@ export class SessionManager implements ISessionManager {
     // Agent/MCP runtime to a session after it has been removed from the map.
     await this.agentCreationLocks.get(sessionId)?.catch(() => undefined)
     await this.agentRefreshLocks.get(sessionId)?.catch(() => undefined)
+    await this.nodeSettingsLocks?.get(sessionId)?.catch(() => undefined)
 
     // Fully await the single runtime teardown path before deleting files.
     await this.disposeManagedAgentRuntime(managed, 'session deleted')
@@ -6541,12 +6689,14 @@ export class SessionManager implements ISessionManager {
      */
     rpcContext?: { callerClientId?: string },
   ): Promise<void> {
+    if (this.nodeSettingsLocks?.has(sessionId)) await this.waitForNodeSettings(sessionId)
     const managed = this.sessions.get(sessionId)
     if (!managed) {
       throw new Error(`Session ${sessionId} not found`)
     }
     this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
     if (managed.executionPolicy) {
+      this.setSessionPermissionMode(sessionId, 'allow-all')
       setSessionExecutionPolicy(sessionId, managed.executionPolicy)
       for (const attachment of attachments ?? []) {
         const path = attachment.path
@@ -7213,6 +7363,7 @@ export class SessionManager implements ISessionManager {
     }
 
     sessionLog.info('Cancelling processing for session:', sessionId, silent ? '(silent)' : '')
+    this.clearPendingPermissionRequestsForSession(sessionId)
 
     // Keep the stopped prompt and any queued follow-ups on the persisted info
     // marker. The composer only receives them when that marker is clicked.
@@ -7383,6 +7534,14 @@ export class SessionManager implements ISessionManager {
    */
   private sessionCompletionListeners = new Set<(evt: SessionCompletionEvent) => void>()
 
+  /** Observe the same session events delivered to clients without replacing the transport sink. */
+  private sessionEventListeners = new Set<(event: SessionEvent, workspaceId: string) => void>()
+
+  onSessionEvent(listener: (event: SessionEvent, workspaceId: string) => void): () => void {
+    this.sessionEventListeners.add(listener)
+    return () => { this.sessionEventListeners.delete(listener) }
+  }
+
   /**
    * Subscribe to in-process session completion (Tasks Conductor seam).
    * Returns an unsubscribe function. Not a renderer event; not agent-facing.
@@ -7433,6 +7592,7 @@ export class SessionManager implements ISessionManager {
       await this.disposeManagedAgentRuntime(managed, 'user stop')
     }
 
+    this.clearPendingPermissionRequestsForSession(sessionId)
     // 1. Cleanup state
     this.setProcessing(managed, false)
     managed.stopRequested = false  // Reset for next turn
@@ -7841,8 +8001,21 @@ export class SessionManager implements ISessionManager {
     options?: import('@craft-agent/shared/protocol').PermissionResponseOptions,
   ): boolean {
     const managed = this.sessions.get(sessionId)
+    const requestMeta = this.pendingPermissionRequests.get(requestId)
+    if (!managed || !requestMeta || requestMeta.sessionId !== sessionId) return false
+    const nodePermission = this.pendingNodePermissions.get(requestId)
+    if (nodePermission) {
+      if (nodePermission.sessionId !== sessionId) return false
+      const expired = nodePermission.expiresAt <= Date.now() || managed.persistenceRetired || !!managed.runtimeTeardown || !managed.isProcessing || managed.stopRequested
+      const granted = allowed && !expired
+      clearTimeout(nodePermission.timer)
+      this.pendingNodePermissions.delete(requestId)
+      this.pendingPermissionRequests.delete(requestId)
+      this.sendEvent({ type: 'permission_resolved', sessionId, requestId, allowed: granted, reason: expired ? 'expired' : undefined }, managed.workspace.id)
+      nodePermission.resolve(granted)
+      return !expired
+    }
     if (managed?.agent) {
-      const requestMeta = this.pendingPermissionRequests.get(requestId)
       this.pendingPermissionRequests.delete(requestId)
 
       if (requestMeta?.type === 'admin_approval') {
@@ -7853,6 +8026,7 @@ export class SessionManager implements ISessionManager {
           sessionLog.warn(`Admin approval rejected by broker for ${requestId}: ${brokerResult.reason}`)
           // Broker rejection should fail closed.
           managed.agent.respondToPermission(requestId, false, false)
+          this.sendEvent({ type: 'permission_resolved', sessionId, requestId, allowed: false, reason: brokerResult.reason }, managed.workspace.id)
           return false
         }
 
@@ -7863,6 +8037,7 @@ export class SessionManager implements ISessionManager {
 
       sessionLog.info(`Permission response for ${requestId}: allowed=${allowed}, alwaysAllow=${alwaysAllow}`)
       managed.agent.respondToPermission(requestId, allowed, alwaysAllow)
+      this.sendEvent({ type: 'permission_resolved', sessionId, requestId, allowed }, managed.workspace.id)
       return true
     } else {
       sessionLog.warn(`Cannot respond to permission - no agent for session ${sessionId}`)
@@ -7906,6 +8081,9 @@ export class SessionManager implements ISessionManager {
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void {
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      // Node execution ceilings remain enforced separately from the mode.
+      // Persisted Explore/Ask state must never suppress the team scheduler.
+      if (managed.executionPolicy) mode = 'allow-all'
       const previousManagedMode = managed.permissionMode ?? 'ask'
       const diagnosticsBefore = getPermissionModeDiagnostics(sessionId)
       const previousEffectiveMode = diagnosticsBefore.permissionMode
@@ -7913,6 +8091,7 @@ export class SessionManager implements ISessionManager {
       // No-op only when BOTH managed state and mode-manager state already match.
       // If managed state matches but diagnostics drifted, heal authoritative mode state.
       if (previousManagedMode === mode && previousEffectiveMode === mode) {
+        if (managed.executionPolicy && managed.agent && managed.agent.getPermissionMode?.() !== mode) managed.agent.setPermissionMode(mode)
         return
       }
 
@@ -9434,13 +9613,18 @@ export class SessionManager implements ISessionManager {
   }
 
   private sendEvent(event: SessionEvent, workspaceId?: string): void {
-    if (!this.eventSink) {
-      sessionLog.warn('Cannot send event - no event sink')
+    if (!workspaceId) {
+      sessionLog.warn(`Cannot send ${event.type} event - no workspaceId`)
       return
     }
 
-    if (!workspaceId) {
-      sessionLog.warn(`Cannot send ${event.type} event - no workspaceId`)
+    for (const listener of this.sessionEventListeners ?? []) {
+      try { listener(event, workspaceId) }
+      catch (error) { sessionLog.error(`onSessionEvent listener threw for session ${event.sessionId}:`, error) }
+    }
+
+    if (!this.eventSink) {
+      sessionLog.warn('Cannot send event - no event sink')
       return
     }
 
@@ -9452,7 +9636,13 @@ export class SessionManager implements ISessionManager {
    * Instead of sending 50+ IPC events per second, batches deltas and flushes every 50ms
    */
   private queueDelta(sessionId: string, workspaceId: string, delta: string, turnId?: string): void {
-    const existing = this.pendingDeltas.get(sessionId)
+    let existing = this.pendingDeltas.get(sessionId)
+    if (existing && existing.turnId !== turnId) {
+      // Intermediate and final assistant messages have distinct identities. A
+      // single batch must never relabel earlier text with the next message ID.
+      this.flushDelta(sessionId, workspaceId)
+      existing = undefined
+    }
     if (existing) {
       // Append to existing batch
       existing.delta += delta
@@ -10064,6 +10254,7 @@ export class SessionManager implements ISessionManager {
 
     // Clear pending credential resolvers (they won't be resolved, but prevents memory leak)
     this.pendingCredentialResolvers.clear()
+    for (const sessionId of this.sessions.keys()) this.clearPendingPermissionRequestsForSession(sessionId)
     this.pendingPermissionRequests.clear()
     this.adminRememberApprovals.clear()
     this.pendingMcpReloadSessionIds.clear()
@@ -10074,6 +10265,7 @@ export class SessionManager implements ISessionManager {
     await Promise.allSettled([
       ...this.agentCreationLocks.values(),
       ...this.agentRefreshLocks.values(),
+      ...this.nodeSettingsLocks.values(),
     ])
 
     // Shutdown must close every retained warm runtime as well as file
@@ -10116,7 +10308,9 @@ export class SessionManager implements ISessionManager {
     this.taskOutputIndex.clear()
     this.agentRefreshLocks.clear()
     this.agentCreationLocks.clear()
+    this.nodeSettingsLocks.clear()
     this.sessionCompletionListeners.clear()
+    this.sessionEventListeners.clear()
     this.remoteBpms.clear()
     this.browserHostByCanvas.clear()
     this.automationBinder = undefined

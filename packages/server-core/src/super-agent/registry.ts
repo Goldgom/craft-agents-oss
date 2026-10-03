@@ -51,7 +51,10 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       sendMessage: (sessionId, message) => host.sendMessage(sessionId, message),
       cancelProcessing: (sessionId, silent) => host.cancelProcessing(sessionId, silent),
       onSessionComplete: listener => host.onSessionComplete(listener),
+      onSessionEvent: listener => host.onSessionEvent(listener),
+      respondToPermission: (sessionId, requestId, allowed, alwaysAllow) => host.respondToPermission(sessionId, requestId, allowed, alwaysAllow),
       getSessionFinalText: sessionId => host.getSessionFinalText(sessionId),
+      ensureSuperAgentSessionSettings: (sessionId, settings) => host.ensureSuperAgentSessionSettings(sessionId, settings),
       applySessionPolicy: async (sessionId, policy) => {
         if (!host.applySessionPolicy) throw new Error('This host does not support Super Agent execution policies')
         const session = await host.getSession(sessionId)
