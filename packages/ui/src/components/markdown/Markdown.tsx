@@ -1,5 +1,5 @@
 import * as React from 'react'
-import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
@@ -16,7 +16,7 @@ import { MarkdownImageBlock } from './MarkdownImageBlock'
 import { MarkdownLatexBlock } from './MarkdownLatexBlock'
 import { MarkdownDocBlock } from './MarkdownDocBlock'
 import { preprocessLinks } from './linkify'
-import { resolveMarkdownLinkTarget } from './link-target'
+import { MarkdownLink } from './MarkdownLink'
 import remarkCollapsibleSections from './remarkCollapsibleSections'
 import { CollapsibleSection } from './CollapsibleSection'
 import { useCollapsibleMarkdown } from './CollapsibleMarkdownContext'
@@ -205,42 +205,11 @@ function createComponents(
     //   through `resolveMarkdownLinkTarget` so file URLs land in `onFileClick`
     //   and blocked URLs surface a meaningful error via `onUrlClick` →
     //   `classifyExternalUrl`.
-    a: ({ href, children }) => {
-      const trimmedHref = href?.trim() ?? ''
-      const sanitized = trimmedHref ? defaultUrlTransform(trimmedHref) : ''
-      const safeHref = sanitized ? sanitized : undefined
-
-      const handleClick = (e: React.MouseEvent) => {
-        e.preventDefault()
-
-        // Some AI outputs include raw HTML anchors with empty href but path text content.
-        // Fallback to the anchor text when href is missing/empty.
-        const fallbackText = React.Children.toArray(children)
-          .map((child) => (typeof child === 'string' ? child : ''))
-          .join('')
-          .trim()
-
-        const target = trimmedHref || fallbackText
-        if (!target) return
-
-        const resolvedTarget = resolveMarkdownLinkTarget(target)
-        if (resolvedTarget.kind === 'file' && onFileClick) {
-          onFileClick(resolvedTarget.path)
-        } else if (resolvedTarget.kind === 'url' && onUrlClick) {
-          onUrlClick(resolvedTarget.url)
-        }
-      }
-
-      return (
-        <a
-          href={safeHref}
-          onClick={handleClick}
-          className="text-accent hover:underline cursor-pointer"
-        >
-          {children}
-        </a>
-      )
-    },
+    a: ({ href, children }) => (
+      <MarkdownLink href={href} onUrlClick={onUrlClick} onFileClick={onFileClick}>
+        {children}
+      </MarkdownLink>
+    ),
   }
 
   // Terminal mode: minimal formatting
