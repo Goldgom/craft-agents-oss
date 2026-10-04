@@ -292,7 +292,7 @@ const api = buildClientApi(client, CHANNEL_MAP, (ch) => client.isChannelAvailabl
 }
 
 ;(api as any).getRuntimeEnvironment = (): 'electron' | 'web' => 'electron'
-;(api as any).openTokenNestRecharge = (url: string): Promise<void> => ipcRenderer.invoke(TOKENNEST_RECHARGE_IPC, url)
+;(api as any).openTokenNestRecharge = (url: string, connectionSlug?: string): Promise<void> => ipcRenderer.invoke(TOKENNEST_RECHARGE_IPC, url, connectionSlug)
 
 // ---------------------------------------------------------------------------
 // Transport connection state logging (for remote connections)

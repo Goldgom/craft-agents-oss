@@ -110,6 +110,21 @@ describe('TokenNest OAuth', () => {
     expect(authorization).toBe('Bearer oauth-access');
   });
 
+  test('recovers a missing access token using the saved refresh token', async () => {
+    let stored = { value: '', refreshToken: 'saved-refresh', expiresAt: Date.now() + 3600_000 };
+    const manager = {
+      getLlmOAuth: async () => ({ accessToken: stored.value, refreshToken: stored.refreshToken, expiresAt: stored.expiresAt }),
+      getSnapshot: async () => ({ credential: stored, revision: 'revision' }),
+      compareAndSetMany: async (changes: import('../credentials/types.ts').CredentialCompareAndSet[]) => {
+        stored = changes[0]!.credential! as typeof stored;
+        return true;
+      },
+    } as unknown as CredentialManager;
+    globalThis.fetch = (async () => Response.json({ access_token: 'recovered-access', refresh_token: 'rotated-refresh', expires_in: 3600 })) as unknown as typeof fetch;
+    expect((await getValidTokenNestCredentials('tokennest', manager))?.accessToken).toBe('recovered-access');
+    expect(stored.refreshToken).toBe('rotated-refresh');
+  });
+
   test('hides the group selector when an older TokenNest has no OAuth groups endpoint', async () => {
     globalThis.fetch = (async () => new Response('', { status: 404 })) as unknown as typeof fetch;
     await expect(fetchTokenNestChannelGroups('oauth-access')).resolves.toEqual([]);

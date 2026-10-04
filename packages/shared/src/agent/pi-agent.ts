@@ -96,7 +96,8 @@ import { expandPath } from '../utils/paths.ts';
 import { getSessionDataPath, getSessionPath, getSessionPlansPath } from '../sessions/storage.ts';
 
 // Error typing
-import { parseError, type AgentError } from './errors.ts';
+import { createAgentError, parseError, type AgentError, type ErrorCode } from './errors.ts';
+import { TokenNestRequestError } from '../auth/tokennest-oauth.ts';
 
 // Centralized PreToolUse pipeline
 import { runPreToolUseChecksWithPermissions, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
@@ -125,9 +126,19 @@ class OAuthReauthenticationRequiredError extends Error {
   }
 }
 
-function refreshFailureRequiresReauthentication(message: string): boolean {
+class OAuthTokenRefreshError extends Error {
+  constructor(public readonly code: ErrorCode, status?: number) {
+    const reason = code === 'network_error' ? 'network error'
+      : code === 'rate_limited' ? 'rate limit' : 'service unavailable';
+    super(`OAuth token refresh failed: ${reason}${status ? ` (HTTP ${status})` : ''}. Please try again.`);
+    this.name = 'OAuthTokenRefreshError';
+  }
+}
+
+function refreshFailureRequiresReauthentication(error: unknown, message: string): boolean {
   const normalized = message.toLowerCase();
   return (
+    (error instanceof TokenNestRequestError && (error.status === 400 || error.status === 401)) ||
     normalized.includes('invalid_grant') ||
     (normalized.includes('refresh token') && (
       normalized.includes('expired') ||
@@ -135,7 +146,9 @@ function refreshFailureRequiresReauthentication(message: string): boolean {
       normalized.includes('invalid') ||
       normalized.includes('unavailable')
     )) ||
-    /token refresh failed:\s*(400|401)\b/.test(normalized)
+    /token refresh failed:\s*(400|401)\b/.test(normalized) ||
+    /copilot token exchange failed: http (401|403)\b/.test(normalized) ||
+    normalized.includes('refresh credentials are unavailable')
   );
 }
 
@@ -394,6 +407,7 @@ export class PiAgent extends BaseAgent {
     this.onBackendAuthRequired = cb;
   }
   private tokenRefreshInProgress: Promise<void> | null = null;
+  private deferredOAuthRefresh?: { accessToken: string; refreshToken: string; retryAfter: number };
 
   // Global mutex: keyed by connectionSlug so multiple PiAgent instances
   // sharing the same connection don't race concurrent token refreshes.
@@ -1023,10 +1037,17 @@ export class PiAgent extends BaseAgent {
         if (error instanceof CredentialChangedError || current.revision !== snapshot.revision) throw new CredentialChangedError();
         const msg = error instanceof Error ? error.message : String(error);
         this.debug('Token refresh failed');
-        if (error instanceof OAuthReauthenticationRequiredError || refreshFailureRequiresReauthentication(msg)) {
+        if (error instanceof OAuthReauthenticationRequiredError || refreshFailureRequiresReauthentication(error, msg)) {
           throw new OAuthReauthenticationRequiredError();
         }
-        throw new Error('Token refresh failed. Try again.');
+        const status = error instanceof TokenNestRequestError ? error.status
+          : Number(msg.match(/(?:failed:\s*|HTTP\s+)(\d{3})\b/i)?.[1]) || undefined;
+        const code = status === 429 ? 'rate_limited'
+          : status && status >= 500 ? 'service_error'
+          : /network|fetch failed|offline|econn|enotfound|timeout|timed out/i.test(msg) ? 'network_error'
+          : 'service_error';
+        // Keep status and recovery intent without leaking provider responses or tokens.
+        throw new OAuthTokenRefreshError(code, status);
       }
 
       // Persistence has succeeded and changed the revision ourselves. Keep
@@ -1090,8 +1111,29 @@ export class PiAgent extends BaseAgent {
       throw new OAuthReauthenticationRequiredError();
     }
 
+    if (this.deferredOAuthRefresh?.accessToken === stored.accessToken &&
+        this.deferredOAuthRefresh.refreshToken === stored.refreshToken &&
+        this.deferredOAuthRefresh.retryAfter > Date.now() &&
+        stored.expiresAt && stored.expiresAt > Date.now() + 60_000) return;
+
     this.debug('OAuth token expires soon — refreshing before the next request');
-    await this.refreshAndPushTokens();
+    try {
+      await this.refreshAndPushTokens();
+    } catch (error) {
+      // An early refresh failure must not block a token that is still usable.
+      // Do not immediately replay a rotating token after an ambiguous network failure.
+      const current = await getCredentialManager().getLlmOAuth(slug);
+      if (error instanceof OAuthTokenRefreshError &&
+          current?.accessToken === stored.accessToken &&
+          current.refreshToken === stored.refreshToken &&
+          current.expiresAt && current.expiresAt > Date.now() + 60_000) {
+        this.deferredOAuthRefresh = { accessToken: current.accessToken, refreshToken: current.refreshToken,
+          retryAfter: Date.now() + 30_000 };
+        this.debug('Early OAuth refresh unavailable — continuing with the unexpired access token');
+        return;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -3008,6 +3050,7 @@ export class PiAgent extends BaseAgent {
    * Parse a Pi error into a typed AgentError.
    */
   private parsePiError(error: Error): AgentError {
+    if (error instanceof OAuthTokenRefreshError) return createAgentError(error.code, error.message);
     const errorMessage = error.message.toLowerCase();
 
     // Auth errors

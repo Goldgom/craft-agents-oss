@@ -382,6 +382,7 @@ const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
   credentials: 'KeyRound',
   app: 'ToggleRight',
   usage: 'ChartNoAxesCombined',
+  recharge: 'WalletCards',
   ai: 'Sparkles',
   appearance: 'Palette',
   input: 'Keyboard',
@@ -406,7 +407,7 @@ const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
  * Order is determined by SETTINGS_PAGES in settings-registry.ts
  */
 export const SETTINGS_ITEMS: SettingsMenuItem[] = SETTINGS_PAGES
-  .filter(page => page.id !== 'usage' && (page.id !== 'server' || FEATURE_FLAGS.embeddedServer))
+  .filter(page => page.id !== 'usage' && page.id !== 'recharge' && (page.id !== 'server' || FEATURE_FLAGS.embeddedServer))
   .map(page => ({
     id: page.id,
     labelKey: page.labelKey,

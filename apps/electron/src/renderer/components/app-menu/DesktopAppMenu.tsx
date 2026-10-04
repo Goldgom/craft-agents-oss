@@ -187,6 +187,11 @@ export function DesktopAppMenu({
 
         <StyledDropdownMenuSeparator />
 
+        <StyledDropdownMenuItem onClick={() => onOpenSettingsSubpage('recharge')}>
+          <Icons.WalletCards className="h-3.5 w-3.5" />
+          {t('settings.recharge.title')}
+        </StyledDropdownMenuItem>
+
         {renderMenuSection(EDIT_MENU, actionHandlers, t)}
         {renderMenuSection(VIEW_MENU, actionHandlers, t)}
         {renderMenuSection(WINDOW_MENU, actionHandlers, t)}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUpRight, BarChart3, CalendarDays, CircleDollarSign, Coins, ExternalLink, Inbox, RefreshCw, ServerCog, Sparkles, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -24,6 +24,7 @@ const formatMoney = (value: number, currency = 'USD') => {
 }
 const balanceText = (balance?: Pick<ApiBalance, 'display' | 'remaining' | 'currency'>) => balance?.display ?? (balance?.remaining === undefined ? '—' : formatMoney(balance.remaining, balance.currency))
 const isMissingUsageHandler = (message: string) => message.includes('No handler for: tokennest:getUsage') || message.includes('CHANNEL_NOT_FOUND')
+const isUsageTimeout = (message: string) => /timeout|timed out/i.test(message)
 
 function addPoint(map: Map<string, TokenNestUsagePoint>, key: string, usage: { input: number; output: number; total: number; cost: number }) {
   const point = map.get(key) ?? { key, label: key, requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 }
@@ -45,6 +46,7 @@ export default function UsageSettingsPage() {
   const [selectedSlug, setSelectedSlug] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshingSlug, setRefreshingSlug] = useState<string | null>(null)
+  const loadId = useRef(0)
 
   const tokenNestConnections = useMemo(() => llmConnections.filter(connection => connection.oauthProvider === 'tokennest' && connection.isAuthenticated), [llmConnections])
   const activeSlug = tokenNestConnections.some(connection => connection.slug === selectedSlug) ? selectedSlug : tokenNestConnections[0]?.slug ?? ''
@@ -52,29 +54,44 @@ export default function UsageSettingsPage() {
   const activeError = usageErrors[activeSlug]
 
   const load = useCallback(async () => {
+    const id = ++loadId.current
     setLoading(true)
     try {
-      const [nextSessions, nextBalances] = await Promise.all([window.electronAPI.getSessions(), window.electronAPI.getLlmConnectionBalances()])
-      setSessions(nextSessions.filter(session => !session.hidden))
-      setBalances(nextBalances)
-      const results = await Promise.all(tokenNestConnections.map(async connection => {
+      const usageRequest = Promise.all(tokenNestConnections.map(async connection => {
         try { return { slug: connection.slug, snapshot: await window.electronAPI.getTokenNestUsage({ connectionSlug: connection.slug, days: 30 }) } }
         catch (error) { return { slug: connection.slug, error: error instanceof Error ? error.message : String(error) } }
       }))
-      const nextUsage: Record<string, TokenNestUsageSnapshot> = {}
+      const localRequest = Promise.all([window.electronAPI.getSessions(), window.electronAPI.getLlmConnectionBalances()])
+        .then(([nextSessions, nextBalances]) => {
+          if (id !== loadId.current) return
+          setSessions(nextSessions.filter(session => !session.hidden))
+          setBalances(nextBalances)
+        }).catch(error => {
+          if (id === loadId.current) toast.error(t('settings.usage.loadFailed'), { description: error instanceof Error ? error.message : String(error) })
+        })
+      const results = await usageRequest
+      if (id !== loadId.current) return
       const nextErrors: Record<string, string> = {}
-      for (const result of results) {
-        if ('snapshot' in result && result.snapshot) nextUsage[result.slug] = result.snapshot
-        else if ('error' in result && result.error) nextErrors[result.slug] = result.error
-      }
-      setUsage(nextUsage)
+      setUsage(previous => {
+        const nextUsage: Record<string, TokenNestUsageSnapshot> = {}
+        for (const result of results) {
+          if ('snapshot' in result && result.snapshot) nextUsage[result.slug] = result.snapshot
+          else if (previous[result.slug]) nextUsage[result.slug] = previous[result.slug]
+        }
+        return nextUsage
+      })
+      for (const result of results) if ('error' in result && result.error) nextErrors[result.slug] = result.error
       setUsageErrors(nextErrors)
+      await localRequest
     } catch (error) {
-      toast.error(t('settings.usage.loadFailed'), { description: error instanceof Error ? error.message : String(error) })
-    } finally { setLoading(false) }
+      if (id === loadId.current) toast.error(t('settings.usage.loadFailed'), { description: error instanceof Error ? error.message : String(error) })
+    } finally { if (id === loadId.current) setLoading(false) }
   }, [t, tokenNestConnections])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load()
+    return () => { loadId.current += 1 }
+  }, [load])
 
   const local = useMemo(() => {
     const totals = { input: 0, output: 0, total: 0, cost: 0 }
@@ -142,7 +159,7 @@ export default function UsageSettingsPage() {
         </div>
       </section>
 
-      {activeError && <div className={cn('flex items-start gap-3 rounded-xl border px-4 py-3 text-sm', isMissingUsageHandler(activeError) ? 'border-amber-500/20 bg-amber-500/[0.07] text-amber-700 dark:text-amber-300' : 'border-destructive/20 bg-destructive/[0.06] text-destructive')}><ServerCog className="mt-0.5 size-4 shrink-0" /><div><div className="font-medium">{t('settings.usage.syncUnavailable')}</div><div className="mt-0.5 text-xs opacity-80">{isMissingUsageHandler(activeError) ? t('settings.usage.syncUnavailableDescription') : activeError}</div></div></div>}
+      {activeError && <div className={cn('flex items-start gap-3 rounded-xl border px-4 py-3 text-sm', activeUsage || isUsageTimeout(activeError) || isMissingUsageHandler(activeError) ? 'border-amber-500/20 bg-amber-500/[0.07] text-amber-700 dark:text-amber-300' : 'border-destructive/20 bg-destructive/[0.06] text-destructive')}><ServerCog className="mt-0.5 size-4 shrink-0" /><div><div className="font-medium">{t('settings.usage.syncUnavailable')}</div><div className="mt-0.5 text-xs opacity-80">{isMissingUsageHandler(activeError) ? t('settings.usage.syncUnavailableDescription') : isUsageTimeout(activeError) ? t('settings.usage.syncTimeoutDescription') : activeError}</div>{activeUsage && <div className="mt-1 text-xs opacity-80">{t('settings.usage.cachedDescription', { time: new Date(activeUsage.updatedAt).toLocaleString() })}</div>}</div></div>}
 
       <UsageDashboard title={activeUsage ? t('settings.usage.providerTitle') : t('settings.usage.localTitle')} description={activeUsage ? `${t('settings.usage.providerDescription')}${activeUsage.truncated ? ` ${t('settings.usage.chartTruncated')}` : ''}` : t('settings.usage.localDescription')} totals={shownTotals} currency={activeUsage?.currency ?? 'USD'} daily={activeUsage?.daily ?? local.daily} byModel={activeUsage?.byModel ?? local.byModel} t={t} />
 

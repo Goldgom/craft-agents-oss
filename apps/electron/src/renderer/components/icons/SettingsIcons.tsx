@@ -26,6 +26,7 @@ import {
   Activity,
   Users,
   ChartNoAxesCombined,
+  WalletCards,
 } from 'lucide-react'
 import type { SettingsSubpage } from '../../../shared/types'
 
@@ -59,6 +60,7 @@ export const CollaborationsIcon = ({ className }: IconProps) => <Users className
 export const SETTINGS_ICONS: Record<SettingsSubpage, React.ComponentType<IconProps>> = {
   app: AppSettingsIcon,
   usage: UsageSettingsIcon,
+  recharge: ({ className }) => <WalletCards className={className} />,
   ai: AiSettingsIcon,
   credentials: CredentialsSettingsIcon,
   appearance: AppearanceIcon,

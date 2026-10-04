@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'bun:test'
 import { parseError } from '../errors.ts'
 
+describe('OAuth startup errors', () => {
+  it('classifies expired login and invalid grant failures as requiring reauthentication', () => {
+    for (const message of ['Your login has expired. Please sign in again to continue.', 'invalid_grant']) {
+      expect(parseError(new Error(message)).code).toBe('expired_oauth_token')
+    }
+  })
+})
+
 describe('parseError content-policy handling', () => {
   it('maps prompt_blocked moderation responses to a user-friendly policy error', () => {
     const raw = '400: {"message":"request blocked by content moderation (request id: req_123)","type":"new_api_error","code":"prompt_blocked"}'

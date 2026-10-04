@@ -1,3 +1,4 @@
+import { getProviderRechargeTarget } from '@craft-agent/shared/utils/billing'
 /**
  * AiSettingsPage
  *
@@ -42,7 +43,7 @@ import {
 import { cn } from '@/lib/utils'
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
-import { openTokenNestRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
+import { openConnectionRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
 
 import {
   SettingsSection,
@@ -486,8 +487,8 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
       description={getDescription()}
     >
       <div className="flex items-center gap-1.5">
-        {connection.oauthProvider === 'tokennest' && connection.isAuthenticated && (
-          <Button size="sm" variant="outline" onClick={() => void openTokenNestRecharge(connection.slug)}>
+        {getProviderRechargeTarget(connection) && (
+          <Button size="sm" variant="outline" onClick={() => void openConnectionRecharge(connection)}>
             {t('settings.ai.tokenNestRecharge')}
           </Button>
         )}
@@ -878,7 +879,7 @@ export default function AiSettingsPage() {
   useEffect(() => {
     let cancelled = false
     const refresh = () => {
-      if (showApiBalances) void window.electronAPI.getLlmConnectionBalances()
+      if (showApiBalances) void window.electronAPI.getLlmConnectionBalances({ forceRefresh: true })
         .then(balances => { if (!cancelled) setApiBalances(balances) })
         .catch(error => console.warn('Failed to refresh balances after recharge', error))
     }

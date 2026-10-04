@@ -543,7 +543,7 @@ export interface ElectronAPI {
   // TokenNest OAuth (PKCE through the user's system browser)
   startTokenNestOAuth(connectionSlug?: string): Promise<{ success: boolean; error?: string }>
   /** Open the wallet in an isolated app window; resolves when the window closes. */
-  openTokenNestRecharge(url: string): Promise<void>
+  openTokenNestRecharge(url: string, connectionSlug?: string): Promise<void>
   getTokenNestRechargeUrl(connectionSlug: string): Promise<{ url: string; requiresWebsiteLogin: boolean }>
   checkTokenNestAuth(): Promise<import('@craft-agent/shared/auth').TokenNestAuthorizationIssue[]>
 
@@ -860,7 +860,7 @@ export interface ElectronAPI {
   setDefaultThinkingLevel(level: ThinkingLevel): Promise<{ success: boolean; error?: string }>
   setWorkspaceDefaultLlmConnection(workspaceId: string, slug: string | null): Promise<{ success: boolean; error?: string }>
   refreshLlmConnectionModels(slug: string): Promise<{ success: boolean; error?: string }>
-  getLlmConnectionBalances(): Promise<Array<import('@craft-agent/shared/protocol').LlmConnectionBalance>>
+  getLlmConnectionBalances(options?: { forceRefresh?: boolean }): Promise<Array<import('@craft-agent/shared/protocol').LlmConnectionBalance>>
   getShowApiBalances(): Promise<boolean>
   setShowApiBalances(enabled: boolean): Promise<void>
   getTokenNestUsage(args: { connectionSlug: string; days?: number }): Promise<import('@craft-agent/shared/protocol').TokenNestUsageSnapshot>

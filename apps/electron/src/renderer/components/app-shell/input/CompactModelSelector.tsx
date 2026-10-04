@@ -1,3 +1,4 @@
+import { getProviderRechargeTarget } from '@craft-agent/shared/utils/billing'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -45,7 +46,7 @@ import {
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
-import { openTokenNestRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
+import { openConnectionRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
 
 type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
 
@@ -174,14 +175,14 @@ export function CompactModelSelector({
   React.useEffect(() => {
     if (!open) return
     let cancelled = false
-    const refresh = async () => {
+    const refresh = async (event?: Event) => {
       try {
         const enabled = await window.electronAPI.getShowApiBalances()
         if (!enabled || cancelled) {
           if (!cancelled) setApiBalances([])
           return
         }
-        const balances = await window.electronAPI.getLlmConnectionBalances()
+        const balances = await window.electronAPI.getLlmConnectionBalances({ forceRefresh: event?.type === TOKENNEST_BALANCE_REFRESH_EVENT })
         if (!cancelled) setApiBalances(balances)
       } catch {
         if (!cancelled) setApiBalances([])
@@ -263,8 +264,8 @@ export function CompactModelSelector({
       <DrawerContent>
         <DrawerHeader>
           <DrawerTitle>{t('common.model')}</DrawerTitle>
-          {effectiveConnectionDetails?.oauthProvider === 'tokennest' && effectiveConnectionDetails.isAuthenticated && (
-            <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setOpen(false); void openTokenNestRecharge(effectiveConnectionDetails.slug) }}>
+          {effectiveConnectionDetails && getProviderRechargeTarget(effectiveConnectionDetails) && (
+            <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setOpen(false); void openConnectionRecharge(effectiveConnectionDetails) }}>
               {t('settings.ai.tokenNestRecharge')}
             </button>
           )}

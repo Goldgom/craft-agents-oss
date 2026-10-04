@@ -7,6 +7,7 @@ import { SecureStorageBackend } from '../../credentials/backends/secure-storage.
 import { PiAgent } from '../pi-agent.ts';
 import { NativeCodexAgent } from '../native-codex-agent.ts';
 import { performTokenRefresh } from '../../auth/state.ts';
+import { parseError } from '../errors.ts';
 const originalFetch = globalThis.fetch;
 const cleanups: Array<() => void> = [];
 afterEach(() => { jest.useRealTimers(); globalThis.fetch = originalFetch; for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
@@ -30,6 +31,57 @@ function remoteGate(failure = false) {
     : Response.json({ access_token: jwt(), id_token: 'dummy-id', refresh_token: 'dummy-rotated', expires_in: 3600, token: 'dummy-copilot-token', expires_at: Math.floor(Date.now() / 1000) + 3600 }); }) as unknown as typeof fetch;
   return { entered, release, requests: () => requests };
 }
+
+describe('Pi OAuth refresh recovery', () => {
+  for (const status of [400, 401]) test(`TokenNest HTTP ${status} without OAuth detail requests reauthentication`, async () => {
+    const f = fixture(); await f.backend.set(f.id, { ...f.credential, expiresAt: Date.now() + 10 * 60_000 });
+    const agent: any = new PiAgent({ ...f.config, runtime: { piAuthProvider: 'openai', oauthProvider: 'tokennest' } });
+    cleanups.push(() => agent.destroy());
+    globalThis.fetch = (async () => Response.json({ error: 'grant_rejected', error_description: 'dummy-secret-echo' }, { status })) as unknown as typeof fetch;
+    const events: any[] = [];
+    for await (const event of agent.chatImpl('hello')) events.push(event);
+    expect(events[0].type).toBe('typed_error');
+    expect(events[0].error.code).toBe('expired_oauth_token');
+    expect(events[0].error.canRetry).toBe(false);
+    expect(events[0].error.actions[0].action).toBe('reauth');
+    expect(JSON.stringify(events)).not.toContain('dummy-secret-echo');
+    expect((await f.backend.get(f.id))?.refreshToken).toBe(f.credential.refreshToken);
+  });
+
+  test('a temporary early refresh failure keeps an unexpired access token usable without immediate repeats', async () => {
+    const f = fixture(); await f.backend.set(f.id, { ...f.credential, expiresAt: Date.now() + 10 * 60_000 });
+    const agent: any = new PiAgent({ ...f.config, runtime: { piAuthProvider: 'openai', oauthProvider: 'tokennest' } });
+    cleanups.push(() => agent.destroy());
+    let requests = 0;
+    globalThis.fetch = (async () => { requests++; return Response.json({ error: 'unavailable' }, { status: 503 }); }) as unknown as typeof fetch;
+    await agent.ensureOAuthCredentialsFresh();
+    await agent.ensureOAuthCredentialsFresh();
+    expect(requests).toBe(1);
+    expect((await f.backend.get(f.id))?.value).toBe(f.credential.value);
+    // Even during backoff, an expired access token must never be used.
+    await f.backend.set(f.id, { ...f.credential, expiresAt: 1 });
+    await expect(agent.ensureOAuthCredentialsFresh()).rejects.toThrow('HTTP 503');
+    expect(requests).toBe(2);
+  });
+
+  for (const failure of ['network', 'service', 'rate'] as const) test(`expired tokens retain a safe typed ${failure} failure`, async () => {
+    const f = fixture(); await f.backend.set(f.id, f.credential);
+    const agent: any = new PiAgent({ ...f.config, runtime: { piAuthProvider: 'openai', oauthProvider: 'tokennest' } });
+    cleanups.push(() => agent.destroy());
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests++;
+      if (failure === 'network') throw new Error('fetch failed dummy-secret-echo');
+      return Response.json({ error: 'dummy-secret-echo' }, { status: failure === 'rate' ? 429 : 503 });
+    }) as unknown as typeof fetch;
+    const error = await agent.ensureOAuthCredentialsFresh().catch((error: Error) => error);
+    const expected = failure === 'network' ? 'network_error' : failure === 'rate' ? 'rate_limited' : 'service_error';
+    expect(agent.parsePiError(error).code).toBe(expected);
+    expect(parseError(error).code).toBe(expected);
+    expect(String(error)).not.toContain('dummy-secret-echo');
+    expect(requests).toBe(1);
+  });
+});
 for (const provider of ['chatgpt', 'copilot']) for (const mutation of ['replace', 'delete', 'failed-old-grant'] as const) test(`Pi ${provider} refresh preserves newer ${mutation}`, async () => {
   const f = fixture(); await f.backend.set(f.id, f.credential);
   const agent: any = new PiAgent({ ...f.config, runtime: { piAuthProvider: provider === 'copilot' ? 'github-copilot' : 'openai-codex' } }); cleanups.push(() => agent.destroy());

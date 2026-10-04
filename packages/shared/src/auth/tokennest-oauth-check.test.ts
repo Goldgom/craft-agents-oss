@@ -90,6 +90,21 @@ describe('TokenNest startup authorization check', () => {
     })
   })
 
+  it('repairs a missing access token during the authorization check', async () => {
+    let stored: StoredCredential = { value: '', refreshToken: 'saved-refresh', scope: TOKENNEST_OAUTH_CONFIG.scopes }
+    const manager = {
+      getLlmOAuth: async () => ({ accessToken: stored.value, refreshToken: stored.refreshToken, scope: stored.scope, expiresAt: stored.expiresAt }),
+      getSnapshot: async () => ({ credential: stored, revision: 'revision' }),
+      compareAndSetMany: async (changes: import('../credentials/types.ts').CredentialCompareAndSet[]) => { stored = changes[0]!.credential!; return true },
+    } as unknown as CredentialManager
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => String(input).endsWith('/token')
+      ? Response.json({ access_token: 'repaired-token', refresh_token: 'rotated-refresh', expires_in: 3600 })
+      : Response.json({ data: [] })) as unknown as typeof fetch
+    expect(await checkTokenNestAuthorization('tokennest', manager)).toBeNull()
+    expect(stored.value).toBe('repaired-token')
+    expect(stored.refreshToken).toBe('rotated-refresh')
+  })
+
   it('reports a rejected access token when no refresh token is available', async () => {
     globalThis.fetch = (async () => Response.json({ error: 'invalid_token' }, { status: 401 })) as unknown as typeof fetch
     expect(await checkTokenNestAuthorization('tokennest', credentials())).toEqual({

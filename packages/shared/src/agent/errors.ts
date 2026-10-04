@@ -466,6 +466,8 @@ export function parseError(
     lowerMessage.includes('quota_exceeded')
   ) {
     code = 'billing_error';
+  } else if (lowerMessage.includes('login has expired') || lowerMessage.includes('invalid_grant')) {
+    code = 'expired_oauth_token';
   } else if (lowerMessage.includes('401') || lowerMessage.includes('unauthorized') || lowerMessage.includes('invalid api key') || lowerMessage.includes('invalid x-api-key') || lowerMessage.includes('authentication failed') || lowerMessage.includes('token is expired') || lowerMessage.includes('token expired')) {
     // Distinguish between API key and OAuth errors
     if (lowerMessage.includes('oauth') || lowerMessage.includes('token') || lowerMessage.includes('session')) {

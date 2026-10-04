@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import * as config from '@craft-agent/shared/config'
+import * as configStorage from '@craft-agent/shared/config/storage'
 import * as credentials from '@craft-agent/shared/credentials'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type { HandlerFn, RequestContext, RpcServer } from '@craft-agent/server-core/transport'
@@ -112,6 +113,24 @@ async function startAndComplete(harness: ReturnType<typeof createHarness>, conne
 }
 
 describe('TokenNest OAuth RPC handlers', () => {
+  it('bypasses the balance cache after recharge while normal queries reuse it', async () => {
+    const connection: config.LlmConnection = { slug: 'recharge-balance-test', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth', oauthProvider: 'tokennest', createdAt: 1 }
+    stubStorage(connection)
+    spyOn(config, 'getLlmConnections').mockReturnValue([connection])
+    spyOn(configStorage, 'getShowApiBalances').mockReturnValue(true)
+    let remaining = 1
+    const requests = mock(async () => Response.json({ amount_usd: remaining }))
+    globalThis.fetch = requests as unknown as typeof fetch
+    const harness = createHarness()
+    const getBalances = harness.getHandler(RPC_CHANNELS.llmConnections.GET_BALANCES)
+    await expect(getBalances(harness.context)).resolves.toMatchObject([{ remaining: 1 }])
+    remaining = 10
+    await expect(getBalances(harness.context)).resolves.toMatchObject([{ remaining: 1 }])
+    expect(requests).toHaveBeenCalledTimes(1)
+    await expect(getBalances(harness.context, { forceRefresh: true })).resolves.toMatchObject([{ remaining: 10 }])
+    expect(requests).toHaveBeenCalledTimes(2)
+  })
+
   it('refreshes a rejected OAuth token before creating the recharge entry', async () => {
     stubStorage({ slug: 'account', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth', oauthProvider: 'tokennest', createdAt: 1 })
     const harness = createHarness()
@@ -319,5 +338,23 @@ describe('TokenNest OAuth RPC handlers', () => {
     expect(result.daily).toHaveLength(1)
     expect(result.recentRecords).toHaveLength(2)
     expect(result.truncated).toBe(false)
+  })
+
+  it('retries a rejected usage token and does not wait for a separate balance request', async () => {
+    stubStorage({ slug: 'usage-retry', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth', oauthProvider: 'tokennest', createdAt: 1 })
+    const harness = createHarness()
+    const requests: string[] = []
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input))
+      requests.push(url.pathname)
+      if (url.pathname.endsWith('/token')) return Response.json({ access_token: 'renewed', refresh_token: 'rotated', expires_in: 3600 })
+      if (new Headers(init?.headers).get('authorization') !== 'Bearer renewed') return Response.json({ error: 'invalid_token' }, { status: 401 })
+      if (url.pathname.endsWith('/summary')) return Response.json({ data: { request_count: 0, total_tokens: 123 } })
+      if (url.pathname.endsWith('/records')) return Response.json({ data: { total: 0, items: [] } })
+      throw new Error(`Unexpected request: ${url}`)
+    }) as typeof fetch
+    await expect(harness.getHandler(RPC_CHANNELS.tokennest.GET_USAGE)(harness.context, { connectionSlug: 'usage-retry' })).resolves.toMatchObject({ totalTokens: 123 })
+    expect(requests.filter(path => path.endsWith('/token'))).toHaveLength(1)
+    expect(requests.some(path => path.endsWith('/balance'))).toBe(false)
   })
 })

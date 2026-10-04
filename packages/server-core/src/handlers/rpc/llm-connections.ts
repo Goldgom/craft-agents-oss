@@ -15,6 +15,7 @@ import type { HandlerDeps } from '../handler-deps'
 import { randomUUID } from 'node:crypto'
 import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
 import { fetchApiBalance, supportsApiBalance, type LlmConnectionBalance } from '@craft-agent/server-core/domain'
+import { fetchTokenNestUsage } from './tokennest-usage'
 
 // Local OAuth state
 let copilotOAuthAbort: AbortController | null = null
@@ -639,7 +640,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
 
   // Querying a balance is deliberately separate from listing connections: it is
   // optional, requires a network call, and must never delay normal chat startup.
-  server.handle(RPC_CHANNELS.llmConnections.GET_BALANCES, async (): Promise<LlmConnectionBalance[]> => {
+  server.handle(RPC_CHANNELS.llmConnections.GET_BALANCES, async (_ctx, options?: { forceRefresh?: boolean }): Promise<LlmConnectionBalance[]> => {
     const { getShowApiBalances } = await import('@craft-agent/shared/config/storage')
     if (!getShowApiBalances()) return []
 
@@ -647,7 +648,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     const now = Date.now()
     const balances = await Promise.all(getLlmConnections().filter(supportsApiBalance).map(async connection => {
       const cached = balanceCache.get(connection.slug)
-      if (cached && cached.expiresAt > now) return cached.value
+      if (!options?.forceRefresh && cached && cached.expiresAt > now) return cached.value
       let credential: string | undefined
       if (connection.oauthProvider === 'tokennest') {
         const { getValidTokenNestCredentials } = await import('@craft-agent/shared/auth')
@@ -894,6 +895,8 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     connectionSlug: string
     days?: number
   }): Promise<TokenNestUsageSnapshot> => {
+    // Leave headroom below the transport's 30-second timeout, including a 401 retry.
+    const deadline = AbortSignal.timeout(20_000)
     const connection = getLlmConnection(args.connectionSlug)
     if (!connection || connection.oauthProvider !== 'tokennest') {
       throw new Error('TokenNest connection not found')
@@ -902,8 +905,6 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     const endTimestamp = Math.floor(Date.now() / 1000)
     const startTimestamp = endTimestamp - days * 24 * 60 * 60
     const {
-      fetchTokenNestUsageRecords,
-      fetchTokenNestUsageSummary,
       getValidTokenNestCredentials,
       TokenNestRequestError,
     } = await import('@craft-agent/shared/auth')
@@ -911,28 +912,14 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     let credentials = await getValidTokenNestCredentials(connection.slug, credentialManager)
     if (!credentials) throw new Error('TokenNest authentication has expired. Please sign in again.')
 
-    const fetchUsage = async (accessToken: string) => {
-      const summary = await fetchTokenNestUsageSummary(accessToken, startTimestamp, endTimestamp)
-      const records = []
-      let total = 0
-      const maxPages = 50
-      for (let page = 1; page <= maxPages; page += 1) {
-        const result = await fetchTokenNestUsageRecords(accessToken, { startTimestamp, endTimestamp, page, pageSize: 100 })
-        total = result.total
-        records.push(...result.items)
-        if (records.length >= total || result.items.length === 0) break
-      }
-      return { summary, records, truncated: records.length < total }
-    }
-
     let result
     try {
-      result = await fetchUsage(credentials.accessToken)
+      result = await fetchTokenNestUsage(credentials.accessToken, startTimestamp, endTimestamp, deadline)
     } catch (error) {
       if (!(error instanceof TokenNestRequestError) || error.status !== 401) throw error
       credentials = await getValidTokenNestCredentials(connection.slug, credentialManager, true)
       if (!credentials) throw new Error('TokenNest authentication has expired. Please sign in again.')
-      result = await fetchUsage(credentials.accessToken)
+      result = await fetchTokenNestUsage(credentials.accessToken, startTimestamp, endTimestamp, deadline)
     }
 
     const daily = new Map<string, TokenNestUsagePoint>()
@@ -966,8 +953,7 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     const cachedBalance = balanceCache.get(connection.slug)
     const providerBalance = cachedBalance && cachedBalance.expiresAt > Date.now()
       ? cachedBalance.value
-      : await fetchApiBalance(connection, credentials.accessToken)
-    balanceCache.set(connection.slug, { value: providerBalance, expiresAt: Date.now() + BALANCE_CACHE_TTL_MS })
+      : null // Balances are refreshed independently by GET_BALANCES; don't delay usage for them.
     return {
       connectionSlug: connection.slug,
       ...(providerBalance ? { balance: {

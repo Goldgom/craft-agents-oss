@@ -75,6 +75,12 @@ export function buildMobileMenuPages({ hasNewWindow, isDebugMode }: BuildOptions
   // on mobile — the page would render but be useless.
   rootRows.push(
     {
+      id: 'recharge',
+      iconName: 'WalletCards',
+      labelKey: 'settings.recharge.title',
+      action: { kind: 'settingsSubpage', subpage: 'recharge' },
+    },
+    {
       id: 'settings',
       iconName: 'Settings',
       labelKey: 'sidebar.settings',

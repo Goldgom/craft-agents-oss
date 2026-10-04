@@ -18,6 +18,7 @@ import ServerPickerPage from './pages/ServerPickerPage'
 import { ResetConfirmationDialog } from '@/components/ResetConfirmationDialog'
 import { DeleteSessionConfirmationDialog } from '@/components/DeleteSessionConfirmationDialog'
 import { TokenNestReauthDialog } from '@/components/TokenNestReauthDialog'
+import { OAuthReauthDialog } from '@/components/OAuthReauthDialog'
 import type { TokenNestAuthorizationIssue } from '@craft-agent/shared/auth'
 import { UpdatePrompt } from '@/components/UpdatePrompt'
 import { SplashScreen } from '@/components/SplashScreen'
@@ -95,7 +96,8 @@ import {
   shouldShowGettingStartedGuide,
 } from '@/lib/getting-started-guide'
 import { resolveAuthGatedAppState } from '@/lib/app-startup'
-import { getTokenNestRechargeConnection, rechargeOnInsufficientBalance } from '@/lib/tokennest-recharge'
+import { getRechargeConnection, rechargeOnInsufficientBalance } from '@/lib/tokennest-recharge'
+import { getOAuthReauthConnection } from '@/lib/oauth-reauth'
 
 // PDF previews are opened on demand. Loading the renderer lazily keeps pdf.js
 // and its worker off the startup path.
@@ -399,7 +401,7 @@ export default function App() {
     const session = store.get(sessionAtomFamily(event.sessionId))
     if (session?.hidden) return
     const sessionConnection = session?.llmConnection ?? store.get(sessionMetaMapAtom).get(event.sessionId)?.llmConnection
-    const connection = getTokenNestRechargeConnection(llmConnections, sessionConnection, workspaceDefaultLlmConnection)
+    const connection = getRechargeConnection(llmConnections, sessionConnection, workspaceDefaultLlmConnection)
     rechargeOnInsufficientBalance(event.error, connection)
   }), [llmConnections, workspaceDefaultLlmConnection, store])
   // Global default LLM connection slug (from app config)
@@ -431,6 +433,24 @@ export default function App() {
   const [tokenNestSigningIn, setTokenNestSigningIn] = useState(false)
   const [tokenNestSignInError, setTokenNestSignInError] = useState<string | null>(null)
   const tokenNestAuthCheckedRef = useRef(false)
+  const [oauthReauthConnections, setOAuthReauthConnections] = useState<LlmConnectionWithStatus[]>([])
+
+  useEffect(() => window.electronAPI.onSessionEvent(event => {
+    if (event.type !== 'typed_error' && event.type !== 'error') return
+    const session = store.get(sessionAtomFamily(event.sessionId))
+    if (session?.hidden) return
+    const sessionConnection = session?.llmConnection ?? store.get(sessionMetaMapAtom).get(event.sessionId)?.llmConnection
+    const connection = getOAuthReauthConnection(event.error, llmConnections, sessionConnection, workspaceDefaultLlmConnection)
+    if (!connection) return
+    // The server emits terminal auth errors only after its automatic recovery attempt.
+    if (connection.oauthProvider === 'tokennest') {
+      setTokenNestAuthIssues(issues => issues.some(issue => issue.connectionSlug === connection.slug)
+        ? issues : [...issues, { connectionSlug: connection.slug, reason: 'expired' }])
+    } else {
+      setOAuthReauthConnections(connections => connections.some(item => item.slug === connection.slug)
+        ? connections : [...connections, connection])
+    }
+  }), [llmConnections, workspaceDefaultLlmConnection, store])
   // Promise-backed delete confirmation keeps the async session action API while
   // rendering an app-styled dialog in both Electron and the Web UI.
   const [deleteSessionConfirmationName, setDeleteSessionConfirmationName] = useState<string | null>(null)
@@ -970,7 +990,10 @@ export default function App() {
     if (!tokenNestAuthCheckedRef.current) {
       tokenNestAuthCheckedRef.current = true
       window.electronAPI.checkTokenNestAuth()
-        .then(setTokenNestAuthIssues)
+        .then(issues => setTokenNestAuthIssues(current => [
+          ...current,
+          ...issues.filter(issue => !current.some(item => item.connectionSlug === issue.connectionSlug)),
+        ]))
         .catch(error => rendererLog.warn('[App] TokenNest startup authorization check failed:', error))
     }
 
@@ -2412,6 +2435,14 @@ export default function App() {
               error={tokenNestSignInError}
               onDismiss={dismissTokenNestReauth}
               onSignIn={() => { void signInToTokenNestAgain() }}
+            />
+            <OAuthReauthDialog
+              connectionName={tokenNestAuthIssues.length ? null : oauthReauthConnections[0]?.name ?? null}
+              onDismiss={() => setOAuthReauthConnections(connections => connections.slice(1))}
+              onSignIn={() => {
+                setOAuthReauthConnections(connections => connections.slice(1))
+                navigate(routes.view.settings('ai'))
+              }}
             />
             <UpdatePrompt
               info={updateChecker.updateInfo}

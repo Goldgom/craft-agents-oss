@@ -1,7 +1,7 @@
 /**
  * TopBar - Persistent top bar above all panels (Slack-style)
  *
- * Layout: [Sidebar] [Menu] [Back] [Forward] [Workspace selector] ... [Browser strip] [+] [Help]
+ * Layout: [Sidebar] [Menu] [Server] [Studio mode] [Back] [Forward] [Workspace selector] ... [Browser strip] [+] [Help]
  *
  * Fixed at top of window, 48px tall.
  * macOS: offset left to avoid stoplight controls.
@@ -154,7 +154,7 @@ export function TopBar({
       if (frame) cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [workspaces.length, activeWorkspaceId])
+  }, [workspaces.length, activeWorkspaceId, studioMode])
 
   // Stoplight padding clears macOS traffic-light controls, which only exist
   // in the Electron desktop window. The webui runs in a regular browser tab
@@ -166,22 +166,9 @@ export function TopBar({
   // above every page and duplicate the Android navigation affordances.
   if (androidEmbedded) return null
 
-  if (studioMode !== 'agent') {
-    return (
-      <div
-        className="fixed top-0 left-0 right-0 z-panel titlebar-drag-region flex items-center gap-3 border-b border-border bg-background pr-4"
-        style={{ height: 'var(--topbar-height)', paddingLeft: menuLeftPadding }}
-      >
-        <span className="text-sm font-semibold text-foreground">词元鸟</span>
-        <span className="h-5 w-px bg-border/80" />
-        <StudioModeSwitcher value={studioMode} onChange={onStudioModeChange} compact={isCompact} />
-      </div>
-    )
-  }
-
   return (
     <div
-      className="fixed top-0 left-0 right-0 z-panel titlebar-drag-region"
+      className={cn("fixed top-0 left-0 right-0 z-panel titlebar-drag-region", studioMode !== 'agent' && "border-b border-border bg-background")}
       style={{ height: 'var(--topbar-height)' }}
     >
       <div className="flex h-full w-full items-center justify-between gap-2">
@@ -197,7 +184,7 @@ export function TopBar({
         {!isCompact && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <TopBarButton onClick={onToggleSidebar} aria-label={t("menu.toggleSidebar")}>
+            <TopBarButton onClick={onToggleSidebar} disabled={studioMode !== 'agent'} aria-label={t("menu.toggleSidebar")}>
               <PanelLeftRounded className="h-[18px] w-[18px] text-foreground/70" />
             </TopBarButton>
           </TooltipTrigger>
@@ -217,8 +204,17 @@ export function TopBar({
         />
         </div>
 
-        {/* Server switcher — 当前运行服务端 (本机服务器 / 远程服务) */}
+        {/* Keep the server switcher in the same position across all studio modes. */}
         <ServerSwitcher />
+
+        {!isCompact && <TopBarButton
+          onClick={() => onOpenSettingsSubpage('recharge')}
+          aria-label={t('settings.recharge.title')}
+          className="ml-1 w-auto shrink-0 gap-1.5 border border-border/70 bg-background/70 px-2.5 text-xs font-medium"
+        >
+          <Icons.WalletCards className="size-3.5 text-primary" />
+          <span>{t('settings.recharge.title')}</span>
+        </TopBarButton>}
 
         <div className="ml-1"><StudioModeSwitcher value={studioMode} onChange={onStudioModeChange} compact={isCompact} /></div>
 
@@ -227,6 +223,7 @@ export function TopBar({
             drill-in chevron in PanelHeader plus the browser's native back gesture
             cover that affordance, and the freed width lets the workspace pill
             actually fit on phone-width viewports. */}
+        {studioMode === 'agent' && (
         <div className={cn("ml-1 flex min-w-0 items-center gap-1", isCompact ? "flex-1" : "w-[clamp(220px,42vw,640px)]")}>
           {!isCompact && (
             <>
@@ -273,10 +270,11 @@ export function TopBar({
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* === RIGHT: Browser strip + add + help === */}
-      {!isCompact && (
+      {studioMode === 'agent' && !isCompact && (
       <div ref={rightSlotRef} className="flex min-w-0 shrink-0 items-center justify-end gap-1" style={{ paddingRight: 12 }}>
         <div className="min-w-0">
           <BrowserTabStrip activeSessionId={activeSessionId} maxVisibleBadges={maxVisibleBrowserBadges} />

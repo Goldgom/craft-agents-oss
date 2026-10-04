@@ -37,6 +37,7 @@ import {
   Wrench,
   Users,
   ChartNoAxesCombined,
+  WalletCards,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -644,6 +645,7 @@ function AppShellContent({
   // full-width in the content area — there is no pages navigator list.
   const isPagesView = isPagesNavigation(navState)
   const isUsageView = isSettingsNavigation(navState) && navState.subpage === 'usage'
+  const isRechargeView = isSettingsNavigation(navState) && navState.subpage === 'recharge'
 
   // Derive source filter from navigation state (only when in sources navigator)
   const sourceFilter: SourceFilter | null = isSourcesNavigation(navState) ? navState.filter ?? null : null
@@ -1881,8 +1883,9 @@ function AppShellContent({
   // Handler for settings view. With no arg → bare `settings` route (navigator-only
   // in compact mode, App fallback on desktop). With an arg → `settings/<subpage>`.
   const handleSettingsClick = useCallback((subpage?: SettingsSubpage) => {
+    onStudioModeChange('agent')
     navigate(routes.view.settings(subpage ?? 'app'))
-  }, [])
+  }, [onStudioModeChange])
 
   const handleCollaborationsClick = useCallback(() => {
     navigate(routes.view.settings('collaborations'))
@@ -1890,6 +1893,10 @@ function AppShellContent({
 
   const handleUsageClick = useCallback(() => {
     navigate(routes.view.settings('usage'))
+  }, [])
+
+  const handleRechargeClick = useCallback(() => {
+    navigate(routes.view.settings('recharge'))
   }, [])
 
   // ============================================================================
@@ -2306,6 +2313,7 @@ function AppShellContent({
     }
 
     // Settings navigator
+    if (isRechargeView) return t('settings.recharge.title')
     if (isUsageView) return t("settings.usage.title")
     if (isSettingsNavigation(navState)) return t("sidebar.settings")
 
@@ -2326,7 +2334,7 @@ function AppShellContent({
       default:
         return t("sidebar.allSessions")
     }
-  }, [navState, t, sessionFilter, automationFilter, labelConfigs, viewConfigs, effectiveSessionStatuses, isUsageView])
+  }, [navState, t, sessionFilter, automationFilter, labelConfigs, viewConfigs, effectiveSessionStatuses, isUsageView, isRechargeView])
 
   // Build recursive sidebar items from the shared display-sorted label tree.
   // Each node renders with condensed height (compact: true) since many labels expected.
@@ -2765,6 +2773,13 @@ function AppShellContent({
                     { id: "separator:skills-settings", type: "separator" },
                     // --- Settings ---
                     {
+                      id: "nav:recharge",
+                      title: t('settings.recharge.title'),
+                      icon: WalletCards,
+                      variant: isRechargeView ? "default" : "ghost",
+                      onClick: handleRechargeClick,
+                    },
+                    {
                       id: "nav:usage",
                       title: t("settings.usage.title"),
                       icon: ChartNoAxesCombined,
@@ -2775,7 +2790,7 @@ function AppShellContent({
                       id: "nav:settings",
                       title: t("sidebar.settings"),
                       icon: Settings,
-                      variant: (isSettingsNavigation(navState) && !isUsageView) ? "default" : "ghost",
+                      variant: (isSettingsNavigation(navState) && !isUsageView && !isRechargeView) ? "default" : "ghost",
                       onClick: () => handleSettingsClick(),
                     },
                     {
@@ -3720,7 +3735,7 @@ function AppShellContent({
             )}
             </div>
           }
-          navigatorWidth={isAutoCompact ? (isUsageView ? 0 : sessionListWidth) : (effectiveSidebarAndNavigatorHidden || isBoardView || isPagesView || isUsageView ? 0 : sessionListWidth)}
+          navigatorWidth={isAutoCompact ? (isUsageView || isRechargeView ? 0 : sessionListWidth) : (effectiveSidebarAndNavigatorHidden || isBoardView || isPagesView || isUsageView || isRechargeView ? 0 : sessionListWidth)}
           isSidebarAndNavigatorHidden={effectiveSidebarAndNavigatorHidden}
           isRightSidebarVisible={false}
           isCompact={isAutoCompact}
@@ -3761,7 +3776,7 @@ function AppShellContent({
         )}
 
         {/* Session List Resize Handle (absolute, hidden in focused mode, board view, and pages) */}
-        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isPagesView && !isUsageView && (
+        {!effectiveSidebarAndNavigatorHidden && !isBoardView && !isPagesView && !isUsageView && !isRechargeView && (
         <div
           ref={sessionListHandleRef}
           onMouseDown={(e) => { e.preventDefault(); setIsResizing('session-list') }}

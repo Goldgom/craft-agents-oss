@@ -495,10 +495,10 @@ ipcMain.handle('__set-startup-location', async (event, value: string) => {
 // client. In that mode there is no embedded RPC server to service LOCAL_ONLY
 // channels, so expose these through the main process instead.
 ipcMain.handle('__client:get-version', () => app.getVersion())
-ipcMain.handle(TOKENNEST_RECHARGE_IPC, (event, url: string) => {
+ipcMain.handle(TOKENNEST_RECHARGE_IPC, (event, url: string, connectionSlug?: string) => {
   const parent = windowManager?.getWindowByWebContentsId(event.sender.id)
   if (!parent) throw new Error('Application window not found')
-  return openTokenNestRechargeWindow(parent, url)
+  return openTokenNestRechargeWindow(parent, url, connectionSlug)
 })
 ipcMain.handle('__client:is-debug-mode', () => !app.isPackaged)
 ipcMain.handle('__client:get-system-theme', () => nativeTheme.shouldUseDarkColors)

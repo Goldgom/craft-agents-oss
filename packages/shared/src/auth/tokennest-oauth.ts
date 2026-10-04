@@ -77,10 +77,11 @@ export class TokenNestRequestError extends Error {
   }
 }
 
-async function tokenNestJson(accessToken: string, url: URL | string, method = 'GET'): Promise<Record<string, unknown>> {
+async function tokenNestJson(accessToken: string, url: URL | string, method = 'GET', signal?: AbortSignal): Promise<Record<string, unknown>> {
   const response = await fetch(url, {
     method,
     headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
+    signal,
   });
   const body = await response.text();
   let payload: unknown;
@@ -135,11 +136,12 @@ export async function fetchTokenNestUsageSummary(
   accessToken: string,
   startTimestamp: number,
   endTimestamp: number,
+  signal?: AbortSignal,
 ): Promise<TokenNestUsageSummary> {
   const url = new URL(TOKENNEST_OAUTH_CONFIG.usageSummaryUrl);
   url.searchParams.set('start_timestamp', String(startTimestamp));
   url.searchParams.set('end_timestamp', String(endTimestamp));
-  const data = await tokenNestJson(accessToken, url);
+  const data = await tokenNestJson(accessToken, url, 'GET', signal);
   return {
     startTimestamp: finiteNumber(data.start_timestamp),
     endTimestamp: finiteNumber(data.end_timestamp),
@@ -155,14 +157,14 @@ export async function fetchTokenNestUsageSummary(
 
 export async function fetchTokenNestUsageRecords(
   accessToken: string,
-  options: { startTimestamp: number; endTimestamp: number; page?: number; pageSize?: number },
+  options: { startTimestamp: number; endTimestamp: number; page?: number; pageSize?: number; signal?: AbortSignal },
 ): Promise<TokenNestUsageRecordsPage> {
   const url = new URL(TOKENNEST_OAUTH_CONFIG.usageRecordsUrl);
   url.searchParams.set('start_timestamp', String(options.startTimestamp));
   url.searchParams.set('end_timestamp', String(options.endTimestamp));
   url.searchParams.set('page', String(options.page ?? 1));
   url.searchParams.set('page_size', String(Math.min(100, Math.max(1, options.pageSize ?? 100))));
-  const data = await tokenNestJson(accessToken, url);
+  const data = await tokenNestJson(accessToken, url, 'GET', options.signal);
   const rawItems = Array.isArray(data.items) ? data.items : [];
   const items = rawItems.flatMap((entry): TokenNestUsageRecord[] => {
     if (!entry || typeof entry !== 'object') return [];
@@ -298,6 +300,7 @@ async function requestTokens(params: URLSearchParams, operation: 'exchange' | 'r
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: params.toString(),
+    signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) {
     const payload = await response.text();
@@ -374,8 +377,8 @@ export async function getValidTokenNestCredentials(
   forceRefresh = false,
 ): Promise<TokenNestTokens | null> {
   const stored = await credentialManager.getLlmOAuth(connectionSlug);
-  if (!stored?.accessToken) return null;
-  const expiring = !stored.expiresAt || stored.expiresAt < Date.now() + 5 * 60_000;
+  if (!stored || (!stored.accessToken && !stored.refreshToken)) return null;
+  const expiring = !stored.accessToken || !stored.expiresAt || stored.expiresAt < Date.now() + 5 * 60_000;
   if (!forceRefresh && !expiring) return stored;
   if (!stored.refreshToken) return forceRefresh || expiring ? null : stored;
 
@@ -390,11 +393,11 @@ export async function getValidTokenNestCredentials(
     const id = { type: 'llm_oauth' as const, connectionSlug };
     const snapshot = await credentialManager.getSnapshot(id);
     const latest = snapshot.credential;
-    if (!latest?.value || !latest.refreshToken) {
+    if (!latest?.refreshToken) {
       throw new Error('TokenNest refresh credentials are unavailable');
     }
     // Another caller may have completed a refresh before this mutex was set.
-    if (!forceRefresh && latest.expiresAt && latest.expiresAt >= Date.now() + 5 * 60_000) {
+    if (!forceRefresh && latest.value && latest.expiresAt && latest.expiresAt >= Date.now() + 5 * 60_000) {
       return { accessToken: latest.value, refreshToken: latest.refreshToken, expiresAt: latest.expiresAt, scope: latest.scope };
     }
     let tokens: TokenNestTokens;
@@ -431,7 +434,7 @@ export async function checkTokenNestAuthorization(
 ): Promise<TokenNestAuthorizationIssue | null> {
   const saved = await credentialManager.getLlmOAuth(connectionSlug);
   // A deliberately disconnected account is handled by normal connection setup.
-  if (!saved?.accessToken) return null;
+  if (!saved || (!saved.accessToken && !saved.refreshToken)) return null;
 
   const requiredScopes = TOKENNEST_OAUTH_CONFIG.scopes.split(/\s+/);
   if (saved.scope) {

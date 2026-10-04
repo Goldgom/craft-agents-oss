@@ -77,7 +77,7 @@ import { resolveBranchNewPanelOption } from "./branching"
 import { handleErrorMessageAction } from "./error-message-actions"
 import { useAtomValue } from 'jotai'
 import { sessionMetaMapAtom } from '@/atoms/sessions'
-import { getTokenNestRechargeConnection, openTokenNestRecharge } from '@/lib/tokennest-recharge'
+import { getRechargeConnection, openConnectionRecharge } from '@/lib/tokennest-recharge'
 import { isInsufficientBalanceError } from '@craft-agent/shared/utils/billing'
 
 // ============================================================================
@@ -2232,7 +2232,7 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
   const { t } = useTranslation()
   const context = useAppShellContext()
   const metadata = useAtomValue(sessionMetaMapAtom)
-  const rechargeConnection = getTokenNestRechargeConnection(context.llmConnections,
+  const rechargeConnection = getRechargeConnection(context.llmConnections,
     sessionId ? metadata.get(sessionId)?.llmConnection : undefined, context.workspaceDefaultLlmConnection)
   const canRecharge = !!rechargeConnection && isInsufficientBalanceError({ message: message.content, originalError: message.errorOriginal })
   const friendlyCopy = (() => {
@@ -2294,7 +2294,7 @@ function ErrorMessage({ message, onOpenUrl, sessionId, onRetry }: { message: Mes
           <span>{friendlyCopy.title}</span>
         </div>
         <p className="pl-8 text-sm leading-5 text-destructive/90">{friendlyCopy.description}</p>
-        {canRecharge && <button type="button" className="mt-2 ml-8 text-xs underline text-destructive" onClick={() => void openTokenNestRecharge(rechargeConnection!.slug)}>
+        {canRecharge && <button type="button" className="mt-2 ml-8 text-xs underline text-destructive" onClick={() => void openConnectionRecharge(rechargeConnection!)}>
           {t('settings.ai.tokenNestRecharge')}
         </button>}
 

@@ -37,6 +37,7 @@ export interface SettingsPageDefinition {
 export const SETTINGS_PAGES = [
   { id: 'app' as const, labelKey: 'settings.app.title', descriptionKey: 'settings.app.description' },
   { id: 'usage' as const, labelKey: 'settings.usage.title', descriptionKey: 'settings.usage.description' },
+  { id: 'recharge' as const, labelKey: 'settings.recharge.title', descriptionKey: 'settings.recharge.description' },
   { id: 'preferences' as const, labelKey: 'settings.preferences.title', descriptionKey: 'settings.preferences.description' },
   { id: 'ai' as const, labelKey: 'settings.ai.title', descriptionKey: 'settings.ai.description' },
   { id: 'credentials' as const, labelKey: 'settings.credentials.title', descriptionKey: 'settings.credentials.description' },
