@@ -48,6 +48,8 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
     host: {
       createSession: (workspaceId, options) => host.createSession(workspaceId, options),
       getSession: sessionId => host.getSession(sessionId),
+      getSessions: workspaceId => host.getSessions(workspaceId),
+      deleteSession: (sessionId, guard) => host.deleteSession(sessionId, guard),
       sendMessage: (sessionId, message) => host.sendMessage(sessionId, message),
       cancelProcessing: (sessionId, silent) => host.cancelProcessing(sessionId, silent),
       onSessionComplete: listener => host.onSessionComplete(listener),

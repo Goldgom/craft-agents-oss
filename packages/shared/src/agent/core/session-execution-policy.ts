@@ -177,7 +177,7 @@ export type SessionPolicyToolResult = { allowed: true } | { allowed: false; reas
 const READ_TOOLS = new Set(['read', 'glob', 'grep', 'find', 'ls']);
 const WRITE_TOOLS = new Set(['write', 'edit', 'multiedit', 'notebookedit']);
 const PURE_TOOLS = new Set(['todowrite', 'taskoutput', 'askuserquestion', 'mermaid_validate', 'get_session_info']);
-const DELEGATION_TOOLS = new Set(['task', 'agent', 'spawn_agent', 'spawn_session', 'delegate', 'call_llm', 'create_task', 'send_agent_message']);
+const DELEGATION_TOOLS = new Set(['task', 'agent', 'spawn_agent', 'spawn_session', 'delegate', 'call_llm', 'create_task']);
 const BROWSER_COMMANDS = new Set(['--help', 'open', 'navigate', 'snapshot', 'find', 'click', 'click-at', 'drag', 'fill', 'type', 'select', 'screenshot', 'screenshot-region', 'console', 'network', 'wait', 'key', 'scroll', 'back', 'forward', 'focus', 'windows', 'release', 'close', 'hide', 'window-resize', 'upload']);
 
 function deny(reason: string): SessionPolicyToolResult { return { allowed: false, reason: `Super Agent policy: ${reason}` }; }
@@ -361,6 +361,17 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   const name = parts[parts.length - 1]!.toLowerCase().replace(/_/g, '');
   const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
   const canonical = parts[parts.length - 1]!.toLowerCase();
+  // The host routes existing team sessions through the durable node scheduler.
+  // Messaging never creates a session or bypasses its serial turn queue.
+  if (canonical === 'send_agent_message') {
+    if (slug && slug !== 'session') return deny('use the session messaging tool for configured team nodes');
+    if (typeof input.sessionId !== 'string' || !input.sessionId.trim()
+      || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 32_000
+      || input.targetMemberId !== undefined || (input.attachments !== undefined && (!Array.isArray(input.attachments) || input.attachments.length))) {
+      return deny('team messaging requires a sessionId and a non-empty message; reference shared files in the message instead of attachments');
+    }
+    return { allowed: true };
+  }
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return deny('each node uses one model process; spawning, delegation and additional model calls are disabled');
   if (name === 'webfetch' && !slug) return deny('WebFetch can call an additional summarization model; use browser_tool to fetch pages within the node model process');
   if (policy.fullControl === true) {

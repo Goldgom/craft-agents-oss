@@ -31,6 +31,29 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('Super Agent permission ceiling', () => {
+  test('allows team messaging in both control modes without allowing extra model processes', async () => {
+    for (const fullControl of [false, true]) {
+      setSessionExecutionPolicy(sessionId, { ...policy, fullControl });
+      let requests = 0;
+      setSessionPolicyPermissionHandler(sessionId, async () => { requests++; return false; });
+      const input = { sessionId: 'existing-team-session', message: 'Verified progress' };
+      expect((await authorizeSessionPolicyTool(sessionId, 'mcp__session__send_agent_message', input)).allowed).toBe(true);
+      const checked = await runPreToolUseChecksWithPermissions({ toolName: 'mcp__session__send_agent_message', input, sessionId,
+        permissionMode: 'allow-all', workspaceRootPath: root, workspaceId: 'workspace', workingDirectory: root,
+        activeSourceSlugs: [], allSourceSlugs: [], hasSourceActivation: false,
+        permissionManager: new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root }) });
+      expect(checked.type).toBe('allow');
+      for (const invalid of [{ message: 'Missing recipient' }, { ...input, message: '' }, { ...input, targetMemberId: 'remote' }, { ...input, attachments: [{ path: outside }] }]) {
+        expect((await authorizeSessionPolicyTool(sessionId, 'mcp__session__send_agent_message', invalid)).allowed).toBe(false);
+      }
+      expect(checkSessionExecutionPolicy(sessionId, 'mcp__assigned__send_agent_message', input).allowed).toBe(false);
+      for (const tool of ['Task', 'Agent', 'spawn_agent', 'mcp__session__spawn_session', 'mcp__session__call_llm', 'mcp__session__create_task']) {
+        expect((await authorizeSessionPolicyTool(sessionId, tool, input)).allowed).toBe(false);
+      }
+      expect(requests).toBe(0);
+    }
+  });
+
   test('full control bypasses folder, capability, source and mode approvals while retaining model serialization', async () => {
     const ceilings = { ...policy, role: 'coordinator' as const, readFiles: false, writeFiles: false, runPrograms: false, browser: false, fullControl: true };
     setSessionExecutionPolicy(sessionId, ceilings);

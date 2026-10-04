@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import {
   Activity, ArrowLeft, BookOpen, Bot, BrainCircuit, Check, ChevronDown, ClipboardList, Code2, ExternalLink,
   FolderOpen, Layers3, LoaderCircle, MessagesSquare, Plus, RefreshCw,
-  Settings2, ShieldCheck, Square, Wrench,
+  Settings2, ShieldCheck, Square, Wrench, Archive,
 } from 'lucide-react'
 import type { SuperAgentCommand, SuperAgentConfig, SuperAgentSnapshot } from '@craft-agent/shared/super-agent'
 import type { LoadedSkill, LoadedSource } from '../../../shared/types'
@@ -22,6 +22,7 @@ import { SuperAgentConfiguration } from './SuperAgentConfiguration'
 import { SuperAgentResources, SuperAgentScripts } from './SuperAgentResources'
 import { NodeCommunication, SharedBoard } from './SuperAgentCollaboration'
 import { SuperAgentPlans } from './SuperAgentPlans'
+import { SuperAgentHistory } from './SuperAgentHistory'
 import { SuperAgentConversation, SuperAgentPermissionHistory } from './SuperAgentConversation'
 import { formatTimestamp, useSuperAgentText, withExecuteMode } from './super-agent-ui'
 import { recentActivityEntries, taskActivity, tasklessWorkerActivities, visibleActivityText, type SuperAgentActivity } from './super-agent-activity'
@@ -32,12 +33,13 @@ export interface SuperAgentPageProps {
   onOpenSession?: (sessionId: string) => void
 }
 
-type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts'
+type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts' | 'history'
 const settingsSections: Array<{ id: SettingsSection; icon: typeof Bot }> = [
   { id: 'settings', icon: Settings2 }, { id: 'team', icon: Layers3 },
   { id: 'plans', icon: ClipboardList },
   { id: 'board', icon: ClipboardList }, { id: 'communication', icon: MessagesSquare },
   { id: 'resources', icon: BookOpen }, { id: 'scripts', icon: Code2 },
+  { id: 'history', icon: Archive },
 ]
 
 export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpenSession }: SuperAgentPageProps) {
@@ -145,6 +147,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
     try {
       const next = await action(workspaceId)
       if (workspaceRef.current === workspaceId) { setSnapshot(next); setLoading(false) }
+      return next
     } catch (cause) {
       if (workspaceRef.current === workspaceId) { errorSourceRef.current = 'action'; setError(cause instanceof Error ? cause.message : String(cause)) }
       throw cause
@@ -220,6 +223,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
                       onEdit={openNodeSettings} onOpenSession={onOpenSession} onTask={nodeId => setTaskDialogNode(nodeId)} busy={busy} />}
                     {settingsSection === 'board' && <SharedBoard config={config} items={snapshot.state.board} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'plans' && <SuperAgentPlans items={snapshot.state.plans} onCommand={async value => { await command(value) }} />}
+                    {settingsSection === 'history' && <SuperAgentHistory key={activeWorkspaceId!} workspaceId={activeWorkspaceId!} snapshot={snapshot} busy={busy} onCommand={command} />}
                     {settingsSection === 'communication' && <NodeCommunication config={config} messages={snapshot.state.messages} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'resources' && <SuperAgentResources config={config} sources={sources} skills={skills} onSave={async value => { await save(value) }} />}
                     {settingsSection === 'scripts' && <SuperAgentScripts snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} onSave={async value => { await save(value) }} onCommand={async value => { await command(value) }} />}

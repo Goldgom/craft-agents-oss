@@ -75,6 +75,16 @@ export interface SuperAgentConfig {
 
 export type SuperAgentTaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
+/** Durable record of the control actions applied to one model turn. */
+export interface SuperAgentActionReceipt {
+  turnId: string
+  status: 'applied' | 'rejected' | 'partially_applied'
+  applied: Array<{ id: string; type: string; targetId?: string }>
+  rejected?: { id: string; type: string; targetId?: string; error: string }
+  notAttempted?: Array<{ id: string; type: string; targetId?: string }>
+  createdAt: number
+}
+
 export interface SuperAgentTask {
   id: string
   planId?: string
@@ -89,6 +99,8 @@ export interface SuperAgentTask {
   completedAt?: number
   output?: string
   error?: string
+  /** A submitted result does not imply its requested actions succeeded. */
+  actionReceipt?: SuperAgentActionReceipt
 }
 
 export interface SuperAgentNodeRuntime {
@@ -109,6 +121,8 @@ export interface SuperAgentMessage {
   body: string
   taskId?: string
   createdAt: number
+  /** Actual host outcome of model control actions, independent of prose claims. */
+  actionReceipt?: SuperAgentActionReceipt
   /** Durable display record; never used to restore or grant an approval. */
   permission?: SuperAgentPermissionRecord
 }
@@ -143,6 +157,20 @@ export interface SuperAgentPlanItem {
 
 export interface SuperAgentScriptRuntime {
   scriptId: string
+  /** Unique execution identity; never restore or replay the previous process. */
+  runId?: string
+  /** Assignment that required this run; absent for manual launches. */
+  taskId?: string
+  planId?: string
+  /** Persist a terminal result until its coordinator summary has been queued. */
+  resultPending?: boolean
+  /** A queued summary is not acknowledged until its coordinator turn succeeds. */
+  resultQueuedAt?: number
+  resultReportedAt?: number
+  /** Bounded automatic delivery attempts; an explicit user continuation may reset them. */
+  resultDeliveryAttempts?: number
+  resultDeliveryPaused?: boolean
+  resultDeliveryError?: string
   status: 'idle' | 'running' | 'completed' | 'failed' | 'stopped' | 'missing' | 'untracked'
   changedAt?: number
   lastModifiedAt?: number
@@ -182,6 +210,19 @@ export interface SuperAgentSnapshot {
   /** Live provider output and tool events; deliberately not persisted as a second transcript. */
   activity?: SuperAgentNodeActivity[]
   permissionRequests?: SuperAgentPermissionRequest[]
+  historyCleanup?: SuperAgentHistoryCleanupResult
+}
+
+export interface SuperAgentHistoryCleanupResult {
+  mode: 'runtime' | 'compact' | 'sessions'
+  tasks: number
+  messages: number
+  plans: number
+  scriptLogs: number
+  sessions: number
+  queued: number
+  archivePath?: string
+  failures: Array<{ sessionId: string; error: string }>
 }
 
 export interface SuperAgentActivityEntry {
@@ -231,6 +272,9 @@ export type SuperAgentCommand =
   | { type: 'plan-delete'; id: string; expectedRevision: number }
   | { type: 'cancel'; taskId?: string }
   | { type: 'inspect' }
+  | { type: 'history-cleanup'; before: number; keepRecentMessages: number; expectedRevision: number }
+  | { type: 'history-compact'; nodeIds: string[]; expectedRevision: number }
+  | { type: 'history-delete-sessions'; sessions: Array<{ id: string; lastMessageAt: number }>; before: number; expectedRevision: number }
   | { type: 'permission-response'; requestId: string; allowed: boolean }
   | { type: 'message'; fromNodeId: string; toNodeId: string; body: string }
   | { type: 'board-upsert'; item: { id?: string; title: string; content: string }; expectedRevision?: number }

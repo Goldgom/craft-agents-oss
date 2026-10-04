@@ -97,6 +97,36 @@ const strings = {
   setupComplete: ['已准备创建', 'Ready to create'],
   setupSummary: ['{{workers}} 个工作节点 · 1 个主节点 · 每 {{minutes}} 分钟检查', '{{workers}} workers · 1 coordinator · inspect every {{minutes}} minutes'],
   settings: ['设置', 'Settings'],
+  history: ['历史信息清理', 'History cleanup'],
+  historyHint: ['选择清理范围并预览。未完成计划、当前节点会话及其依赖资料会保留。', 'Choose what to clean and review the scope. Unfinished plans, current node sessions and their dependencies are preserved.'],
+  historyRuntime: ['运行历史', 'Runtime history'],
+  historyRuntimeHint: ['归档并清理已结束任务、旧消息、已关闭计划和旧脚本日志。完整会话及项目文件保留。', 'Archive and clean finished tasks, old messages, closed plans and old script logs. Full conversations and project files are retained.'],
+  historyCompact: ['模型上下文', 'Model context'],
+  historyCompactHint: ['选择节点，将旧上下文压缩为摘要，保留目标、进展和必要引用。会调用模型，完整聊天记录保留。', 'Choose nodes to summarize older context while preserving goals, progress and references. Uses the model; full chat transcripts are retained.'],
+  historySessions: ['旧会话及附件', 'Old sessions and attachments'],
+  historySessionsHint: ['仅列出当前工作区已结束或归档的旧会话。删除会永久移除会话、附件和会话目录中的文件。', 'Lists old completed or archived sessions in this workspace. Deletion permanently removes the conversation, attachments and files in its session folder.'],
+  historyPeriod: ['清理时间范围', 'Age filter'],
+  historyAll: ['全部符合条件的历史', 'All eligible history'],
+  historyOlder: ['{{days}} 天前', 'Older than {{days}} days'],
+  historyKeep: ['保留最近消息', 'Keep recent messages'],
+  historyKeepCount: ['{{count}} 条', '{{count}} messages'],
+  historyPreview: ['可清理：{{tasks}} 个任务、{{messages}} 条消息、{{plans}} 个计划、{{logs}} 份脚本日志', 'Eligible: {{tasks}} tasks, {{messages}} messages, {{plans}} plans, {{logs}} script logs'],
+  historyIdle: ['请等待节点、脚本及授权处理完成后再清理。', 'Wait for nodes, scripts and pending approvals to finish before cleaning history.'],
+  historyNoNodes: ['还没有可压缩的节点会话。', 'No node sessions are available to compact.'],
+  historyNoSessions: ['没有符合条件的旧会话。当前节点、未完成任务、星标、协作及任务流程关联的会话受到保护。', 'No eligible old sessions. Current nodes, unfinished work, flagged, collaboration and task workflow sessions are protected.'],
+  historyArchive: ['归档并清理', 'Archive and clean'],
+  historyCompactAction: ['压缩所选上下文', 'Compact selected context'],
+  historyDeleteAction: ['删除所选会话', 'Delete selected sessions'],
+  historySelected: ['已选 {{count}} 项', '{{count}} selected'],
+  historyConfirm: ['确认清理范围', 'Confirm cleanup scope'],
+  historyConfirmRuntime: ['将按预览范围先保存归档，再清理运行历史。', 'The previewed runtime history will be archived before it is cleaned.'],
+  historyConfirmCompact: ['将为所选 {{count}} 个节点启动上下文压缩。摘要可能省略细节；可从原会话查阅完整记录。', 'Start context compaction for {{count}} selected nodes. Summaries may omit details; full transcripts remain available.'],
+  historyConfirmDelete: ['永久删除所选 {{count}} 个会话及其附件和会话目录文件，无法撤销。项目目录中的文件保留。', 'Permanently delete {{count}} selected sessions, their attachments and session-folder files. This cannot be undone. Project-directory files are retained.'],
+  historyDone: ['已清理 {{tasks}} 个任务、{{messages}} 条消息、{{plans}} 个计划、{{logs}} 份日志。', 'Cleaned {{tasks}} tasks, {{messages}} messages, {{plans}} plans and {{logs}} logs.'],
+  historyQueued: ['已安排 {{count}} 个节点压缩上下文；进度与结果可在节点会话中查看。', 'Context compaction queued for {{count}} nodes. View progress and results in the node conversations.'],
+  historyDeleted: ['已删除 {{count}} 个会话。', 'Deleted {{count}} sessions.'],
+  historyArchiveOpen: ['查看归档文件', 'Show archive file'],
+  historyFailed: ['{{count}} 项操作未完成，详见下方原因。', '{{count}} operations did not finish. Reasons are shown below.'],
   continuousWork: ['持续工作', 'Continuous work'],
   continuousWorkHint: ['开启后主动推进未完成计划；整个团队连续空闲 30 分钟时在后台自检。程序运行期间生效。', 'Advance unfinished plans. Run a background review after the whole team has been idle for 30 minutes. Requires the server to be running.'],
   plans: ['计划列表', 'Plans'],
@@ -302,7 +332,7 @@ export function createConfig(connections: LlmConnectionWithStatus[], text: Super
     idleInspectionMinutes: 15,
     continuousWork: false,
     environment: {
-      kind: 'folder', workingDirectory: '', permissionMode: 'allow-all', fullControl: false,
+      kind: 'folder', workingDirectory: '', permissionMode: 'allow-all', fullControl: true,
       permissions: { readFiles: true, writeFiles: false, runPrograms: false, browser: false },
     },
     sourceSlugs: [], abilityProfiles: [], scripts: [],
@@ -313,7 +343,7 @@ export type SuperAgentPreset = 'custom' | 'balanced' | 'fast' | 'deep'
 
 /** Missing legacy settings inherit full control; an explicit limited mode is preserved. */
 export function withExecuteMode(config: SuperAgentConfig): SuperAgentConfig {
-  return { ...config, environment: { ...config.environment, permissionMode: 'allow-all', fullControl: config.environment.fullControl === true } }
+  return { ...config, environment: { ...config.environment, permissionMode: 'allow-all', fullControl: config.environment.fullControl !== false } }
 }
 
 export function scriptAccessGranted(environment: SuperAgentEnvironment): boolean {

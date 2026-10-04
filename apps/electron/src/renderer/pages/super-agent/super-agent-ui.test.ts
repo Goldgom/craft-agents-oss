@@ -16,17 +16,17 @@ const tokenNest: LlmConnectionWithStatus = {
 }
 
 describe('Super Agent model authorization and setup', () => {
-  it('starts the whole team in Execute with full control disabled until selected', () => {
+  it('starts the whole team in Execute with full control enabled by default', () => {
     const config = createConfig([tokenNest], text)
     expect(config.environment.permissionMode).toBe('allow-all')
-    expect(config.environment.fullControl).toBe(false)
+    expect(config.environment.fullControl).toBe(true)
     expect(config.environment.permissions).toEqual({ readFiles: true, writeFiles: false, runPrograms: false, browser: false })
   })
 
-  it('keeps legacy settings limited and preserves the selected control mode across presets', () => {
+  it('defaults missing control settings to full control and preserves explicit choices across presets', () => {
     const config = createConfig([tokenNest], text)
     delete config.environment.fullControl
-    expect(withExecuteMode(config).environment.fullControl).toBe(false)
+    expect(withExecuteMode(config).environment.fullControl).toBe(true)
     for (const fullControl of [true, false]) {
       config.environment.fullControl = fullControl
       const environment = structuredClone(config.environment)

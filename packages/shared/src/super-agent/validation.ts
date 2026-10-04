@@ -32,7 +32,7 @@ const ConfigSchema = z.object({
     workingDirectory: z.string().trim().min(1).max(4_096),
     // Accept legacy documents, then reconcile every node to the team's Execute mode.
     permissionMode: z.enum(['safe', 'ask', 'allow-all']).default('allow-all').transform(() => 'allow-all' as const),
-    fullControl: z.boolean().default(false),
+    fullControl: z.boolean().default(true),
     permissions: z.object({ readFiles: z.boolean(), writeFiles: z.boolean(), runPrograms: z.boolean(), browser: z.boolean() }).strict(),
     sandbox: z.object({ runtime: z.enum(['docker', 'podman']), image: slug }).strict().optional(),
     vm: z.object({ workspaceId: slug }).strict().optional(),
@@ -84,6 +84,9 @@ const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('plan-delete'), id, expectedRevision: z.number().int().min(1) }).strict(),
   z.object({ type: z.literal('cancel'), taskId: id.optional() }).strict(),
   z.object({ type: z.literal('inspect') }).strict(),
+  z.object({ type: z.literal('history-cleanup'), before: z.number().finite().min(0), keepRecentMessages: z.number().int().min(0).max(500), expectedRevision: z.number().int().min(0) }).strict(),
+  z.object({ type: z.literal('history-compact'), nodeIds: z.array(id).min(1).max(32), expectedRevision: z.number().int().min(0) }).strict(),
+  z.object({ type: z.literal('history-delete-sessions'), sessions: z.array(z.object({ id: z.string().trim().min(1).max(200), lastMessageAt: z.number().finite().min(0) }).strict()).min(1).max(100), before: z.number().finite().min(0), expectedRevision: z.number().int().min(0) }).strict(),
   z.object({ type: z.literal('permission-response'), requestId: z.string().trim().min(1).max(200), allowed: z.boolean() }).strict(),
   z.object({ type: z.literal('message'), fromNodeId: id, toNodeId: z.union([id, z.literal('all')]), body: text }).strict(),
   z.object({ type: z.literal('board-upsert'), item: z.object({ id: id.optional(), title: name, content: text }).strict(), expectedRevision: z.number().int().min(0).optional() }).strict(),

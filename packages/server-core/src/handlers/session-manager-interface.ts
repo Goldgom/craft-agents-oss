@@ -55,7 +55,7 @@ export interface ISessionManager {
   /** Resolved working directory of a live session (Tasks Conductor uses it so children inherit
    *  the orchestrator's cwd). */
   getSessionWorkingDirectory(sessionId: string): string | undefined
-  deleteSession(sessionId: string): Promise<void>
+  deleteSession(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true }): Promise<void>
   notifySessionCreated?(workspaceId: string, sessionId: string): void
 
   // ---------------------------------------------------------------------------

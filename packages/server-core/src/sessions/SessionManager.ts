@@ -4,6 +4,7 @@ import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type She
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
 import { runStudioImageToolAction } from './studio-image-tool'
+import { resolveSessionTurnCompletion } from './session-turn-completion'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import { createScopedLogger, CONSOLE_LOGGER, type PlatformServices, type Logger } from '@craft-agent/server-core/runtime'
 import { basename, dirname, join } from 'path'
@@ -12,7 +13,7 @@ import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
 import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, checkSessionExecutionPolicy, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
 import type { SuperAgentSessionPolicy } from '@craft-agent/shared/super-agent'
-import { cleanupSuperAgents } from '../super-agent/registry'
+import { cleanupSuperAgents, getSuperAgentService } from '../super-agent/registry'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@craft-agent/shared/agent'
 import {
   resolveSessionConnection,
@@ -5371,6 +5372,10 @@ export class SessionManager implements ISessionManager {
           return { ...result, targetBusy: false }
         },
         sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => {
+          if (managed.executionPolicy) {
+            if (attachments?.length) throw new Error('Super Agent messages must reference shared files instead of attachments')
+            return getSuperAgentService(this).sendNodeMessage(managed.workspace.id, managed.id, sessionId, message)
+          }
           if (managed.collaboration?.relay) throw new Error('Use targetMemberId for multi-server collaboration; bare session IDs are ambiguous')
           // Collaboration request/report events are the durable outbox. They
           // currently persist text only, so accepting direct attachments here
@@ -6648,11 +6653,19 @@ export class SessionManager implements ISessionManager {
     this.sendEvent({ type: 'message_annotations_updated', sessionId, messageId, annotations: message.annotations }, managed.workspace.id)
   }
 
-  async deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true }): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) {
+      if (guard) throw new Error('Session no longer exists; refresh the session list')
       sessionLog.warn(`Cannot delete session: ${sessionId} not found`)
       return
+    }
+
+    if (guard && (managed.workspace.id !== guard.workspaceId || managed.lastMessageAt !== guard.lastMessageAt
+      || managed.isProcessing || managed.messageQueue.length || managed.isFlagged || managed.isAsyncOperationOngoing
+      || managed.taskSlug || managed.taskRunId || managed.parentSessionId || managed.collaboration
+      || !(managed.isArchived || ['done', 'cancelled'].includes(managed.sessionStatus ?? '')))) {
+      throw new Error('Session changed or is no longer eligible for history cleanup')
     }
 
     // Get workspace slug before deleting
@@ -6781,6 +6794,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session ${sessionId} not found`)
     }
+    if (managed.persistenceRetired) throw new Error('Session is being deleted and cannot accept new messages')
     this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
     if (managed.executionPolicy) {
       this.setSessionPermissionMode(sessionId, 'allow-all')
@@ -7720,6 +7734,8 @@ export class SessionManager implements ISessionManager {
     const isViewing = this.isSessionBeingViewed(sessionId, managed.workspace.id)
     const currentFinalMessageId = this.getLastFinalAssistantMessageId(managed.messages)
     const didReceiveNewFinalMessage = !!currentFinalMessageId && currentFinalMessageId !== turnStartFinalMessageId
+    const completion = resolveSessionTurnCompletion(managed.messages, reason, turnStartFinalMessageId, currentFinalMessageId)
+    reason = completion.reason
 
     if (reason === 'complete' && didReceiveNewFinalMessage) {
       if (isViewing) {
@@ -7802,10 +7818,8 @@ export class SessionManager implements ISessionManager {
         sessionId,
         workspaceId: managed.workspace.id,
         reason,
-        finalMessageId: currentFinalMessageId,
-        finalText: currentFinalMessageId
-          ? managed.messages.find(m => m.id === currentFinalMessageId)?.content
-          : undefined,
+        finalMessageId: completion.finalMessageId,
+        finalText: completion.finalText,
         tokenUsage: managed.tokenUsage,
       })
 

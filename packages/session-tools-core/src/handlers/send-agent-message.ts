@@ -59,8 +59,9 @@ export async function handleSendAgentMessage(
     // app restarted") — for actual task status, call list_background_tasks.
     if (result.delivery === 'queued') {
       return successResponse(
-        `Message queued for session ${args.sessionId} — it is currently processing another turn. ` +
-          `It will handle your message after the current turn finishes. Do not assume it was read yet; ` +
+        `Message queued for session ${args.sessionId}. ` +
+          (result.targetBusy ? 'It will handle your message after the current turn finishes. ' : 'It will handle your message when its scheduler starts the next turn. ') +
+          `Do not assume it was read yet; ` +
           `wait for a reply or query status before concluding anything.`
       );
     }

@@ -36,6 +36,14 @@ describe('handleSendAgentMessage delivery ack', () => {
     expect(text.toLowerCase()).toContain('do not assume it was read');
   });
 
+  it('reports scheduler queueing without claiming an idle target is busy', async () => {
+    const { ctx } = createCtx({ delivery: 'queued', targetBusy: false });
+    const res = await handleSendAgentMessage(ctx, { sessionId: 'target-9', message: 'progress' });
+    expect(res.isError).toBeFalsy();
+    expect(JSON.stringify(res)).toContain('scheduler');
+    expect(JSON.stringify(res)).not.toContain('currently processing');
+  });
+
   it('wraps the message with a sender envelope', async () => {
     const { ctx, calls } = createCtx({ delivery: 'delivered', targetBusy: false }, { name: 'Monitor' });
     await handleSendAgentMessage(ctx, { sessionId: 'target-9', message: 'ping' });
