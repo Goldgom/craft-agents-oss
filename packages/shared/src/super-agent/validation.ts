@@ -26,11 +26,13 @@ const ConfigSchema = z.object({
     abilityProfileIds: z.array(id).max(100),
   }).strict()).min(2).max(32),
   idleInspectionMinutes: z.number().finite().min(1).max(1_440),
+  continuousWork: z.boolean().default(false),
   environment: z.object({
     kind: z.enum(['folder', 'sandbox', 'vm']),
     workingDirectory: z.string().trim().min(1).max(4_096),
     // Accept legacy documents, then reconcile every node to the team's Execute mode.
     permissionMode: z.enum(['safe', 'ask', 'allow-all']).default('allow-all').transform(() => 'allow-all' as const),
+    fullControl: z.boolean().default(false),
     permissions: z.object({ readFiles: z.boolean(), writeFiles: z.boolean(), runPrograms: z.boolean(), browser: z.boolean() }).strict(),
     sandbox: z.object({ runtime: z.enum(['docker', 'podman']), image: slug }).strict().optional(),
     vm: z.object({ workspaceId: slug }).strict().optional(),
@@ -76,7 +78,10 @@ export function validateSuperAgentConfig(value: unknown): SuperAgentConfig {
 
 const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('chat'), text }).strict(),
-  z.object({ type: z.literal('task'), title: name, instructions: text, nodeId: id.optional() }).strict(),
+  z.object({ type: z.literal('task'), title: name, instructions: text, nodeId: id.optional(), planId: id.optional() }).strict(),
+  z.object({ type: z.literal('continuous-work'), enabled: z.boolean() }).strict(),
+  z.object({ type: z.literal('plan-upsert'), item: z.object({ id: id.optional(), title: name, instructions: text, status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: z.string().max(4_000) }).strict(), expectedRevision: z.number().int().min(0) }).strict(),
+  z.object({ type: z.literal('plan-delete'), id, expectedRevision: z.number().int().min(1) }).strict(),
   z.object({ type: z.literal('cancel'), taskId: id.optional() }).strict(),
   z.object({ type: z.literal('inspect') }).strict(),
   z.object({ type: z.literal('permission-response'), requestId: z.string().trim().min(1).max(200), allowed: z.boolean() }).strict(),
@@ -92,5 +97,5 @@ export function validateSuperAgentCommand(value: unknown): SuperAgentCommand {
 }
 
 export function emptySuperAgentState(now = Date.now()): SuperAgentState {
-  return { version: 1, revision: 0, nodes: [], tasks: [], messages: [], board: [], scripts: [], lastUserActivityAt: now }
+  return { version: 1, revision: 0, nodes: [], tasks: [], messages: [], board: [], plans: [], scripts: [], lastUserActivityAt: now }
 }

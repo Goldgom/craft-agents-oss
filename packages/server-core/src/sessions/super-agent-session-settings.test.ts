@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { storedToMessage } from '@craft-agent/core/types'
-import { checkSessionExecutionPolicy, clearSessionExecutionPolicy } from '@craft-agent/shared/agent'
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, getSessionProgramExecutor, hasSessionPolicyToolGrant, setSessionProgramExecutor } from '@craft-agent/shared/agent'
 import { getPermissionModeDiagnostics, setPermissionMode, type PermissionMode } from '@craft-agent/shared/agent/mode-manager'
 import { createSession, loadSession, saveSession, sessionPersistenceQueue } from '@craft-agent/shared/sessions'
+import { getSourcesBySlugs, isSourceUsable } from '@craft-agent/shared/sources'
 import { SessionManager, createManagedSession } from './SessionManager'
 
 const cleanups: Array<() => Promise<void>> = []
@@ -17,12 +18,13 @@ function deferred() {
   return { promise, resolve }
 }
 
-async function fixture(options: { cold?: boolean; role?: 'coordinator' | 'worker' } = {}) {
+async function fixture(options: { cold?: boolean; role?: 'coordinator' | 'worker'; fullControl?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'super-agent-session-settings-'))
   const created = await createSession(root, { name: 'Existing node', permissionMode: 'safe', agentSystemPrompt: 'Legacy node prompt' })
   const stored = loadSession(root, created.id)!
   const policy = { nodeId: options.role === 'worker' ? 'worker' : 'main', role: options.role ?? 'coordinator', rootPath: root,
-    readFiles: true, writeFiles: false, runPrograms: false, browser: false, allowSources: [], allowSubagents: false as const }
+    readFiles: true, writeFiles: false, runPrograms: false, browser: false, allowSources: [], allowSubagents: false as const,
+    ...(options.fullControl !== undefined ? { fullControl: options.fullControl } : {}) }
   stored.executionPolicy = policy
   stored.sdkSessionId = 'existing-sdk-conversation'
   stored.messages = [
@@ -42,9 +44,12 @@ async function fixture(options: { cold?: boolean; role?: 'coordinator' | 'worker
   internals.sessions.set(managed.id, managed)
   let backendMode: PermissionMode = 'safe'
   const modeCalls: PermissionMode[] = []
+  const permissionResponses: Array<{ requestId: string; allowed: boolean; alwaysAllow?: boolean }> = []
   let disposals = 0
   const agent = { getPermissionMode: () => backendMode, setPermissionMode: (mode: PermissionMode) => { backendMode = mode; modeCalls.push(mode) },
-    isProcessing: () => false, disposeForRestart: async () => { disposals++ }, dispose: () => { disposals++ } }
+    isProcessing: () => false, redirect: () => false, forceAbort: () => {},
+    respondToPermission: (requestId: string, allowed: boolean, alwaysAllow?: boolean) => { permissionResponses.push({ requestId, allowed, alwaysAllow }) },
+    disposeForRestart: async () => { disposals++ }, dispose: () => { disposals++ } }
   managed.agent = agent as never
   cleanups.push(async () => {
     await manager.cleanup()
@@ -54,10 +59,217 @@ async function fixture(options: { cold?: boolean; role?: 'coordinator' | 'worker
     expect(resolve(root).startsWith(`${resolve(tmpdir())}${sep}`)).toBe(true)
     await rm(root, { recursive: true, force: true })
   })
-  return { root, stored, header, policy, manager, internals, managed, agent, modeCalls, getDisposals: () => disposals }
+  return { root, stored, header, policy, manager, internals, managed, agent, modeCalls, permissionResponses, getDisposals: () => disposals }
 }
 
 describe('Super Agent session settings reconciliation', () => {
+  test('live full control persists and restores access without recycling an active cold node or losing its limited capabilities', async () => {
+    const f = await fixture({ cold: true, role: 'worker' })
+    f.managed.isProcessing = true
+    const input = { file_path: resolve(f.root, '..', 'outside-node.txt'), content: 'outside' }
+    const enabling = f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(true)
+    expect(f.managed.isProcessing).toBe(true)
+    await enabling
+    expect(f.getDisposals()).toBe(0)
+    expect(f.managed.agent as unknown).toBe(f.agent)
+    const saved = loadSession(f.root, f.managed.id)!
+    expect(saved.executionPolicy).toMatchObject({ fullControl: true, readFiles: true, writeFiles: false, runPrograms: false, browser: false })
+    expect(saved.messages.map(message => message.id)).toEqual(['existing-user', 'existing-assistant'])
+    expect(saved.sdkSessionId).toBe('existing-sdk-conversation')
+    const { messages: savedMessages, ...savedHeader } = saved
+    const restored = createManagedSession({ ...savedHeader, id: 'restored-full-control' }, f.managed.workspace)
+    expect(restored.executionPolicy?.fullControl).toBe(true)
+    expect(checkSessionExecutionPolicy(restored.id, 'Write', input, f.root).allowed).toBe(true)
+    clearSessionExecutionPolicy(restored.id)
+    const disabling = f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(false)
+    expect(f.managed.isProcessing).toBe(true)
+    await disabling
+    expect(loadSession(f.root, f.managed.id)!.executionPolicy).toMatchObject({ fullControl: false, writeFiles: false, runPrograms: false, browser: false })
+    expect(f.getDisposals()).toBe(0)
+    f.managed.isProcessing = false
+  })
+
+  test('enabling resumes the original pending operation and provider approval rather than cancelling either', async () => {
+    const f = await fixture({ role: 'worker' })
+    const outside = await mkdtemp(join(tmpdir(), 'super-agent-pending-outside-'))
+    cleanups.push(() => rm(outside, { recursive: true, force: true }))
+    const input = { file_path: join(outside, 'requested.txt') }
+    await writeFile(input.file_path, 'Original pending read')
+    f.managed.isProcessing = true
+    f.internals.attachNodePermissionHandler(f.managed)
+    const events: any[] = []
+    f.manager.onSessionEvent(event => events.push(event))
+    const original = authorizeSessionPolicyTool(f.managed.id, 'Read', input, f.root)
+    expect(f.internals.pendingNodePermissions.size).toBe(1)
+    f.internals.pendingPermissionRequests.set('native-admin', { sessionId: f.managed.id, type: 'admin_approval', toolName: 'Bash', command: 'sudo arbitrary-command' })
+    await f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
+    expect((await original).allowed).toBe(true)
+    expect(f.permissionResponses).toEqual([{ requestId: 'native-admin', allowed: true, alwaysAllow: false }])
+    expect(f.internals.pendingNodePermissions.size).toBe(0)
+    expect(f.internals.pendingPermissionRequests.size).toBe(0)
+    expect(events.filter(event => event.type === 'permission_request')).toHaveLength(1)
+    expect(events.filter(event => event.type === 'permission_resolved' && event.allowed)).toHaveLength(2)
+    expect(hasSessionPolicyToolGrant(f.managed.id, 'Read', input, f.root)).toBe(false)
+    await f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Read', input, f.root).allowed).toBe(false)
+    f.managed.isProcessing = false
+  })
+
+  test('revocation reaches hidden previous nodes and keeps other workspaces and ordinary sessions unchanged', async () => {
+    const f = await fixture({ role: 'worker', fullControl: true })
+    const previousConfig = await createSession(f.root, { name: 'Hidden previous node', permissionMode: 'allow-all' })
+    const previous = loadSession(f.root, previousConfig.id)!
+    previous.executionPolicy = { ...f.policy, nodeId: 'previous-worker', fullControl: true }
+    previous.hidden = true
+    await saveSession(previous)
+    const { messages, ...header } = previous
+    const hidden = createManagedSession(header, f.managed.workspace, { messagesLoaded: false })
+    f.internals.sessions.set(hidden.id, hidden)
+    const foreign = createManagedSession({ ...f.header, id: 'other-workspace-node', executionPolicy: { ...f.policy, fullControl: true } }, { ...f.managed.workspace, id: 'other-workspace' })
+    const ordinary = createManagedSession({ id: 'ordinary', permissionMode: 'safe' }, f.managed.workspace, { messagesLoaded: true })
+    f.internals.sessions.set(foreign.id, foreign)
+    f.internals.sessions.set(ordinary.id, ordinary)
+    f.managed.isProcessing = true
+    hidden.isProcessing = true
+    const disabling = f.manager.setSuperAgentFullControl('workspace', false)
+    expect(f.managed.executionPolicy?.fullControl).toBe(false)
+    expect(hidden.executionPolicy?.fullControl).toBe(false)
+    expect(foreign.executionPolicy?.fullControl).toBe(true)
+    expect(ordinary.permissionMode).toBe('safe')
+    await disabling
+    expect(loadSession(f.root, hidden.id)!.executionPolicy?.fullControl).toBe(false)
+    expect(loadSession(f.root, f.managed.id)!.executionPolicy?.fullControl).toBe(false)
+    expect(f.managed.agent as unknown).toBe(f.agent)
+    expect(f.getDisposals()).toBe(0)
+    f.managed.isProcessing = false
+    hidden.isProcessing = false
+    f.internals.sessions.delete(foreign.id)
+    f.internals.sessions.delete(ordinary.id)
+    clearSessionExecutionPolicy(foreign.id)
+  })
+
+  test('flag-only changes revalidate and retain the actual verified sandbox executor without persisting its handle', async () => {
+    const f = await fixture({ role: 'worker' })
+    const runtimePath = join(f.root, process.platform === 'win32' ? 'docker.exe' : 'docker')
+    await writeFile(runtimePath, 'Verified test runtime')
+    setSessionProgramExecutor(f.managed.id, { runtimePath, containerId: 'tokenbird-super-test', workingDirectory: '/workspace' })
+    await f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
+    expect(getSessionProgramExecutor(f.managed.id)?.containerId).toBe('tokenbird-super-test')
+    await f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
+    expect(getSessionProgramExecutor(f.managed.id)?.containerId).toBe('tokenbird-super-test')
+    expect(loadSession(f.root, f.managed.id)!.executionPolicy).not.toHaveProperty('containerExecutor')
+  })
+
+  test('full control permits queueing an outside attachment and real directory/source selection, then restores the direct gates', async () => {
+    const f = await fixture({ role: 'worker' })
+    const outside = await mkdtemp(join(tmpdir(), 'super-agent-direct-outside-'))
+    cleanups.push(() => rm(outside, { recursive: true, force: true }))
+    const attachment = { type: 'text' as const, path: join(outside, 'document.txt'), name: 'document.txt', mimeType: 'text/plain', size: 1 }
+    await writeFile(attachment.path, 'Existing outside attachment')
+    await f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
+    f.managed.isProcessing = true
+    await f.manager.sendMessage(f.managed.id, 'Read the outside attachment', [attachment])
+    expect(f.managed.messageQueue.at(-1)?.attachments).toEqual([attachment])
+    f.managed.messageQueue = []
+    f.managed.isProcessing = false
+    f.managed.agent = null
+    f.manager.updateWorkingDirectory(f.managed.id, outside)
+    expect(f.managed.workingDirectory).toBe(outside)
+    const sourceFolder = join(f.root, 'sources', 'selected-real-source')
+    await mkdir(sourceFolder, { recursive: true })
+    await writeFile(join(sourceFolder, 'config.json'), JSON.stringify({ id: 'selected-real-source', name: 'Real Source', slug: 'selected-real-source',
+      enabled: true, provider: 'test', type: 'api', api: { baseUrl: 'https://example.invalid', authType: 'none' } }))
+    expect(getSourcesBySlugs(f.root, ['selected-real-source']).filter(isSourceUsable)).toHaveLength(1)
+    await f.manager.setSessionSources(f.managed.id, ['selected-real-source'])
+    expect(f.managed.enabledSourceSlugs).toEqual(['selected-real-source'])
+    await f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
+    expect(() => f.manager.updateWorkingDirectory(f.managed.id, outside)).toThrow('working directory is outside')
+    await expect(f.manager.setSessionSources(f.managed.id, ['selected-real-source'])).rejects.toThrow('data source is not assigned')
+    await expect(f.manager.sendMessage(f.managed.id, 'Read blocked attachment', [attachment])).rejects.toThrow('attachment is outside')
+  })
+  test('a failed workspace activation rolls back successful peer nodes and their durable flags', async () => {
+    const f = await fixture({ role: 'worker' })
+    const peerConfig = await createSession(f.root, { name: 'Peer node', permissionMode: 'allow-all' })
+    const peerStored = loadSession(f.root, peerConfig.id)!
+    peerStored.executionPolicy = { ...f.policy, nodeId: 'peer-worker' }
+    await saveSession(peerStored)
+    const { messages, ...peerHeader } = peerStored
+    const peer = createManagedSession(peerHeader, f.managed.workspace)
+    f.internals.sessions.set(peer.id, peer)
+    const realFlush = sessionPersistenceQueue.flush.bind(sessionPersistenceQueue)
+    const flush = spyOn(sessionPersistenceQueue, 'flush').mockImplementation(async sessionId => {
+      if (sessionId === f.managed.id && f.managed.executionPolicy?.fullControl) throw new Error('Injected activation persistence failure')
+      await realFlush(sessionId)
+    })
+    try {
+      await expect(f.manager.setSuperAgentFullControl('workspace', true)).rejects.toThrow('Injected activation persistence failure')
+      expect(f.managed.executionPolicy?.fullControl).toBe(false)
+      expect(peer.executionPolicy?.fullControl).toBe(false)
+      expect(loadSession(f.root, f.managed.id)!.executionPolicy?.fullControl).toBe(false)
+      expect(loadSession(f.root, peer.id)!.executionPolicy?.fullControl).toBe(false)
+      expect(f.getDisposals()).toBe(0)
+    } finally { flush.mockRestore() }
+  })
+
+  test('a delayed activation failure cannot undo a newer live revocation', async () => {
+    const f = await fixture({ role: 'worker' }), entered = deferred(), release = deferred()
+    const realFlush = sessionPersistenceQueue.flush.bind(sessionPersistenceQueue)
+    let suspended = false
+    const flush = spyOn(sessionPersistenceQueue, 'flush').mockImplementation(async sessionId => {
+      if (sessionId === f.managed.id && f.managed.executionPolicy?.fullControl && !suspended) {
+        suspended = true
+        entered.resolve()
+        await release.promise
+        throw new Error('Late activation persistence failure')
+      }
+      await realFlush(sessionId)
+    })
+    try {
+      const enabling = f.manager.setSuperAgentFullControl('workspace', true)
+      const rejected = enabling.then(() => undefined, error => error as Error)
+      await entered.promise
+      await f.manager.setSuperAgentFullControl('workspace', false)
+      expect(f.managed.executionPolicy?.fullControl).toBe(false)
+      release.resolve()
+      expect((await rejected)?.message).toBe('Late activation persistence failure')
+      expect(f.managed.executionPolicy?.fullControl).toBe(false)
+      expect(loadSession(f.root, f.managed.id)!.executionPolicy?.fullControl).toBe(false)
+      expect(checkSessionExecutionPolicy(f.managed.id, 'Write', { file_path: resolve(f.root, '..', 'outside.txt'), content: 'blocked' }).allowed).toBe(false)
+    } finally { release.resolve(); flush.mockRestore() }
+  })
+
+  test('failed revocation persistence keeps live and reused nodes restricted until durable retry succeeds', async () => {
+    const f = await fixture({ role: 'worker', fullControl: true })
+    const flush = spyOn(sessionPersistenceQueue, 'flush').mockRejectedValue(new Error('Injected revocation persistence failure'))
+    try {
+      await expect(f.manager.setSuperAgentFullControl('workspace', false)).rejects.toThrow('Injected revocation persistence failure')
+      expect(f.managed.executionPolicy?.fullControl).toBe(false)
+      const input = { file_path: resolve(f.root, '..', 'outside.txt'), content: 'blocked' }
+      expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input).allowed).toBe(false)
+      f.internals.createAgentRuntime = async () => f.agent
+      await f.internals.getOrCreateAgent(f.managed)
+      expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input).allowed).toBe(false)
+      expect(f.getDisposals()).toBe(0)
+    } finally { flush.mockRestore() }
+    await f.manager.setSuperAgentFullControl('workspace', false)
+    expect(loadSession(f.root, f.managed.id)!.executionPolicy?.fullControl).toBe(false)
+  })
+
+  test('failed verified-executor revalidation revokes an activation rather than leaving host access enabled', async () => {
+    const f = await fixture({ role: 'worker' })
+    const runtimePath = join(f.root, process.platform === 'win32' ? 'docker.exe' : 'docker')
+    await writeFile(runtimePath, 'Verified test runtime')
+    setSessionProgramExecutor(f.managed.id, { runtimePath, containerId: 'tokenbird-super-test', workingDirectory: '/workspace' })
+    await rm(runtimePath)
+    await expect(f.manager.setSuperAgentFullControl('workspace', true)).rejects.toThrow()
+    expect(f.managed.executionPolicy?.fullControl).toBe(false)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Bash', { command: 'echo blocked' }, f.root).allowed).toBe(false)
+    expect(getSessionProgramExecutor(f.managed.id)).toBeUndefined()
+    expect(loadSession(f.root, f.managed.id)!.executionPolicy?.fullControl).toBe(false)
+  })
+
   test('restored coordinator and worker nodes default to Execute while ordinary sessions retain their mode', async () => {
     const f = await fixture()
     const restoredMain = createManagedSession({ ...f.header, id: 'restored-main', permissionMode: 'safe' }, f.managed.workspace)

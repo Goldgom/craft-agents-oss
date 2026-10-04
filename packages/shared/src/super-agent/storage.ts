@@ -13,6 +13,7 @@ export interface SuperAgentPendingTurn {
   taskId?: string
   createdAt: number
   startedAt?: number
+  backgroundInspection?: boolean
   /** Bound model-to-model message chains to prevent autonomous ping-pong. */
   depth: number
   chainId: string
@@ -29,16 +30,23 @@ export interface SuperAgentDocument {
 
 const number = z.number().finite().min(0)
 const string = z.string().max(64_000)
+const PermissionRecordSchema = z.object({
+  id: string, nodeId: string, toolName: string, description: string,
+  command: string.optional(), reason: string.optional(), target: string.optional(), operation: string.optional(),
+  status: z.enum(['pending', 'approved', 'denied', 'expired']), resolvedAt: number.optional(),
+}).strict()
 const StateSchema = z.object({
   version: z.literal(1), revision: number.int(),
   nodes: z.array(z.object({ nodeId: string, sessionId: string.optional(), status: z.enum(['idle', 'preparing', 'working', 'error']), activeTaskId: string.optional(), lastStartedAt: number.optional(), lastCompletedAt: number.optional(), error: string.optional() }).strict()).max(32),
-  tasks: z.array(z.object({ id: string, title: string, instructions: string, nodeId: string, sessionId: string.optional(), status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']), createdAt: number, startedAt: number.optional(), completedAt: number.optional(), output: string.optional(), error: string.optional() }).strict()).max(500),
-  messages: z.array(z.object({ id: string, fromNodeId: string, toNodeId: string, kind: z.enum(['chat', 'message', 'task', 'result', 'inspection', 'script', 'error']), body: string, taskId: string.optional(), createdAt: number }).strict()).max(500),
+  tasks: z.array(z.object({ id: string, title: string, instructions: string, nodeId: string, planId: string.optional(), sessionId: string.optional(), status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']), createdAt: number, startedAt: number.optional(), completedAt: number.optional(), output: string.optional(), error: string.optional() }).strict()).max(500),
+  messages: z.array(z.object({ id: string, fromNodeId: string, toNodeId: string, kind: z.enum(['chat', 'message', 'task', 'result', 'inspection', 'script', 'error']), body: string, taskId: string.optional(), createdAt: number, permission: PermissionRecordSchema.optional() }).strict()).max(500),
   board: z.array(z.object({ id: string, title: string, content: string, revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256),
   scripts: z.array(z.object({ scriptId: string, status: z.enum(['idle', 'running', 'completed', 'failed', 'stopped', 'missing', 'untracked']), changedAt: number.optional(), lastModifiedAt: number.optional(), sha256: string.optional(), startedAt: number.optional(), completedAt: number.optional(), exitCode: z.number().int().nullable().optional(), output: string.optional(), error: string.optional() }).strict()).max(100),
   lastUserActivityAt: number, lastInspectionAt: number.optional(),
+  allIdleSince: number.optional(),
+  plans: z.array(z.object({ id: string, title: string, instructions: string, status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: string, revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256).default([]),
 }).strict()
-const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script']), text: string, taskId: string.optional(), createdAt: number, startedAt: number.optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
+const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script']), text: string, taskId: string.optional(), createdAt: number, startedAt: number.optional(), backgroundInspection: z.boolean().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
 
 export async function loadSuperAgentDocument(workspaceRoot: string): Promise<SuperAgentDocument> {
   try {

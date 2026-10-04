@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ChoiceList, FormField, FormSection, selectClass, textareaClass } from './SuperAgentForms'
-import { formatTimestamp, useSuperAgentText } from './super-agent-ui'
+import { formatTimestamp, scriptAccessGranted, useSuperAgentText } from './super-agent-ui'
 
 export function SuperAgentResources({ config, sources, skills, onSave }: {
   config: SuperAgentConfig
@@ -99,9 +99,7 @@ export function SuperAgentScripts({ snapshot, onSave, onCommand }: {
   const [argsText, setArgsText] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  const hostScriptGranted = config.environment.kind !== 'folder'
-    || Object.values(config.environment.permissions).every(Boolean)
-  const canRun = snapshot.environment.available && config.environment.permissions.runPrograms && hostScriptGranted
+  const canRun = snapshot.environment.available && scriptAccessGranted(config.environment)
   async function run(action: () => Promise<void>, after?: () => void) {
     setPending(true); setError('')
     try { await action(); after?.() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
@@ -113,8 +111,8 @@ export function SuperAgentScripts({ snapshot, onSave, onCommand }: {
   return <div className="h-full min-h-0 overflow-y-auto"><div className="mx-auto max-w-3xl space-y-5 p-6">
     <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">{text('scripts')}</h2><p className="mt-1 max-w-lg text-xs leading-5 text-muted-foreground">{text('scriptHint')}</p></div>
       <Button size="sm" variant="outline" disabled={pending} onClick={() => editScript()}><Plus className="size-3.5" />{text('addScript')}</Button></div>
-    {config.environment.kind === 'folder' && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5 text-muted-foreground">{text('hostScriptPermissions')}</p>}
-    {config.environment.kind !== 'folder' && !config.environment.permissions.runPrograms
+    {!config.environment.fullControl && config.environment.kind === 'folder' && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5 text-muted-foreground">{text('hostScriptPermissions')}</p>}
+    {!config.environment.fullControl && config.environment.kind !== 'folder' && !config.environment.permissions.runPrograms
       && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5 text-muted-foreground">{text('manualScriptPermissions')}</p>}
     {config.scripts.length === 0 ? <div className="rounded-xl border border-border/70 p-8"><EmptyResource icon={Code2} message={text('noScripts')} /></div>
       : config.scripts.map(item => {
@@ -146,7 +144,7 @@ export function SuperAgentScripts({ snapshot, onSave, onCommand }: {
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>{text('addScript')}</DialogTitle><DialogDescription>{text('scriptHint')}</DialogDescription></DialogHeader>
         {script && <fieldset disabled={pending} className="min-w-0 space-y-4">
           <FormField label={text('scriptName')}><Input value={script.name} maxLength={80} onChange={event => setScript({ ...script, name: event.target.value })} /></FormField>
-          <FormField label={text('scriptPath')} hint={text('scriptPathHint')}><Input value={script.path} onChange={event => setScript({ ...script, path: event.target.value })} placeholder="scripts/analyze.py" /></FormField>
+          <FormField label={text('scriptPath')} hint={text(config.environment.fullControl && config.environment.kind !== 'sandbox' ? 'scriptPathFullControlHint' : 'scriptPathHint')}><Input value={script.path} onChange={event => setScript({ ...script, path: event.target.value })} placeholder="scripts/analyze.py" /></FormField>
           <FormField label={text('scriptArgs')}><textarea rows={3} className={textareaClass} value={argsText} onChange={event => setArgsText(event.target.value)} /></FormField>
           <div className="grid gap-4 sm:grid-cols-2"><FormField label={text('timeout')}><Input type="number" min={1} max={3600} value={script.timeoutSeconds} onChange={event => setScript({ ...script, timeoutSeconds: Number(event.target.value) })} /></FormField>
             <FormField label={text('syncNode')}><select className={selectClass} value={script.nodeId ?? ''} onChange={event => setScript({ ...script, nodeId: event.target.value || undefined })}>

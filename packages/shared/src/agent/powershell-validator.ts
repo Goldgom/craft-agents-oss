@@ -381,7 +381,8 @@ function parseCommand(command: string): ParseResult {
  */
 export function validatePowerShellCommand(
   command: string,
-  patterns: CompiledBashPattern[]
+  patterns: CompiledBashPattern[],
+  options: { strictSystemInspection?: boolean } = {},
 ): PowerShellValidationResult {
   // Check if PowerShell is available
   if (!isPowerShellAvailable()) {
@@ -418,6 +419,14 @@ export function validatePowerShellCommand(
     };
   }
 
+  if (options.strictSystemInspection) {
+    const subcommandResults: SubcommandResult[] = [];
+    return isSystemInspectionTree(parseResult.ast, patterns, subcommandResults)
+      ? { allowed: true, subcommandResults }
+      : { allowed: false, reason: { type: 'unsafe_command', command,
+        explanation: 'Automatic system inspection requires literal metadata queries without scripts, method calls or state changes' } };
+  }
+
   // Validate the AST
   const subcommandResults: SubcommandResult[] = [];
   const result = validateNode(parseResult.ast, patterns, subcommandResults);
@@ -426,6 +435,73 @@ export function validatePowerShellCommand(
     ...result,
     subcommandResults: subcommandResults.length > 0 ? subcommandResults : undefined,
   };
+}
+
+/** Fail closed on AST kinds whose semantics are broader than a metadata query. */
+function isSystemInspectionTree(root: ASTNode, patterns: CompiledBashPattern[], results: SubcommandResult[]): boolean {
+  const boundVariables = new Set<string>();
+  const visit = (node: ASTNode | undefined): boolean => {
+    if (!node) return false;
+    const fields = node as unknown as Record<string, unknown>;
+    const child = (field: string) => fields[field] as ASTNode | undefined;
+    const every = (field: string) => { const list = fields[field]; return Array.isArray(list) && list.every(visit); };
+    switch (node.Type) {
+    case 'ScriptBlockAst': {
+      if (child('ParamBlock')) return false;
+      const blocks = ['BeginBlock', 'ProcessBlock', 'EndBlock'].map(child).filter(Boolean);
+      return blocks.length > 0 && blocks.every(visit);
+    }
+    case 'NamedBlockAst': return every('Statements');
+    case 'PipelineAst': return !(node as PipelineAst).Background && every('PipelineElements');
+    case 'CommandAst': {
+      const command = node as CommandAst;
+      return command.InvocationOperator === 'Unknown' && command.Redirections.length === 0 && every('CommandElements')
+        && validateCommand(command, patterns, results).allowed;
+    }
+    case 'CommandExpressionAst': return visit(child('Expression'));
+    case 'CommandParameterAst': return !child('Argument') || visit(child('Argument'));
+    case 'StringConstantExpressionAst':
+    case 'ConstantExpressionAst': return true;
+    case 'VariableExpressionAst': {
+      const variable = node as VariableExpressionAst;
+      return !variable.Splatted && (boundVariables.has(variable.VariablePath.toLowerCase())
+        || /^(?:PSVersionTable|true|false|null|env:(?:COMPUTERNAME|USERNAME|OS|SystemDrive|TEMP|TMP|windir|PROCESSOR_ARCHITECTURE|PROCESSOR_IDENTIFIER|NUMBER_OF_PROCESSORS))$/i.test(variable.VariablePath));
+    }
+    case 'ExpandableStringExpressionAst': return every('NestedExpressions');
+    case 'ArrayLiteralAst': return every('Elements');
+    case 'MemberExpressionAst': {
+      const expression = child('Expression'), member = child('Member') as StringConstantExpressionAst | undefined;
+      if (member?.Type !== 'StringConstantExpressionAst') return false;
+      if (expression?.Type === 'TypeExpressionAst') {
+        return /^\[(?:System\.)?Environment\]$/i.test(expression.Text)
+          && /^(?:MachineName|UserName|OSVersion|Is64BitOperatingSystem|Is64BitProcess|ProcessorCount|Version|SystemDirectory|TickCount|TickCount64)$/i.test(member.Value);
+      }
+      // Literal properties of the metadata objects cannot execute methods.
+      return visit(expression) && /^[a-z][a-z0-9_]*$/i.test(member.Value);
+    }
+    case 'IndexExpressionAst': return visit(child('Target')) && child('Index')?.Type === 'StringConstantExpressionAst';
+    case 'ParenExpressionAst': return visit(child('Pipeline'));
+    case 'StatementBlockAst': return every('Statements');
+    case 'AssignmentStatementAst': {
+      const left = child('Left') as VariableExpressionAst | undefined;
+      if (fields.Operator !== 'Equals' || left?.Type !== 'VariableExpressionAst' || left.Splatted
+        || !/^[a-z_][a-z0-9_]*$/i.test(left.VariablePath)
+        || /^(?:PS|Error|Output|Confirm|WhatIf|Progress|Warning|Verbose|Debug|Information|ExecutionContext|Host|HOME|PWD|true$|false$|null$)/i.test(left.VariablePath)
+        || !visit(child('Right'))) return false;
+      boundVariables.add(left.VariablePath.toLowerCase());
+      return true;
+    }
+    case 'HashtableAst': {
+      const pairs = fields.KeyValuePairs;
+      return Array.isArray(pairs) && pairs.every(pair => pair && pair.Key?.Type === 'StringConstantExpressionAst' && visit(pair.Value));
+    }
+    case 'ConvertExpressionAst': return fields.TargetType === 'pscustomobject' && child('Child')?.Type === 'HashtableAst' && visit(child('Child'));
+    // Method calls, scripts, functions, loops, native executables and unknown
+    // expression kinds cannot receive this automatic inspection grant.
+    default: return false;
+    }
+  };
+  return visit(root);
 }
 
 /**

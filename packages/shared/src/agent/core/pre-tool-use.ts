@@ -48,7 +48,7 @@ import { evaluateApiEndpointPolicy, evaluateMcpToolPolicy } from '../source-poli
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
-import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionPolicyToolGrant, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionFullControl, hasSessionPolicyToolGrant, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
 
 // ============================================================
 // TYPES
@@ -702,7 +702,8 @@ function withPermissionModeContext(reason: string, sessionId: string, effectiveM
 export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): Promise<PreToolUseCheckResult> {
   const policy = await authorizeSessionPolicyTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory);
   if (!policy.allowed) return { type: 'block', reason: policy.reason };
-  if (hasSessionExecutionPolicy(ctx.sessionId)) {
+  if (hasSessionExecutionPolicy(ctx.sessionId) && !hasSessionFullControl(ctx.sessionId)
+    && !isSessionPolicyShellAutoAllowed(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory)) {
     const modeResult = shouldAllowToolInMode(ctx.toolName, ctx.input, getPermissionModeDiagnostics(ctx.sessionId).permissionMode, {
       plansFolderPath: ctx.plansFolderPath, dataFolderPath: ctx.dataFolderPath,
       permissionsContext: { workspaceRootPath: ctx.workspaceRootPath, activeSourceSlugs: ctx.activeSourceSlugs },
@@ -747,7 +748,8 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // Canonical mode source of truth for this session.
   // Keep incoming permissionMode only for mismatch diagnostics.
   const diagnostics = getPermissionModeDiagnostics(sessionId);
-  const effectivePermissionMode = diagnostics.permissionMode;
+  const fullControl = hasSessionFullControl(sessionId);
+  const effectivePermissionMode = fullControl ? 'allow-all' : diagnostics.permissionMode;
 
   if (permissionMode !== effectivePermissionMode) {
     onDebug?.(
@@ -766,7 +768,8 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     { plansFolderPath, dataFolderPath, permissionsContext }
   );
 
-  const explicitlyGranted = hasSessionPolicyToolGrant(sessionId, toolName, input, workingDirectory);
+  const explicitlyGranted = fullControl || isSessionPolicyShellAutoAllowed(sessionId, toolName, input, workingDirectory)
+    || hasSessionPolicyToolGrant(sessionId, toolName, input, workingDirectory);
   if (!modeResult.allowed && !explicitlyGranted) {
     const reasonWithContext = withPermissionModeContext(modeResult.reason, sessionId, effectivePermissionMode);
     onDebug?.(`Permission mode ${effectivePermissionMode}: blocking ${toolName} — ${reasonWithContext}`);

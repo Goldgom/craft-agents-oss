@@ -13,12 +13,12 @@
  * Provider-specific behavior (chat, abort, capabilities) is implemented in subclasses.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { AgentEvent } from '@craft-agent/core/types';
 import type { FileAttachment } from '../utils/files.ts';
-import { expandPath } from '../utils/paths.ts';
+import { expandPath, getBundledAssetsDir } from '../utils/paths.ts';
 import { buildTransferredSessionContext } from './conversation-summary.ts';
 import type { ThinkingLevel } from './thinking-levels.ts';
 import { DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from './thinking-levels.ts';
@@ -665,8 +665,25 @@ export abstract class BaseAgent implements AgentBackend {
   private refreshNodeReferenceFiles(sources: LoadedSource[]): void {
     const policy = getSessionExecutionPolicy(this._sessionId);
     if (!policy) return;
-    const paths = sources.filter(source => policy.allowSources.includes(source.config.slug)).map(source => join(source.folderPath, 'guide.md'));
-    if (policy.browser) paths.push(join(CONFIG_DIR, 'docs', 'browser-tools.md'));
+    const paths = sources.filter(source => policy.fullControl || policy.allowSources.includes(source.config.slug)).map(source => join(source.folderPath, 'guide.md'));
+    // App-provided capability instructions are exact read-only references. Discover
+    // their real assets, and only the matching names of synced documentation;
+    // arbitrary files added to the config directory never become references.
+    const skillsRoot = getBundledAssetsDir('skills');
+    const docsRoot = getBundledAssetsDir('docs');
+    try {
+      if (skillsRoot) {
+        for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
+          if (entry.isDirectory()) paths.push(join(skillsRoot, entry.name, 'SKILL.md'));
+        }
+      }
+      if (docsRoot) {
+        for (const entry of readdirSync(docsRoot, { withFileTypes: true })) {
+          if (!entry.isFile() || !/\.md$/i.test(entry.name)) continue;
+          paths.push(join(docsRoot, entry.name), join(CONFIG_DIR, 'docs', entry.name));
+        }
+      }
+    } catch { /* Missing app assets do not grant broader filesystem access. */ }
     setSessionReferenceFiles(this._sessionId, paths);
   }
 
@@ -1019,7 +1036,8 @@ ${formattedMessages}
     const pathList = [...skillPaths.entries()]
       .map(([slug, path]) => `- ${path} (skill: ${slug})`)
       .join('\n');
-    return `Before proceeding with the user's request, you MUST read the following skill instruction files using the Read tool or \`cat\` via Bash:\n${pathList}\n\nDo not take any other action until you have read these files.`;
+    const reader = hasSessionExecutionPolicy(this._sessionId) ? 'the Read tool' : 'the Read tool or `cat` via Bash';
+    return `Before proceeding with the user's request, you MUST read the following skill instruction files using ${reader}:\n${pathList}\n\nDo not take any other action until you have read these files.`;
   }
 
   // ============================================================

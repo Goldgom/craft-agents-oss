@@ -89,6 +89,11 @@ function ConvertTo-SerializableAst {
             $result.Expression = ConvertTo-SerializableAst $Node.Expression ($Depth + 1)
         }
 
+        'ConvertExpressionAst' {
+            $result.TargetType = $Node.Type.TypeName.FullName.ToLowerInvariant()
+            $result.Child = ConvertTo-SerializableAst $Node.Child ($Depth + 1)
+        }
+
         'StringConstantExpressionAst' {
             $result.Value = $Node.Value
             $result.StringConstantType = $Node.StringConstantType.ToString()

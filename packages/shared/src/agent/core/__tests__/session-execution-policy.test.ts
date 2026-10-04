@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'shell-quote';
-import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, clearSessionPolicyGrants, getSessionExecutionPolicy, getSessionPolicyGrantTarget, normalizeSessionPolicyInput, setSessionExecutionPolicy, setSessionPolicyPermissionHandler, setSessionProgramExecutor, setSessionReferenceFiles, wrapSessionProgramInput, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '../session-execution-policy.ts';
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, clearSessionPolicyGrants, getSessionExecutionPolicy, getSessionPolicyGrantTarget, getSessionProgramExecutor, hasSessionFullControl, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, setSessionExecutionPolicy, setSessionPolicyPermissionHandler, setSessionProgramExecutor, setSessionReferenceFiles, wrapSessionProgramInput, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '../session-execution-policy.ts';
 import { PermissionManager } from '../permission-manager.ts';
 import { runPreToolUseChecks, runPreToolUseChecksWithPermissions } from '../pre-tool-use.ts';
 import { setPermissionMode, cleanupModeState } from '../../mode-manager.ts';
@@ -31,6 +31,131 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('Super Agent permission ceiling', () => {
+  test('full control bypasses folder, capability, source and mode approvals while retaining model serialization', async () => {
+    const ceilings = { ...policy, role: 'coordinator' as const, readFiles: false, writeFiles: false, runPrograms: false, browser: false, fullControl: true };
+    setSessionExecutionPolicy(sessionId, ceilings);
+    setPermissionMode(sessionId, 'safe');
+    let requests = 0;
+    setSessionPolicyPermissionHandler(sessionId, async () => { requests++; return false; });
+    const manager = new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root });
+    const operations = [
+      ['Read', { file_path: `${root}/../outside/secret.txt` }],
+      ['Write', { file_path: join(outside, 'new.txt'), content: 'new' }],
+      ['Bash', { command: 'echo unrestricted', run_in_background: true }],
+      ['mcp__session__localbash', { command: 'Remove-Item anything', cwd: outside }],
+      ['mcp__session__browser_tool', { command: ['evaluate', 'document.title'] }],
+      ['mcp__session__browser_tool', { command: ['navigate', 'file:///tmp/example.txt'] }],
+      ['mcp__session__browser_tool', { command: ['upload', '@e1', join(outside, 'secret.txt')] }],
+      ['mcp__unassigned__write', { path: outside, content: 'x' }],
+      ['mcp__assigned__execute_code', { code: 'run code' }],
+    ] as const;
+    for (const [toolName, input] of operations) {
+      expect(checkSessionExecutionPolicy(sessionId, toolName, input).allowed).toBe(true);
+      expect((await authorizeSessionPolicyTool(sessionId, toolName, input)).allowed).toBe(true);
+      expect(manager.evaluateToolCall(toolName, input)).toEqual({ allowed: true });
+      const checked = await runPreToolUseChecksWithPermissions({ toolName, input, sessionId, permissionMode: 'safe', workspaceRootPath: root,
+        workspaceId: 'workspace', workingDirectory: root, activeSourceSlugs: ['assigned', 'unassigned'], allSourceSlugs: ['assigned', 'unassigned'], hasSourceActivation: true, permissionManager: manager });
+      expect(['allow', 'modify']).toContain(checked.type);
+    }
+    expect(manager.requiresBashPermission('sudo rm anywhere')).toBe(false);
+    for (const tool of ['Task', 'Agent', 'mcp__session__spawn_session', 'mcp__session__call_llm', 'spawn_agent', 'mcp__session__create_task', 'WebFetch']) {
+      expect((await authorizeSessionPolicyTool(sessionId, tool, { prompt: 'another model' })).allowed).toBe(false);
+    }
+    expect(checkSessionExecutionPolicy(sessionId, 'Bash', { command: '\0' }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', undefined as never).allowed).toBe(false);
+    expect(requests).toBe(0);
+  });
+
+  test('turning full control off restores original ceilings without needing or retaining operation grants', async () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, readFiles: false, writeFiles: false, runPrograms: false, browser: false, fullControl: true });
+    const full = getSessionExecutionPolicy(sessionId)!;
+    expect(hasSessionFullControl(sessionId)).toBe(true);
+    expect(full.writeFiles).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Write', { file_path: join(outside, 'new.txt') }).allowed).toBe(true);
+    setSessionExecutionPolicy(sessionId, { ...full, fullControl: false });
+    expect(hasSessionFullControl(sessionId)).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(root, 'allowed.txt') }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Write', { file_path: join(outside, 'new.txt') }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Bash', { command: 'echo unrestricted' }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__browser_tool', { command: ['evaluate', 'document.title'] }).allowed).toBe(false);
+    expect(() => setSessionExecutionPolicy(sessionId, { ...policy, fullControl: 'true' } as never)).toThrow();
+    expect(hasSessionFullControl(sessionId)).toBe(false);
+  });
+
+  test('enabling full control resumes a suspended original operation, but a later disable cannot install a stale approval', async () => {
+    const input = { file_path: join(outside, 'secret.txt') };
+    let approve!: (allowed: boolean) => void;
+    setSessionPolicyPermissionHandler(sessionId, () => new Promise(resolve => { approve = resolve; }));
+    const first = authorizeSessionPolicyTool(sessionId, 'Read', input);
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true });
+    approve(true);
+    expect((await first).allowed).toBe(true);
+    expect(getSessionPolicyGrantTarget(sessionId, 'Read', input)).toBeUndefined();
+    setSessionExecutionPolicy(sessionId, policy);
+    const second = authorizeSessionPolicyTool(sessionId, 'Read', input);
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true });
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: false });
+    approve(true);
+    expect((await second).allowed).toBe(false);
+  });
+
+  test('full control host programs need no exact grant and verified sandbox programs stay in the chosen container', () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true });
+    const command = `printf '%s' "$(touch marker)"; echo 'quoted'\nfalse`;
+    const wrapped = wrapSessionProgramInput(sessionId, 'Bash', { command })!;
+    expect(parse(wrapped.command as string)).toEqual(['cd', '--', root.replace(/\\/g, '/'), { op: '&&' }, '/bin/bash', '-c', command]);
+    const executable = join(temp, process.platform === 'win32' ? 'docker.exe' : 'docker');
+    writeFileSync(executable, 'test runtime');
+    setSessionProgramExecutor(sessionId, { runtimePath: executable, containerId: 'tokenbird-super-test', workingDirectory: '/workspace' });
+    expect(getSessionProgramExecutor(sessionId)?.containerId).toBe('tokenbird-super-test');
+    const isolated = wrapSessionProgramInput(sessionId, 'Bash', { command, run_in_background: true })!;
+    const environment = process.platform === 'win32' ? ['MSYS_NO_PATHCONV=1', 'MSYS2_ARG_CONV_EXCL=*'] : [];
+    expect(parse(isolated.command as string)).toEqual([...environment, executable.replace(/\\/g, '/'), 'exec', '--workdir', '/workspace', 'tokenbird-super-test', '/bin/sh', '-lc', command]);
+  });
+
+  test('limited nodes auto-run AST-verified system metadata but not filesystem reads, mutations, injections or background jobs', async () => {
+    let requests = 0;
+    setSessionPolicyPermissionHandler(sessionId, async () => { requests++; return false; });
+    for (const tool of ['Bash', 'mcp__session__localbash', 'mcp__session__runshell']) {
+      expect(isSessionPolicyShellAutoAllowed(sessionId, tool, { command: 'uname -a && df -h' })).toBe(true);
+      expect((await authorizeSessionPolicyTool(sessionId, tool, { command: 'uname -a && df -h' })).allowed).toBe(true);
+      for (const input of [{ command: 'cat /etc/passwd' }, { command: 'hostname new-name' }, { command: 'df -h; rm -rf somewhere' },
+        { command: 'df -h > file' }, { command: 'df $(touch file)' }, { command: 'df -h', run_in_background: true }, { command: '' }, { command: 'df -h', cwd: outside }]) {
+        expect(isSessionPolicyShellAutoAllowed(sessionId, tool, input)).toBe(false);
+      }
+    }
+    expect(requests).toBe(0);
+    setSessionExecutionPolicy(sessionId, { ...policy, readFiles: false });
+    expect(isSessionPolicyShellAutoAllowed(sessionId, 'Bash', { command: 'df -h' })).toBe(false);
+  });
+
+  test('full control lets both node roles use built-in tools without requesting approval', async () => {
+    let requests = 0;
+    for (const role of ['coordinator', 'worker'] as const) {
+      setSessionExecutionPolicy(sessionId, { ...policy, role, fullControl: true, readFiles: false, writeFiles: false, runPrograms: false, browser: false });
+      setSessionPolicyPermissionHandler(sessionId, async () => { requests++; return false; });
+      for (const [tool, input] of [
+        ['Read', { file_path: join(outside, 'secret.txt') }],
+        ['Write', { file_path: join(outside, 'new.txt'), content: 'test' }],
+        ['Bash', { command: 'echo test' }],
+        ['mcp__session__localbash', { command: 'echo test', cwd: outside }],
+        ['mcp__session__runshell', { command: 'echo test' }],
+        ['mcp__session__browser_tool', { command: ['navigate', 'https://example.com'] }],
+        ['mcp__session__canvas', { action: 'inspect' }],
+      ] as const) expect((await authorizeSessionPolicyTool(sessionId, tool, input)).allowed).toBe(true);
+      const manager = new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root });
+      const result = await runPreToolUseChecksWithPermissions({ toolName: 'Bash', input: { command: 'echo test' }, sessionId,
+        permissionMode: 'allow-all', workingDirectory: root, workspaceRootPath: root, workspaceId: 'workspace',
+        activeSourceSlugs: [], allSourceSlugs: [], hasSourceActivation: false, permissionManager: manager });
+      expect(result.type).toBe('modify');
+      expect(manager.evaluateToolCall('Write', { file_path: join(outside, 'new.txt'), content: 'test' }).allowed).toBe(true);
+    }
+    expect(requests).toBe(0);
+    expect(getSessionExecutionPolicy(sessionId)?.fullControl).toBe(true);
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: false });
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(outside, 'secret.txt') }).allowed).toBe(false);
+  });
+
   test('pauses an outside read for approval and grants only its exact operation in the current turn', async () => {
     const input = { file_path: join(outside, 'secret.txt'), offset: 1 };
     let request: SessionPolicyPermissionRequest | undefined;

@@ -21,14 +21,14 @@ type ManagedTestSession = {
   stopRequested: boolean
   persistenceRetired?: boolean
   runtimeTeardown?: Promise<void>
-  agent?: { forceAbort(reason: unknown): void }
+  agent?: { forceAbort(reason: unknown): void; respondToPermission?(requestId: string, allowed: boolean, alwaysAllow: boolean): void }
 }
 type PermissionEvent = Extract<SessionEvent, { type: 'permission_request' }>
 type NodePermissionHarness = {
   sessions: Map<string, ManagedTestSession>
   pendingPermissionRequests: Map<string, { sessionId: string }>
   pendingNodePermissions: Map<string, {
-    sessionId: string; expiresAt: number; timer: ReturnType<typeof setTimeout>; resolve: (allowed: boolean) => void
+    sessionId: string; request: SessionPolicyPermissionRequest; expiresAt: number; timer: ReturnType<typeof setTimeout>; resolve: (allowed: boolean) => void
   }>
   sessionEventListeners: Set<(event: SessionEvent, workspaceId: string) => void>
   rpcServer: {
@@ -39,6 +39,7 @@ type NodePermissionHarness = {
   onSessionEvent(listener: (event: SessionEvent, workspaceId: string) => void): () => void
   attachNodePermissionHandler(managed: ManagedTestSession): void
   requestNodePermission(managed: ManagedTestSession, request: SessionPolicyPermissionRequest): Promise<boolean>
+  autoRespondToNodeRuntimePermission(managed: ManagedTestSession, request: { requestId: string; toolName: string; command?: string; description: string; type?: 'admin_approval' | 'file_write' }): boolean
   clearPendingPermissionRequestsForSession(sessionId: string): void
   respondToPermission(sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean): boolean
   runSessionLocalShell(managed: ManagedTestSession, args: ShellExecArgs): Promise<ClientShellResult>
@@ -119,6 +120,54 @@ async function approveLocalShell(args: ShellExecArgs) {
 }
 
 describe('node permission lifecycle in SessionManager', () => {
+  test('full control runs localbash on the connected client without an approval record', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: true });
+    const args = { command: 'echo test', cwd: outside, timeoutMs: 1_000 };
+    expect((await authorizeSessionPolicyTool(sessionId, localTool, args, root)).allowed).toBe(true);
+    expect((await manager.runSessionLocalShell(managed, args)).stdout).toBe('client-a');
+    expect(invocations).toEqual([{ clientId: 'client-a', capability: CLIENT_RUN_SHELL, args }]);
+    expect(events.some(event => event.type === 'permission_request')).toBe(false);
+    expect(manager.pendingNodePermissions.size).toBe(0);
+  })
+
+  test('full control does not emit approvals for outside reads, browser operations or unassigned sources', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: true })
+    const operations = [
+      ['Read', { file_path: join(outside, 'requested.txt') }],
+      ['mcp__session__browser_tool', { command: ['upload', '@e1', join(outside, 'requested.txt')] }],
+      ['mcp__unassigned__execute_code', { code: 'actual source tool' }],
+    ] as const
+    for (const [toolName, input] of operations) expect((await authorizeSessionPolicyTool(sessionId, toolName, input, root)).allowed).toBe(true)
+    expect((await authorizeSessionPolicyTool(sessionId, 'mcp__session__spawn_agent', {}, root)).allowed).toBe(false)
+    expect((await authorizeSessionPolicyTool(sessionId, 'mcp__session__call_llm', {}, root)).allowed).toBe(false)
+    expect((await authorizeSessionPolicyTool(sessionId, 'WebFetch', { url: 'https://example.test' }, root)).allowed).toBe(false)
+    expect(events).toHaveLength(0)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.pendingPermissionRequests.size).toBe(0)
+  })
+
+  test('full control answers native file and admin callbacks directly and keeps structural calls blocked', () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: true })
+    const responses: unknown[] = []
+    managed.agent = { forceAbort: () => {}, respondToPermission: (...args) => { responses.push(args) } }
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'native-write', toolName: 'Write', description: 'Write outside', type: 'file_write' })).toBe(true)
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'native-admin', toolName: 'Bash', command: 'sudo arbitrary-command', description: 'Run a program', type: 'admin_approval' })).toBe(true)
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'native-delegate', toolName: 'spawn_agent', description: 'Spawn another model' })).toBe(true)
+    expect(responses).toEqual([
+      ['native-write', true, false], ['native-admin', true, false], ['native-delegate', false, false],
+    ])
+    expect(events).toHaveLength(0)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.pendingPermissionRequests.size).toBe(0)
+    managed.stopRequested = true
+    manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'stopped-native', toolName: 'Write', description: 'Late callback' })
+    expect(responses.at(-1)).toEqual(['stopped-native', false, false])
+    managed.stopRequested = false
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: false })
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'limited-native', toolName: 'Write', description: 'Needs normal approval' })).toBe(false)
+    expect(responses).toHaveLength(4)
+  })
+
   test('a response from another session leaves the original request pending', async () => {
     const input = { file_path: join(outside, 'requested.txt') }
     const { result, request } = beginPermission('Read', input)
@@ -230,6 +279,31 @@ describe('node permission lifecycle in SessionManager', () => {
 })
 
 describe('localbash approval binds the real execution destination', () => {
+  test('verified system metadata inspections use the actual connected client without an exact grant', async () => {
+    const args = { command: 'uname -a && df -h', cwd: root }
+    expect((await authorizeSessionPolicyTool(sessionId, localTool, args, root)).allowed).toBe(true)
+    expect((await manager.runSessionLocalShell(managed, args)).stdout).toBe('client-a')
+    expect(invocations).toHaveLength(1)
+    expect(hasSessionPolicyToolGrant(sessionId, localTool, args, root)).toBe(false)
+    expect(events).toHaveLength(0)
+  })
+
+  test('full control selects the current actual client and can fall back to host without stale grants', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: true })
+    const args = { command: 'echo full-control-host', cwd: outside, timeoutMs: 1000 }
+    clients = ['client-b', 'client-a']
+    expect((await manager.runSessionLocalShell(managed, args)).stdout).toBe('client-b')
+    clients = []
+    const hostResult = await manager.runSessionLocalShell(managed, args)
+    expect(hostResult.exitCode).toBe(0)
+    expect(hostResult.cwd).toBe(outside)
+    expect(hostResult.stdout.trim()).toBe('full-control-host')
+    expect(invocations).toHaveLength(1)
+    expect(hasSessionPolicyToolGrant(sessionId, localTool, args, root)).toBe(false)
+    expect(events).toHaveLength(0)
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: false })
+    await expect(manager.runSessionLocalShell(managed, args)).rejects.toThrow('request permission again')
+  })
   test('client reordering cannot redirect an approved operation', async () => {
     const args = { command: 'echo requested', cwd: root, timeoutMs: 1000 }
     const request = await approveLocalShell(args)

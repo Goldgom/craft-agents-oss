@@ -11,6 +11,7 @@ import {
   saveSuperAgentDocument,
   validateSuperAgentCommand,
   validateSuperAgentConfig,
+  superAgentNodePermissions,
   type SuperAgentBoardItem,
   type SuperAgentActivityEntry,
   type SuperAgentCommand,
@@ -22,6 +23,7 @@ import {
   type SuperAgentNode,
   type SuperAgentNodeActivity,
   type SuperAgentPendingTurn,
+  type SuperAgentPlanItem,
   type SuperAgentPermissionRequest,
   type SuperAgentScript,
   type SuperAgentSessionPolicy,
@@ -41,6 +43,8 @@ export interface SuperAgentSessionHost {
   applySessionPolicy?(sessionId: string, policy: SuperAgentSessionPolicy): Promise<void> | void
   /** Reconcile mode and instructions on existing sessions without losing their transcripts. */
   ensureSuperAgentSessionSettings?(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void>
+  /** Apply explicit control changes to current and former node sessions in this workspace. */
+  setSuperAgentFullControl?(workspaceId: string, fullControl: boolean): Promise<void>
 }
 
 export interface SuperAgentServiceDeps {
@@ -80,8 +84,10 @@ const MAX_ACTIVITY_ENTRIES = 80
 const MAX_ACTIVITY_TEXT = 8_000
 const MAX_PERMISSION_HISTORY = 100
 const MAX_PENDING_PERMISSIONS = 200
+const CONTINUOUS_WORK_IDLE_MS = 30 * 60_000
 const ActionsSchema = z.object({
-  tasks: z.array(z.object({ title: z.string().trim().min(1).max(120), instructions: z.string().trim().min(1).max(32_000), nodeId: z.string().max(64).optional() }).strict()).max(4).optional(),
+  tasks: z.array(z.object({ title: z.string().trim().min(1).max(120), instructions: z.string().trim().min(1).max(32_000), nodeId: z.string().max(64).optional(), planId: z.string().max(64).optional() }).strict()).max(4).optional(),
+  plans: z.array(z.object({ id: z.string().max(64).optional(), title: z.string().trim().min(1).max(120), instructions: z.string().trim().min(1).max(32_000), status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: z.string().max(4_000), expectedRevision: z.number().int().min(0) }).strict()).max(8).optional(),
   messages: z.array(z.object({ toNodeId: z.string().min(1).max(64), body: z.string().trim().min(1).max(32_000) }).strict()).max(8).optional(),
   board: z.array(z.object({ id: z.string().max(64).optional(), title: z.string().trim().min(1).max(120), content: z.string().trim().min(1).max(32_000), expectedRevision: z.number().int().min(0) }).strict()).max(8).optional(),
   registerScripts: z.array(z.object({ id: z.string().max(64), name: z.string().trim().min(1).max(120), path: z.string().trim().min(1).max(4_096), args: z.array(z.string().max(4_096)).max(100), timeoutSeconds: z.number().int().min(1).max(86_400) }).strict()).max(4).optional(),
@@ -159,27 +165,57 @@ export class SuperAgentService {
     const config = validateSuperAgentConfig(value)
     const snapshot = await this.serial(workspaceId, async () => {
       const document = await this.load(workspaceId)
-      if (document.pendingTurns.length || document.state.scripts.some(script => script.status === 'running')) {
+      const previous = document.config
+      const fullControlChanged = !!previous && previous.environment.fullControl !== config.environment.fullControl
+      const withoutControl = (value: SuperAgentConfig) => ({ ...value, environment: { ...value.environment, fullControl: false } })
+      const onlyControlChanged = fullControlChanged && JSON.stringify(withoutControl(previous!)) === JSON.stringify(withoutControl(config))
+      if ((!onlyControlChanged || config.environment.kind === 'sandbox') && (document.pendingTurns.length || document.state.scripts.some(script => script.status === 'running'))) {
         throw new Error('Stop active and queued work before changing Super Agent settings')
       }
       await this.deps.validateConfig?.(workspaceId, config)
       if (config.environment.kind === 'folder') await this.folder(config.environment.workingDirectory)
-      const previous = document.config
+      if (fullControlChanged) {
+        if (!this.deps.host.setSuperAgentFullControl) throw new Error('This execution host cannot update Super Agent control permissions')
+        try { await this.deps.host.setSuperAgentFullControl(workspaceId, config.environment.fullControl === true) }
+        catch (error) {
+          if (config.environment.fullControl) {
+            await this.deps.host.setSuperAgentFullControl(workspaceId, false).catch(() => undefined)
+          } else {
+            // A failed persistence write must not undo an explicit revocation.
+            document.config = { ...previous!, environment: { ...previous!.environment, fullControl: false } }
+            await this.commit(workspaceId, document).catch(() => undefined)
+          }
+          throw error
+        }
+      }
       const environmentChanged = JSON.stringify(previous?.environment) !== JSON.stringify(config.environment)
       const promptChanged = previous?.name !== config.name || JSON.stringify(previous?.sourceSlugs) !== JSON.stringify(config.sourceSlugs) || JSON.stringify(previous?.abilityProfiles) !== JSON.stringify(config.abilityProfiles)
+      const previousNodes = document.state.nodes
+      const previousScripts = document.state.scripts
       document.state.nodes = config.nodes.map(node => {
         const oldNode = previous?.nodes.find(item => item.id === node.id)
         const oldRuntime = document.state.nodes.find(item => item.nodeId === node.id)
-        if (!environmentChanged && !promptChanged && JSON.stringify(oldNode) === JSON.stringify(node)) return oldRuntime ?? { nodeId: node.id, status: 'idle' }
+        if (onlyControlChanged || (!environmentChanged && !promptChanged && JSON.stringify(oldNode) === JSON.stringify(node))) return oldRuntime ?? { nodeId: node.id, status: 'idle' }
         return { nodeId: node.id, status: 'idle' }
       })
       document.state.scripts = config.scripts.map(script => document.state.scripts.find(item => item.scriptId === script.id) ?? { scriptId: script.id, status: 'idle' })
       document.config = config
-      this.activities.delete(workspaceId)
-      this.permissions.delete(workspaceId)
-      this.permissionDeadlines.delete(workspaceId)
+      if (!onlyControlChanged) {
+        this.activities.delete(workspaceId)
+        this.permissions.delete(workspaceId)
+        this.permissionDeadlines.delete(workspaceId)
+      }
       document.state.lastUserActivityAt = this.now()
-      await this.commit(workspaceId, document)
+      document.state.allIdleSince = this.now()
+      try { await this.commit(workspaceId, document) }
+      catch (error) {
+        document.config = fullControlChanged && !config.environment.fullControl
+          ? { ...previous!, environment: { ...previous!.environment, fullControl: false } } : previous
+        document.state.nodes = previousNodes
+        document.state.scripts = previousScripts
+        if (fullControlChanged && config.environment.fullControl) await this.deps.host.setSuperAgentFullControl!(workspaceId, false).catch(() => undefined)
+        throw error
+      }
       return this.snapshot(workspaceId, document)
     })
     try { await this.deps.onConfigChanged?.(workspaceId, config) }
@@ -202,7 +238,28 @@ export class SuperAgentService {
       const document = await this.load(workspaceId)
       this.configured(document)
       document.state.lastUserActivityAt = this.now()
+      document.state.allIdleSince = this.now()
       switch (command.type) {
+        case 'continuous-work':
+          document.config!.continuousWork = command.enabled
+          if (!command.enabled) {
+            const retired = document.pendingTurns.filter(turn => turn.backgroundInspection && turn.startedAt == null)
+            document.pendingTurns = document.pendingTurns.filter(turn => !retired.includes(turn))
+            for (const turn of retired) {
+              const runtime = document.state.nodes.find(node => node.nodeId === turn.nodeId)
+              if (runtime?.status === 'preparing') { runtime.status = 'idle'; runtime.activeTaskId = undefined }
+            }
+          }
+          break
+        case 'plan-upsert': this.upsertPlan(document, command.item, 'user', command.expectedRevision); break
+        case 'plan-delete': {
+          const item = document.state.plans.find(item => item.id === command.id)
+          if (!item) throw new Error('Plan item does not exist')
+          if (command.expectedRevision !== item.revision) throw new SuperAgentConflictError(item.revision)
+          if (document.state.tasks.some(task => task.planId === item.id && ['queued', 'running'].includes(task.status))) throw new Error('Stop the linked task before deleting its plan')
+          document.state.plans = document.state.plans.filter(item => item.id !== command.id)
+          break
+        }
         case 'chat': {
           const coordinator = this.coordinator(document)
           this.message(document, 'user', coordinator.id, 'chat', command.text)
@@ -220,7 +277,9 @@ export class SuperAgentService {
           document.state.board = document.state.board.filter(item => item.id !== command.id)
           break
         }
-        case 'cancel': await this.cancel(workspaceId, document, command.taskId); break
+        case 'cancel':
+          if (!command.taskId) document.config!.continuousWork = false
+          await this.cancel(workspaceId, document, command.taskId); break
         case 'script-run': await this.startScript(workspaceId, document, command.scriptId); break
         case 'script-stop': await this.stopScript(workspaceId, document, command.scriptId); break
         case 'permission-response': await this.respondToPermission(workspaceId, document, command.requestId, command.allowed); break
@@ -242,7 +301,9 @@ export class SuperAgentService {
       if (this.expirePermissionDeadlines(workspaceId, document)) await this.commit(workspaceId, document)
       const interval = document.config.idleInspectionMinutes * 60_000
       const activity = Math.max(document.state.lastUserActivityAt, document.state.lastInspectionAt ?? 0)
-      if (this.now() - activity >= interval && this.hasActivityToInspect(document)
+      if (document.config.continuousWork) {
+        await this.checkContinuousWork(workspaceId, document)
+      } else if (this.now() - activity >= interval && this.hasActivityToInspect(document)
         && !document.pendingTurns.some(turn => turn.nodeId === this.coordinator(document).id)) {
         this.inspect(document)
         await this.commit(workspaceId, document)
@@ -250,6 +311,40 @@ export class SuperAgentService {
       if (scanScripts) await this.scanScripts(workspaceId, document)
       this.schedule(workspaceId)
     })))
+  }
+
+  private async checkContinuousWork(workspaceId: string, document: SuperAgentDocument): Promise<void> {
+    const busy = document.pendingTurns.length > 0
+      || document.state.nodes.some(node => node.status === 'working' || node.status === 'preparing' || this.launching.has(`${workspaceId}:${node.nodeId}`))
+      || document.state.scripts.some(script => script.status === 'running' || script.status === 'untracked')
+      || [...(this.permissions.get(workspaceId)?.values() ?? [])].some(request => request.status === 'pending')
+    if (busy) {
+      if (document.state.allIdleSince != null) {
+        document.state.allIdleSince = undefined
+        await this.commit(workspaceId, document)
+      }
+      return
+    }
+    // Session state is authoritative even if a turn was cancelled or opened elsewhere.
+    const sessions = await Promise.all(document.state.nodes.filter(node => node.sessionId).map(node => this.deps.host.getSession(node.sessionId!)))
+    if (sessions.some(session => session?.isProcessing)) {
+      if (document.state.allIdleSince != null) {
+        document.state.allIdleSince = undefined
+        await this.commit(workspaceId, document)
+      }
+      return
+    }
+    const lastActivity = Math.max(document.state.lastUserActivityAt, document.state.lastInspectionAt ?? 0,
+      ...document.state.nodes.map(node => node.lastCompletedAt ?? node.lastStartedAt ?? 0),
+      ...document.state.scripts.map(script => Math.max(script.completedAt ?? 0, script.startedAt ?? 0)))
+    if (document.state.allIdleSince == null) {
+      document.state.allIdleSince = Math.max(lastActivity, this.now())
+      await this.commit(workspaceId, document)
+    }
+    if (this.now() - Math.max(document.state.allIdleSince!, lastActivity) >= CONTINUOUS_WORK_IDLE_MS) {
+      this.inspect(document, true)
+      await this.commit(workspaceId, document)
+    }
   }
 
   async cleanup(): Promise<void> {
@@ -444,6 +539,10 @@ export class SuperAgentService {
       command: event.request.command?.slice(0, MAX_OUTPUT), reason: event.request.reason?.slice(0, MAX_ACTIVITY_TEXT), scope: event.request.policyScope,
       status: 'pending', createdAt: this.now() }
     requests.set(request.id, request)
+    const userNotice = this.message(document, 'system', 'user', 'message', `${node.name} is waiting for user permission: ${request.description}`, turn.taskId)
+    userNotice.permission = { id: request.id, nodeId: node.id, toolName: request.toolName, description: request.description,
+      command: request.command, reason: request.reason, target: request.scope?.target.slice(0, 2_000),
+      operation: request.scope?.operation.slice(0, MAX_ACTIVITY_TEXT), status: request.status }
     const deadline = request.scope?.expiresAt ?? (event.request.approvalTtlSeconds ? this.now() + event.request.approvalTtlSeconds * 1_000 : undefined)
     if (deadline != null) {
       let deadlines = this.permissionDeadlines.get(workspaceId)
@@ -463,7 +562,6 @@ export class SuperAgentService {
       : request.command ? `\nRequested command: ${request.command.slice(0, MAX_ACTIVITY_TEXT)}` : ''
     const notice = `${node.name} is waiting for user permission: ${request.description}${request.reason ? `\nReason: ${request.reason}` : ''}${details}\nThe current turn remains paused until the user approves or denies this operation.`
     this.message(document, 'system', coordinator.id, 'message', notice, turn.taskId)
-    this.message(document, 'system', 'user', 'message', notice, turn.taskId)
     if (node.role === 'worker' && turn.depth < MAX_CHAIN_DEPTH && document.pendingTurns.length < MAX_PENDING_TURNS
       && (document.chainCounts[turn.chainId] ?? 0) < MAX_CHAIN_TURNS) {
       this.enqueue(document, coordinator.id, 'summary', `${notice}\nReview the pending approval request and explain the reason and tradeoff to the user. Do not approve, bypass permissions, retry this task, or perform the blocked work. The user decides through the permission card.`, undefined, turn.depth + 1, turn.chainId)
@@ -499,6 +597,11 @@ export class SuperAgentService {
   private resolvePermission(workspaceId: string, document: SuperAgentDocument, request: SuperAgentPermissionRequest, status: 'approved' | 'denied' | 'expired'): void {
     if (request.status !== 'pending') return
     request.status = status; request.resolvedAt = this.now()
+    for (const message of document.state.messages) {
+      if (message.permission?.id !== request.id || message.permission.nodeId !== request.nodeId || message.permission.status !== 'pending') continue
+      message.permission.status = status; message.permission.resolvedAt = request.resolvedAt
+      message.body = `Permission ${status} for ${request.toolName}.`
+    }
     this.permissionDeadlines.get(workspaceId)?.delete(request.id)
     const requests = this.permissions.get(workspaceId)
     const activity = this.activities.get(workspaceId)?.get(request.nodeId)
@@ -564,6 +667,13 @@ export class SuperAgentService {
     if (cached) return cached
     const document = await loadSuperAgentDocument(this.deps.rootForWorkspace(workspaceId))
     let recovered = false
+    // Runtime approvals are not restored after restart. Keep their display records truthful.
+    for (const message of document.state.messages) {
+      if (message.permission?.status !== 'pending') continue
+      message.permission.status = 'expired'; message.permission.resolvedAt = this.now()
+      message.body = `Permission expired for ${message.permission.toolName}.`
+      recovered = true
+    }
     if (document.config) {
       const nodeIds = new Set(document.config.nodes.map(node => node.id))
       if (document.state.nodes.some(node => !nodeIds.has(node.nodeId)) || document.pendingTurns.some(turn => !nodeIds.has(turn.nodeId))) throw new Error('Super Agent state references an unknown node')
@@ -580,7 +690,11 @@ export class SuperAgentService {
         document.pendingTurns = document.pendingTurns.filter(item => item.id !== turn.id)
         if (runtime) { runtime.status = 'error'; runtime.activeTaskId = undefined; runtime.error = 'Previous turn was interrupted; review its session before retrying' }
         const task = document.state.tasks.find(task => task.id === turn.taskId)
-        if (task) { task.status = 'failed'; task.error = runtime?.error; task.completedAt = this.now() }
+        if (task) {
+          task.status = 'failed'; task.error = runtime?.error; task.completedAt = this.now()
+          const plan = document.state.plans.find(item => item.id === task.planId)
+          if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: task.error ?? 'Previous task was interrupted; inspect before retrying' }, 'system', plan.revision)
+        }
       }
       for (const script of document.state.scripts) if (script.status === 'running') {
         recovered = true
@@ -595,6 +709,8 @@ export class SuperAgentService {
       }
     }
     this.documents.set(workspaceId, document)
+    // Server downtime cannot prove that every managed process was idle.
+    if (document.config?.continuousWork) { document.state.allIdleSince = this.now(); recovered = true }
     if (recovered) await this.commit(workspaceId, document)
     this.schedule(workspaceId)
     return document
@@ -609,21 +725,30 @@ export class SuperAgentService {
     return this.configured(document).nodes.find(node => node.role === 'coordinator')!
   }
 
-  private enqueue(document: SuperAgentDocument, nodeId: string, kind: SuperAgentPendingTurn['kind'], text: string, taskId?: string, depth = 0, chainId?: string): void {
+  private enqueue(document: SuperAgentDocument, nodeId: string, kind: SuperAgentPendingTurn['kind'], text: string, taskId?: string, depth = 0, chainId?: string): SuperAgentPendingTurn {
     if (document.pendingTurns.length >= MAX_PENDING_TURNS) throw new Error('Super Agent turn queue is full')
     const id = this.id('turn')
     const chain = chainId ?? id
     if ((document.chainCounts[chain] ?? 0) >= MAX_CHAIN_TURNS) throw new Error('Communication chain call budget reached; wait for user input')
     document.chainCounts[chain] = (document.chainCounts[chain] ?? 0) + 1
-    document.pendingTurns.push({ id, nodeId, kind, text: text.slice(0, MAX_OUTPUT), taskId, createdAt: this.now(), depth, chainId: chain })
+    const turn: SuperAgentPendingTurn = { id, nodeId, kind, text: text.slice(0, MAX_OUTPUT), taskId, createdAt: this.now(), depth, chainId: chain }
+    document.pendingTurns.push(turn)
+    document.state.allIdleSince = undefined
+    return turn
   }
 
-  private message(document: SuperAgentDocument, fromNodeId: string, toNodeId: string, kind: SuperAgentMessage['kind'], body: string, taskId?: string): void {
-    document.state.messages.push({ id: this.id('msg'), fromNodeId, toNodeId, kind, body: body.slice(0, MAX_OUTPUT), taskId, createdAt: this.now() })
+  private message(document: SuperAgentDocument, fromNodeId: string, toNodeId: string, kind: SuperAgentMessage['kind'], body: string, taskId?: string): SuperAgentMessage {
+    const message: SuperAgentMessage = { id: this.id('msg'), fromNodeId, toNodeId, kind, body: body.slice(0, MAX_OUTPUT), taskId, createdAt: this.now() }
+    document.state.messages.push(message)
     document.state.messages = document.state.messages.slice(-500)
+    return message
   }
 
-  private addTask(document: SuperAgentDocument, command: { title: string; instructions: string; nodeId?: string }, depth = 0, chainId?: string): void {
+  private addTask(document: SuperAgentDocument, command: { title: string; instructions: string; nodeId?: string; planId?: string }, depth = 0, chainId?: string): void {
+    let plan = command.planId ? document.state.plans.find(item => item.id === command.planId) : undefined
+    if (command.planId && !plan) throw new Error('Unknown plan item')
+    if (plan && ['completed', 'cancelled', 'blocked'].includes(plan.status)) throw new Error('Only actionable plans may be assigned')
+    if (plan && document.state.tasks.some(task => task.planId === command.planId && ['queued', 'running'].includes(task.status))) throw new Error('This plan already has an active task')
     const workers = this.configured(document).nodes.filter(node => node.role === 'worker')
     const load = (nodeId: string) => document.pendingTurns.filter(turn => turn.nodeId === nodeId).length
     const worker = command.nodeId ? workers.find(node => node.id === command.nodeId) : [...workers].sort((a, b) => load(a.id) - load(b.id))[0]
@@ -635,10 +760,17 @@ export class SuperAgentService {
     }
     if (document.pendingTurns.length >= MAX_PENDING_TURNS) throw new Error('Super Agent turn queue is full')
     if (chainId && (document.chainCounts[chainId] ?? 0) >= MAX_CHAIN_TURNS) throw new Error('Communication chain call budget reached; wait for user input')
-    const task = { id: this.id('task'), title: command.title, instructions: command.instructions, nodeId: worker.id, status: 'queued' as const, createdAt: this.now() }
+    // Every assignment has a durable plan, including tasks entered directly in the UI.
+    if (!plan) {
+      const planId = this.id('plan')
+      this.upsertPlan(document, { id: planId, title: command.title, instructions: command.instructions, status: 'planned', priority: 3, note: '' }, this.coordinator(document).id, 0)
+      plan = document.state.plans.find(item => item.id === planId)!
+    }
+    const task = { id: this.id('task'), planId: plan.id, title: command.title, instructions: command.instructions, nodeId: worker.id, status: 'queued' as const, createdAt: this.now() }
     document.state.tasks.push(task)
     this.message(document, this.coordinator(document).id, worker.id, 'task', `${task.title}\n${task.instructions}`, task.id)
     this.enqueue(document, worker.id, 'task', `Task: ${task.title}\n${task.instructions}`, task.id, depth, chainId)
+    if (plan) this.upsertPlan(document, { ...plan, status: 'active' }, this.coordinator(document).id, plan.revision)
   }
 
   private routeMessage(document: SuperAgentDocument, fromNodeId: string, toNodeId: string, body: string, depth: number, chainId?: string): void {
@@ -668,10 +800,23 @@ export class SuperAgentService {
     else document.state.board.push(item)
   }
 
-  private inspect(document: SuperAgentDocument): void {
+  private upsertPlan(document: SuperAgentDocument, input: Omit<SuperAgentPlanItem, 'id' | 'revision' | 'updatedBy' | 'updatedAt'> & { id?: string }, actor: string, expectedRevision: number): void {
+    const current = input.id ? document.state.plans.find(item => item.id === input.id) : undefined
+    if (expectedRevision !== (current?.revision ?? 0)) throw new SuperAgentConflictError(current?.revision ?? 0)
+    if (!current && document.state.plans.length >= 256) throw new Error('The plan list is full')
+    if (current && ['completed', 'cancelled'].includes(input.status) && document.state.tasks.some(task => task.planId === current.id && ['queued', 'running'].includes(task.status))) throw new Error('Stop or finish linked work before closing its plan')
+    const item: SuperAgentPlanItem = { id: input.id ?? this.id('plan'), title: input.title, instructions: input.instructions, status: input.status, priority: input.priority, note: input.note.slice(0, 4_000), revision: (current?.revision ?? 0) + 1, updatedBy: actor, updatedAt: this.now() }
+    if (current) Object.assign(current, item)
+    else document.state.plans.push(item)
+  }
+
+  private inspect(document: SuperAgentDocument, continuous = false): void {
     const coordinator = this.coordinator(document)
     if (document.pendingTurns.some(turn => turn.nodeId === coordinator.id && turn.kind === 'inspection')) return
-    this.enqueue(document, coordinator.id, 'inspection', 'Inspect worker and script statuses, identify blocked work and summarize results for the user. Do not invent new goals or perform worker work yourself.')
+    const turn = this.enqueue(document, coordinator.id, 'inspection', continuous
+      ? '持续工作后台自检：所有节点、队列和受管脚本已连续空闲至少 30 分钟。反思用户已提出的目标、计划列表、任务结果和共享板，检查遗漏、未完成工作及可验证的后续步骤。维护计划状态、优先级和受阻原因，按优先级向已有工作节点分派下一项可执行工作，并在 tasks 中携带 planId。已完成或取消的工作不要重复执行；受阻计划仅在阻碍已解除时恢复。只能推进用户已授权目标，不擅自扩展目标或绕过审批。如果确实无事可做，简短记录自检结果，等待下一次空闲自检。'
+      : 'Inspect worker and script statuses, identify blocked work and summarize results for the user. Do not invent new goals or perform worker work yourself.')
+    turn.backgroundInspection = continuous
     document.state.lastInspectionAt = this.now()
   }
 
@@ -747,20 +892,28 @@ export class SuperAgentService {
       if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
       // Container image preparation can take minutes. It must not hold the
       // workspace mutation lock, so polling and cancellation remain responsive.
-      await this.deps.host.applySessionPolicy(runtime.sessionId!, {
-        nodeId, role: node.role, rootPath: environment.workingDirectory,
-        readFiles: config.environment.permissions.readFiles,
-        writeFiles: node.role === 'worker' && config.environment.permissions.writeFiles,
-        runPrograms: node.role === 'worker' && config.environment.permissions.runPrograms,
-        browser: config.environment.permissions.browser,
-        allowSources: sourceSlugs, allowSubagents: false,
-        containerExecutor: environment.containerExecutor,
-      })
-      if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
-      if (!this.deps.host.ensureSuperAgentSessionSettings) throw new Error('This execution host cannot reconcile Super Agent session mode and instructions')
-      await this.deps.host.ensureSuperAgentSessionSettings(runtime.sessionId!, {
-        permissionMode: 'allow-all', agentSystemPrompt: this.nodePrompt(config, node),
-      })
+      for (;;) {
+        // A folder/VM control toggle can occur while environment preparation is
+        // awaiting I/O. Reconcile the latest setting, never a reserved old flag.
+        const currentConfig = this.configured(document)
+        await this.deps.host.applySessionPolicy(runtime.sessionId!, {
+          nodeId, role: node.role, rootPath: environment.workingDirectory,
+          fullControl: currentConfig.environment.fullControl === true,
+          ...currentConfig.environment.permissions,
+          writeFiles: node.role === 'worker' && currentConfig.environment.permissions.writeFiles,
+          runPrograms: node.role === 'worker' && currentConfig.environment.permissions.runPrograms,
+          allowSources: sourceSlugs, allowSubagents: false,
+          containerExecutor: environment.containerExecutor,
+        })
+        if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
+        if (document.config !== currentConfig) continue
+        if (!this.deps.host.ensureSuperAgentSessionSettings) throw new Error('This execution host cannot reconcile Super Agent session mode and instructions')
+        await this.deps.host.ensureSuperAgentSessionSettings(runtime.sessionId!, {
+          permissionMode: 'allow-all', agentSystemPrompt: this.nodePrompt(currentConfig, node),
+        })
+        if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
+        if (document.config === currentConfig) break
+      }
       const prompt = await this.serial(workspaceId, async () => {
         if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return null
         const session = await this.deps.host.getSession(runtime.sessionId!)
@@ -813,13 +966,21 @@ export class SuperAgentService {
     if (task) {
       task.status = success ? 'completed' : event.reason === 'interrupted' ? 'cancelled' : 'failed'
       task.output = success ? output : undefined; task.error = success ? undefined : runtime.error; task.completedAt = this.now()
+      const plan = document.state.plans.find(item => item.id === task.planId)
+      if (plan) this.upsertPlan(document, { ...plan, status: success ? 'active' : 'blocked', note: success ? '工作节点已提交结果，等待主智能体验证是否完成目标。' : task.error ?? '工作被中断，请检查结果后再安排。' }, node.id, plan.revision)
     }
     this.message(document, node.id, node.role === 'coordinator' ? 'user' : this.coordinator(document).id,
       success ? turn.kind === 'inspection' ? 'inspection' : task ? 'result' : 'chat' : 'error', output || (success ? 'Completed' : runtime.error!), turn.taskId)
     if (success && block) {
       try {
         const actions = ActionsSchema.parse(JSON.parse(block[1]!))
-        if ((actions.tasks?.length ?? 0) + (actions.messages?.length ?? 0) + (actions.board?.length ?? 0) + (actions.runScripts?.length ?? 0) + (actions.registerScripts?.length ?? 0) > MAX_MODEL_ACTIONS) throw new Error('Too many communication actions in one turn')
+        if ((actions.tasks?.length ?? 0) + (actions.plans?.length ?? 0) + (actions.messages?.length ?? 0) + (actions.board?.length ?? 0) + (actions.runScripts?.length ?? 0) + (actions.registerScripts?.length ?? 0) > MAX_MODEL_ACTIONS) throw new Error('Too many communication actions in one turn')
+        if (actions.plans?.length && node.role !== 'coordinator') throw new Error('Only the coordinator may maintain plans')
+        for (const input of actions.plans ?? []) {
+          const { expectedRevision, ...item } = input
+          const checked = validateSuperAgentCommand({ type: 'plan-upsert', item, expectedRevision })
+          if (checked.type === 'plan-upsert') this.upsertPlan(document, checked.item, node.id, checked.expectedRevision)
+        }
         for (const input of actions.board ?? []) {
           const checked = validateSuperAgentCommand({ type: 'board-upsert', item: { id: input.id, title: input.title, content: input.content }, expectedRevision: input.expectedRevision })
           if (checked.type === 'board-upsert') this.upsertBoard(document, checked.item, node.id, checked.expectedRevision)
@@ -851,7 +1012,7 @@ export class SuperAgentService {
         for (const scriptId of actions.runScripts ?? []) {
           const script = document.config!.scripts.find(script => script.id === scriptId)
           if (node.role !== 'worker' || !script || script.nodeId !== node.id) throw new Error('Nodes may only start scripts assigned to themselves')
-          if (document.config!.environment.kind !== 'sandbox') throw new Error('Host script execution must be started by the user; nodes need a verified sandbox for automatic programs')
+          if (!document.config!.environment.fullControl && document.config!.environment.kind !== 'sandbox') throw new Error('Host script execution must be started by the user; nodes need a verified sandbox for automatic programs')
           await this.startScript(workspaceId, document, scriptId)
         }
       } catch (error) {
@@ -859,8 +1020,9 @@ export class SuperAgentService {
       }
     }
     if (task && turn.depth < MAX_CHAIN_DEPTH && document.pendingTurns.length < MAX_PENDING_TURNS && (document.chainCounts[turn.chainId] ?? 0) < MAX_CHAIN_TURNS) {
-      this.enqueue(document, this.coordinator(document).id, 'summary', `Worker ${node.name} finished task ${task.title} (${task.status}).\n${task.output ?? task.error ?? ''}\nSummarize the result for the user. Do not repeat completed work.`, undefined, turn.depth + 1, turn.chainId)
+      this.enqueue(document, this.coordinator(document).id, 'summary', `Worker ${node.name} finished task ${task.title} (${task.status}).\n${task.output ?? task.error ?? ''}\nSummarize the result for the user. Do not repeat completed work.${task.planId ? `\nReview linked plan ${task.planId}: verify the goal before marking it completed, or record the remaining steps and blockers using its current revision.` : ''}${document.config!.continuousWork ? '\nContinuous work is enabled: maintain the plan list and dispatch the next actionable step within the authorized goals.' : ''}`, undefined, turn.depth + 1, turn.chainId)
     }
+    if (!document.pendingTurns.length) document.state.allIdleSince = this.now()
     await this.commit(workspaceId, document)
     this.schedule(workspaceId)
   }
@@ -881,7 +1043,11 @@ export class SuperAgentService {
         if ((runtime.status === 'working' || runtime.status === 'preparing') && !runtime.sessionId) runtime.status = 'idle'
       }
       const task = document.state.tasks.find(task => task.id === turn.taskId)
-      if (task) { task.status = 'cancelled'; task.completedAt = this.now() }
+      if (task) {
+        task.status = 'cancelled'; task.completedAt = this.now()
+        const plan = document.state.plans.find(item => item.id === task.planId)
+        if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: '关联任务已停止；检查已执行操作后再决定是否恢复。' }, 'user', plan.revision)
+      }
     }
     // Removal is durable before stopping: late completion events cannot resurrect cancelled tasks.
     await this.commit(workspaceId, document)
@@ -913,14 +1079,20 @@ export class SuperAgentService {
     const coordinator = recipient.role === 'coordinator'
     return JSON.stringify({ nodes: document.config!.nodes.map(node => ({ id: node.id, name: node.name, role: node.role, description: node.description, model: node.model, thinkingLevel: node.thinkingLevel, intelligenceRating: node.intelligenceRating, workPreferences: node.workPreferences, maxCallsPerMinute: node.maxCallsPerMinute, sourceSlugs: node.sourceSlugs, abilityProfileIds: node.abilityProfileIds })),
       executionMode: 'allow-all',
+      continuousWork: document.config!.continuousWork === true,
+      plans: [...document.state.plans].sort((a, b) => (a.status === 'blocked' ? 1 : ['completed', 'cancelled'].includes(a.status) ? 2 : 0) - (b.status === 'blocked' ? 1 : ['completed', 'cancelled'].includes(b.status) ? 2 : 0) || a.priority - b.priority || a.updatedAt - b.updatedAt)
+        .slice(0, 20).map(item => {
+          const participant = coordinator || document.state.tasks.some(task => task.planId === item.id && task.nodeId === recipient.id)
+          return { ...item, instructions: participant ? item.instructions.slice(0, 500) : undefined, note: participant ? item.note.slice(0, 300) : undefined }
+        }),
+      planCount: document.state.plans.length,
       environment: { kind: document.config!.environment.kind, workingDirectory: document.config!.environment.workingDirectory,
+        fullControl: document.config!.environment.fullControl === true,
         permissions: document.config!.environment.permissions, sourceSlugs: recipient.sourceSlugs,
-        nodePermissions: { ...document.config!.environment.permissions,
-          writeFiles: recipient.role === 'worker' && document.config!.environment.permissions.writeFiles,
-          runPrograms: recipient.role === 'worker' && document.config!.environment.permissions.runPrograms } },
+        nodePermissions: superAgentNodePermissions(document.config!.environment, recipient.role) },
       runtime: document.state.nodes.map(runtime => ({ ...runtime, error: coordinator || runtime.nodeId === recipient.id ? runtime.error : undefined })),
       abilityProfiles: document.config!.abilityProfiles.map(profile => ({ id: profile.id, name: profile.name, description: profile.description })),
-      tasks: document.state.tasks.slice(-30).map(task => ({ id: task.id, title: task.title, nodeId: task.nodeId, status: task.status, output: coordinator || task.nodeId === recipient.id ? task.output?.slice(0, 2_000) : undefined, error: coordinator || task.nodeId === recipient.id ? task.error : undefined })),
+      tasks: document.state.tasks.slice(-30).map(task => ({ id: task.id, planId: task.planId, title: task.title, nodeId: task.nodeId, status: task.status, output: coordinator || task.nodeId === recipient.id ? task.output?.slice(0, 2_000) : undefined, error: coordinator || task.nodeId === recipient.id ? task.error : undefined })),
       board: document.state.board,
       scripts: document.state.scripts.map(script => {
         const own = document.config!.scripts.find(config => config.id === script.scriptId)?.nodeId === recipient.id
@@ -980,9 +1152,10 @@ export class SuperAgentService {
     const root = await this.folder(environment.workingDirectory)
     const lexical = resolve(root, script.path)
     const within = (path: string) => { const child = relative(root, path); return child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child) }
-    if (!within(lexical)) throw new Error('Scripts must be inside the configured working folder')
+    const unrestricted = environment.fullControl === true && environment.kind !== 'sandbox'
+    if (!unrestricted && !within(lexical)) throw new Error('Scripts must be inside the configured working folder')
     const canonical = await realpath(lexical)
-    if (!within(canonical)) throw new Error('Script symlinks may not leave the configured working folder')
+    if (!unrestricted && !within(canonical)) throw new Error('Script symlinks may not leave the configured working folder')
     const info = await stat(canonical)
     if (!info.isFile() || info.size > 4 * 1024 * 1024) throw new Error('A registered script must be a file of at most 4 MB')
     return canonical
@@ -1027,11 +1200,11 @@ export class SuperAgentService {
     const key = `${workspaceId}:${scriptId}`
     if (this.scriptProcesses.has(key)) throw new Error('This script is already running')
     if (document.state.scripts.find(item => item.scriptId === scriptId)?.status === 'untracked') throw new Error('The previous script process is untracked; verify it stopped, then remove and re-register this script before starting another process')
-    if (!config.environment.permissions.runPrograms) throw new Error('Script execution requires program permission')
+    if (!config.environment.fullControl && !config.environment.permissions.runPrograms) throw new Error('Script execution requires program permission')
     const environment = this.deps.prepareEnvironment ? await this.deps.prepareEnvironment(workspaceId, config.environment) : await this.environment(workspaceId, config.environment)
     if (!environment.status.available) throw new Error(environment.status.detail)
     if (config.environment.kind !== 'folder' && !this.deps.spawnScript) throw new Error('This execution adapter does not support managed scripts')
-    if (config.environment.kind === 'folder' && Object.values(config.environment.permissions).some(allowed => !allowed)) throw new Error('Host scripts need all file, program and browser permissions; use a container for restricted scripts')
+    if (!config.environment.fullControl && config.environment.kind === 'folder' && Object.values(config.environment.permissions).some(allowed => !allowed)) throw new Error('Host scripts need all file, program and browser permissions; use a container for restricted scripts')
     const path = await this.scriptPath({ ...config.environment, workingDirectory: environment.workingDirectory }, script)
     const extension = extname(path).toLowerCase()
     const runtimes: Record<string, [string, string[]]> = {
@@ -1050,6 +1223,7 @@ export class SuperAgentService {
     const child = remote?.child ?? spawn(runtime[0], [...runtime[1], ...script.args], { cwd: environment.workingDirectory, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], shell: false })
     const state = document.state.scripts.find(item => item.scriptId === scriptId)!
     state.status = 'running'; state.startedAt = this.now(); state.completedAt = undefined; state.output = ''; state.error = undefined; state.exitCode = undefined
+    document.state.allIdleSince = undefined
     const record = { child, timer: setTimeout(() => { void this.serial(workspaceId, async () => { await this.stopScript(workspaceId, document, scriptId, 'Script exceeded its timeout'); await this.commit(workspaceId, document) }).catch(() => undefined) }, script.timeoutSeconds * 1_000), output: '', stopping: false, stop: remote?.stop }
     record.timer.unref?.()
     this.scriptProcesses.set(key, record)

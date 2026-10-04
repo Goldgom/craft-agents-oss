@@ -12,6 +12,7 @@ import { useContainerWidth } from '@/hooks/useContainerWidth'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Markdown } from '@/components/markdown'
 import { cn } from '@/lib/utils'
@@ -20,7 +21,8 @@ import { SuperAgentSetup } from './SuperAgentSetup'
 import { SuperAgentConfiguration } from './SuperAgentConfiguration'
 import { SuperAgentResources, SuperAgentScripts } from './SuperAgentResources'
 import { NodeCommunication, SharedBoard } from './SuperAgentCollaboration'
-import { SuperAgentConversation } from './SuperAgentConversation'
+import { SuperAgentPlans } from './SuperAgentPlans'
+import { SuperAgentConversation, SuperAgentPermissionHistory } from './SuperAgentConversation'
 import { formatTimestamp, useSuperAgentText, withExecuteMode } from './super-agent-ui'
 import { recentActivityEntries, taskActivity, tasklessWorkerActivities, visibleActivityText, type SuperAgentActivity } from './super-agent-activity'
 
@@ -30,9 +32,10 @@ export interface SuperAgentPageProps {
   onOpenSession?: (sessionId: string) => void
 }
 
-type SettingsSection = 'settings' | 'team' | 'board' | 'communication' | 'resources' | 'scripts'
+type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts'
 const settingsSections: Array<{ id: SettingsSection; icon: typeof Bot }> = [
   { id: 'settings', icon: Settings2 }, { id: 'team', icon: Layers3 },
+  { id: 'plans', icon: ClipboardList },
   { id: 'board', icon: ClipboardList }, { id: 'communication', icon: MessagesSquare },
   { id: 'resources', icon: BookOpen }, { id: 'scripts', icon: Code2 },
 ]
@@ -178,6 +181,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
     || snapshot?.state.tasks.some(task => task.status === 'running' || task.status === 'queued')
   function openNodeSettings(nodeId?: string) { setSelectedNodeId(nodeId); setSettingsSection('settings'); setView('settings') }
   const headerActions = config ? <div className="flex items-center gap-1">
+    <label className="mr-2 flex items-center gap-2 text-xs" title={text('continuousWorkHint')}><Switch aria-label={text('continuousWork')} checked={config.continuousWork === true} disabled={busy} onCheckedChange={enabled => { void command({ type: 'continuous-work', enabled }).catch(() => {}) }} />{text('continuousWork')}</label>
     <Button size="icon" variant="ghost" className="size-8" disabled={busy} aria-label={text('refresh')} onClick={() => { setError(''); void refresh() }}><RefreshCw className="size-3.5" /></Button>
     {view === 'home'
       ? <Button size="sm" variant="ghost" onClick={() => openNodeSettings()}><Settings2 className="size-3.5" />{text('settings')}</Button>
@@ -197,9 +201,10 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
               <div className="min-h-0 flex-1">
                 {view === 'home' && <div className={cn('flex h-full min-h-0', compact ? 'flex-col' : 'flex-row')}>
                   <SuperAgentConversation snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} active={active} busy={busy || !!coordinatorWorking} requestPending={busy} onCommand={async value => { await command(value) }}
-                    canStop={!busy && !!teamWorking} onStop={() => { void command({ type: 'cancel' }).catch(() => {}) }}
+                    canStop={!busy && (!!teamWorking || config.continuousWork === true)} onStop={() => { void command({ type: 'cancel' }).catch(() => {}) }}
                     onInspect={() => { void command({ type: 'inspect' }).catch(() => {}) }} />
                   <WorkProgress snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} compact={compact} busy={busy}
+                    onOpenPlans={() => { setSettingsSection('plans'); setView('settings') }}
                     onCreateTask={() => setTaskDialogNode('')} onCommand={async value => { await command(value) }} onOpenSession={onOpenSession} />
                 </div>}
                 {view === 'settings' && <div className={cn('flex h-full min-h-0', compact ? 'flex-col' : 'flex-row')}>
@@ -214,10 +219,12 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
                     {settingsSection === 'team' && <NodeTeam snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} pendingPermissions={pendingPermissions}
                       onEdit={openNodeSettings} onOpenSession={onOpenSession} onTask={nodeId => setTaskDialogNode(nodeId)} busy={busy} />}
                     {settingsSection === 'board' && <SharedBoard config={config} items={snapshot.state.board} onCommand={async value => { await command(value) }} />}
+                    {settingsSection === 'plans' && <SuperAgentPlans items={snapshot.state.plans} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'communication' && <NodeCommunication config={config} messages={snapshot.state.messages} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'resources' && <SuperAgentResources config={config} sources={sources} skills={skills} onSave={async value => { await save(value) }} />}
                     {settingsSection === 'scripts' && <SuperAgentScripts snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} onSave={async value => { await save(value) }} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'settings' && <SuperAgentConfiguration key={activeWorkspaceId + ':' + (selectedNodeId ?? 'settings')} config={config} connections={llmConnections} sources={sources} environmentStatus={snapshot.environment}
+                      onContinuousWork={async enabled => { await command({ type: 'continuous-work', enabled }) }}
                       onSave={async value => { await save(value) }} onOpenAiSettings={onOpenAiSettings} initialNodeId={selectedNodeId} />}
                   </div>
                 </div>}
@@ -231,11 +238,12 @@ function PageNotice({ icon: Icon, title, description, children }: { icon: typeof
   return <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-12 text-center"><Icon className="size-10 text-muted-foreground/35" /><div><h2 className="text-base font-medium">{title}</h2><p className="mt-2 max-w-md text-xs leading-5 text-muted-foreground">{description}</p></div>{children}</div>
 }
 
-function WorkProgress({ snapshot, compact, busy, onCreateTask, onCommand, onOpenSession }: {
+function WorkProgress({ snapshot, compact, busy, onCreateTask, onOpenPlans, onCommand, onOpenSession }: {
   snapshot: SuperAgentSnapshot & { config: SuperAgentConfig }
   compact: boolean
   busy: boolean
   onCreateTask: () => void
+  onOpenPlans: () => void
   onCommand: (command: SuperAgentCommand) => Promise<void>
   onOpenSession?: (sessionId: string) => void
 }) {
@@ -247,6 +255,7 @@ function WorkProgress({ snapshot, compact, busy, onCreateTask, onCommand, onOpen
   const summary = <span className="text-[11px] text-muted-foreground">{text('progressSummary', { working, queued, completed })}</span>
   const tasklessActivities = tasklessWorkerActivities(snapshot)
   const list = <div className="space-y-5">
+    <button type="button" onClick={onOpenPlans} className="flex w-full items-center justify-between rounded-lg border border-border/60 p-3 text-xs hover:bg-accent"><span className="flex items-center gap-2"><ClipboardList className="size-3.5" />{text('plans')}</span><span className="text-muted-foreground">{snapshot.state.plans.filter(plan => !['completed', 'cancelled'].includes(plan.status)).length}</span></button>
     {(tasks.length > 0 || !tasklessActivities.length) && <TaskList snapshot={snapshot} busy={busy} onCommand={onCommand} onOpenSession={onOpenSession} />}
     {tasklessActivities.length > 0 && <section className="space-y-3" aria-label={text('nodeActivity')}><h3 className="text-[11px] font-medium text-muted-foreground">{text('nodeActivity')}</h3>
       {tasklessActivities.map(activity => {
@@ -264,13 +273,14 @@ function WorkProgress({ snapshot, compact, busy, onCreateTask, onCommand, onOpen
       <Activity className="size-3.5" /><span className="font-semibold">{text('workProgress')}</span><span className="min-w-0 flex-1 truncate">{summary}</span><ChevronDown className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
     </summary>
     <div className="flex items-center justify-end px-5 pb-2">{addButton}</div>
-    <div className="max-h-48 overflow-y-auto px-5 pb-4">{list}</div>
+    <div className="max-h-64 overflow-y-auto px-5 pb-4">{list}<SuperAgentPermissionHistory snapshot={snapshot} className="mt-6" /></div>
   </details>
   return <aside className="flex min-h-0 w-80 shrink-0 flex-col border-l border-border/70">
     <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-4"><h2 className="flex items-center gap-2 text-xs font-semibold"><Activity className="size-3.5" />{text('workProgress')}</h2>{addButton}</div>
     <div className="space-y-3 px-5 pb-4"><div className="flex items-center justify-between gap-2">{summary}<span className="text-[10px] tabular-nums text-muted-foreground">{completed}/{tasks.length}</span></div>
       <div role="progressbar" aria-label={text('workProgress')} aria-valuemin={0} aria-valuemax={tasks.length || 1} aria-valuenow={completed} className="h-1.5 overflow-hidden rounded-full bg-foreground/5"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: tasks.length ? (completed / tasks.length * 100) + '%' : '0%' }} /></div></div>
     <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">{list}</div>
+    <SuperAgentPermissionHistory snapshot={snapshot} className="mx-4 mb-4 mt-4 max-h-[40%] shrink-0" />
   </aside>
 }
 

@@ -28,6 +28,8 @@ export interface SuperAgentEnvironment {
   workingDirectory: string
   /** Super Agent normalizes legacy modes to allow-all; capability grants are independent. */
   permissionMode: PermissionMode
+  /** Explicit opt-in to unrestricted tool access without per-operation approvals. */
+  fullControl?: boolean
   permissions: {
     readFiles: boolean
     writeFiles: boolean
@@ -62,6 +64,8 @@ export interface SuperAgentConfig {
   avatar: string
   nodes: SuperAgentNode[]
   idleInspectionMinutes: number
+  /** Wake the coordinator after 30 minutes of complete team inactivity. Defaults to false. */
+  continuousWork?: boolean
   environment: SuperAgentEnvironment
   /** Sources available for assignment; individual nodes need their own binding. */
   sourceSlugs: string[]
@@ -73,6 +77,7 @@ export type SuperAgentTaskStatus = 'queued' | 'running' | 'completed' | 'failed'
 
 export interface SuperAgentTask {
   id: string
+  planId?: string
   title: string
   instructions: string
   nodeId: string
@@ -104,12 +109,33 @@ export interface SuperAgentMessage {
   body: string
   taskId?: string
   createdAt: number
+  /** Durable display record; never used to restore or grant an approval. */
+  permission?: SuperAgentPermissionRecord
+}
+
+export type SuperAgentPermissionRecord = Pick<SuperAgentPermissionRequest,
+  'id' | 'nodeId' | 'toolName' | 'description' | 'command' | 'reason' | 'status' | 'resolvedAt'> & {
+  target?: string
+  operation?: string
 }
 
 export interface SuperAgentBoardItem {
   id: string
   title: string
   content: string
+  revision: number
+  updatedBy: string
+  updatedAt: number
+}
+
+export interface SuperAgentPlanItem {
+  id: string
+  title: string
+  instructions: string
+  status: 'planned' | 'active' | 'blocked' | 'completed' | 'cancelled'
+  /** 1 is the highest priority. */
+  priority: number
+  note: string
   revision: number
   updatedBy: string
   updatedAt: number
@@ -135,9 +161,11 @@ export interface SuperAgentState {
   tasks: SuperAgentTask[]
   messages: SuperAgentMessage[]
   board: SuperAgentBoardItem[]
+  plans: SuperAgentPlanItem[]
   scripts: SuperAgentScriptRuntime[]
   lastUserActivityAt: number
   lastInspectionAt?: number
+  allIdleSince?: number
 }
 
 export interface SuperAgentEnvironmentStatus {
@@ -197,7 +225,10 @@ export interface SuperAgentPermissionRequest {
 /** Model output uses the same bounded operations as the user-facing control API. */
 export type SuperAgentCommand =
   | { type: 'chat'; text: string }
-  | { type: 'task'; title: string; instructions: string; nodeId?: string }
+  | { type: 'task'; title: string; instructions: string; nodeId?: string; planId?: string }
+  | { type: 'continuous-work'; enabled: boolean }
+  | { type: 'plan-upsert'; item: Pick<SuperAgentPlanItem, 'title' | 'instructions' | 'status' | 'priority' | 'note'> & { id?: string }; expectedRevision: number }
+  | { type: 'plan-delete'; id: string; expectedRevision: number }
   | { type: 'cancel'; taskId?: string }
   | { type: 'inspect' }
   | { type: 'permission-response'; requestId: string; allowed: boolean }
@@ -212,6 +243,8 @@ export interface SuperAgentSessionPolicy {
   nodeId: string
   role: SuperAgentNode['role']
   rootPath: string
+  /** Bypass tool capability and directory restrictions in the selected execution environment. */
+  fullControl?: boolean
   readFiles: boolean
   writeFiles: boolean
   runPrograms: boolean

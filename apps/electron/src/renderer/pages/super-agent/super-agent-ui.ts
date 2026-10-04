@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { getModelsForProviderType, isImageGenerationModelId } from '@config/llm-connections'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
-import type { SuperAgentConfig, SuperAgentNode } from '@craft-agent/shared/super-agent'
+import type { SuperAgentConfig, SuperAgentEnvironment, SuperAgentNode } from '@craft-agent/shared/super-agent'
 
 const strings = {
   title: ['超级智能体', 'Super Agent'],
@@ -75,6 +75,12 @@ const strings = {
   containerRuntime: ['容器运行时', 'Container runtime'],
   vmWorkspace: ['虚拟机工作区 ID', 'VM workspace ID'],
   permissions: ['权限控制', 'Permissions'],
+  fullControl: ['完全控制', 'Full control'],
+  fullControlDescription: ['开启后，所有节点无需工具审批即可读写文件、运行程序、操作浏览器，并访问工作目录之外的位置。', 'When enabled, all nodes can read and write files, run programs, use the browser and access locations outside the work folder without tool approvals.'],
+  fullControlBoundary: ['操作使用已连接宿主机、客户端或虚拟机的账号权限；所选沙箱与虚拟机的隔离仍然生效。', 'Operations use the connected host, client or VM account. The selected sandbox and VM isolation still apply.'],
+  fullControlEnabled: ['完全控制（无需工具审批）', 'Full control (no tool approvals)'],
+  advancedPermissions: ['高级权限', 'Advanced permissions'],
+  limitedControl: ['按高级权限执行', 'Use advanced permissions'],
   readFiles: ['读取文件', 'Read files'],
   writeFiles: ['修改文件', 'Write files'],
   runPrograms: ['运行程序和脚本', 'Run programs and scripts'],
@@ -91,6 +97,18 @@ const strings = {
   setupComplete: ['已准备创建', 'Ready to create'],
   setupSummary: ['{{workers}} 个工作节点 · 1 个主节点 · 每 {{minutes}} 分钟检查', '{{workers}} workers · 1 coordinator · inspect every {{minutes}} minutes'],
   settings: ['设置', 'Settings'],
+  continuousWork: ['持续工作', 'Continuous work'],
+  continuousWorkHint: ['开启后主动推进未完成计划；整个团队连续空闲 30 分钟时在后台自检。程序运行期间生效。', 'Advance unfinished plans. Run a background review after the whole team has been idle for 30 minutes. Requires the server to be running.'],
+  plans: ['计划列表', 'Plans'],
+  planHint: ['主智能体按优先级安排工作，记录进展与阻碍，并核验完成情况。你也可以添加或调整计划。', 'The coordinator schedules work by priority, records progress and blockers, and verifies completion. You can also add or edit plans.'],
+  noPlans: ['暂无计划。添加目标，或在聊天中让主智能体安排工作。', 'No plans yet. Add a goal or ask the coordinator to arrange work in chat.'],
+  addPlan: ['添加计划', 'Add plan'],
+  planStatus: ['计划状态', 'Plan status'],
+  priority: ['优先级（1 最高）', 'Priority (1 is highest)'],
+  planNote: ['进展与阻碍', 'Progress and blockers'],
+  planned: ['待安排', 'Planned'],
+  active: ['推进中', 'In progress'],
+  blocked: ['受阻', 'Blocked'],
   settingsTitle: ['超级智能体设置', 'Super Agent settings'],
   generalSettings: ['基本设置', 'General settings'],
   backToAssistant: ['返回助手', 'Back to assistant'],
@@ -130,6 +148,9 @@ const strings = {
   waitingPermission: ['等待授权', 'Waiting for approval'],
   permissionInbox: ['需要你的授权', 'Your approval is needed'],
   permissionHistory: ['最近授权记录', 'Recent approval decisions'],
+  approvalArchived: ['历史审批', 'Archived approval'],
+  approvalDetails: ['查看审批详情', 'View approval details'],
+  approvalReason: ['审批原因', 'Reason'],
   approved: ['已授权此操作', 'Operation approved'],
   denied: ['已拒绝', 'Denied'],
   expired: ['已过期', 'Expired'],
@@ -189,6 +210,7 @@ const strings = {
   scriptName: ['脚本名字', 'Script name'],
   scriptPath: ['脚本路径', 'Script path'],
   scriptPathHint: ['必须位于工作目录内，支持 .js、.mjs、.cjs、.py、.sh、.ps1。', 'Must be inside the work folder. Supports .js, .mjs, .cjs, .py, .sh and .ps1.'],
+  scriptPathFullControlHint: ['可使用工作目录内的相对路径，或执行机器上目录外的绝对路径。支持 .js、.mjs、.cjs、.py、.sh、.ps1。', 'Use a relative path inside the work folder or an absolute path elsewhere on the execution machine. Supports .js, .mjs, .cjs, .py, .sh and .ps1.'],
   hostScriptPermissions: ['在宿主文件夹运行脚本需要明确开启全部能力。脚本有宿主权限；需要隔离时选择容器沙箱。', 'Host scripts require all capabilities to be explicitly enabled. They run with host access; use a container sandbox for isolation.'],
   manualScriptPermissions: ['手动运行脚本需要开启“运行程序和脚本”。', 'Manual scripts require Run programs and scripts to be enabled.'],
   scriptArgs: ['参数（每行一个）', 'Arguments (one per line)'],
@@ -278,8 +300,9 @@ export function createConfig(connections: LlmConnectionWithStatus[], text: Super
     version: 1, name: text('defaultName'), avatar: '✦',
     nodes: [createNode('coordinator', connections, text, preferredSlug), createNode('worker', connections, text, preferredSlug)],
     idleInspectionMinutes: 15,
+    continuousWork: false,
     environment: {
-      kind: 'folder', workingDirectory: '', permissionMode: 'allow-all',
+      kind: 'folder', workingDirectory: '', permissionMode: 'allow-all', fullControl: false,
       permissions: { readFiles: true, writeFiles: false, runPrograms: false, browser: false },
     },
     sourceSlugs: [], abilityProfiles: [], scripts: [],
@@ -288,9 +311,14 @@ export function createConfig(connections: LlmConnectionWithStatus[], text: Super
 
 export type SuperAgentPreset = 'custom' | 'balanced' | 'fast' | 'deep'
 
-/** Execution mode is shared by the whole team; it never enables capabilities. */
+/** Missing legacy settings inherit full control; an explicit limited mode is preserved. */
 export function withExecuteMode(config: SuperAgentConfig): SuperAgentConfig {
-  return { ...config, environment: { ...config.environment, permissionMode: 'allow-all' } }
+  return { ...config, environment: { ...config.environment, permissionMode: 'allow-all', fullControl: config.environment.fullControl === true } }
+}
+
+export function scriptAccessGranted(environment: SuperAgentEnvironment): boolean {
+  return environment.fullControl === true || (environment.permissions.runPrograms
+    && (environment.kind !== 'folder' || Object.values(environment.permissions).every(Boolean)))
 }
 
 export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, connection: LlmConnectionWithStatus, text: SuperAgentText): SuperAgentConfig {

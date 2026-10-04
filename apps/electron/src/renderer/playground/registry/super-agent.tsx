@@ -16,7 +16,7 @@ const source: LoadedSource = {
   folderPath: 'C:\\Demo\\sources', workspaceRootPath: 'C:\\Demo', workspaceId: 'playground-workspace', guide: null,
 }
 
-function demoConfig(): SuperAgentConfig {
+function demoConfig(fullControl = false): SuperAgentConfig {
   return {
     version: 1, name: '星图助手', avatar: '🪐', idleInspectionMinutes: 15,
     nodes: [
@@ -24,7 +24,7 @@ function demoConfig(): SuperAgentConfig {
       { id: 'research', role: 'worker', name: '研究助手', avatar: '🦉', description: '阅读资料，查证信息并整理可追溯的研究笔记。', llmConnection: connection.slug, model: 'gpt-6-astra', thinkingLevel: 'high', maxCallsPerMinute: 6, intelligenceRating: 4, workPreferences: '先核对来源再下结论。', sourceSlugs: [source.config.slug], abilityProfileIds: ['research-profile'] },
       { id: 'executor', role: 'worker', name: '执行助手', avatar: '◈', description: '完成文件整理、结构化记录和脚本任务。', llmConnection: connection.slug, model: 'gpt-6-luna', thinkingLevel: 'medium', maxCallsPerMinute: 12, intelligenceRating: 3, workPreferences: '优先复用项目中的现有文件。', sourceSlugs: [source.config.slug], abilityProfileIds: [] },
     ],
-    environment: { kind: 'folder', workingDirectory: 'C:\\Demo\\WorldMusicHub', permissionMode: 'allow-all', permissions: { readFiles: true, writeFiles: true, runPrograms: false, browser: false } },
+    environment: { kind: 'folder', workingDirectory: 'C:\\Demo\\WorldMusicHub', permissionMode: 'allow-all', fullControl, permissions: { readFiles: true, writeFiles: true, runPrograms: false, browser: false } },
     sourceSlugs: [source.config.slug],
     abilityProfiles: [{ id: 'research-profile', name: '资料研究', description: '为重要结论保留来源与核查记录。', instructions: '先阅读数据源，再给出结论。使用共享数据板记录发现。' }],
     scripts: [{ id: 'catalog-check', name: '检查音乐目录', path: 'scripts/check_catalog.py', args: ['--verify'], nodeId: 'executor', timeoutSeconds: 120 }],
@@ -34,10 +34,11 @@ function demoConfig(): SuperAgentConfig {
 function demoSnapshot(scenario: string): SuperAgentSnapshot {
   const now = Date.now()
   return {
-    config: scenario === 'onboarding' ? null : demoConfig(),
+    config: scenario === 'onboarding' ? null : demoConfig(scenario === 'full-control'),
     environment: { available: scenario !== 'unavailable', isolation: scenario === 'unavailable' ? 'unavailable' : 'host-folder', detail: scenario === 'unavailable' ? '演示状态：所选 Docker 服务尚未运行。请启动运行时后刷新。' : '演示文件夹权限已配置。' },
     state: {
       version: 1, revision: 1, lastUserActivityAt: now, lastInspectionAt: now - 60_000,
+      plans: [{ id: 'plan-catalog', title: '整理音乐素材分类', instructions: '核查目录并整理地域、风格与来源标签。', status: 'active', priority: 1, note: '目录已核查，正在研究标签。', revision: 1, updatedBy: 'main', updatedAt: now - 60_000 }],
       nodes: [
         { nodeId: 'main', status: scenario === 'activity' ? 'working' : 'idle', sessionId: 'demo-main' },
         { nodeId: 'research', status: 'working', activeTaskId: 'task-research', sessionId: 'demo-research' },
@@ -89,7 +90,7 @@ function demoSnapshot(scenario: string): SuperAgentSnapshot {
 }
 
 /** Demo-only API. No provider calls, file operations, credentials or scripts are used. */
-function SuperAgentPreview({ scenario = 'configured' }: { scenario?: 'onboarding' | 'configured' | 'unavailable' | 'activity' | 'approval' }) {
+function SuperAgentPreview({ scenario = 'configured' }: { scenario?: 'onboarding' | 'configured' | 'unavailable' | 'activity' | 'approval' | 'full-control' }) {
   const shell = useAppShellContext()
   const [ready, setReady] = useState(false)
   const [requests, setRequests] = useState(0)
@@ -137,6 +138,14 @@ function SuperAgentPreview({ scenario = 'configured' }: { scenario?: 'onboarding
           snapshot.state.board = [...snapshot.state.board.filter(value => value.id !== item.id), item]
         }
         if (command.type === 'board-delete') snapshot.state.board = snapshot.state.board.filter(item => item.id !== command.id)
+        if (command.type === 'continuous-work') snapshot.config!.continuousWork = command.enabled
+        if (command.type === 'plan-upsert') {
+          const current = snapshot.state.plans.find(item => item.id === command.item.id)
+          if ((current?.revision ?? 0) !== command.expectedRevision) throw new Error('演示版本冲突：请关闭后重新打开计划。')
+          const item = { ...command.item, id: command.item.id ?? crypto.randomUUID(), revision: (current?.revision ?? 0) + 1, updatedBy: 'user', updatedAt: now }
+          snapshot.state.plans = [...snapshot.state.plans.filter(value => value.id !== item.id), item]
+        }
+        if (command.type === 'plan-delete') snapshot.state.plans = snapshot.state.plans.filter(item => item.id !== command.id)
         if (command.type === 'inspect') snapshot.state.messages.push({ id: crypto.randomUUID(), fromNodeId: snapshot.config!.nodes[0].id, toNodeId: 'user', kind: 'inspection', body: '演示检查：所有工作状态仅为界面样例。', createdAt: now })
         if (command.type === 'script-run' || command.type === 'script-stop') throw new Error('此演示不运行脚本。')
         return commit()
@@ -184,13 +193,14 @@ function SuperAgentPreview({ scenario = 'configured' }: { scenario?: 'onboarding
 
 export const superAgentComponents: ComponentEntry[] = [{
   id: 'super-agent', name: 'Super Agent', category: 'Agent Setup',
-  description: 'Synthetic onboarding, streamed activity and scoped approvals. Production uses real server APIs.',
+  description: 'Synthetic onboarding, streamed activity, scoped approvals and full control. Production uses real server APIs.',
   component: SuperAgentPreview, layout: 'full',
   props: [{ name: 'scenario', control: { type: 'select', options: [
-    { label: 'Configured team', value: 'configured' }, { label: 'Live activity', value: 'activity' }, { label: 'Approval in chat', value: 'approval' }, { label: 'First-use setup', value: 'onboarding' }, { label: 'Unavailable environment', value: 'unavailable' },
+    { label: 'Configured team', value: 'configured' }, { label: 'Full control', value: 'full-control' }, { label: 'Live activity', value: 'activity' }, { label: 'Approval in chat', value: 'approval' }, { label: 'First-use setup', value: 'onboarding' }, { label: 'Unavailable environment', value: 'unavailable' },
   ] }, defaultValue: 'configured' }],
   variants: [
     { name: 'Configured team', props: { scenario: 'configured' } },
+    { name: 'Full control', props: { scenario: 'full-control' } },
     { name: 'Live activity', props: { scenario: 'activity' } },
     { name: 'Approval in chat', props: { scenario: 'approval' } },
     { name: 'First-use setup', props: { scenario: 'onboarding' } },

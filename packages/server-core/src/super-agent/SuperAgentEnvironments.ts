@@ -24,11 +24,11 @@ export function sandboxArguments(name: string, root: string, environment: SuperA
   if (!sandbox || !IMAGE_PATTERN.test(sandbox.image)) throw new Error('Use a valid container image name')
   if (!/^tokenbird-super-[a-f0-9-]+$/.test(name)) throw new Error('Invalid managed container name')
   if (root.includes(',') || /[\r\n\x00]/.test(root)) throw new Error('Container folders may not contain commas or control characters')
-  if (environment.permissions.runPrograms && !environment.permissions.readFiles) {
+  if (!environment.fullControl && environment.permissions.runPrograms && !environment.permissions.readFiles) {
     throw new Error('Sandbox programs require file read permission')
   }
-  const mount = environment.permissions.readFiles || environment.permissions.writeFiles
-    ? ['--mount', `type=bind,source=${root},target=/workspace${environment.permissions.writeFiles ? '' : ',readonly'}`]
+  const mount = environment.fullControl || environment.permissions.readFiles || environment.permissions.writeFiles
+    ? ['--mount', `type=bind,source=${root},target=/workspace${environment.fullControl || environment.permissions.writeFiles ? '' : ',readonly'}`]
     : ['--tmpfs', '/workspace:rw,nosuid,nodev,size=67108864']
   return [
     'run', '--name', name, '--label', 'app.tokenbird.super-agent=true',
@@ -67,7 +67,9 @@ export class SuperAgentEnvironments {
   async resolve(workspaceId: string, environment: SuperAgentEnvironment): Promise<{ status: SuperAgentEnvironmentStatus; workingDirectory: string }> {
     const root = await this.folder(environment.workingDirectory)
     if (environment.kind === 'folder') {
-      return { workingDirectory: root, status: { available: true, isolation: 'host-folder', detail: '文件工具限定在工作目录；通用程序请使用沙箱。已登记脚本按程序权限和执行模式运行。' } }
+      return { workingDirectory: root, status: { available: true, isolation: 'host-folder', detail: environment.fullControl
+        ? '完全控制已开启：可直接操作工作目录外的文件、运行宿主程序和浏览器，无需工具审批。操作使用实际执行账号的权限。'
+        : '工作目录内按能力设置执行；内置说明与已验证的只读设备查询无需审批，其他超出范围的操作可申请单次授权。文件夹不提供系统隔离。' } }
     }
     if (environment.kind === 'vm') {
       const available = this.options.isVmHost === true && environment.vm?.workspaceId === workspaceId
@@ -99,7 +101,7 @@ export class SuperAgentEnvironments {
 
   async prepareSession(workspaceId: string, environment: SuperAgentEnvironment, policy: SuperAgentSessionPolicy): Promise<ContainerProgramExecutor | undefined> {
     if (this.closed) throw new Error('Execution environments are shutting down')
-    if (environment.kind !== 'sandbox' || !policy.runPrograms) return undefined
+    if (environment.kind !== 'sandbox' || (!policy.fullControl && !policy.runPrograms)) return undefined
     const resolved = await this.resolve(workspaceId, environment)
     if (!resolved.status.available) throw new Error(resolved.status.detail)
     const name = this.nodeContainerName(workspaceId, policy.nodeId, environment, resolved.workingDirectory)
@@ -120,10 +122,10 @@ export class SuperAgentEnvironments {
     const generation = (this.reconcileVersions.get(workspaceId) ?? 0) + 1
     this.reconcileVersions.set(workspaceId, generation)
     const allowed = new Set<string>()
-    if (config.environment.kind === 'sandbox' && config.environment.permissions.runPrograms) {
+    if (config.environment.kind === 'sandbox' && (config.environment.fullControl || config.environment.permissions.runPrograms)) {
       try {
         const root = await this.folder(config.environment.workingDirectory)
-        for (const node of config.nodes.filter(node => node.role === 'worker')) allowed.add(this.nodeContainerName(workspaceId, node.id, config.environment, root))
+        for (const node of config.nodes.filter(node => config.environment.fullControl || node.role === 'worker')) allowed.add(this.nodeContainerName(workspaceId, node.id, config.environment, root))
       } catch { /* Invalid folders stay unavailable; retire their old containers. */ }
     }
     if (this.reconcileVersions.get(workspaceId) !== generation) return

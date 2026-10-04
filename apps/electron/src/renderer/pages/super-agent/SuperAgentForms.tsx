@@ -1,11 +1,12 @@
-import { useCallback, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useId, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, FolderOpen, ImagePlus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, FolderOpen, ImagePlus, Trash2 } from 'lucide-react'
 import { THINKING_LEVELS, type ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 import type { SuperAgentAbilityProfile, SuperAgentEnvironment, SuperAgentEnvironmentStatus, SuperAgentNode } from '@craft-agent/shared/super-agent'
 import type { LlmConnectionWithStatus, LoadedSource } from '../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { ServerDirectoryBrowser } from '@/components/ServerDirectoryBrowser'
 import { useDirectoryPicker } from '@/hooks/useDirectoryPicker'
 import { useAppShellContext } from '@/context/AppShellContext'
@@ -153,6 +154,7 @@ export function EnvironmentEditor({ environment, onChange, status }: {
 }) {
   const text = useSuperAgentText()
   const { activeWorkspaceId } = useAppShellContext()
+  const fullControlId = useId()
   const choosePath = useCallback((workingDirectory: string) => onChange({ ...environment, workingDirectory }), [environment, onChange])
   const picker = useDirectoryPicker(choosePath)
   const modes = [
@@ -182,15 +184,25 @@ export function EnvironmentEditor({ environment, onChange, status }: {
     </div>}
     {environment.kind === 'vm' && <FormField label={text('vmWorkspace')}><Input value={environment.vm?.workspaceId ?? ''} onChange={event => onChange({ ...environment, vm: { workspaceId: event.target.value } })} /></FormField>}
     {environment.kind === 'folder' && <p className="rounded-lg bg-foreground/5 px-3 py-2 text-xs leading-5 text-muted-foreground">{text('folderIsolation')}</p>}
-    <FormSection title={text('permissions')} description={text('permissionHint')}>
-      {environment.kind === 'folder' && <p className="text-xs leading-5 text-muted-foreground">{text('folderPrograms')}</p>}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {(['readFiles', 'writeFiles', 'runPrograms', 'browser'] as const).map(key => <label key={key} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-3 text-sm">
-          <span>{text(key)}</span><input type="checkbox" className="size-4 accent-primary" checked={environment.permissions[key]}
-            onChange={event => onChange({ ...environment, permissions: { ...environment.permissions, [key]: event.target.checked } })} />
-        </label>)}
+    <FormSection title={text('permissions')}>
+      <div className="flex items-start justify-between gap-5">
+        <div className="min-w-0 space-y-2"><label htmlFor={fullControlId} className="cursor-pointer text-sm font-semibold">{text('fullControl')}</label><p id={fullControlId + '-description'} className="text-xs leading-5 text-muted-foreground">{text('fullControlDescription')}</p></div>
+        <Switch id={fullControlId} type="button" className="mt-0.5" checked={environment.fullControl === true} aria-describedby={fullControlId + '-description'} onCheckedChange={fullControl => onChange({ ...environment, fullControl })} />
       </div>
-      <FormField label={text('permissionMode')} hint={text('executionModeHint')}><Input value={text('allowAll')} readOnly /></FormField>
+      {environment.fullControl ? <p role="status" className="rounded-lg bg-primary/5 px-3 py-2 text-xs leading-5 text-muted-foreground">{text('fullControlBoundary')}</p>
+        : <details className="group/permissions border-t border-border/60 pt-3">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-medium text-muted-foreground">{text('advancedPermissions')}<ChevronDown className="size-3.5 transition-transform group-open/permissions:rotate-180" /></summary>
+          <div className="mt-4 space-y-3">
+            <p className="text-xs leading-5 text-muted-foreground">{text('permissionHint')}</p>
+            {environment.kind === 'folder' && <p className="text-xs leading-5 text-muted-foreground">{text('folderPrograms')}</p>}
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(['readFiles', 'writeFiles', 'runPrograms', 'browser'] as const).map(key => <label key={key} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-3 text-sm">
+                <span>{text(key)}</span><input type="checkbox" className="size-4 accent-primary" checked={environment.permissions[key]}
+                  onChange={event => onChange({ ...environment, permissions: { ...environment.permissions, [key]: event.target.checked } })} />
+              </label>)}
+            </div>
+          </div>
+        </details>}
     </FormSection>
     <ServerDirectoryBrowser open={picker.showServerBrowser} mode={picker.serverBrowserMode} initialPath={environment.workingDirectory}
       onSelect={picker.confirmServerBrowser} onCancel={picker.cancelServerBrowser} />

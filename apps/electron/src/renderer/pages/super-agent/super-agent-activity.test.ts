@@ -8,7 +8,7 @@ function workSnapshot(): SuperAgentSnapshot {
   return {
     config: { version: 1, name: 'Test team', avatar: '', idleInspectionMinutes: 15, nodes: [{ ...node, id: 'main', role: 'coordinator' }, { ...node, id: 'worker', role: 'worker' }], environment: { kind: 'folder', workingDirectory: 'C:\\test', permissionMode: 'allow-all', permissions: { readFiles: true, writeFiles: false, runPrograms: false, browser: false } }, sourceSlugs: [], abilityProfiles: [], scripts: [] },
     environment: { available: true, isolation: 'host-folder', detail: '' },
-    state: { version: 1, revision: 1, lastUserActivityAt: 1, nodes: [{ nodeId: 'main', sessionId: 'session-main', status: 'working' }, { nodeId: 'worker', sessionId: 'session-worker', status: 'working' }], tasks: [], messages: [], board: [], scripts: [] },
+    state: { version: 1, revision: 1, lastUserActivityAt: 1, nodes: [{ nodeId: 'main', sessionId: 'session-main', status: 'working' }, { nodeId: 'worker', sessionId: 'session-worker', status: 'working' }], tasks: [], messages: [], board: [], plans: [], scripts: [] },
     activity: [],
   }
 }

@@ -6,9 +6,12 @@
  * shared session/cookie partition and CDP automation support.
  */
 
-import { join, parse as parsePath } from 'path'
+import { isAbsolute, join, normalize, parse as parsePath } from 'path'
 import { existsSync, mkdirSync } from 'fs'
+import { realpath, stat } from 'fs/promises'
+import { homedir } from 'os'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
+import { hasSessionFullControl } from '@craft-agent/shared/agent'
 import { BrowserView, BrowserWindow, app, ipcMain, nativeTheme, session, shell, type Session as ElectronSession } from 'electron'
 import { mainLog } from './logger'
 import type { WindowManager } from './window-manager'
@@ -1611,13 +1614,30 @@ export class BrowserPaneManager implements IBrowserPaneManager {
 
   async uploadFile(id: string, ref: string, filePaths: string[]): Promise<ElementGeometry> {
     const instance = this.requireAliveInstance(id)
+    // Only the currently bound local session can authorize an unrestricted
+    // upload. A released window's historical owner must not widen its access.
+    const ownerSessionId = instance.ownerType === 'session' ? instance.boundSessionId : null
+    const fullControl = ownerSessionId !== null && instance.ownerSessionId === ownerSessionId
+      && !this.isRemoteOwnerKey(ownerSessionId) && hasSessionFullControl(ownerSessionId)
 
     const safePaths: string[] = []
     for (const p of filePaths) {
-      const workspaceId = this.resolveLaunchWorkspaceId()
-      const safePath = await validateFilePath(p, getWorkspaceAllowedDirs(workspaceId))
+      let safePath: string
+      if (fullControl) {
+        const normalizedPath = normalize(p.startsWith('~') ? p.replace(/^~/, homedir()) : p)
+        if (!isAbsolute(normalizedPath)) throw new Error('Only absolute file paths are allowed')
+        safePath = await realpath(normalizedPath)
+        if (!(await stat(safePath)).isFile()) throw new Error('Upload path must be a regular file')
+      } else {
+        const workspaceId = this.resolveLaunchWorkspaceId()
+        safePath = await validateFilePath(p, getWorkspaceAllowedDirs(workspaceId))
+      }
       if (!existsSync(safePath)) throw new Error(`File not found: ${p}`)
       safePaths.push(safePath)
+    }
+    if (fullControl && (instance.boundSessionId !== ownerSessionId || instance.ownerType !== 'session'
+      || instance.ownerSessionId !== ownerSessionId || !hasSessionFullControl(ownerSessionId!))) {
+      throw new Error('Browser upload authorization changed while preparing files; retry with the current session permissions')
     }
 
     return instance.cdp.setFileInputFiles(ref, safePaths)

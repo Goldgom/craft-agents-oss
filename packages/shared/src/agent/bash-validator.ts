@@ -172,7 +172,8 @@ function getDangerousAwkReason(commandParts: string[]): string | null {
  */
 export function validateBashCommand(
   command: string,
-  patterns: CompiledBashPattern[]
+  patterns: CompiledBashPattern[],
+  options: { forbidRedirections?: boolean } = {},
 ): BashValidationResult {
   // Parse the command into an AST
   let ast: ScriptNode;
@@ -187,6 +188,17 @@ export function validateBashCommand(
         error: error instanceof Error ? error.message : String(error),
       },
     };
+  }
+
+  if (options.forbidRedirections) {
+    const queue: unknown[] = [ast];
+    while (queue.length) {
+      const value = queue.pop();
+      if (!value || typeof value !== 'object') continue;
+      if ((value as ASTNode).type === 'Redirect') return { allowed: false, reason: { type: 'redirect',
+        op: (value as RedirectNode).op?.text ?? 'redirect', explanation: 'Automatic system inspection cannot redirect input or output files' } };
+      queue.push(...Object.values(value));
+    }
   }
 
   // Validate the AST recursively

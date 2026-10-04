@@ -1,4 +1,5 @@
 export type * from './types'
+export { superAgentNodePermissions } from './permissions'
 export { validateSuperAgentConfig, validateSuperAgentCommand, emptySuperAgentState } from './validation'
 export { loadSuperAgentDocument, saveSuperAgentDocument } from './storage'
 export type { SuperAgentDocument, SuperAgentPendingTurn } from './storage'

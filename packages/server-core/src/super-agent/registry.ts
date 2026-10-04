@@ -33,7 +33,7 @@ export async function validateSuperAgentCatalog(workspaceId: string, config: Sup
     for (const slug of node.sourceSlugs) if (!sources.has(slug)) throw new Error(`Data source not found: ${slug}`)
   }
   for (const slug of config.sourceSlugs) if (!sources.has(slug)) throw new Error(`Data source not found: ${slug}`)
-  if (config.environment.kind === 'sandbox' && config.environment.permissions.runPrograms && !config.environment.permissions.readFiles) {
+  if (!config.environment.fullControl && config.environment.kind === 'sandbox' && config.environment.permissions.runPrograms && !config.environment.permissions.readFiles) {
     throw new Error('Sandbox programs require file read permission')
   }
 }
@@ -55,6 +55,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       respondToPermission: (sessionId, requestId, allowed, alwaysAllow) => host.respondToPermission(sessionId, requestId, allowed, alwaysAllow),
       getSessionFinalText: sessionId => host.getSessionFinalText(sessionId),
       ensureSuperAgentSessionSettings: (sessionId, settings) => host.ensureSuperAgentSessionSettings(sessionId, settings),
+      setSuperAgentFullControl: (workspaceId, fullControl) => host.setSuperAgentFullControl(workspaceId, fullControl),
       applySessionPolicy: async (sessionId, policy) => {
         if (!host.applySessionPolicy) throw new Error('This host does not support Super Agent execution policies')
         const session = await host.getSession(sessionId)
@@ -86,7 +87,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       // executor only after the environment adapter has verified that host mode.
       const resolved = await environments.resolve(workspaceId, environment)
       if (!resolved.status.available || resolved.status.isolation !== 'remote-vm') throw new Error(resolved.status.detail)
-      if (!Object.values(environment.permissions).every(Boolean)) throw new Error('VM host scripts require all environment permissions')
+      if (!environment.fullControl && !Object.values(environment.permissions).every(Boolean)) throw new Error('VM host scripts require all environment permissions')
       const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
       const commands: Record<string, [string, string[]]> = {
         '.js': [process.execPath, [path]], '.mjs': [process.execPath, [path]], '.cjs': [process.execPath, [path]],

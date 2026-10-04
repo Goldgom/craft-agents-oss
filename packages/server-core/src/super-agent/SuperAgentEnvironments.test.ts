@@ -76,6 +76,26 @@ describe('Super Agent execution environments', () => {
     await expect(environments.prepareSession('workspace', environment(), policy())).rejects.toThrow('shutting down')
   })
 
+  it('full control prepares coordinator sandboxes with writable project mounts', async () => {
+    const calls: string[][] = []
+    const environments = new SuperAgentEnvironments({ findRuntime: async () => runtimePath, run: async (_runtime, args) => {
+      calls.push(args)
+      if (args[0] === 'inspect') throw new Error('No such container')
+      return 'ready'
+    } })
+    const full = { ...environment(), fullControl: true, permissions: { readFiles: false, writeFiles: false, runPrograms: false, browser: false } }
+    const node = { id: 'main', role: 'coordinator' as const, name: 'Main', avatar: '', description: '', llmConnection: 'test', model: 'test', thinkingLevel: 'medium' as const, maxCallsPerMinute: 6, intelligenceRating: 3, workPreferences: '', sourceSlugs: [], abilityProfileIds: [] }
+    await environments.reconcile('workspace', { version: 1, name: 'Test', avatar: '', idleInspectionMinutes: 15,
+      environment: full, sourceSlugs: [], abilityProfiles: [], scripts: [], nodes: [node] })
+    const executor = await environments.prepareSession('workspace', full, { ...policy(), nodeId: 'main', role: 'coordinator', fullControl: true, runPrograms: false })
+    expect(executor).toBeDefined()
+    const args = calls.find(args => args[0] === 'run')!
+    expect(args).toContain(`type=bind,source=${root},target=/workspace`)
+    expect(args).toContain('--network=none')
+    expect(args).not.toContain('--privileged')
+    await environments.cleanup()
+  })
+
   it('VM mode requires an identified VM server and its current workspace', async () => {
     const config = { ...environment(), kind: 'vm' as const, vm: { workspaceId: 'vm-workspace' } }
     const local = new SuperAgentEnvironments()

@@ -134,8 +134,9 @@ export function SuperAgentSetup({ connections, defaultConnection, onSave, onOpen
             <div className="min-w-0 flex-1"><p className="text-sm font-medium">{node.name}<span className="ml-2 text-xs font-normal text-muted-foreground">{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span></p><p className="mt-0.5 truncate text-xs text-muted-foreground">{connections.find(connection => connection.slug === node.llmConnection)?.name} · {node.model}</p></div>
             <Check className="size-4 text-emerald-500" />
           </div>)}</div>
-          <div className="border-t border-border/70 pt-4"><div className="mb-3 flex items-center justify-between gap-3 text-xs"><span className="font-medium text-muted-foreground">{text('permissionMode')}</span><span>{text('allowAll')}</span></div><p className="text-xs font-medium text-muted-foreground">{text('workingDirectory')}</p><p className="mt-1 break-all font-mono text-xs">{config.environment.workingDirectory}</p>
-            <div className="mt-3 flex flex-wrap gap-2">{(['readFiles', 'writeFiles', 'runPrograms', 'browser'] as const).filter(key => config.environment.permissions[key]).map(key => <span key={key} className="rounded-full bg-foreground/5 px-2 py-1 text-xs">{text(key)}</span>)}</div>
+          <div className="border-t border-border/70 pt-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs"><span className="font-medium text-muted-foreground">{text('permissions')}</span><span>{text(config.environment.fullControl ? 'fullControlEnabled' : 'limitedControl')}</span></div><p className="text-xs font-medium text-muted-foreground">{text('workingDirectory')}</p><p className="mt-1 break-all font-mono text-xs">{config.environment.workingDirectory}</p>
+            {config.environment.fullControl ? <p className="mt-3 text-xs leading-5 text-muted-foreground">{text('fullControlBoundary')}</p>
+              : <div className="mt-3 flex flex-wrap gap-2">{(['readFiles', 'writeFiles', 'runPrograms', 'browser'] as const).filter(key => config.environment.permissions[key]).map(key => <span key={key} className="rounded-full bg-foreground/5 px-2 py-1 text-xs">{text(key)}</span>)}</div>}
           </div>
         </div>}
       </fieldset>

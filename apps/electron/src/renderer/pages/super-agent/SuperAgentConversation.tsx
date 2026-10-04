@@ -10,6 +10,8 @@ import { AgentAvatar } from './SuperAgentForms'
 import { nodeLabel } from './SuperAgentCollaboration'
 import { formatTimestamp, useSuperAgentText } from './super-agent-ui'
 import { ordinaryPermissionHeads, recentPermissionResolutions, visibleActivityEntries, visibleActivityText, type SuperAgentActivity, type SuperAgentApproval } from './super-agent-activity'
+import { approvalNotice, permissionNotice } from './super-agent-permission-notice'
+import { PermissionResultCard } from './PermissionResultCard'
 
 export function SuperAgentConversation({ snapshot, active, busy, requestPending, canStop, onStop, onCommand, onInspect }: {
   snapshot: SuperAgentSnapshot & { config: SuperAgentConfig }
@@ -36,16 +38,15 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
   const mainActivity = snapshot.activity?.find(activity => activity.nodeId === coordinator.id)
   const entries = mainActivity ? visibleActivityEntries(mainActivity, messages) : []
   const inbox = snapshot.permissionRequests ?? []
+  const notices = new Map(messages.map(message => [message.id, permissionNotice(message, inbox, config)]))
   const approvals = inbox.filter(request => request.status === 'pending')
-  const resolutions = recentPermissionResolutions(inbox)
   const sessionIds = new Set(state.nodes.map(node => node.sessionId).filter((id): id is string => !!id))
   const ordinary = ordinaryPermissionHeads(sessionIds, pendingPermissions, inbox)
   const approvalCount = approvals.length + ordinary.length
   const streamRevision = entries.map(entry => entry.id + ':' + entry.updatedAt + ':' + entry.text.length).join('|')
-  const resolutionRevision = resolutions.map(request => request.id + ':' + request.status + ':' + request.resolvedAt).join('|')
   useEffect(() => {
     if (active && followRef.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages.length, streamRevision, resolutionRevision, approvalCount, busy, active])
+  }, [messages.length, streamRevision, approvalCount, busy, active])
 
   async function send() {
     if (!input.trim() || requestPending || sending || !snapshot.environment.available) return
@@ -81,8 +82,9 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
       if (scroller) followRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 100
     }}>
       <div className="mx-auto max-w-3xl space-y-6">
-        {!messages.length && !entries.length && <div className="mx-auto flex max-w-sm flex-col items-center gap-4 py-12 text-center"><AgentAvatar avatar={config.avatar} name={config.name} className="size-16 rounded-3xl text-3xl" /><h1 className="text-lg font-semibold">{config.name}</h1><p className="text-sm leading-6 text-muted-foreground">{text('introMessage')}</p></div>}
+        {!messages.some(message => !notices.get(message.id)) && !entries.length && <div className="mx-auto flex max-w-sm flex-col items-center gap-4 py-12 text-center"><AgentAvatar avatar={config.avatar} name={config.name} className="size-16 rounded-3xl text-3xl" /><h1 className="text-lg font-semibold">{config.name}</h1><p className="text-sm leading-6 text-muted-foreground">{text('introMessage')}</p></div>}
         {messages.map(message => {
+          if (notices.get(message.id)) return null
           const user = message.fromNodeId === 'user'
           const sender = config.nodes.find(node => node.id === message.fromNodeId) ?? coordinator
           return <article key={message.id} className={cn('flex items-start gap-3', user && 'flex-row-reverse')}>
@@ -101,14 +103,6 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
           {ordinary.map(request => <ApprovalCard key={request.sessionId + ':' + request.requestId} owner={nodeLabel(config, state.nodes.find(node => node.sessionId === request.sessionId)?.nodeId ?? coordinator.id, text)} request={request}
             pending={respondingTo !== null || !onRespondToPermission} onRespond={allowed => { void respondOrdinary(request, allowed) }} />)}
         </div>}
-        {resolutions.length > 0 && <section className="space-y-2 border-t border-border/60 pt-4" aria-label={text('permissionHistory')}>
-          <h2 className="text-[11px] font-medium text-muted-foreground">{text('permissionHistory')}</h2>
-          <div className="space-y-2" aria-live="polite">{resolutions.map(request => <article key={request.sessionId + ':' + request.id} className="flex items-start gap-2 text-[11px] leading-5">
-            {request.status === 'approved' ? <Check className="mt-1 size-3 shrink-0 text-emerald-500" /> : <X className={cn('mt-1 size-3 shrink-0', request.status === 'denied' ? 'text-destructive' : 'text-muted-foreground')} />}
-            <div className="min-w-0 flex-1"><p className="flex flex-wrap items-center gap-x-2"><span className="font-medium">{nodeLabel(config, request.nodeId, text)}</span><span className={cn(request.status === 'approved' ? 'text-emerald-600 dark:text-emerald-400' : request.status === 'denied' ? 'text-destructive' : 'text-muted-foreground')}>{text(request.status === 'pending' ? 'waitingPermission' : request.status)}</span><span className="text-muted-foreground">{formatTimestamp(request.resolvedAt ?? request.createdAt)}</span></p>
-              <p className="truncate text-muted-foreground" title={request.scope?.target ?? request.description}>{request.toolName} · {request.scope?.target ?? request.description}</p></div>
-          </article>)}</div>
-        </section>}
         {approvalError && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-xs leading-5 text-destructive">{approvalError}</p>}
         {busy && !entries.length && <div role="status" className="flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" />{text('working')}</div>}
       </div>
@@ -124,6 +118,29 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
         </div>
       </div>
     </div>
+  </section>
+}
+
+export function SuperAgentPermissionHistory({ snapshot, className }: {
+  snapshot: SuperAgentSnapshot & { config: SuperAgentConfig }
+  className?: string
+}) {
+  const text = useSuperAgentText()
+  const { config, state } = snapshot
+  const inbox = snapshot.permissionRequests ?? []
+  const notices = state.messages.flatMap(message => {
+    const notice = permissionNotice(message, inbox, config)
+    return notice && notice.record.status !== 'pending' ? [{ notice, timestamp: notice.record.resolvedAt ?? message.createdAt }] : []
+  })
+  const representedApprovals = new Set(notices.map(({ notice }) => notice.record.id))
+  const resolutions = recentPermissionResolutions(inbox.filter(request => !representedApprovals.has(request.id)))
+  const records = [...notices, ...resolutions.map(request => ({ notice: approvalNotice(request), timestamp: request.resolvedAt ?? request.createdAt }))]
+  const history = [...new Map(records.map(item => [item.notice.record.id, item])).values()].sort((a, b) => b.timestamp - a.timestamp)
+  if (!history.length) return null
+  return <section className={cn('flex min-h-0 flex-col gap-3 border-t border-border/60 pt-4', className)} aria-label={text('permissionHistory')}>
+    <h2 className="shrink-0 text-[11px] font-medium text-muted-foreground">{text('permissionHistory')}</h2>
+    <div className="min-h-0 space-y-2 overflow-y-auto" aria-live="polite">{history.map(({ notice, timestamp }) => <PermissionResultCard key={notice.record.id}
+      notice={notice} owner={notice.owner ?? nodeLabel(config, notice.record.nodeId, text)} timestamp={formatTimestamp(timestamp)} text={text} />)}</div>
   </section>
 }
 

@@ -10,7 +10,7 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
-import { setSessionExecutionPolicy, setSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, checkSessionPolicyPath, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
+import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, checkSessionExecutionPolicy, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
 import type { SuperAgentSessionPolicy } from '@craft-agent/shared/super-agent'
 import { cleanupSuperAgents } from '../super-agent/registry'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@craft-agent/shared/agent'
@@ -397,7 +397,7 @@ async function buildServersFromSources(
 /** Apply an Agent's independent MCP/API source switches. Ordinary sessions
  * have no policy and retain the workspace behaviour unchanged. */
 function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'agentSessionSettings' | 'executionPolicy'>): LoadedSource[] {
-  if (managed?.executionPolicy) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
+  if (managed?.executionPolicy && !managed.executionPolicy.fullControl) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
   const settings = managed?.agentSessionSettings
   if (!settings) return sources
   const mcp = settings.mcpSourceSlugs ? new Set(settings.mcpSourceSlugs) : null
@@ -700,6 +700,7 @@ async function resolveToolDisplayMeta(
 
 /** Agent type - unified backend interface for all providers */
 type AgentInstance = AgentBackend
+type AgentPermissionRequest = Parameters<NonNullable<AgentBackend['onPermissionRequest']>>[0]
 
 /**
  * Status of a background task in the main-process registry.
@@ -1073,7 +1074,7 @@ export function createManagedSession(
   if (managed.executionPolicy) {
     managed.permissionMode = 'allow-all'
     setPermissionMode(managed.id, 'allow-all', { changedBy: 'restore' })
-    try { setSessionExecutionPolicy(managed.id, managed.executionPolicy) }
+    try { managed.executionPolicy = setSessionExecutionPolicy(managed.id, managed.executionPolicy) }
     catch (error) { sessionLog.error(`Invalid restored node policy for session ${managed.id}:`, error) }
   }
   return managed
@@ -1235,11 +1236,14 @@ export class SessionManager implements ISessionManager {
   // Permission request metadata tracking (keyed by requestId)
   private pendingPermissionRequests: Map<string, {
     sessionId: string
+    toolName?: string
+    command?: string
     type?: 'bash' | 'file_write' | 'mcp_mutation' | 'api_mutation' | 'admin_approval'
     commandHash?: string
   }> = new Map()
   private pendingNodePermissions = new Map<string, {
     sessionId: string
+    request: SessionPolicyPermissionRequest
     expiresAt: number
     timer: ReturnType<typeof setTimeout>
     resolve: (allowed: boolean) => void
@@ -1645,7 +1649,7 @@ export class SessionManager implements ISessionManager {
 
   private async runSessionLocalShell(managed: ManagedSession, args: ShellExecArgs): Promise<ClientShellResult> {
     let clientId: string | null
-    if (managed.executionPolicy) {
+    if (managed.executionPolicy && !isSessionPolicyShellAutoAllowed(managed.id, 'mcp__session__localbash', { ...args }, managed.workingDirectory)) {
       const { getSessionPolicyGrantTarget } = await import('@craft-agent/shared/agent')
       const target = getSessionPolicyGrantTarget(managed.id, 'mcp__session__localbash', { ...args }, managed.workingDirectory)
       // The permission dialog names one execution target. Do not switch
@@ -1780,6 +1784,8 @@ export class SessionManager implements ISessionManager {
 
   private requestNodePermission(managed: ManagedSession, request: SessionPolicyPermissionRequest): Promise<boolean> {
     if (this.sessions.get(managed.id) !== managed || managed.persistenceRetired || managed.runtimeTeardown || !managed.isProcessing || managed.stopRequested) return Promise.resolve(false)
+    // A callback captured before a live mode change must use the current policy.
+    if (managed.executionPolicy?.fullControl) return Promise.resolve(checkSessionExecutionPolicy(managed.id, request.toolName, request.input, managed.workingDirectory).allowed)
     if ([...this.pendingNodePermissions.values()].filter(item => item.sessionId === managed.id).length >= 20) return Promise.resolve(false)
     const tool = request.toolName.split('__').at(-1)!.toLowerCase()
     if (tool === 'localbash') {
@@ -1800,8 +1806,8 @@ export class SessionManager implements ISessionManager {
         resolve(false)
       }, Math.max(1, request.scope.expiresAt - Date.now()))
       timer.unref?.()
-      this.pendingNodePermissions.set(requestId, { sessionId: managed.id, expiresAt: request.scope.expiresAt, timer, resolve })
-      this.pendingPermissionRequests.set(requestId, { sessionId: managed.id })
+      this.pendingNodePermissions.set(requestId, { sessionId: managed.id, request, expiresAt: request.scope.expiresAt, timer, resolve })
+      this.pendingPermissionRequests.set(requestId, { sessionId: managed.id, toolName: request.toolName })
       this.sendEvent({ type: 'permission_request', sessionId: managed.id, request: {
         requestId, sessionId: managed.id, toolName: request.toolName,
         type: request.scope.kind === 'program' ? 'bash' : request.scope.kind === 'file_write' ? 'file_write' : 'mcp_mutation',
@@ -1814,6 +1820,16 @@ export class SessionManager implements ISessionManager {
         policyScope: { ...request.scope },
       } }, managed.workspace.id)
     })
+  }
+
+  /** Provider callbacks can race a mode change; no renderer/broker approval is needed in full control. */
+  private autoRespondToNodeRuntimePermission(managed: ManagedSession, request: AgentPermissionRequest): boolean {
+    if (!managed.executionPolicy?.fullControl) return false
+    const allowed = this.sessions.get(managed.id) === managed && !managed.persistenceRetired
+      && !managed.runtimeTeardown && managed.isProcessing && !managed.stopRequested
+      && checkSessionExecutionPolicy(managed.id, request.toolName, { command: request.command }, managed.workingDirectory).allowed
+    managed.agent?.respondToPermission(request.requestId, allowed, false)
+    return true
   }
 
   /**
@@ -3578,6 +3594,74 @@ export class SessionManager implements ISessionManager {
     await sessionPersistenceQueue.flush(sessionId)
   }
 
+  /** Change operational access immediately without replacing a running node's conversation. */
+  async setSuperAgentSessionFullControl(sessionId: string, fullControl: boolean): Promise<void> {
+    if (typeof fullControl !== 'boolean') throw new Error('Full control must be a boolean')
+    const managed = this.sessions.get(sessionId)
+    if (!managed?.executionPolicy) throw new Error('Super Agent node session not found')
+    const previouslyEnabled = managed.executionPolicy.fullControl === true
+    const executor = getSessionProgramExecutor(sessionId)
+    let appliedPolicy: SessionExecutionPolicy | undefined
+    try {
+      // Keep the explicit revocation in managed state even if the environment
+      // directory disappeared and normalization can only register a denial.
+      managed.executionPolicy = appliedPolicy = { ...managed.executionPolicy, fullControl }
+      managed.executionPolicy = appliedPolicy = setSessionExecutionPolicy(sessionId, managed.executionPolicy)
+      this.attachNodePermissionHandler(managed)
+      this.setSessionPermissionMode(sessionId, 'allow-all')
+      if (managed.agent?.getAllSources && managed.agent.setAllSources) managed.agent.setAllSources(managed.agent.getAllSources())
+      // Policy replacement discards runtime handles and exact grants. Revalidate
+      // the current executor; it is never read from the persisted JSONL header.
+      setSessionProgramExecutor(sessionId, executor)
+
+      if (fullControl) {
+        for (const [requestId, metadata] of [...this.pendingPermissionRequests]) {
+          if (metadata.sessionId !== sessionId) continue
+          const nodeRequest = this.pendingNodePermissions.get(requestId)?.request
+          const allowed = checkSessionExecutionPolicy(sessionId,
+            nodeRequest?.toolName ?? metadata.toolName ?? '',
+            nodeRequest?.input ?? { command: metadata.command }, managed.workingDirectory).allowed
+          // Resolve the backend/core's original suspended operation, including
+          // permission cards emitted before the user changed the mode.
+          this.respondToPermission(sessionId, requestId, allowed, false)
+        }
+      }
+      if (managed.persistenceRetired) return
+      this.persistSession(managed, true)
+      await sessionPersistenceQueue.flush(sessionId)
+    } catch (error) {
+      // Failed activation must not leave an unrestricted hidden session. A
+      // later live mode change wins over this asynchronous failure; revocation
+      // stays effective even if its own disk write cannot complete.
+      if (fullControl && !previouslyEnabled && this.sessions.get(sessionId) === managed && managed.executionPolicy === appliedPolicy) {
+        try { await this.setSuperAgentSessionFullControl(sessionId, false) }
+        catch (rollbackError) { sessionLog.error(`Failed to persist node access rollback for ${sessionId}:`, rollbackError) }
+      }
+      throw error
+    }
+  }
+
+  /** Include older hidden nodes whose team configuration no longer references their session IDs. */
+  async setSuperAgentFullControl(workspaceId: string, fullControl: boolean): Promise<void> {
+    if (typeof fullControl !== 'boolean') throw new Error('Full control must be a boolean')
+    const updates = [...this.sessions.values()]
+      .filter(managed => managed.workspace.id === workspaceId && !!managed.executionPolicy)
+      .map(managed => {
+        const previouslyEnabled = managed.executionPolicy!.fullControl === true
+        const update = this.setSuperAgentSessionFullControl(managed.id, fullControl)
+        return { managed, previouslyEnabled, appliedPolicy: managed.executionPolicy, update }
+      })
+    const results = await Promise.allSettled(updates.map(item => item.update))
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (!failed) return
+    if (fullControl) {
+      await Promise.allSettled(updates
+        .filter(item => !item.previouslyEnabled && this.sessions.get(item.managed.id) === item.managed && item.managed.executionPolicy === item.appliedPolicy)
+        .map(item => this.setSuperAgentSessionFullControl(item.managed.id, false)))
+    }
+    throw failed.reason
+  }
+
   /** Reuse a node's conversation while updating the effective prompt and Execute mode. */
   async ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void> {
     if (settings?.permissionMode !== 'allow-all' || typeof settings.agentSystemPrompt !== 'string' || !settings.agentSystemPrompt.trim()) {
@@ -4645,6 +4729,7 @@ export class SessionManager implements ISessionManager {
         commandHash?: string;
         approvalTtlSeconds?: number;
       }) => {
+        if (this.autoRespondToNodeRuntimePermission(managed, request)) return
         sessionLog.info(`Permission request for session ${managed.id}:`, request.command)
         let brokerMetadata: {
           commandHash?: string
@@ -4671,6 +4756,8 @@ export class SessionManager implements ISessionManager {
 
         this.pendingPermissionRequests.set(request.requestId, {
           sessionId: managed.id,
+          toolName: request.toolName,
+          command: request.command,
           type: request.type,
           commandHash: effectiveCommandHash,
         })
@@ -5839,7 +5926,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session not found: ${sessionId}`)
     }
-    if (managed.executionPolicy && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
+    if (managed.executionPolicy && !managed.executionPolicy.fullControl && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
       throw new Error('Super Agent policy: data source is not assigned to this node')
     }
 
@@ -6700,7 +6787,7 @@ export class SessionManager implements ISessionManager {
       setSessionExecutionPolicy(sessionId, managed.executionPolicy)
       for (const attachment of attachments ?? []) {
         const path = attachment.path
-        if (!managed.executionPolicy.readFiles || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory))) {
+        if (!managed.executionPolicy.fullControl && (!managed.executionPolicy.readFiles || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory)))) {
           throw new Error('Super Agent policy: attachment is outside the node environment or file reading is disabled')
         }
       }
@@ -6981,7 +7068,7 @@ export class SessionManager implements ISessionManager {
           const candidateSlugs = Array.from(requiredSources)
           const loadedSources = getSourcesBySlugs(workspaceRoot, candidateSlugs)
           const usableSources = new Set(
-            loadedSources
+            filterAgentSources(loadedSources, managed)
               .filter(isSourceUsable)
               .map(source => source.config.slug)
           )
@@ -8018,7 +8105,7 @@ export class SessionManager implements ISessionManager {
     if (managed?.agent) {
       this.pendingPermissionRequests.delete(requestId)
 
-      if (requestMeta?.type === 'admin_approval') {
+      if (requestMeta?.type === 'admin_approval' && !managed.executionPolicy?.fullControl) {
         const brokerResult = this.privilegedExecutionBroker.resolveApproval(requestId, allowed, {
           expectedCommandHash: requestMeta.commandHash,
         })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
-import { applyPreset, configError, createConfig, nodeModels, withExecuteMode, type SuperAgentText } from './super-agent-ui'
+import { applyPreset, configError, createConfig, nodeModels, scriptAccessGranted, withExecuteMode, type SuperAgentText } from './super-agent-ui'
 
 const text: SuperAgentText = key => key
 const tokenNest: LlmConnectionWithStatus = {
@@ -16,10 +16,38 @@ const tokenNest: LlmConnectionWithStatus = {
 }
 
 describe('Super Agent model authorization and setup', () => {
-  it('starts the whole team in Execute without enabling ungranted capabilities', () => {
+  it('starts the whole team in Execute with full control disabled until selected', () => {
     const config = createConfig([tokenNest], text)
     expect(config.environment.permissionMode).toBe('allow-all')
+    expect(config.environment.fullControl).toBe(false)
     expect(config.environment.permissions).toEqual({ readFiles: true, writeFiles: false, runPrograms: false, browser: false })
+  })
+
+  it('keeps legacy settings limited and preserves the selected control mode across presets', () => {
+    const config = createConfig([tokenNest], text)
+    delete config.environment.fullControl
+    expect(withExecuteMode(config).environment.fullControl).toBe(false)
+    for (const fullControl of [true, false]) {
+      config.environment.fullControl = fullControl
+      const environment = structuredClone(config.environment)
+      expect(withExecuteMode(config).environment).toEqual(environment)
+      for (const preset of ['custom', 'balanced', 'fast', 'deep'] as const) {
+        expect(applyPreset(config, preset, tokenNest, text).environment).toEqual(environment)
+      }
+    }
+  })
+
+  it('allows scripts with full control while preserving limited-mode capability requirements', () => {
+    const environment = createConfig([tokenNest], text).environment
+    environment.fullControl = false
+    environment.permissions = { readFiles: false, writeFiles: false, runPrograms: false, browser: false }
+    expect(scriptAccessGranted(environment)).toBe(false)
+    expect(scriptAccessGranted({ ...environment, fullControl: true })).toBe(true)
+    environment.permissions.runPrograms = true
+    expect(scriptAccessGranted(environment)).toBe(false)
+    expect(scriptAccessGranted({ ...environment, kind: 'sandbox' })).toBe(true)
+    environment.permissions = { readFiles: true, writeFiles: true, runPrograms: true, browser: true }
+    expect(scriptAccessGranted(environment)).toBe(true)
   })
 
   it('keeps legacy environment boundaries and capabilities when editing or choosing any preset', () => {

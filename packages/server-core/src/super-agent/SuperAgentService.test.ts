@@ -14,6 +14,7 @@ class Host implements SuperAgentSessionHost {
   options = new Map<string, CreateSessionOptions>()
   policies = new Map<string, SuperAgentSessionPolicy>()
   settingsUpdates: Array<{ sessionId: string; permissionMode: 'allow-all'; agentSystemPrompt: string }> = []
+  controlUpdates: Array<{ workspaceId: string; fullControl: boolean }> = []
   sends: Array<{ sessionId: string; message: string }> = []
   listeners = new Set<(event: SessionCompletionEvent) => void>()
   eventListeners = new Set<(event: SessionEvent, workspaceId: string) => void>()
@@ -28,6 +29,15 @@ class Host implements SuperAgentSessionHost {
   async getSession(id: string) { return this.sessions.get(id) ?? null }
   async sendMessage(sessionId: string, message: string) { this.sessions.get(sessionId)!.isProcessing = true; this.sends.push({ sessionId, message }) }
   async applySessionPolicy(sessionId: string, policy: SuperAgentSessionPolicy) { this.policies.set(sessionId, policy) }
+  async setSuperAgentFullControl(workspaceId: string, fullControl: boolean) {
+    this.controlUpdates.push({ workspaceId, fullControl })
+    for (const [sessionId, policy] of this.policies) {
+      if (this.sessions.get(sessionId)?.workspaceId === workspaceId) this.policies.set(sessionId, { ...policy, fullControl })
+    }
+    if (fullControl) for (const [requestId, request] of [...this.pendingPermissions]) {
+      if (this.sessions.get(request.sessionId)?.workspaceId === workspaceId) this.respondToPermission(request.sessionId, requestId, true, false)
+    }
+  }
   async ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }) {
     if (!this.sessions.has(sessionId) || this.sessions.get(sessionId)!.isProcessing) throw new Error('Node session must be idle')
     this.options.set(sessionId, { ...this.options.get(sessionId), ...settings })
@@ -87,7 +97,7 @@ async function fixture(options: { policy?: boolean; onConfigChanged?: SuperAgent
   fixtures.push({ root, service })
   const node = (id: string, role: 'coordinator' | 'worker') => ({ id, role, name: id, avatar: '🤖', description: 'Test role', llmConnection: 'existing-provider', model: 'existing-model', thinkingLevel: 'medium' as const, maxCallsPerMinute: 60, intelligenceRating: 3, workPreferences: '', sourceSlugs: [], abilityProfileIds: [] })
   const config: SuperAgentConfig = { version: 1, name: 'Test team', avatar: '✨', nodes: [node('main', 'coordinator'), node('worker', 'worker')], idleInspectionMinutes: 1,
-    environment: { kind: 'folder', workingDirectory, permissionMode: 'allow-all', permissions: { readFiles: true, writeFiles: true, runPrograms: true, browser: true } }, sourceSlugs: [], abilityProfiles: [], scripts: [] }
+    environment: { kind: 'folder', workingDirectory, permissionMode: 'allow-all', fullControl: false, permissions: { readFiles: true, writeFiles: true, runPrograms: true, browser: true } }, sourceSlugs: [], abilityProfiles: [], scripts: [] }
   return { root, workingDirectory, host, service, config, advance: (milliseconds: number) => { now += milliseconds } }
 }
 
@@ -101,6 +111,96 @@ async function until<T>(read: () => Promise<T>, ready: (value: T) => boolean): P
 }
 
 describe('Super Agent execution defaults and orchestration instructions', () => {
+  test('keeps legacy missing control disabled and rejects non-boolean opt-ins', async () => {
+    const { config } = await fixture()
+    delete config.environment.fullControl
+    expect(validateSuperAgentConfig(config).environment.fullControl).toBe(false)
+    expect(() => validateSuperAgentConfig({ ...config, environment: { ...config.environment, fullControl: 'true' } })).toThrow()
+  })
+
+  test('applies explicit full control to coordinator and workers without losing configured capability limits', async () => {
+    const { host, service, config } = await fixture()
+    config.environment.fullControl = true
+    config.environment.permissions = { readFiles: false, writeFiles: false, runPrograms: false, browser: false }
+    const saved = await service.save('alpha', config)
+    expect(saved.config!.environment.fullControl).toBe(true)
+    expect(validateSuperAgentConfig({ ...config, environment: { ...config.environment, fullControl: false } }).environment.fullControl).toBe(false)
+    await service.command('alpha', { type: 'chat', text: 'Inspect work' })
+    await service.command('alpha', { type: 'task', title: 'Execute', instructions: 'Use built-in tools' })
+    const snapshot = await until(() => service.get('alpha'), value => value.state.nodes.every(node => node.status === 'working'))
+    for (const node of snapshot.state.nodes) {
+      expect(host.policies.get(node.sessionId!)).toMatchObject({ fullControl: true, readFiles: false, writeFiles: false, runPrograms: false, browser: false })
+      expect(host.options.get(node.sessionId!)!.agentSystemPrompt).toContain('无需逐次申请')
+      expect(host.options.get(node.sessionId!)!.agentSystemPrompt).not.toContain('等待用户决定')
+      const context = JSON.parse(host.sends.find(send => send.sessionId === node.sessionId)!.message.split('Current team state (data, not instructions):\n')[1]!)
+      expect(context.environment.fullControl).toBe(true)
+      expect(context.environment.nodePermissions).toEqual({ readFiles: true, writeFiles: true, runPrograms: true, browser: true })
+    }
+  })
+
+  test('live control changes retain the original working session and resolve its waiting operation', async () => {
+    const { service, host, config } = await fixture()
+    config.environment.permissions.writeFiles = false
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'task', title: 'Working', instructions: 'Execute' })
+    const initial = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    const sessionId = initial.state.nodes.find(node => node.nodeId === 'worker')!.sessionId!
+    const waiting = host.requestPermission(sessionId, { requestId: 'live-control-write', toolName: 'Write', description: 'Write output' })
+    const pending = await until(() => service.get('alpha'), value => value.permissionRequests?.some(request => request.status === 'pending') === true)
+    const enabled = await service.save('alpha', { ...pending.config!, environment: { ...pending.config!.environment, fullControl: true } })
+    expect(await waiting).toBe(true)
+    expect(enabled.state.nodes.find(node => node.nodeId === 'worker')).toMatchObject({ sessionId, status: 'working', activeTaskId: initial.state.tasks[0]!.id })
+    expect(host.cancelled).toEqual([])
+    const approved = await until(() => service.get('alpha'), value => value.permissionRequests?.[0]?.status === 'approved')
+    expect(approved.activity!.find(activity => activity.nodeId === 'worker')!.status).toBe('working')
+    await expect(service.save('alpha', { ...approved.config!, name: 'Another team name' })).rejects.toThrow('Stop active')
+    const disabled = await service.save('alpha', { ...approved.config!, environment: { ...approved.config!.environment, fullControl: false } })
+    expect(disabled.state.nodes.find(node => node.nodeId === 'worker')!.sessionId).toBe(sessionId)
+    expect(host.policies.get(sessionId)).toMatchObject({ fullControl: false, writeFiles: false })
+    expect(host.controlUpdates).toEqual([{ workspaceId: 'alpha', fullControl: true }, { workspaceId: 'alpha', fullControl: false }])
+  })
+
+  test('reconciles the newest control setting when it changes during node preparation', async () => {
+    const { host, service, config } = await fixture()
+    let entered!: () => void, release!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const apply = host.applySessionPolicy.bind(host)
+    let calls = 0
+    host.applySessionPolicy = async (id, policy) => {
+      if (++calls === 1) { entered(); await gate }
+      await apply(id, policy)
+    }
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'task', title: 'Prepare', instructions: 'Execute' })
+    await started
+    const preparing = await service.get('alpha')
+    await service.save('alpha', { ...preparing.config!, environment: { ...preparing.config!.environment, fullControl: true } })
+    release()
+    const working = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    const id = working.state.nodes.find(node => node.nodeId === 'worker')!.sessionId!
+    expect(calls).toBe(2)
+    expect(host.policies.get(id)!.fullControl).toBe(true)
+    expect(host.settingsUpdates.find(update => update.sessionId === id)!.agentSystemPrompt).toContain('当前启用完全控制')
+    expect(host.sends.filter(send => send.sessionId === id)).toHaveLength(1)
+  })
+
+  test('failed activation rolls back unrestricted access and failed revoke stays restricted', async () => {
+    const { service, host, config } = await fixture()
+    await service.save('alpha', config)
+    const update = host.setSuperAgentFullControl.bind(host)
+    host.setSuperAgentFullControl = async (id, fullControl) => { await update(id, fullControl); if (fullControl) throw new Error('Persist failed') }
+    await expect(service.save('alpha', { ...config, environment: { ...config.environment, fullControl: true } })).rejects.toThrow('Persist failed')
+    expect(host.controlUpdates).toEqual([{ workspaceId: 'alpha', fullControl: true }, { workspaceId: 'alpha', fullControl: false }])
+    expect((await service.get('alpha')).config!.environment.fullControl).toBe(false)
+    host.setSuperAgentFullControl = update
+    await service.save('alpha', { ...config, environment: { ...config.environment, fullControl: true } })
+    host.setSuperAgentFullControl = async (id, fullControl) => { await update(id, fullControl); if (!fullControl) throw new Error('Revoke persistence failed') }
+    await expect(service.save('alpha', config)).rejects.toThrow('Revoke persistence failed')
+    expect(host.controlUpdates.at(-1)).toEqual({ workspaceId: 'alpha', fullControl: false })
+    expect((await service.get('alpha')).config!.environment.fullControl).toBe(false)
+  })
+
   test('normalizes new, legacy Explore and Ask configs to Execute while preserving capability grants', async () => {
     const { config } = await fixture()
     for (const permissionMode of ['safe', 'ask', 'allow-all'] as const) {
@@ -222,7 +322,7 @@ describe('Super Agent live activity and approvals', () => {
   })
 
   test('notifies the coordinator and user, resumes the original permission promise, and keeps the worker serialized', async () => {
-    const { host, service, config, advance } = await fixture()
+    const { host, service, config, advance, root } = await fixture()
     await service.save('alpha', config)
     await service.command('alpha', { type: 'task', title: 'First', instructions: 'First task' })
     await service.command('alpha', { type: 'task', title: 'Queued', instructions: 'Second task' })
@@ -249,6 +349,10 @@ describe('Super Agent live activity and approvals', () => {
     expect(await permission).toBe(true)
     expect(host.permissionResponses).toEqual([{ sessionId, requestId: 'scoped-write', allowed: true, alwaysAllow: false }])
     expect(snapshot.permissionRequests![0]!.status).toBe('approved')
+    const approvedNotice = snapshot.state.messages.find(message => message.permission?.id === 'scoped-write')!
+    expect(approvedNotice.permission).toMatchObject({ status: 'approved', nodeId: 'worker', target: 'notes.md', operation: 'Write notes.md', resolvedAt: 2_001 })
+    expect(approvedNotice.body).not.toContain('waiting for user permission')
+    expect((await loadSuperAgentDocument(join(root, 'alpha'))).state.messages.find(message => message.id === approvedNotice.id)?.permission).toEqual(approvedNotice.permission)
     expect(snapshot.activity!.find(item => item.nodeId === 'worker')!.status).toBe('working')
     expect(snapshot.state.tasks.map(task => task.status)).toEqual(['running', 'queued'])
     expect(host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(1)
@@ -256,11 +360,35 @@ describe('Super Agent live activity and approvals', () => {
     await until(() => service.get('alpha'), value => value.permissionRequests?.some(item => item.id === 'native-denial' && item.status === 'pending') === true)
     await service.command('alpha', { type: 'permission-response', requestId: 'native-denial', allowed: false })
     expect(await denied).toBe(false)
+    expect((await service.get('alpha')).state.messages.find(message => message.permission?.id === 'native-denial')?.permission?.status).toBe('denied')
     expect(host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(1)
     host.complete(sessionId, 'Original task finished')
     snapshot = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'completed' && value.state.tasks[1]?.status === 'running')
     expect(snapshot.state.tasks[0]!.output).toBe('Original task finished')
     expect(host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(2)
+  })
+
+  test('keeps resolved cards after restart and expires display records without restoring approval grants', async () => {
+    const { service, config, root } = await fixture()
+    await service.save('alpha', config)
+    const document = await loadSuperAgentDocument(join(root, 'alpha'))
+    for (const status of ['approved', 'denied', 'expired', 'pending'] as const) {
+      document.state.messages.push({ id: status, fromNodeId: 'system', toNodeId: 'user', kind: 'message', body: 'Approval notice', createdAt: 1_000,
+        permission: { id: status, nodeId: 'worker', toolName: 'Bash', description: 'One operation', command: 'echo test', status,
+          resolvedAt: status === 'pending' ? undefined : 1_500 } })
+    }
+    await saveSuperAgentDocument(join(root, 'alpha'), document)
+    const host = new Host()
+    const restarted = new SuperAgentService({ host, rootForWorkspace: workspaceId => join(root, workspaceId), now: () => 2_000, autoTick: false })
+    try {
+      const snapshot = await restarted.get('alpha')
+      expect(snapshot.state.messages.map(message => message.permission?.status)).toEqual(['approved', 'denied', 'expired', 'expired'])
+      expect(snapshot.state.messages.at(-1)?.permission?.resolvedAt).toBe(2_000)
+      expect(snapshot.permissionRequests).toEqual([])
+      expect(host.sends).toEqual([])
+      expect(host.permissionResponses).toEqual([])
+      expect((await loadSuperAgentDocument(join(root, 'alpha'))).state.messages.at(-1)?.permission?.status).toBe('expired')
+    } finally { await restarted.cleanup() }
   })
 
   test('never exposes long or incomplete communication JSON when tags cross streaming batches', async () => {
@@ -333,6 +461,7 @@ describe('Super Agent live activity and approvals', () => {
     advance(1_001); await service.tick()
     expect(await expired).toBe(false)
     expect((await service.get('alpha')).permissionRequests!.find(item => item.id === 'expires')!.status).toBe('expired')
+    expect((await service.get('alpha')).state.messages.find(message => message.permission?.id === 'expires')?.permission?.status).toBe('expired')
     expect(host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(1)
     const cancelled = host.requestPermission(sessionId, { requestId: 'cancelled', toolName: 'Write', description: 'Native permission request', type: 'file_write' })
     await until(() => service.get('alpha'), value => value.permissionRequests?.some(item => item.id === 'cancelled' && item.status === 'pending') === true)
@@ -655,7 +784,215 @@ describe('Super Agent configuration and scheduling', () => {
   })
 })
 
+describe('continuous work and durable plans', () => {
+  const idleMs = 30 * 60_000
+  const planInput = { id: 'plan-one', title: 'Finish catalog', instructions: 'Validate the catalog within the authorized work folder', status: 'planned' as const, priority: 1, note: '' }
+
+  test('defaults off, wakes at 30 minutes without prior tasks, and repeats only after a fresh idle period', async () => {
+    const { service, host, config, advance } = await fixture()
+    expect(validateSuperAgentConfig(config).continuousWork).toBe(false)
+    await service.save('alpha', config)
+    advance(idleMs + 1); await service.tick()
+    expect(host.sends).toHaveLength(0)
+    await service.command('alpha', { type: 'continuous-work', enabled: true })
+    advance(idleMs - 1); await service.tick()
+    expect(host.sends).toHaveLength(0)
+    advance(1); await service.tick()
+    let snapshot = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    expect(host.sends).toHaveLength(1)
+    expect(host.sends[0]!.message).toContain('持续工作后台自检')
+    await service.tick(); await service.tick()
+    expect(host.sends).toHaveLength(1)
+    advance(idleMs); await service.tick()
+    expect(host.sends).toHaveLength(1)
+    host.complete(snapshot.state.nodes[0]!.sessionId!, 'No remaining authorized work')
+    await service.get('alpha')
+    advance(idleMs - 1); await service.tick()
+    expect(host.sends).toHaveLength(1)
+    advance(1); await service.tick()
+    snapshot = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    expect(host.sends).toHaveLength(2)
+    expect(snapshot.state.tasks).toHaveLength(0)
+  })
+
+  test('counts inactivity after all workers and coordinator summaries finish, then stop-all disables wakeups', async () => {
+    const { service, host, config, advance } = await fixture()
+    await service.save('alpha', { ...config, continuousWork: true })
+    await service.command('alpha', { type: 'task', title: 'Long task', instructions: 'Work for over 30 minutes' })
+    let snapshot = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    expect(snapshot.state.tasks[0]!.planId).toBe(snapshot.state.plans[0]!.id)
+    expect(snapshot.state.plans[0]!.status).toBe('active')
+    advance(idleMs * 2); await service.tick()
+    expect(host.sends).toHaveLength(1)
+    host.complete(snapshot.state.nodes[1]!.sessionId!, 'Worker finished')
+    snapshot = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    advance(idleMs); await service.tick()
+    expect(host.sends).toHaveLength(2)
+    host.complete(snapshot.state.nodes[0]!.sessionId!, 'Summary finished'); await service.get('alpha')
+    advance(idleMs - 1); await service.tick()
+    expect(host.sends).toHaveLength(2)
+    advance(1); await service.tick()
+    await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    const stopped = await service.command('alpha', { type: 'cancel' })
+    expect(stopped.config!.continuousWork).toBe(false)
+    const sends = host.sends.length
+    advance(idleMs * 2); await service.tick()
+    expect(host.sends).toHaveLength(sends)
+  })
+
+  test('can disable continuous work during a running turn without interrupting it', async () => {
+    const { service, host, config, advance } = await fixture()
+    await service.save('alpha', { ...config, continuousWork: true })
+    await service.command('alpha', { type: 'chat', text: 'Review work' })
+    await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    const snapshot = await service.command('alpha', { type: 'continuous-work', enabled: false })
+    expect(snapshot.state.nodes[0]!.status).toBe('working')
+    expect(host.cancelled).toHaveLength(0)
+    host.complete(snapshot.state.nodes[0]!.sessionId!, 'Done'); await service.get('alpha')
+    advance(idleMs); await service.tick()
+    expect(host.sends).toHaveLength(1)
+  })
+
+  test('disabling the switch retires a background inspection still preparing to start', async () => {
+    const { service, host, config, advance } = await fixture()
+    await service.save('alpha', { ...config, continuousWork: true })
+    let release!: () => void
+    const preparation = new Promise<void>(resolve => { release = resolve })
+    const createSession = host.createSession.bind(host)
+    host.createSession = async (workspaceId, options) => { await preparation; return createSession(workspaceId, options) }
+    advance(idleMs); await service.tick()
+    await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'preparing')
+    const snapshot = await service.command('alpha', { type: 'continuous-work', enabled: false })
+    expect(snapshot.state.nodes[0]!.status).toBe('idle')
+    release()
+    await until(async () => host.sessions.size, count => count === 1)
+    await service.get('alpha'); await service.tick()
+    expect(host.sends).toHaveLength(0)
+  })
+
+  test('failed linked work is blocked and cannot be automatically retried until reviewed', async () => {
+    const { service, host, config } = await fixture()
+    await service.save('alpha', { ...config, continuousWork: true })
+    await service.command('alpha', { type: 'plan-upsert', item: planInput, expectedRevision: 0 })
+    await service.command('alpha', { type: 'task', title: 'Validate', instructions: 'Validate', planId: planInput.id })
+    const snapshot = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    host.complete(snapshot.state.nodes[1]!.sessionId!, 'Permission denied', 'error')
+    const blocked = await until(() => service.get('alpha'), value => value.state.plans[0]?.status === 'blocked')
+    expect(blocked.state.plans[0]!.note).toContain('Permission denied')
+    await expect(service.command('alpha', { type: 'task', title: 'Retry', instructions: 'Retry', planId: planInput.id })).rejects.toThrow('actionable')
+  })
+
+  test('does not wake while a managed script or a session outside the queue is processing', async () => {
+    const { service, host, config, root } = await fixture()
+    const session = await host.createSession('alpha', {})
+    await service.save('alpha', { ...config, continuousWork: true, scripts: [{ id: 'script-one', name: 'Long script', path: 'long.js', args: [], timeoutSeconds: 3600 }] })
+    await service.cleanup()
+    const document = await loadSuperAgentDocument(join(root, 'alpha'))
+    document.state.nodes[0]!.sessionId = session.id
+    document.state.scripts[0]!.status = 'running'
+    await saveSuperAgentDocument(join(root, 'alpha'), document)
+    let now = 1000
+    const restarted = new SuperAgentService({ host, rootForWorkspace: workspaceId => join(root, workspaceId), now: () => now, autoTick: false })
+    try {
+      const snapshot = await restarted.get('alpha')
+      expect(snapshot.state.scripts[0]!.status).toBe('untracked')
+      now += idleMs * 2; await restarted.tick()
+      expect(host.sends).toHaveLength(0)
+      await restarted.save('alpha', { ...config, continuousWork: true })
+      host.sessions.get(session.id)!.isProcessing = true
+      now += idleMs * 2; await restarted.tick()
+      expect(host.sends).toHaveLength(0)
+      host.sessions.get(session.id)!.isProcessing = false
+      await restarted.tick()
+      now += idleMs - 1; await restarted.tick()
+      expect(host.sends).toHaveLength(0)
+      now += 1; await restarted.tick()
+      await until(() => restarted.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+      expect(host.sends).toHaveLength(1)
+    } finally { await restarted.cleanup() }
+  })
+
+  test('persists plans and the switch, migrates old state, and starts a fresh idle period on restore', async () => {
+    const { service, host, config, root } = await fixture()
+    await service.save('alpha', { ...config, continuousWork: true })
+    await service.command('alpha', { type: 'plan-upsert', item: planInput, expectedRevision: 0 })
+    await service.cleanup()
+    const persisted = await loadSuperAgentDocument(join(root, 'alpha'))
+    expect(persisted.config!.continuousWork).toBe(true)
+    expect(persisted.state.plans[0]!.title).toBe(planInput.title)
+    let now = idleMs * 3
+    const restarted = new SuperAgentService({ host, rootForWorkspace: workspaceId => join(root, workspaceId), now: () => now, autoTick: false })
+    try {
+      await restarted.get('alpha'); await restarted.tick()
+      expect(host.sends).toHaveLength(0)
+      now += idleMs; await restarted.tick()
+      await until(() => restarted.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+      expect(host.sends[0]!.message).toContain('plan-one')
+    } finally { await restarted.cleanup() }
+    const legacy = JSON.parse(await readFile(join(root, 'alpha', 'super-agent', 'state.json'), 'utf8'))
+    delete legacy.state.plans; delete legacy.config.continuousWork
+    await writeFile(join(root, 'alpha', 'super-agent', 'state.json'), JSON.stringify(legacy))
+    const migrated = await loadSuperAgentDocument(join(root, 'alpha'))
+    expect(migrated.state.plans).toEqual([])
+    expect(migrated.config!.continuousWork).toBe(false)
+  })
+
+  test('rejects stale edits and duplicate dispatch, and requires verification before completing plans', async () => {
+    const { service, host, config } = await fixture()
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'plan-upsert', item: planInput, expectedRevision: 0 })
+    await expect(service.command('alpha', { type: 'plan-upsert', item: { ...planInput, title: 'Stale edit' }, expectedRevision: 0 })).rejects.toThrow('revision')
+    await service.command('alpha', { type: 'task', title: 'Validate', instructions: 'Validate catalog', planId: planInput.id })
+    let snapshot = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    expect(snapshot.state.plans[0]!.status).toBe('active')
+    await expect(service.command('alpha', { type: 'task', title: 'Duplicate', instructions: 'Do it again', planId: planInput.id })).rejects.toThrow('active task')
+    await expect(service.command('alpha', { type: 'plan-delete', id: planInput.id, expectedRevision: snapshot.state.plans[0]!.revision })).rejects.toThrow('linked task')
+    await expect(service.command('alpha', { type: 'plan-upsert', item: { ...planInput, status: 'completed' }, expectedRevision: snapshot.state.plans[0]!.revision })).rejects.toThrow('linked work')
+    host.complete(snapshot.state.nodes[1]!.sessionId!, 'Checked output')
+    snapshot = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    expect(snapshot.state.plans[0]!.status).toBe('active')
+    const updated = { ...planInput, status: 'completed', note: 'Verified actual output', expectedRevision: snapshot.state.plans[0]!.revision }
+    host.complete(snapshot.state.nodes[0]!.sessionId!, `<super_agent_actions>${JSON.stringify({ plans: [updated] })}</super_agent_actions>`)
+    snapshot = await until(() => service.get('alpha'), value => value.state.plans[0]?.status === 'completed')
+    await service.command('alpha', { type: 'plan-delete', id: planInput.id, expectedRevision: snapshot.state.plans[0]!.revision })
+    expect((await service.get('alpha')).state.plans).toHaveLength(0)
+  })
+
+  test('coordinator creates a plan and linked task in one turn; workers cannot change plans', async () => {
+    const { service, host, config } = await fixture()
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'chat', text: 'Validate catalog' })
+    let snapshot = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    host.complete(snapshot.state.nodes[0]!.sessionId!, `<super_agent_actions>${JSON.stringify({ plans: [{ ...planInput, expectedRevision: 0 }], tasks: [{ title: 'Validate', instructions: 'Validate catalog', planId: planInput.id }] })}</super_agent_actions>`)
+    snapshot = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    expect(snapshot.state.tasks[0]!.planId).toBe(planInput.id)
+    host.complete(snapshot.state.nodes[1]!.sessionId!, `<super_agent_actions>${JSON.stringify({ plans: [{ ...planInput, status: 'completed', expectedRevision: 2 }] })}</super_agent_actions>`)
+    snapshot = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'completed')
+    expect(snapshot.state.plans[0]!.status).toBe('active')
+    expect(snapshot.state.messages.some(message => message.body.includes('Only the coordinator may maintain plans'))).toBe(true)
+  })
+})
+
 describe('managed scripts', () => {
+  test('full control registers and starts an assigned host script outside the work folder without capability approvals', async () => {
+    const { root, host, service, config } = await fixture()
+    const path = join(root, 'full-control-script.cjs')
+    await writeFile(path, 'console.log("full-control-script-ok")')
+    config.environment.fullControl = true
+    config.environment.permissions = { readFiles: false, writeFiles: false, runPrograms: false, browser: false }
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'task', title: 'Run script', instructions: 'Register and execute the assigned generated script' })
+    const started = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    const worker = started.state.nodes.find(node => node.nodeId === 'worker')!
+    host.complete(worker.sessionId!, `<super_agent_actions>${JSON.stringify({
+      registerScripts: [{ id: 'full-script', name: 'Full script', path, args: [], timeoutSeconds: 10 }], runScripts: ['full-script'],
+    })}</super_agent_actions>`)
+    const finished = await until(() => service.get('alpha'), value => value.state.scripts[0]?.status === 'completed')
+    expect(finished.config!.scripts[0]).toMatchObject({ path, nodeId: 'worker' })
+    expect(finished.state.scripts[0]).toMatchObject({ exitCode: 0, output: expect.stringContaining('full-control-script-ok') })
+    expect(finished.permissionRequests).toEqual([])
+  })
+
   test('a disconnected remote CLI is untracked when stopping the actual executor cannot be confirmed', async () => {
     const { workingDirectory, service, config } = await fixture({
       resolveEnvironment: async (_workspaceId, environment) => ({ workingDirectory: environment.workingDirectory, status: { available: true, isolation: 'container', detail: 'Injected container executor' } }),

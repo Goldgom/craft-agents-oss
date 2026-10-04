@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { expandPath } from '../../utils/paths.ts';
 import type { SuperAgentSessionPolicy } from '../../super-agent/types.ts';
 import type { SessionPolicyPermissionScope } from '@craft-agent/core/types';
+import { isReadOnlySystemInspection } from './system-inspection-policy.ts';
 
 export interface SessionProgramExecutor {
   runtimePath: string;
@@ -41,6 +42,7 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     || !['coordinator', 'worker'].includes(input.role)
     || typeof input.rootPath !== 'string' || !isAbsolute(input.rootPath)
     || input.allowSubagents !== false
+    || (input.fullControl !== undefined && typeof input.fullControl !== 'boolean')
     || !Array.isArray(input.allowSources) || input.allowSources.some(slug => typeof slug !== 'string' || !slug.trim())
     || ['readFiles', 'writeFiles', 'runPrograms', 'browser'].some(key => typeof input[key as keyof SessionExecutionPolicy] !== 'boolean')) {
     throw new Error('Invalid Super Agent execution policy');
@@ -51,6 +53,8 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     nodeId: input.nodeId,
     role: input.role,
     rootPath,
+    fullControl: input.fullControl === true,
+    // Keep the configured ceilings so turning full control off restores them.
     readFiles: input.readFiles,
     writeFiles: input.role === 'worker' && input.writeFiles,
     runPrograms: input.role === 'worker' && input.runPrograms,
@@ -93,6 +97,8 @@ export function getSessionExecutionPolicy(sessionId: string): SessionExecutionPo
 }
 
 export function hasSessionExecutionPolicy(sessionId: string): boolean { return policies.has(sessionId); }
+export function hasSessionFullControl(sessionId: string): boolean { return policies.get(sessionId)?.policy?.fullControl === true; }
+export function getSessionProgramExecutor(sessionId: string): SessionProgramExecutor | undefined { return policies.get(sessionId)?.executor; }
 export function clearSessionExecutionPolicy(sessionId: string): void { policies.delete(sessionId); }
 
 export function setSessionPolicyPermissionHandler(sessionId: string, handler: (request: SessionPolicyPermissionRequest) => Promise<boolean>): void {
@@ -127,6 +133,7 @@ export function setSessionReferenceFiles(sessionId: string, paths: string[]): vo
 
 /** Resolve missing write targets through their nearest existing parent, including junctions. */
 export function checkSessionPolicyPath(policy: SessionExecutionPolicy, value: string, cwd?: string, scanDirectory = false): string | null {
+  if (policy.fullControl === true) return null;
   try {
     if (!value || value.includes('\0') || /^(?:[a-z]+:\/\/|\\\\)/i.test(value)
       || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(value)) return 'Unsupported filesystem path';
@@ -242,6 +249,27 @@ export function hasSessionPolicyToolGrant(sessionId: string, toolName: string, i
   return !!getOperationGrant(sessionId, toolName, input, cwd);
 }
 
+function shellAutoAllowed(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
+  if (!registered.policy || !input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const parts = toolName.split('__');
+  const name = parts.at(-1)!.toLowerCase().replace(/_/g, '');
+  if (!['bash', 'localbash', 'runshell'].includes(name) || (parts.length >= 3 && parts[1] !== 'session')
+    || typeof input.command !== 'string' || !input.command.trim() || input.command.includes('\0')
+    || (input.cwd !== undefined && typeof input.cwd !== 'string')) return false;
+  if (registered.policy.fullControl === true) return true;
+  if (registered.policy.role !== 'worker' || !registered.policy.readFiles || input.run_in_background || input.background) return false;
+  // Do not silently move a sandbox inspection onto the host or client.
+  if (registered.executor && name !== 'bash') return false;
+  if (typeof input.cwd === 'string' && checkSessionPolicyPath(registered.policy, input.cwd, cwd)) return false;
+  return isReadOnlySystemInspection(input.command, name === 'bash' ? 'posix' : process.platform === 'win32' ? 'cmd' : 'posix');
+}
+
+/** Recognizes full-control shells and AST-verified system metadata inspections. */
+export function isSessionPolicyShellAutoAllowed(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
+  const registered = policies.get(sessionId);
+  return !!registered && shellAutoAllowed(registered, toolName, input, cwd);
+}
+
 /** Only known operations can be requested; delegation and malformed inputs stay blocked. */
 function permissionScope(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): SessionPolicyPermissionScope | undefined {
   const policy = registered.policy!;
@@ -289,7 +317,9 @@ function permissionScope(registered: RegisteredPolicy, toolName: string, input: 
 
 /** Called by provider hooks before the synchronous pipeline, so the original call can wait and resume. */
 export async function authorizeSessionPolicyTool(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string, deniedReason?: string): Promise<SessionPolicyToolResult> {
-  const result = deniedReason ? deny(deniedReason) : checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
+  const checked = checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
+  if (hasSessionFullControl(sessionId) || isSessionPolicyShellAutoAllowed(sessionId, toolName, input, cwd)) return checked;
+  const result = deniedReason ? deny(deniedReason) : checked;
   if (result.allowed || hasSessionPolicyToolGrant(sessionId, toolName, input, cwd)) return { allowed: true };
   const registered = policies.get(sessionId);
   if (!registered?.policy || !registered.requestPermission || !input || typeof input !== 'object' || Array.isArray(input)) return result;
@@ -302,6 +332,9 @@ export async function authorizeSessionPolicyTool(sessionId: string, toolName: st
   const request = { toolName, input: operationInput(registered.policy, toolName, input, cwd), reason: result.reason, scope };
   let allowed = false;
   try { allowed = await registered.requestPermission(request); } catch { /* Fail closed. */ }
+  // A live full-control switch resumes the original call under the current
+  // policy rather than trying to install a grant against a stale generation.
+  if (allowed && hasSessionFullControl(sessionId)) return checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
   if (!allowed) return deny('permission was denied or expired; report the blocked operation to the main agent');
   if (policies.get(sessionId) !== registered || generation !== registered.generation || scope.expiresAt <= Date.now()
     || pathIdentity !== operationPathIdentity(registered.policy, toolName, input, cwd)) return deny('the operation or node policy changed while awaiting approval; request again');
@@ -329,6 +362,14 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
   const canonical = parts[parts.length - 1]!.toLowerCase();
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return deny('each node uses one model process; spawning, delegation and additional model calls are disabled');
+  if (name === 'webfetch' && !slug) return deny('WebFetch can call an additional summarization model; use browser_tool to fetch pages within the node model process');
+  if (policy.fullControl === true) {
+    if (['bash', 'localbash', 'runshell'].includes(name) && (!slug || slug === 'session')
+      && (typeof input.command !== 'string' || !input.command.trim() || input.command.includes('\0')
+        || (input.cwd !== undefined && typeof input.cwd !== 'string'))) return deny('a valid program command and working directory are required');
+    return { allowed: true };
+  }
+  if (shellAutoAllowed(registered, toolName, input, cwd)) return { allowed: true };
   if (slug && slug !== 'session') {
     if (!policy.allowSources.includes(slug)) return deny(`source "${slug}" is not assigned to this node`);
     if (/browser|playwright|puppeteer|selenium/.test(canonical) && !policy.browser) return deny('browser access is disabled for this node');
@@ -419,8 +460,9 @@ export function wrapSessionProgramInput(sessionId: string, toolName: string, inp
   if (!registered || toolName.toLowerCase() !== 'bash') return undefined;
   const executor = registered.executor;
   if (!executor) {
-    if (!hasSessionPolicyToolGrant(sessionId, toolName, input) || typeof input.command !== 'string') throw new Error('Verified sandbox program executor is unavailable');
-    // An explicit exact-command host exception is the only way a folder node can run Bash.
+    if (!(hasSessionFullControl(sessionId) || isSessionPolicyShellAutoAllowed(sessionId, toolName, input)
+      || hasSessionPolicyToolGrant(sessionId, toolName, input)) || typeof input.command !== 'string') throw new Error('Verified sandbox program executor is unavailable');
+    // Full control, verified inspections and exact grants may use the host shell.
     const directory = operationInput(registered.policy!, toolName, input).cwd as string;
     return { ...input, command: `cd -- ${quotePosix(process.platform === 'win32' ? directory.replace(/\\/g, '/') : directory)} && /bin/bash -c ${quotePosix(input.command)}` };
   }

@@ -27,7 +27,7 @@ import { createLogger } from '../../utils/debug.ts';
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PermissionMode } from '../mode-types.ts';
 import type { PermissionManagerConfig, ToolPermissionResult } from './types.ts';
-import { checkSessionExecutionPolicy, hasSessionPolicyToolGrant } from './session-execution-policy.ts';
+import { checkSessionExecutionPolicy, hasSessionFullControl, hasSessionPolicyToolGrant, isSessionPolicyShellAutoAllowed } from './session-execution-policy.ts';
 
 const log = createLogger('permissions');
 
@@ -132,7 +132,8 @@ export class PermissionManager {
   ): ToolPermissionResult {
     const policyResult = checkSessionExecutionPolicy(this.config.sessionId, toolName, toolInput, this.config.workingDirectory);
     if (!policyResult.allowed) return policyResult;
-    if (hasSessionPolicyToolGrant(this.config.sessionId, toolName, toolInput, this.config.workingDirectory)) return { allowed: true };
+    if (hasSessionFullControl(this.config.sessionId) || isSessionPolicyShellAutoAllowed(this.config.sessionId, toolName, toolInput, this.config.workingDirectory)
+      || hasSessionPolicyToolGrant(this.config.sessionId, toolName, toolInput, this.config.workingDirectory)) return { allowed: true };
     const mode = this.getPermissionMode();
 
     // Use shouldAllowToolInMode which handles all the complex logic
@@ -189,7 +190,8 @@ export class PermissionManager {
   checkBashCommand(command: string): string | null {
     const policyResult = checkSessionExecutionPolicy(this.config.sessionId, 'Bash', { command }, this.config.workingDirectory);
     if (!policyResult.allowed) return policyResult.reason;
-    if (hasSessionPolicyToolGrant(this.config.sessionId, 'Bash', { command }, this.config.workingDirectory)) return null;
+    if (hasSessionFullControl(this.config.sessionId) || isSessionPolicyShellAutoAllowed(this.config.sessionId, 'Bash', { command }, this.config.workingDirectory)
+      || hasSessionPolicyToolGrant(this.config.sessionId, 'Bash', { command }, this.config.workingDirectory)) return null;
     const mode = this.getPermissionMode();
 
     // In execute mode, all commands are allowed
@@ -221,6 +223,8 @@ export class PermissionManager {
    * @returns true if permission should be requested
    */
   requiresBashPermission(command: string): boolean {
+    if (hasSessionFullControl(this.config.sessionId)
+      || isSessionPolicyShellAutoAllowed(this.config.sessionId, 'Bash', { command }, this.config.workingDirectory)) return false;
     const mode = this.getPermissionMode();
 
     // Execute mode never requires permission

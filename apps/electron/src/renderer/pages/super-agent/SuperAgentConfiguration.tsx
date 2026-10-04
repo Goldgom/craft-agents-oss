@@ -4,16 +4,18 @@ import type { SuperAgentConfig, SuperAgentEnvironmentStatus } from '@craft-agent
 import type { LlmConnectionWithStatus, LoadedSource } from '../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { AgentAvatar, AvatarEditor, EnvironmentEditor, FormField, FormSection, NodeEditor } from './SuperAgentForms'
 import { configError, createNode, useSuperAgentText, withExecuteMode } from './super-agent-ui'
 
-export function SuperAgentConfiguration({ config, connections, sources, environmentStatus, onSave, onOpenAiSettings, initialNodeId }: {
+export function SuperAgentConfiguration({ config, connections, sources, environmentStatus, onSave, onContinuousWork, onOpenAiSettings, initialNodeId }: {
   config: SuperAgentConfig
   connections: LlmConnectionWithStatus[]
   sources: LoadedSource[]
   environmentStatus: SuperAgentEnvironmentStatus
   onSave: (config: SuperAgentConfig) => Promise<void>
+  onContinuousWork: (enabled: boolean) => Promise<void>
   onOpenAiSettings?: () => void
   initialNodeId?: string
 }) {
@@ -30,7 +32,11 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
     const validation = configError(draft, connections, text)
     if (validation) { setError(validation); return }
     setPending(true); setError('')
-    try { await onSave(draft); setSaved(true) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
+    try { await onSave({ ...draft, continuousWork: config.continuousWork }); setSaved(true) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
+  }
+  async function toggleContinuousWork(enabled: boolean) {
+    setPending(true); setError('')
+    try { await onContinuousWork(enabled) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
   }
   return <div className="h-full min-h-0 overflow-y-auto">
     <div className="mx-auto max-w-3xl space-y-6 p-6">
@@ -44,7 +50,9 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
         {section === 'identity' && <FormSection title={text('identity')}>
           <AvatarEditor avatar={draft.avatar} name={draft.name} onChange={avatar => patch({ avatar })} />
           <FormField label={text('assistantName')}><Input value={draft.name} maxLength={80} onChange={event => patch({ name: event.target.value })} /></FormField>
-          <FormField label={text('idleInterval')} hint={text('idleHint')}><Input type="number" min={1} max={1440} className="max-w-44" value={draft.idleInspectionMinutes} onChange={event => patch({ idleInspectionMinutes: Number(event.target.value) })} /></FormField>
+          <div className="flex items-start justify-between gap-4"><div><label htmlFor="continuous-work-setting" className="text-sm font-medium">{text('continuousWork')}</label><p id="continuous-work-setting-hint" className="mt-1 text-xs leading-5 text-muted-foreground">{text('continuousWorkHint')}</p></div>
+            <Switch id="continuous-work-setting" type="button" checked={config.continuousWork === true} aria-describedby="continuous-work-setting-hint" onCheckedChange={enabled => void toggleContinuousWork(enabled)} /></div>
+          <FormField label={text('idleInterval')} hint={text(config.continuousWork ? 'continuousWorkHint' : 'idleHint')}><Input type="number" min={1} max={1440} disabled={config.continuousWork === true} className="max-w-44" value={draft.idleInspectionMinutes} onChange={event => patch({ idleInspectionMinutes: Number(event.target.value) })} /></FormField>
         </FormSection>}
         {section === 'team' && <>
           <p className="rounded-lg bg-primary/5 p-3 text-xs leading-5 text-muted-foreground">{text('coordinatorRule')}</p>

@@ -7,6 +7,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve, sep } from 'node:path'
+import { clearSessionExecutionPolicy, setSessionExecutionPolicy } from '@craft-agent/shared/agent'
 
 const createdWindows: any[] = []
 let toolbarLoadFailuresRemaining = 0
@@ -262,6 +266,113 @@ describe('BrowserPaneManager', () => {
   })
 
   afterEach(() => { manager.destroyAll() })
+
+  describe('local uploads use the active owning session permissions', () => {
+    const ownerSessionId = 'browser-upload-owner'
+    const secondSessionId = 'browser-upload-other-owner'
+    let fixture: string
+    let environmentRoot: string
+    let sensitiveFile: string
+    let ordinaryFile: string
+
+    beforeEach(async () => {
+      fixture = await mkdtemp(join(tmpdir(), 'browser-upload-policy-'))
+      environmentRoot = join(fixture, 'environment')
+      await mkdir(environmentRoot)
+      sensitiveFile = join(fixture, 'outside.env')
+      ordinaryFile = join(fixture, 'ordinary.txt')
+      await writeFile(sensitiveFile, 'fixture')
+      await writeFile(ordinaryFile, 'fixture')
+    })
+
+    afterEach(async () => {
+      clearSessionExecutionPolicy(ownerSessionId)
+      clearSessionExecutionPolicy(secondSessionId)
+      expect(resolve(fixture).startsWith(resolve(tmpdir()) + sep)).toBe(true)
+      await rm(fixture, { recursive: true, force: true })
+    })
+
+    function applyPolicy(sessionId: string, fullControl: boolean) {
+      setSessionExecutionPolicy(sessionId, { nodeId: sessionId, role: 'worker', rootPath: environmentRoot,
+        fullControl, readFiles: false, writeFiles: false, runPrograms: false, browser: false,
+        allowSources: [], allowSubagents: false })
+    }
+
+    function browser(sessionId?: string) {
+      const id = manager.createInstance('upload-local')
+      if (sessionId) manager.bindSession(id, sessionId)
+      const instance = (manager as any).instances.get(id)
+      const upload = mock(async () => ({ ref: '@e1', box: { x: 0, y: 0, width: 10, height: 10 }, clickPoint: { x: 5, y: 5 } }))
+      instance.cdp.setFileInputFiles = upload
+      return { id, upload }
+    }
+
+    it('lets the bound full-control node upload a real file outside its environment', async () => {
+      applyPolicy(ownerSessionId, true)
+      const { id, upload } = browser(ownerSessionId)
+      await manager.uploadFile(id, '@e1', [sensitiveFile])
+      expect(upload).toHaveBeenCalledWith('@e1', [await realpath(sensitiveFile)])
+    })
+
+    it('preserves ordinary uploads and their sensitive-file guard', async () => {
+      const { id, upload } = browser('ordinary-session')
+      await manager.uploadFile(id, '@e1', [ordinaryFile])
+      expect(upload).toHaveBeenCalledWith('@e1', [await realpath(ordinaryFile)])
+      await expect(manager.uploadFile(id, '@e1', [sensitiveFile])).rejects.toThrow('cannot read sensitive files')
+      expect(upload).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps an opted-out node under the ordinary file guard', async () => {
+      applyPolicy(ownerSessionId, false)
+      const { id, upload } = browser(ownerSessionId)
+      await expect(manager.uploadFile(id, '@e1', [sensitiveFile])).rejects.toThrow('cannot read sensitive files')
+      expect(upload).not.toHaveBeenCalled()
+    })
+
+    it('does not trust a released window historical full-control owner', async () => {
+      applyPolicy(ownerSessionId, true)
+      const { id, upload } = browser(ownerSessionId)
+      manager.unbindSession(id)
+      await expect(manager.uploadFile(id, '@e1', [sensitiveFile])).rejects.toThrow('cannot read sensitive files')
+      expect(upload).not.toHaveBeenCalled()
+    })
+
+    it('rejects revocation while resolving an upload instead of using stale full control', async () => {
+      applyPolicy(ownerSessionId, true)
+      const { id, upload } = browser(ownerSessionId)
+      const result = manager.uploadFile(id, '@e1', [sensitiveFile])
+      applyPolicy(ownerSessionId, false)
+      await expect(result).rejects.toThrow('authorization changed')
+      expect(upload).not.toHaveBeenCalled()
+    })
+
+    it('rejects rebinding during preparation even if the new owner also has full control', async () => {
+      applyPolicy(ownerSessionId, true)
+      applyPolicy(secondSessionId, true)
+      const { id, upload } = browser(ownerSessionId)
+      const result = manager.uploadFile(id, '@e1', [sensitiveFile])
+      manager.bindSession(id, secondSessionId)
+      await expect(result).rejects.toThrow('authorization changed')
+      expect(upload).not.toHaveBeenCalled()
+    })
+
+    it('still requires an existing regular file and an absolute path', async () => {
+      applyPolicy(ownerSessionId, true)
+      const { id, upload } = browser(ownerSessionId)
+      await expect(manager.uploadFile(id, '@e1', ['relative.txt'])).rejects.toThrow('Only absolute')
+      await expect(manager.uploadFile(id, '@e1', [join(fixture, 'missing.txt')])).rejects.toThrow()
+      await expect(manager.uploadFile(id, '@e1', [environmentRoot])).rejects.toThrow('regular file')
+      expect(upload).not.toHaveBeenCalled()
+    })
+
+    it('does not enable the unsupported remote upload transport', async () => {
+      applyPolicy(ownerSessionId, true)
+      const { id, upload } = browser(ownerSessionId)
+      await expect((manager as any).dispatchCapability({ v: 1, workspaceId: 'workspace', sessionId: ownerSessionId,
+        method: 'uploadFile', args: [id, '@e1', [sensitiveFile], { fullControl: true }] })).rejects.toThrow('not supported yet')
+      expect(upload).not.toHaveBeenCalled()
+    })
+  })
 
   it('creates and lists instances', () => {
     const id = manager.createInstance('test-1')
