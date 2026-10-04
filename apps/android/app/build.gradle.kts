@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "26.10.3"
+        versionName = "26.10.4"
 
         buildConfigField("String", "SERVER_URL", "\"${configuredServerUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
 
