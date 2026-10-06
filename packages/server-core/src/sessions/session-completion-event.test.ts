@@ -9,7 +9,7 @@ test('processing stop emits the current network error instead of an earlier acti
     messages: [
       { id: 'old', role: 'assistant', content: '<super_agent_actions>{"tasks":[]}</super_agent_actions>', timestamp: 1 },
       { id: 'current-user', role: 'user', content: 'Continue validation', timestamp: 2 },
-      { id: 'network-error', role: 'error', content: 'Connection Error: Could not reach the AI service.', timestamp: 3 },
+      { id: 'network-error', role: 'error', content: 'Connection Error: Could not reach the AI service.', errorCode: 'network_error', errorCanRetry: true, timestamp: 3 },
     ],
   }
   const completions: SessionCompletionEvent[] = []
@@ -29,7 +29,7 @@ test('processing stop emits the current network error instead of an earlier acti
   await manager.onProcessingStopped('session', 'complete')
   expect(managed.isProcessing).toBe(false)
   expect(completions).toHaveLength(1)
-  expect(completions[0]).toMatchObject({ reason: 'error', finalText: managed.messages[2]!.content })
+  expect(completions[0]).toMatchObject({ reason: 'error', finalText: managed.messages[2]!.content, errorCode: 'network_error', canRetry: true })
   expect(completions[0]!.finalMessageId).toBeUndefined()
 })
 

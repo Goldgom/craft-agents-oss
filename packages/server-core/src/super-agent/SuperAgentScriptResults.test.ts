@@ -55,6 +55,38 @@ async function acknowledgeResult(f: Pick<Awaited<ReturnType<typeof scriptFixture
 }
 
 describe('required asynchronous script results', () => {
+  test('network recovery retains the same result review without acknowledging it or restarting its script', async () => {
+    const f = await scriptFixture()
+    const submitted = await f.assign()
+    const summary = await until(() => f.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'working')
+    const sessionId = summary.state.nodes.find(node => node.nodeId === 'main')!.sessionId!
+    f.host.complete(sessionId, 'Waiting for recorded script evidence.')
+    await until(() => f.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'idle')
+    f.processes[0]!.close(0)
+    f.advance(1001)
+    await f.service.tick()
+    await until(() => f.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'working'
+      && f.host.sends.findLast(send => send.sessionId === sessionId)?.message.includes('This asynchronous script result') === true)
+    const before = await loadSuperAgentDocument(join(f.root, 'alpha'))
+    const review = before.pendingTurns.find(turn => turn.scriptRunId === submitted.state.scripts[0]!.runId)!
+    f.host.complete(sessionId, 'Connection Error: Could not reach the AI service.', 'error', { errorCode: 'network_error', canRetry: true })
+    const waiting = await until(() => f.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'recovering')
+    expect(waiting.state.tasks[0]).toEqual(submitted.state.tasks[0])
+    expect(waiting.state.scripts[0]).toMatchObject({ status: 'completed', resultDeliveryAttempts: 1 })
+    expect(waiting.state.scripts[0]!.resultReportedAt).toBeUndefined()
+    const durable = await loadSuperAgentDocument(join(f.root, 'alpha'))
+    expect(durable.pendingTurns.find(turn => turn.scriptRunId === review.scriptRunId)).toMatchObject({ id: review.id, retryAttempt: 1 })
+    f.advance(2000)
+    await f.service.tick()
+    await until(() => f.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'working'
+      && f.host.sends.findLast(send => send.sessionId === sessionId)?.message.includes('Continue this same authorized turn') === true)
+    f.host.complete(sessionId, 'Recorded script result verified.')
+    const delivered = await until(() => f.service.get('alpha'), value => value.state.scripts[0]?.resultReportedAt != null)
+    expect(delivered.state.tasks[0]).toEqual(submitted.state.tasks[0])
+    expect(delivered.state.scripts[0]!.resultDeliveryAttempts).toBe(1)
+    expect(f.processes).toHaveLength(1)
+  })
+
   test('binds a run to its assignment and prevents premature plan acceptance or deletion', async () => {
     const { service, root, assign } = await scriptFixture()
     const active = await assign()
@@ -96,6 +128,22 @@ describe('required asynchronous script results', () => {
     expect(reviewed.state.plans[0]!.status).toBe('blocked')
     expect(reviewed.state.scripts[0]!.resultReportedAt).toBeDefined()
     await expect(service.command('alpha', editPlan(reviewed.state.plans[0]!, 'completed'))).rejects.toThrow('failed or stopped')
+  })
+
+  test('a successful script preserves a blocker reported by another task in the same plan', async () => {
+    const { service, host, config, processes, assign } = await scriptFixture()
+    config.nodes.push({ ...config.nodes[1]!, id: 'worker-two', name: 'Second worker' })
+    await service.save('alpha', config)
+    const submitted = await assign()
+    await service.command('alpha', { type: 'task', title: 'Review', instructions: 'Review the artifact', nodeId: 'worker-two', planId: submitted.state.plans[0]!.id })
+    let snapshot = await until(() => service.get('alpha'), value => value.state.tasks[1]?.status === 'running')
+    host.complete(snapshot.state.tasks[1]!.sessionId!, 'Review failed', 'error')
+    snapshot = await until(() => service.get('alpha'), value => value.state.plans[0]?.status === 'blocked')
+    const blockedPlan = { ...snapshot.state.plans[0]! }
+    processes[0]!.close(0)
+    snapshot = await until(() => service.get('alpha'), value => value.state.scripts[0]?.status === 'completed')
+    expect(snapshot.state.plans[0]).toEqual(blockedPlan)
+    expect(snapshot.state.scripts[0]!.resultQueuedAt).toBeDefined()
   })
 
   test('a successful run remains active until its output is verified', async () => {

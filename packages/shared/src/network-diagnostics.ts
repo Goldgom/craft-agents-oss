@@ -62,18 +62,20 @@ export async function fetchWithNetworkDiagnostics(
   } catch { /* Never log malformed raw input. */ }
   const base = {
     id, endpoint, method: init?.method || (input instanceof Request ? input.method : 'GET'),
-    runtime: process.release.name, runtimeVersion: process.version,
+    runtime: process.versions.bun ? 'bun' : process.release.name,
+    runtimeVersion: process.versions.bun || process.version,
     proxyConfigured: Boolean((init as RequestInit & { proxy?: string } | undefined)?.proxy),
   };
+  const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
   const emit = (fields: Record<string, unknown>) => {
     try { write({ ...base, elapsedMs: Date.now() - started, ...fields }); } catch { /* best effort */ }
   };
-  emit({ phase: 'start', aborted: init?.signal?.aborted ?? false });
+  emit({ phase: 'start', aborted: signal?.aborted ?? false });
   let response: Response;
   try {
     response = await fetcher(input, init);
   } catch (error) {
-    emit({ phase: 'fetch_error', aborted: init?.signal?.aborted ?? false, errors: networkErrorChain(error) });
+    emit({ phase: 'fetch_error', aborted: signal?.aborted ?? false, errors: networkErrorChain(error) });
     throw error;
   }
   emit({ phase: 'headers', status: response.status,

@@ -43,7 +43,7 @@ function Root() {
   const isAndroidApp = new URLSearchParams(window.location.search).get('embedded') === 'android'
 
   return (
-    <ThemeProvider activeWorkspaceId={workspaceId} defaultMode={isAndroidApp ? 'dark' : 'system'}>
+    <ThemeProvider activeWorkspaceId={workspaceId} defaultMode={isAndroidApp ? 'light' : 'system'}>
       <App />
       <Toaster />
     </ThemeProvider>

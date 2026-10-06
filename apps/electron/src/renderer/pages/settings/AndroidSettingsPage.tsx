@@ -17,6 +17,8 @@ import {
   Sparkles,
   TerminalSquare,
   Wifi,
+  Download,
+  Upload,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { navigate, routes } from '@/lib/navigate'
@@ -54,6 +56,19 @@ export default function AndroidSettingsPage() {
   const [requestingPermission, setRequestingPermission] = useState<AndroidPermissionKey | null>(null)
   const [adbConfig, setAdbConfig] = useState<NetworkAdbConfig>(DEFAULT_ADB_CONFIG)
   const [adbMessage, setAdbMessage] = useState('')
+  const [backupBusy, setBackupBusy] = useState(false)
+  const [backupMessage, setBackupMessage] = useState('')
+  const [keepAwake, setKeepAwake] = useState(() => androidBridge()?.getKeepAwake?.() ?? false)
+  const backup = async (restore: boolean) => {
+    if (backupBusy) return
+    if (restore && !window.confirm('导入备份会合并或替换同名工作区和设置。是否选择备份文件继续？')) return
+    setBackupBusy(true); setBackupMessage(restore ? '请选择 ZIP 备份文件…' : '正在生成备份…')
+    try {
+      const result = restore ? await window.electronAPI.importAllData() : await window.electronAPI.exportAllData()
+      setBackupMessage(result.canceled ? '已取消' : result.success ? (restore ? '备份已导入，刷新应用即可查看' : '备份已保存') : result.error ?? '操作失败')
+    } catch (error) { setBackupMessage(error instanceof Error ? error.message : String(error)) }
+    finally { setBackupBusy(false) }
+  }
 
   useEffect(() => {
     const loadServerConfig = async () => {
@@ -325,6 +340,15 @@ export default function AndroidSettingsPage() {
           </div>
         </section>
 
+        <section className="mb-5">
+          <h2 className="mb-2 px-1 text-xs font-medium tracking-wide text-muted-foreground">数据与运行</h2>
+          <div className="overflow-hidden rounded-2xl border border-border/60 bg-card">
+            <button disabled={backupBusy} className="flex min-h-[60px] w-full items-center gap-3 px-4 text-left disabled:opacity-50" onClick={() => void backup(false)}><Download className="size-5" /><span>导出全部数据</span></button>
+            <button disabled={backupBusy} className="flex min-h-[60px] w-full items-center gap-3 border-t border-border/50 px-4 text-left disabled:opacity-50" onClick={() => void backup(true)}><Upload className="size-5" /><span>导入 ZIP 备份</span></button>
+            {backupMessage && <p role="status" className="px-4 pb-3 text-xs text-muted-foreground">{backupMessage}</p>}
+            <label className="flex min-h-[60px] items-center gap-3 border-t border-border/50 px-4"><span className="flex-1">任务运行时保持屏幕亮起</span><input type="checkbox" className="size-5" checked={keepAwake} onChange={event => { const enabled = event.target.checked; setKeepAwake(enabled); void window.electronAPI.setKeepAwakeWhileRunning(enabled) }} /></label>
+          </div>
+        </section>
         <section>
           <h2 className="mb-2 px-1 text-xs font-medium tracking-wide text-muted-foreground">应用维护</h2>
           <div className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-xs">

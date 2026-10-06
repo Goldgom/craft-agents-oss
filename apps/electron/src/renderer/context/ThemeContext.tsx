@@ -223,11 +223,18 @@ function getSystemPreference(): 'light' | 'dark' {
 
 function loadStoredTheme(): StoredTheme | null {
   if (typeof window === 'undefined') return null
-  return storage.get<StoredTheme | null>(storage.KEYS.theme, null)
+  const stored = storage.get<StoredTheme | null>(storage.KEYS.theme, null)
+  // Android's loopback origin changes on restart; native preferences survive it.
+  const nativeMode = window.CraftAgentAndroid?.getThemeMode?.()
+  if (nativeMode === 'light' || nativeMode === 'dark' || nativeMode === 'system') {
+    return { colorTheme: 'default', ...stored, mode: nativeMode }
+  }
+  return stored
 }
 
 function saveTheme(theme: StoredTheme): void {
   storage.set(storage.KEYS.theme, theme)
+  window.CraftAgentAndroid?.setThemeMode?.(theme.mode)
 }
 
 export function ThemeProvider({
@@ -297,13 +304,7 @@ export function ThemeProvider({
   }>({ background: null, chat: null, sidebar: null, characters: { left: null, right: null } })
 
   // === Derived values ===
-  // The native Android shell is intentionally dark and older WebViews can
-  // report a light `prefers-color-scheme` even while drawing a dark surface.
-  // Force the shared renderer to the matching palette so it never produces
-  // dark-on-dark onboarding or settings screens.
-  const isAndroidEmbedded = typeof window !== 'undefined'
-    && new URLSearchParams(window.location.search).get('embedded') === 'android'
-  const resolvedMode = isAndroidEmbedded ? 'dark' : mode === 'system' ? systemPreference : mode
+  const resolvedMode = mode === 'system' ? systemPreference : mode
   // Effective theme: preview > workspace override > app default
   const effectiveColorTheme = previewColorTheme ?? workspaceColorTheme ?? colorTheme
   const effectiveColorThemeSource: 'preview' | 'workspace' | 'app' =

@@ -1191,7 +1191,7 @@ describe('continuous work and durable plans', () => {
     expect(migrated.config!.continuousWork).toBe(false)
   })
 
-  test('rejects stale edits and duplicate dispatch, and requires verification before completing plans', async () => {
+  test('rejects stale edits and requires verification before completing plans', async () => {
     const { service, host, config } = await fixture()
     await service.save('alpha', config)
     await service.command('alpha', { type: 'plan-upsert', item: planInput, expectedRevision: 0 })
@@ -1199,7 +1199,6 @@ describe('continuous work and durable plans', () => {
     await service.command('alpha', { type: 'task', title: 'Validate', instructions: 'Validate catalog', planId: planInput.id })
     let snapshot = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
     expect(snapshot.state.plans[0]!.status).toBe('active')
-    await expect(service.command('alpha', { type: 'task', title: 'Duplicate', instructions: 'Do it again', planId: planInput.id })).rejects.toThrow('active task')
     await expect(service.command('alpha', { type: 'plan-delete', id: planInput.id, expectedRevision: snapshot.state.plans[0]!.revision })).rejects.toThrow('linked task')
     await expect(service.command('alpha', { type: 'plan-upsert', item: { ...planInput, status: 'completed' }, expectedRevision: snapshot.state.plans[0]!.revision })).rejects.toThrow('linked work')
     host.complete(snapshot.state.nodes[1]!.sessionId!, 'Checked output')
@@ -1210,6 +1209,68 @@ describe('continuous work and durable plans', () => {
     snapshot = await until(() => service.get('alpha'), value => value.state.plans[0]?.status === 'completed')
     await service.command('alpha', { type: 'plan-delete', id: planInput.id, expectedRevision: snapshot.state.plans[0]!.revision })
     expect((await service.get('alpha')).state.plans).toHaveLength(0)
+  })
+
+  test('coordinator assigns parallel subtasks to one plan and keeps each worker serial', async () => {
+    const { service, host, config, root, advance } = await fixture()
+    config.nodes.push({ ...config.nodes[1]!, id: 'worker-two', name: 'Second worker' })
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'chat', text: 'Split this stage across workers' })
+    let snapshot = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    host.complete(snapshot.state.nodes[0]!.sessionId!, `<super_agent_actions>${JSON.stringify({
+      plans: [{ ...planInput, expectedRevision: 0 }],
+      tasks: [
+        { title: 'Implementation', instructions: 'Build the artifact', nodeId: 'worker', planId: planInput.id },
+        { title: 'Independent review', instructions: 'Review the requirements', planId: planInput.id },
+        { title: 'Follow-up check', instructions: 'Check the artifact after implementation', nodeId: 'worker', planId: planInput.id },
+      ],
+    })}</super_agent_actions>`)
+    snapshot = await until(() => service.get('alpha'), value => value.state.tasks.filter(task => task.status === 'running').length === 2)
+    expect(snapshot.state.tasks.map(task => [task.planId, task.nodeId, task.status])).toEqual([
+      [planInput.id, 'worker', 'running'], [planInput.id, 'worker-two', 'running'], [planInput.id, 'worker', 'queued'],
+    ])
+    expect(snapshot.state.messages.find(message => message.fromNodeId === 'main' && message.toNodeId === 'user')?.actionReceipt).toMatchObject({
+      status: 'applied', applied: [{ type: 'plan-upsert' }, { type: 'task' }, { type: 'task' }, { type: 'task' }],
+    })
+    expect((await loadSuperAgentDocument(join(root, 'alpha'))).state.tasks).toEqual(snapshot.state.tasks)
+    const workerSession = snapshot.state.nodes.find(node => node.nodeId === 'worker')!.sessionId!
+    const secondSession = snapshot.state.nodes.find(node => node.nodeId === 'worker-two')!.sessionId!
+    expect(host.sends.filter(send => send.sessionId === workerSession)).toHaveLength(1)
+    host.complete(secondSession, 'Review evidence')
+    snapshot = await until(() => service.get('alpha'), value => value.state.tasks[1]?.status === 'completed')
+    expect(snapshot.state.plans[0]!.status).toBe('active')
+    await expect(service.command('alpha', { type: 'plan-upsert', item: { ...planInput, status: 'completed' }, expectedRevision: snapshot.state.plans[0]!.revision })).rejects.toThrow('linked work')
+    host.complete(workerSession, 'Implementation artifact')
+    await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'completed')
+    advance(1_001); await service.tick()
+    snapshot = await until(() => service.get('alpha'), value => value.state.tasks[2]?.status === 'running')
+    expect(host.sends.filter(send => send.sessionId === workerSession)).toHaveLength(2)
+    await expect(service.command('alpha', { type: 'plan-delete', id: planInput.id, expectedRevision: snapshot.state.plans[0]!.revision })).rejects.toThrow('linked task')
+    await expect(service.command('alpha', { type: 'plan-upsert', item: { ...planInput, status: 'completed' }, expectedRevision: snapshot.state.plans[0]!.revision })).rejects.toThrow('linked work')
+    host.complete(workerSession, 'Follow-up evidence')
+    snapshot = await until(() => service.get('alpha'), value => value.state.tasks.every(task => task.status === 'completed'))
+    expect(snapshot.state.plans[0]!.status).toBe('active')
+    snapshot = await service.command('alpha', { type: 'plan-upsert', item: { ...planInput, status: 'completed', note: 'Verified all three results' }, expectedRevision: snapshot.state.plans[0]!.revision })
+    expect(snapshot.state.plans[0]!.status).toBe('completed')
+  })
+
+  for (const stopped of ['error', 'cancel'] as const) test(`successful sibling preserves a shared plan's blocker after ${stopped}`, async () => {
+    const { service, host, config } = await fixture()
+    config.nodes.push({ ...config.nodes[1]!, id: 'worker-two', name: 'Second worker' })
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'plan-upsert', item: planInput, expectedRevision: 0 })
+    await service.command('alpha', { type: 'task', title: 'Implementation', instructions: 'Build the artifact', nodeId: 'worker', planId: planInput.id })
+    await service.command('alpha', { type: 'task', title: 'Review', instructions: 'Review the requirements', nodeId: 'worker-two', planId: planInput.id })
+    let snapshot = await until(() => service.get('alpha'), value => value.state.tasks.filter(task => task.status === 'running').length === 2)
+    if (stopped === 'cancel') await service.command('alpha', { type: 'cancel', taskId: snapshot.state.tasks[0]!.id })
+    else host.complete(snapshot.state.nodes.find(node => node.nodeId === 'worker')!.sessionId!, 'Implementation failed', 'error')
+    snapshot = await until(() => service.get('alpha'), value => value.state.plans[0]?.status === 'blocked')
+    const blockedPlan = { ...snapshot.state.plans[0]! }
+    expect(snapshot.state.tasks[1]!.status).toBe('running')
+    host.complete(snapshot.state.nodes.find(node => node.nodeId === 'worker-two')!.sessionId!, 'Review evidence')
+    snapshot = await until(() => service.get('alpha'), value => value.state.tasks[1]?.status === 'completed')
+    expect(snapshot.state.plans[0]).toEqual(blockedPlan)
+    await expect(service.command('alpha', { type: 'task', title: 'Retry', instructions: 'Retry implementation', planId: planInput.id })).rejects.toThrow('actionable')
   })
 
   test('coordinator creates a plan and linked task in one turn; workers cannot change plans', async () => {

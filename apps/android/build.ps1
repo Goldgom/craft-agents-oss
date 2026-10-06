@@ -1,5 +1,6 @@
 param(
     [string]$ServerUrl = "wss://agent.goldgom.top:50003",
+    [string]$DebugApplicationIdSuffix = "",
     [switch]$Release,
     [switch]$SkipToolchainInstall,
     [switch]$SkipServerRuntimeDownload
@@ -195,7 +196,12 @@ try {
     Pop-Location
 }
 $assetRoot = Join-Path $androidRoot "app\src\main\assets\webui"
-if (Test-Path $assetRoot) { Remove-Item -Recurse -Force $assetRoot }
+if (Test-Path -LiteralPath $assetRoot) {
+    $resolvedAssetRoot = (Resolve-Path -LiteralPath $assetRoot).Path
+    $expectedAssetRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot "apps/android/app/src/main/assets/webui"))
+    if ($resolvedAssetRoot -ne $expectedAssetRoot) { throw "Unexpected WebUI asset directory: $resolvedAssetRoot" }
+    Remove-Item -LiteralPath $resolvedAssetRoot -Recurse -Force
+}
 New-Item -ItemType Directory -Force $assetRoot | Out-Null
 $webuiDist = Join-Path $projectRoot "apps\webui\dist"
 # Source maps are useful during web development but are not needed in the APK.
@@ -219,6 +225,9 @@ $task = if ($Release) { "assembleRelease" } else { "assembleDebug" }
 # incremental ZIP packager cannot retain deleted hashed chunks as unreferenced
 # data in the APK.
 $gradleArgs = @("clean", $task, "-PserverUrl=$ServerUrl")
+if (-not $Release -and $DebugApplicationIdSuffix) {
+    $gradleArgs += "-PdebugApplicationIdSuffix=$DebugApplicationIdSuffix"
+}
 
 Push-Location $androidRoot
 try {
@@ -238,6 +247,7 @@ if (-not $apk) { throw "Gradle completed but no $variant APK was found." }
 $outputDir = Join-Path $projectRoot "dist\android"
 New-Item -ItemType Directory -Force $outputDir | Out-Null
 $outputName = if ($Release -and $apk.EndsWith("-unsigned.apk")) { "tokenbird-$variant-unsigned.apk" } else { "tokenbird-$variant.apk" }
+if (-not $Release -and $DebugApplicationIdSuffix) { $outputName = "tokenbird-debug-device.apk" }
 $outputApk = Join-Path $outputDir $outputName
 Copy-Item $apk $outputApk -Force
 Write-Output "APK: $outputApk"

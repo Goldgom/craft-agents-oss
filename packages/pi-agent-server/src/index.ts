@@ -101,6 +101,7 @@ import { createSearchTool } from './tools/search/create-search-tool.ts';
 import { allowCraftMetadataProperties, stripCraftMetadata } from './craft-metadata-schema.ts';
 import { applySystemPromptOverride } from './system-prompt-override.ts';
 import { adaptCredentialForPiSdk, type PiCredential } from './adapt-credential.ts';
+import { installRequestAuthGuard, updateCustomEndpointCredential } from './runtime-auth.ts';
 
 // ============================================================
 // Types — JSONL Protocol
@@ -123,6 +124,7 @@ interface InitMessage {
   providerType?: string;
   authType?: string;
   workspaceId?: string;
+  oauthProvider?: string;
   baseUrl?: string;
   branchFromSdkSessionId?: string;
   branchFromSessionPath?: string;
@@ -168,6 +170,7 @@ type InboundMessage =
   | RuntimeConfigUpdateMessage
   | { type: 'steer'; message: string }
   | { type: 'token_update'; id?: string; piAuth: { provider: string; credential: PiCredential } }
+  | { type: 'auth_refresh_result'; id: string; success: boolean; message?: string }
   | { type: 'shutdown' };
 
 /** Proxy tool definition from main process */
@@ -247,6 +250,7 @@ interface OutboundError { type: 'error'; message: string; code?: string; id?: st
 
 type OutboundMessage =
   | { type: 'token_update_result'; id: string; success: boolean }
+  | { type: 'auth_refresh_request'; id: string }
   | OutboundReady
   | OutboundEvent
   | OutboundPreToolUseReq
@@ -269,6 +273,21 @@ type OutboundMessage =
 let piSession: AgentSession | null = null;
 let piModelRegistry: PiModelRegistry | null = null;
 let moduleCredentialStore: InMemoryCredentialStore | null = null;
+const pendingRequestAuth = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+let requestAuthCounter = 0;
+
+function ensureRequestAuthFresh(): Promise<void> {
+  if (initConfig?.authType !== 'oauth' || initConfig.oauthProvider !== 'tokennest') return Promise.resolve();
+  const id = `request-auth-${++requestAuthCounter}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingRequestAuth.delete(id);
+      reject(new Error('OAuth token refresh timed out. Please retry.'));
+    }, 60_000);
+    pendingRequestAuth.set(id, { resolve, reject, timer });
+    send({ type: 'auth_refresh_request', id });
+  });
+}
 // Cached runtime build shared by the main session and ephemeral queryLlm
 // sessions — see createAuthenticatedRuntime. Cached as a promise so concurrent
 // first callers coalesce onto one build instead of racing.
@@ -498,7 +517,6 @@ function registerCustomEndpointModels(
   const allIds = [...customEndpointModelIds];
   registry.registerProvider('custom-endpoint', {
     baseUrl,
-    apiKey: resolveCustomEndpointApiKey(),
     api,
     authHeader: true,
     headers: initConfig?.customHeaders,
@@ -546,6 +564,9 @@ async function createAuthenticatedRuntime(): Promise<{
     await credentials.modify('anthropic', async () => ({ type: 'api_key', key: apiKey }));
     debugLog('Injected API key into credential store (legacy fallback)');
   }
+  if (shouldPreferCustomEndpoint()) {
+    await updateCustomEndpointCredential(credentials, resolveCustomEndpointApiKey());
+  }
 
   if (!moduleRuntimePromise) {
     const build = async (): Promise<{
@@ -559,6 +580,7 @@ async function createAuthenticatedRuntime(): Promise<{
         modelsStore: new InMemoryModelsStore(),
       });
       const modelRegistry = new PiModelRegistry(modelRuntime);
+      installRequestAuthGuard(modelRuntime, ensureRequestAuthFresh);
 
       // Register custom endpoint models dynamically via Pi SDK's registerProvider API.
       // This makes arbitrary OpenAI/Anthropic-compatible endpoints work through the Pi SDK
@@ -1005,8 +1027,8 @@ async function queryLlm(
 
   // If piAuth is set, ensure the mini model uses the same provider.
   // Pi SDK will fail with "No API key found" if the model requires a different provider.
-  // Exception: 'custom-endpoint' provider is always compatible because it has its own
-  // API key configured via resolveCustomEndpointApiKey() and doesn't use the credential store.
+  // Exception: 'custom-endpoint' uses the same credential under its own store
+  // entry, which is updated together with the authenticated provider on rotation.
   if (initConfig.piAuth) {
     const authProvider = initConfig.piAuth.provider;
     const bareModel = model.startsWith('pi/') ? model.slice(3) : model;
@@ -1685,6 +1707,9 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
     };
 
     if (piModelRegistry && initConfig.baseUrl?.trim() && initConfig.customEndpoint) {
+      if (moduleCredentialStore) {
+        await updateCustomEndpointCredential(moduleCredentialStore, resolveCustomEndpointApiKey());
+      }
       const modelEntries: CustomEndpointModelEntry[] = (initConfig.customModels?.length
         ? initConfig.customModels
         : [initConfig.model || 'default']
@@ -1833,6 +1858,11 @@ function exitAfterCleanup(exitCode: number): void {
       pending.resolve({ content: 'Server shutting down', isError: true });
     }
     pendingToolExecutions.clear();
+    for (const pending of pendingRequestAuth.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('Pi server shutting down'));
+    }
+    pendingRequestAuth.clear();
   } catch (error) {
     debugLog(`Cleanup before exit failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -1931,6 +1961,9 @@ async function processMessage(msg: InboundMessage): Promise<void> {
         if (!moduleCredentialStore) moduleCredentialStore = new InMemoryCredentialStore();
         await moduleCredentialStore.modify(provider, async () => adapted);
         initConfig.piAuth = msg.piAuth;
+        if (shouldPreferCustomEndpoint()) {
+          await updateCustomEndpointCredential(moduleCredentialStore, resolveCustomEndpointApiKey());
+        }
         if (msg.id) send({ type: 'token_update_result', id: msg.id, success: true });
       } catch {
         // Never forward provider/credential details through protocol errors.
@@ -1938,6 +1971,16 @@ async function processMessage(msg: InboundMessage): Promise<void> {
         else debugLog('Credential update failed');
       }
       break;
+
+    case 'auth_refresh_result': {
+      const pending = pendingRequestAuth.get(msg.id);
+      if (!pending) break;
+      pendingRequestAuth.delete(msg.id);
+      clearTimeout(pending.timer);
+      if (msg.success) pending.resolve();
+      else pending.reject(new Error(msg.message || 'OAuth token refresh failed. Please retry.'));
+      break;
+    }
 
     case 'shutdown':
       handleShutdown();

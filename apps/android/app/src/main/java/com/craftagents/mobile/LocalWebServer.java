@@ -62,10 +62,16 @@ final class LocalWebServer {
         this.oauthCallbackListener = oauthCallbackListener;
     }
 
-    int start() throws IOException {
-        ServerSocket socket = new ServerSocket(0, 20, InetAddress.getByName("127.0.0.1"));
+    int start(int preferredPort) throws IOException {
+        ServerSocket socket;
+        try {
+            socket = new ServerSocket(preferredPort, 20, InetAddress.getByName("127.0.0.1"));
+        } catch (IOException occupied) {
+            socket = new ServerSocket(0, 20, InetAddress.getByName("127.0.0.1"));
+        }
         serverSocket = socket;
-        Thread acceptThread = new Thread(() -> acceptLoop(socket), "craft-agent-local-web");
+        final ServerSocket listener = socket;
+        Thread acceptThread = new Thread(() -> acceptLoop(listener), "craft-agent-local-web");
         acceptThread.setDaemon(true);
         acceptThread.start();
         return socket.getLocalPort();

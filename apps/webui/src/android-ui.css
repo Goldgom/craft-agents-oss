@@ -1,172 +1,409 @@
-/* Android-only chrome. Solid colors also work on older system WebViews.
-   The extra root class increases specificity over legacy compact overrides. */
-html[data-mobile-app="android"]:root #root {
-  padding-top: 56px;
+/* Android uses an RGB palette so older system WebViews can render every token.
+   :root specificity keeps the mobile design above the shared compact styles. */
+html[data-mobile-app="android"]:root {
+  --background: #fff !important;
+  --background-elevated: #f8f9fb !important;
+  --foreground: #191c22 !important;
+  --foreground-dimmed: #626875 !important;
+  --foreground-rgb: 25, 28, 34 !important;
+  --accent: #0066ff !important;
+  --accent-rgb: 0, 102, 255 !important;
+  --primary: #0066ff !important;
+  --primary-foreground: #fff !important;
+  --user-message-bubble: #0066ff !important;
+  --user-message-bubble-dimmed: #eaf2ff !important;
+  --card: #fff !important;
+  --card-foreground: #191c22 !important;
+  --popover: #fff !important;
+  --popover-foreground: #191c22 !important;
+  --secondary: #f3f5f8 !important;
+  --secondary-foreground: #191c22 !important;
+  --muted: #f5f6f8 !important;
+  --muted-foreground: #818794 !important;
+  --border: #eaecf0 !important;
+  --input: #e3e6ec !important;
+  --ring: #91b8ff !important;
+  --info: #ac750d !important;
+  --info-rgb: 172, 117, 13 !important;
+  --info-text: #8d600a !important;
+  --success: #228650 !important;
+  --success-rgb: 34, 134, 80 !important;
+  --success-text: #228650 !important;
+  --destructive: #cf4141 !important;
+  --destructive-rgb: 207, 65, 65 !important;
+  --destructive-text: #b53333 !important;
+  --foreground-1\.5: #fcfcfc !important;
+  --foreground-2: #fafafa !important;
+  --foreground-3: #f8f8f8 !important;
+  --foreground-5: #f3f4f5 !important;
+  --foreground-10: #e8e9eb !important;
+  --foreground-20: #d1d2d5 !important;
+  --foreground-30: #babcc0 !important;
+  --foreground-40: #a3a5ab !important;
+  --foreground-50: #8c8f95 !important;
+  --foreground-60: #75787f !important;
+  --foreground-70: #5e616a !important;
+  --foreground-80: #474a54 !important;
+  --foreground-90: #30333e !important;
+  --foreground-95: #242833 !important;
+  color-scheme: light;
+  --mobile-foreground-15: #dfe0e3;
+  --mobile-accent-surface: #edf4ff;
+  --mobile-error-surface: #fff1f1;
+  --mobile-success-surface: #edf8f1;
+  --mobile-info-surface: #fff7e6;
+  --mobile-notice-surface: #f4f8ff;
 }
 
-html[data-mobile-app="android"]:root .h-screen {
-  height: 100% !important;
+html[data-mobile-app="android"].dark:root {
+  --accent: #80abff !important;
+  --accent-rgb: 128, 171, 255 !important;
+  --background: #16181d !important;
+  --background-elevated: #1d2027 !important;
+  --foreground: #eef0f5 !important;
+  --foreground-dimmed: #b1b8c6 !important;
+  --foreground-rgb: 238, 240, 245 !important;
+  --card: #1d2027 !important;
+  --card-foreground: #eef0f5 !important;
+  --popover: #242831 !important;
+  --popover-foreground: #eef0f5 !important;
+  --secondary: #282d36 !important;
+  --secondary-foreground: #eef0f5 !important;
+  --muted: #22262e !important;
+  --muted-foreground: #9ba4b5 !important;
+  --border: #343a46 !important;
+  --input: #343a46 !important;
+  --ring: #719ff0 !important;
+  --user-message-bubble-dimmed: #253754 !important;
+  --info: #e8b55a !important;
+  --info-rgb: 232, 181, 90 !important;
+  --info-text: #e8b55a !important;
+  --success: #73cc97 !important;
+  --success-rgb: 115, 204, 151 !important;
+  --success-text: #73cc97 !important;
+  --destructive: #f18f8f !important;
+  --destructive-rgb: 241, 143, 143 !important;
+  --destructive-text: #f18f8f !important;
+  --mobile-foreground-15: #363940 !important;
+  --mobile-accent-surface: #203252 !important;
+  --mobile-error-surface: #3d262a !important;
+  --mobile-success-surface: #21362c !important;
+  --mobile-info-surface: #3b3221 !important;
+  --mobile-notice-surface: #1c293e !important;
+  --foreground-1\.5: #191b20 !important;
+  --foreground-2: #1a1c21 !important;
+  --foreground-3: #1c1e23 !important;
+  --foreground-5: #212328 !important;
+  --foreground-10: #2c2e33 !important;
+  --foreground-20: #414348 !important;
+  --foreground-30: #57595e !important;
+  --foreground-40: #6c6e73 !important;
+  --foreground-50: #828489 !important;
+  --foreground-60: #989a9f !important;
+  --foreground-70: #adafb4 !important;
+  --foreground-80: #c3c5ca !important;
+  --foreground-90: #d8dadf !important;
+  --foreground-95: #e3e5ea !important;
+  color-scheme: dark;
 }
+
+html[data-mobile-app="android"]:root #root { padding-top: 64px; }
+html[data-mobile-app="android"]:root .h-screen { height: 100% !important; }
+html[data-mobile-app="android"]:root [data-panel-role="content"],
+html[data-mobile-app="android"]:root [data-panel-role="navigator"] {
+  background: var(--background) !important;
+  border-radius: 0 !important;
+}
+html[data-mobile-app="android"]:root [data-mobile-panel-header] {
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  min-height: 48px;
+}
+html[data-mobile-app="android"]:root [data-mobile-session-view="all-sessions"] { width: 100% !important; }
+html[data-mobile-app="android"]:root [data-mobile-panel-header] button { box-shadow: none; background: transparent; border: 0; }
+
+/* Tailwind's color-mix fallback loses alpha on factory WebView 101. Keep
+   translucent controls readable using ordinary RGB colors. */
+html[data-mobile-app="android"]:root [class~="bg-foreground/5"],
+html[data-mobile-app="android"]:root [class~="bg-foreground/[0.05]"],
+html[data-mobile-app="android"]:root [class~="bg-foreground/[0.06]"] { background-color: var(--foreground-5); }
+html[data-mobile-app="android"]:root [class~="bg-foreground/10"] { background-color: var(--foreground-10); }
+html[data-mobile-app="android"]:root [class~="bg-foreground/15"] { background-color: var(--mobile-foreground-15); }
+html[data-mobile-app="android"]:root [class~="bg-foreground/20"] { background-color: var(--foreground-20); }
+html[data-mobile-app="android"]:root [class~="bg-accent/10"],
+html[data-mobile-app="android"]:root [class~="bg-primary/10"] { background-color: var(--mobile-accent-surface); }
+html[data-mobile-app="android"]:root [class~="bg-destructive/10"],
+html[data-mobile-app="android"]:root [class~="bg-destructive/5"] { background-color: var(--mobile-error-surface); }
+html[data-mobile-app="android"]:root [class~="bg-success/5"],
+html[data-mobile-app="android"]:root [class~="bg-success/10"] { background-color: var(--mobile-success-surface); }
+html[data-mobile-app="android"]:root [class~="bg-info/10"],
+html[data-mobile-app="android"]:root [class~="bg-info/5"] { background-color: var(--mobile-info-surface); }
+html[data-mobile-app="android"]:root [class~="text-foreground/50"] { color: var(--foreground-50); }
+html[data-mobile-app="android"]:root [class~="text-foreground/60"] { color: var(--foreground-60); }
+html[data-mobile-app="android"]:root [class~="text-foreground/70"] { color: var(--foreground-70); }
+html[data-mobile-app="android"]:root .input-container [data-slot="drawer-trigger"] { min-height: 40px; border-radius: 12px; padding: 0 12px; }
 
 .mobile-app-bar {
   position: fixed;
   top: env(safe-area-inset-top, 0px);
   left: env(safe-area-inset-left, 0px);
   right: env(safe-area-inset-right, 0px);
-  height: 56px;
-  display: flex;
+  height: 64px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px;
   align-items: center;
-  justify-content: center;
-  border-bottom: 1px solid var(--border);
+  padding: 0 10px;
   background: var(--background);
+  color: var(--foreground);
   z-index: 30;
 }
+.mobile-app-bar button { border: 0; background: transparent; cursor: pointer; color: inherit; }
+.mobile-app-bar__icon { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 16px; }
+.mobile-app-bar__icon svg { width: 25px; height: 25px; stroke-width: 1.8; }
+.mobile-app-bar__title { display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; justify-content: center; }
+.mobile-app-bar__title > span { display: flex; align-items: center; gap: 3px; font-size: 19px; font-weight: 650; }
+.mobile-app-bar__title svg { width: 14px; height: 14px; color: var(--muted-foreground); }
+.mobile-app-bar__title small { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted-foreground); }
+.mobile-app-bar__title i { width: 5px; height: 5px; border-radius: 50%; background: #2b9b67; }
+.mobile-app-bar__title i.is-remote { background: var(--accent); }
+.mobile-app-bar__icon:active { background: var(--secondary); }
 
-.mobile-app-bar__brand {
-  color: var(--foreground);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: .2px;
-}
+html[data-mobile-app="android"].mobile-model-setup-needed:root #root { padding-top: 108px; }
+.mobile-model-notice { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 64px); left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 16px; background: var(--mobile-notice-surface); color: var(--foreground-dimmed); font-size: 12px; z-index: 29; }
+.mobile-model-notice > span { flex: 1; }
+.mobile-model-notice button { min-height: 44px; padding: 0 8px; border: 0; border-radius: 12px; background: transparent; color: var(--accent); font-size: 12px; cursor: pointer; }
+.mobile-model-notice__dismiss { width: 36px; }
+.mobile-model-notice__dismiss svg { width: 16px; height: 16px; color: var(--muted-foreground); }
 
-html[data-mobile-app="android"]:root .mobile-controls,
-html[data-mobile-app="android"]:root .mobile-workspace-controls {
-  top: calc(env(safe-area-inset-top, 0px) + 6px);
-}
-
-html[data-mobile-app="android"]:root .mobile-controls__pill,
-html[data-mobile-app="android"]:root .mobile-workspace-controls__trigger {
-  width: 44px;
-  height: 44px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-html[data-mobile-app="android"]:root .mobile-controls__quick-trigger {
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
-}
-
-html[data-mobile-app="android"]:root .mobile-controls__quick-trigger svg {
-  width: 21px;
-  height: 21px;
-}
-
-html[data-mobile-app="android"]:root [data-mobile-panel-header] {
-  padding-left: 8px !important;
-  padding-right: 8px !important;
-  min-height: 56px;
-}
-
-html[data-mobile-app="android"]:root .mobile-controls__backdrop,
-html[data-mobile-app="android"]:root .mobile-workspace-controls__backdrop {
-  background: rgba(0, 0, 0, .48);
-}
-
-html[data-mobile-app="android"]:root .mobile-controls__panel {
-  top: env(safe-area-inset-top, 0px);
-  right: env(safe-area-inset-right, 0px);
-  left: auto;
-  bottom: env(safe-area-inset-bottom, 0px);
-  width: min(336px, calc(100vw - 32px));
-  max-height: var(--app-viewport-height, 100vh);
-  padding: 8px 12px 20px;
-  border-radius: 20px 0 0 20px;
-  background: rgb(19, 20, 23);
-  box-shadow: -12px 0 40px rgba(0, 0, 0, .2);
-  z-index: 5;
-}
-
-html[data-mobile-app="android"]:root .mobile-controls__header {
-  min-height: 80px;
-  padding: 8px 4px 16px 12px;
-  background: rgb(19, 20, 23);
-  backdrop-filter: none;
-}
-
-html[data-mobile-app="android"]:root .mobile-controls__header > span { gap: 6px; }
-html[data-mobile-app="android"]:root .mobile-controls__header strong { font-size: 20px; }
-html[data-mobile-app="android"]:root .mobile-controls__header small { font-size: 12px; }
-html[data-mobile-app="android"]:root .mobile-controls__header button { width: 44px; height: 44px; }
-
-.mobile-controls__destinations { display: grid; gap: 4px; }
-.mobile-controls__group { position: relative; }
-
-.mobile-controls__destinations button,
-html[data-mobile-app="android"]:root .mobile-controls__panel > button {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 48px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--foreground-dimmed);
-  font-size: 14px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.mobile-controls__group > button { width: calc(100% - 48px); }
-.mobile-controls__destinations svg { width: 19px; height: 19px; flex: none; }
-.mobile-controls__group summary {
+.mobile-drawer, .mobile-workspace-picker { position: fixed; inset: 0; z-index: var(--z-modal, 200); color: var(--foreground); }
+.mobile-overlay-backdrop { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: rgba(21, 28, 43, .28); animation: mobile-backdrop-in .18s ease-out; }
+.mobile-drawer__panel {
   position: absolute;
-  top: 0;
-  right: 0;
-  width: 48px;
-  height: 48px;
+  top: env(safe-area-inset-top, 0px);
+  bottom: env(safe-area-inset-bottom, 0px);
+  left: env(safe-area-inset-left, 0px);
+  width: min(360px, 86vw);
   display: flex;
-  align-items: center;
-  justify-content: center;
-  list-style: none;
-  border-radius: 12px;
-  color: var(--muted-foreground);
-  cursor: pointer;
+  flex-direction: column;
+  background: var(--background);
+  border-radius: 0 22px 22px 0;
+  box-shadow: 12px 0 48px rgba(26, 36, 54, .08);
+  outline: none;
+  overflow: hidden;
+  animation: mobile-drawer-in .2s ease-out;
 }
-.mobile-controls__group summary::-webkit-details-marker { display: none; }
-.mobile-controls__group details[open] summary svg { transform: rotate(180deg); }
-.mobile-controls__children {
-  margin: 2px 0 8px 20px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
+.mobile-drawer__header { min-height: 76px; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 8px 24px; flex: none; }
+.mobile-drawer__header strong { font-size: 25px; letter-spacing: -.7px; }
+.mobile-drawer__header button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 14px; color: var(--foreground-dimmed); background: transparent; cursor: pointer; }
+.mobile-drawer__header svg { width: 22px; height: 22px; }
+.mobile-drawer__scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 16px; }
+.mobile-drawer__new { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 50px; margin: 4px 0 14px; padding: 0 16px; border: 0; border-radius: 16px; background: var(--mobile-accent-surface); color: var(--accent); font-size: 16px; font-weight: 600; cursor: pointer; }
+.mobile-drawer__new svg { width: 22px; height: 22px; }
+.mobile-drawer__destinations > button, .mobile-drawer__more > button {
+  display: flex; align-items: center; gap: 14px; width: 100%; min-height: 50px; padding: 0 16px;
+  border: 0; border-radius: 12px; background: transparent; color: var(--foreground); font-size: 16px; text-align: left; cursor: pointer;
 }
-.mobile-controls__children button { font-size: 13px; }
-.mobile-controls__destinations button:active,
-.mobile-controls__group summary:active { background: rgba(237, 236, 240, .06); }
+.mobile-drawer__destinations svg { width: 22px; height: 22px; stroke-width: 1.8; flex: none; }
+.mobile-drawer__more summary { display: flex; align-items: center; justify-content: space-between; min-height: 44px; margin: 4px 0; padding: 0 17px; list-style: none; color: var(--muted-foreground); font-size: 13px; cursor: pointer; border-radius: 12px; }
+.mobile-drawer__more summary::-webkit-details-marker { display: none; }
+.mobile-drawer__more summary svg { width: 16px; height: 16px; }
+.mobile-drawer__more[open] summary svg { transform: rotate(180deg); }
+.mobile-drawer__more > button { font-size: 14px; min-height: 46px; }
+.mobile-drawer__history { padding-top: 4px; }
+.mobile-drawer__search { display: flex; align-items: center; gap: 10px; height: 44px; margin: 0 4px 10px; padding: 0 12px; border-radius: 13px; background: var(--muted); }
+.mobile-drawer__search svg { width: 18px; height: 18px; flex: none; color: var(--muted-foreground); }
+.mobile-drawer__search input { min-width: 0; width: 100%; height: 100%; border: 0; outline: none; background: transparent; color: var(--foreground); font-size: 14px; }
+.mobile-drawer__search:focus-within { outline: 2px solid var(--ring); }
+.mobile-drawer__history h2 { margin: 0; padding: 14px 16px 8px; color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
+.mobile-drawer__section-heading { display: flex; align-items: center; justify-content: space-between; }
+.mobile-drawer__section-heading button { border: 0; min-height: 44px; padding: 0 16px; background: transparent; color: var(--muted-foreground); font-size: 12px; cursor: pointer; }
+.mobile-drawer__session { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 54px; padding: 8px 12px; border: 0; border-radius: 14px; background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
+.mobile-drawer__session > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.mobile-drawer__session.is-active { background: var(--secondary); }
+.mobile-drawer__session-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 12px; background: var(--secondary); color: var(--muted-foreground); }
+.mobile-drawer__session-icon svg { width: 18px; height: 18px; }
+.mobile-drawer__busy { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.mobile-drawer__empty { margin: 0; padding: 20px 16px; color: var(--muted-foreground); font-size: 13px; line-height: 1.7; }
+.mobile-drawer__footer { border-top: 1px solid var(--border); padding: 10px 16px 14px; flex: none; }
+.mobile-drawer__mode { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 8px; border: 0; border-radius: 14px; background: transparent; color: var(--foreground); cursor: pointer; text-align: left; }
+.mobile-drawer__mode > svg:first-child { box-sizing: content-box; width: 20px; height: 20px; padding: 12px; background: var(--mobile-accent-surface); border-radius: 16px; color: var(--accent); }
+.mobile-drawer__mode > span { display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.mobile-drawer__mode strong { font-size: 14px; font-weight: 600; }
+.mobile-drawer__mode small { font-size: 11px; color: var(--muted-foreground); }
+.mobile-drawer__mode > svg:last-child { width: 16px; height: 16px; transform: rotate(-90deg); color: var(--muted-foreground); }
+.mobile-drawer__footer-actions { display: flex; justify-content: space-around; margin-top: 4px; }
+.mobile-drawer__footer-actions button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 8px; border: 0; border-radius: 12px; background: transparent; color: var(--foreground-dimmed); font-size: 12px; cursor: pointer; }
+.mobile-drawer__footer-actions svg { width: 17px; height: 17px; }
+.mobile-drawer button:active, .mobile-drawer summary:active { background: var(--secondary); }
+.mobile-drawer button:focus-visible, .mobile-drawer summary:focus-visible,
+.mobile-app-bar button:focus-visible, .mobile-workspace-picker button:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 
-html[data-mobile-app="android"]:root .mobile-workspace-controls__panel {
-  top: 50px;
-  padding: 8px;
-  border-radius: 16px;
-  background: rgb(25, 27, 32);
-}
-html[data-mobile-app="android"]:root .mobile-workspace-controls__item {
-  border: 0;
-  border-radius: 10px;
-  font-size: 14px;
-}
-html[data-mobile-app="android"]:root .mobile-workspace-controls__item.is-active {
-  color: var(--accent);
-  background: rgba(129, 140, 248, .1);
-}
-.mobile-workspace-controls__empty { padding: 12px 16px; color: var(--foreground-dimmed); font-size: 14px; }
+.mobile-workspace-picker__panel { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 72px); left: 16px; right: 16px; width: min(400px, calc(100vw - 32px)); max-height: calc(var(--app-viewport-height, 100vh) - 100px); margin: 0 auto; padding: 0 8px 12px; border-radius: 22px; background: var(--background); overflow-y: auto; outline: none; box-shadow: 0 12px 40px rgba(26, 36, 54, .12); }
+.mobile-workspace-picker__panel .mobile-drawer__header { padding-left: 12px; min-height: 64px; }
+.mobile-workspace-picker__panel .mobile-drawer__header strong { font-size: 18px; letter-spacing: 0; }
+.mobile-workspace-picker__item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 54px; padding: 0 16px; border: 0; border-radius: 14px; background: transparent; text-align: left; color: var(--foreground); cursor: pointer; }
+.mobile-workspace-picker__item > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mobile-workspace-picker__item svg { width: 20px; height: 20px; flex: none; }
+.mobile-workspace-picker__item small { color: var(--accent); }
+.mobile-workspace-picker__item.is-active { background: var(--mobile-accent-surface); }
+.mobile-workspace-picker__item:disabled { opacity: .6; }
 
+html[data-mobile-app="android"]:root [data-chat-empty-state] { padding: 24px; }
+html[data-mobile-app="android"]:root .mobile-chat-empty__legacy { display: none; }
+.mobile-chat-welcome { display: flex; flex-direction: column; align-items: center; text-align: center; width: 100%; max-width: 340px; transform: translateY(-20px); }
+.mobile-chat-welcome > img { width: 64px; height: 64px; border-radius: 20px; margin-bottom: 22px; }
+.mobile-chat-welcome h1 { color: var(--foreground); font-size: 24px; font-weight: 650; letter-spacing: -.6px; line-height: 1.5; margin: 0; }
+.mobile-chat-welcome p { color: var(--muted-foreground); font-size: 14px; margin: 8px 0 28px; }
+.mobile-chat-welcome__prompts { display: grid; gap: 10px; width: 100%; pointer-events: auto; }
+.mobile-chat-welcome__prompts button { display: flex; align-items: center; justify-content: space-between; min-height: 50px; padding: 0 18px; border: 1px solid var(--border); border-radius: 16px; background: var(--background-elevated); color: var(--foreground-dimmed); font-size: 14px; text-align: left; cursor: pointer; }
+.mobile-chat-welcome__prompts span { color: var(--muted-foreground); font-size: 17px; }
+.mobile-chat-welcome__prompts button:active { background: var(--mobile-accent-surface); }
+html[data-mobile-app="android"]:root [data-theme-bubble="user"] { color: var(--primary-foreground); background: var(--user-message-bubble); border-radius: 22px 22px 6px 22px; font-size: 16px; line-height: 1.7; padding: 12px 18px; }
+html[data-mobile-app="android"]:root [data-theme-bubble="user"] a { color: inherit; text-decoration: underline; }
+html[data-mobile-app="android"]:root [data-theme-bubble="assistant"] { background: var(--muted); border-radius: 6px 22px 22px 22px; box-shadow: none; font-size: 16px; line-height: 1.8; }
+html[data-mobile-app="android"]:root [data-chat-input-zone] { padding: 8px 12px 12px; background: var(--background); }
+html[data-mobile-app="android"]:root .input-container { border: 1px solid var(--border); border-radius: 24px; background: var(--background); box-shadow: 0 4px 20px rgba(30, 44, 70, .07); }
+html[data-mobile-app="android"]:root [data-tutorial="chat-input"] { font-size: 16px; line-height: 1.6; min-height: 66px; padding: 16px 18px 8px; }
 html[data-mobile-app="android"]:root .header-icon-btn,
 html[data-mobile-app="android"]:root .input-toolbar-btn,
 html[data-mobile-app="android"]:root .send-btn { min-width: 44px; width: 44px; height: 44px; }
+html[data-mobile-app="android"]:root .send-btn[data-tutorial="send-button"] { background: var(--primary); color: var(--primary-foreground); }
+html[data-mobile-app="android"]:root .send-btn:disabled { background: var(--secondary); color: var(--muted-foreground); opacity: 1; }
+html[data-mobile-app="android"]:root [data-focus-zone="chat"] [data-radix-scroll-area-viewport] { scroll-padding-bottom: 16px; }
 
-html[data-mobile-app="android"]:root .mobile-controls button:focus-visible,
-html[data-mobile-app="android"]:root .mobile-controls summary:focus-visible,
-html[data-mobile-app="android"]:root .mobile-workspace-controls button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+@keyframes mobile-drawer-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+.mobile-drawer__studio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px 0 12px; }
+.mobile-workspace-picker__create { display: flex; gap: 8px; padding: 16px; border-top: 1px solid var(--border); }
+.mobile-workspace-picker__create input { min-width: 0; flex: 1; height: 44px; padding: 0 12px; color: var(--foreground); background: var(--muted); border-radius: 12px; }
+.mobile-workspace-picker__create button { min-width: 64px; border-radius: 12px; background: var(--primary); color: var(--primary-foreground); }
+.mobile-workspace-picker__create button:disabled { opacity: .5; }
+.mobile-drawer__studio > button { display: flex; align-items: center; flex-direction: column; justify-content: center; gap: 6px; min-height: 72px; padding: 10px 3px; border-radius: 16px; background: var(--muted); font-size: 12px; }
+.mobile-drawer__studio > button[aria-pressed="true"] { background: var(--mobile-accent-surface); color: var(--primary); }
+html[data-mobile-app="android"] [data-studio-editor="canvas"] > header { min-height: 52px; height: auto; padding: 8px; }
+html[data-mobile-app="android"] [data-studio-editor="canvas"] > header button { flex-shrink: 0; min-height: 36px; }
+html[data-mobile-app="android"] [data-studio-editor="canvas"] > div { position: relative; }
+html[data-mobile-app="android"] [data-studio-inspector]:not([hidden]) { position: absolute; right: 0; top: 0; bottom: 0; z-index: 25; width: min(320px, calc(100% - 48px)); box-shadow: -4px 0 20px rgba(0,0,0,.16); }
+html[data-mobile-app="android"] [data-studio-inspector][hidden] { display: none; }
+html[data-mobile-app="android"] [data-studio-editor="canvas"] canvas { touch-action: none; }
+@keyframes mobile-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@media (max-height: 620px) { .mobile-chat-welcome { transform: none; } .mobile-chat-welcome > img { display: none; } .mobile-chat-welcome p { margin-bottom: 16px; } .mobile-chat-welcome__prompts { gap: 6px; } .mobile-chat-welcome__prompts button { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .mobile-drawer__panel, .mobile-overlay-backdrop { animation: none; } }
+
+/* App dialogs are pages on Android. Override caller-specific desktop sizes and
+   Vaul's sheet transforms; the visible viewport shrinks with the keyboard.
+   Navigation remains a sidebar, and native document pickers remain OS-owned. */
+html[data-mobile-app="android"]:root [data-slot="dialog-content"],
+html[data-mobile-app="android"]:root [data-slot="drawer-content"],
+html[data-mobile-app="android"]:root [data-fullscreen-overlay],
+html[data-mobile-app="android"]:root [data-getting-started-guide],
+html[data-mobile-app="android"]:root .mobile-workspace-picker__panel {
+  position: fixed !important;
+  top: var(--app-viewport-top, 0px) !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: var(--app-viewport-height, 100vh) !important;
+  min-height: 0 !important;
+  max-height: var(--app-viewport-height, 100vh) !important;
+  box-sizing: border-box;
+  margin: 0 !important;
+  transform: none !important;
+  translate: none !important;
+  animation: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: var(--background) !important;
+  color: var(--foreground);
 }
-
-html[data-mobile-app="android"].keyboard-open:root #root { padding-top: 0; }
-html.keyboard-open .mobile-app-bar { display: none; }
+html[data-mobile-app="android"]:root [data-slot="dialog-content"] {
+  display: flex !important;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scroll-padding-top: 80px;
+  scroll-padding-bottom: 80px;
+}
+html[data-mobile-app="android"]:root [data-slot="dialog-content"] > * { flex-shrink: 0; }
+html[data-mobile-app="android"]:root [data-slot="dialog-content"] > .flex-1 {
+  min-height: 0;
+  flex-shrink: 1;
+}
+html[data-mobile-app="android"]:root [data-slot="dialog-header"] {
+  position: sticky;
+  top: -20px;
+  z-index: 2;
+  margin: -20px -20px 0;
+  padding: 24px 72px 20px 20px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+html[data-mobile-app="android"]:root [data-slot="dialog-title"] { font-size: 20px; line-height: 1.5; }
+html[data-mobile-app="android"]:root [data-slot="dialog-description"] { line-height: 1.6; }
+html[data-mobile-app="android"]:root [data-slot="dialog-footer"] {
+  position: sticky;
+  bottom: -20px;
+  z-index: 2;
+  margin: auto -20px -20px;
+  padding: 16px 20px;
+  background: var(--background);
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+html[data-mobile-app="android"]:root [data-slot="dialog-footer"] button { min-height: 44px; }
+html[data-mobile-app="android"]:root [data-slot="dialog-content"] > [data-slot="dialog-close"],
+html[data-mobile-app="android"]:root [data-slot="drawer-dismiss"] {
+  display: flex;
+  position: fixed;
+  top: calc(var(--app-viewport-top, 0px) + 12px);
+  right: 12px;
+  z-index: 3;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--secondary);
+  color: var(--foreground);
+  opacity: 1;
+}
+html[data-mobile-app="android"]:root [data-slot="drawer-content"] {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  will-change: auto;
+}
+/* Vaul extends the sheet background below its edge during dragging. On a
+   fullscreen page that extension would create two extra screens of scrolling. */
+html[data-mobile-app="android"]:root [data-slot="drawer-content"]::after { display: none; }
+html[data-mobile-app="android"]:root [data-slot="drawer-content"] > * { flex-shrink: 0; }
+html[data-mobile-app="android"]:root [data-slot="drawer-content"] > :first-child { display: none; }
+html[data-mobile-app="android"]:root [data-slot="drawer-header"] {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 24px 72px 20px 20px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+html[data-mobile-app="android"]:root [data-slot="drawer-title"] { font-size: 20px; line-height: 1.5; }
+html[data-mobile-app="android"]:root [data-slot="drawer-content"] > .overflow-y-auto {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+html[data-mobile-app="android"]:root .mobile-workspace-picker__panel { padding: 0 8px 20px; }
+html[data-mobile-app="android"]:root .mobile-workspace-picker__panel .mobile-drawer__header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--background);
+}

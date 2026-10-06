@@ -672,6 +672,7 @@ export class PiAgent extends BaseAgent {
       miniModel: this.config.miniModel,
       providerType: this.config.providerType,
       authType: this.config.authType,
+      oauthProvider: runtime.oauthProvider,
       workspaceId: this.config.workspace.id,
       // Windows: propagate the globally configured Git Bash path so the Pi
       // SDK's built-in bash tool uses the same shell as the Claude backend
@@ -902,7 +903,7 @@ export class PiAgent extends BaseAgent {
     });
   }
 
-  /** Called only before starting a new turn, never as a Settings side effect. */
+  /** Synchronize before a turn or a TokenNest model request, never as a Settings side effect. */
   private async synchronizeStoredAuthBeforeTurn(): Promise<void> {
     if (!this.subprocess) return;
     const runtime = getBackendRuntime(this.config);
@@ -971,7 +972,7 @@ export class PiAgent extends BaseAgent {
 
   /**
    * Refresh OAuth tokens and push updated credentials to the running subprocess.
-   * Handles both Copilot (Pi SDK) and ChatGPT Plus token refresh.
+   * Handles TokenNest, Copilot (Pi SDK), and ChatGPT Plus token refresh.
    */
   private async refreshAndPushTokens(): Promise<void> {
     if (this.config.authType !== 'oauth') return;
@@ -1209,6 +1210,12 @@ export class PiAgent extends BaseAgent {
         break;
       }
 
+      case 'auth_refresh_request': {
+        const id = typeof msg.id === 'string' ? msg.id : '';
+        if (id) void this.handleRequestAuthRefresh(id);
+        break;
+      }
+
       case 'ready':
         // Subprocess initialized, callback server listening
         this.callbackPort = (msg.callbackPort as number) || 0;
@@ -1414,9 +1421,22 @@ export class PiAgent extends BaseAgent {
     }
   }
 
-  /**
-   * Forward a Pi SDK event from the subprocess through the event adapter.
-   */
+  /** Refresh at each model request, including continuations inside a long turn. */
+  private async handleRequestAuthRefresh(id: string): Promise<void> {
+    const child = this.subprocess;
+    try {
+      await this.ensureOAuthCredentialsFresh();
+      await this.synchronizeStoredAuthBeforeTurn();
+      if (child && this.subprocess === child) this.send({ type: 'auth_refresh_result', id, success: true });
+    } catch (error) {
+      // The child only receives a safe recovery message, never raw token endpoint responses.
+      const message = error instanceof OAuthReauthenticationRequiredError || error instanceof OAuthTokenRefreshError
+        ? error.message : 'Credential update could not be completed. Please retry.';
+      if (child && this.subprocess === child) this.send({ type: 'auth_refresh_result', id, success: false, message });
+    }
+  }
+
+  /** Forward a Pi SDK event from the subprocess through the event adapter. */
   private handleSubprocessEvent(event: Record<string, unknown>): void {
     // The subprocess sends Pi SDK AgentSessionEvent objects serialized as JSON.
     // Feed them through PiEventAdapter to convert to TokenBirdEvents.

@@ -2,6 +2,44 @@ import { describe, expect, it } from 'bun:test';
 import { fetchWithNetworkDiagnostics, networkErrorChain, sanitizeNetworkMessage } from '../network-diagnostics.ts';
 
 describe('network diagnostics', () => {
+  it('records the actual Bun runtime and preserves the SDK signal', async () => {
+    const controller = new AbortController();
+    let receivedInit: RequestInit | undefined;
+    const records: Record<string, unknown>[] = [];
+    const fetcher = (async (_input: unknown, init?: RequestInit) => {
+      receivedInit = init;
+      return new Response('ok');
+    }) as unknown as typeof fetch;
+    const response = await fetchWithNetworkDiagnostics(fetcher, 'https://host/v1/chat/completions', {
+      signal: controller.signal,
+    }, r => { records.push(r); });
+    await response.text();
+    expect(receivedInit?.signal).toBe(controller.signal);
+    expect(records[0]?.runtime).toBe('bun');
+    expect(records[0]?.runtimeVersion).toBe(process.versions.bun);
+  });
+
+  it('cancels a pending AI request with the SDK signal', async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Promise<Response>(() => {}),
+    });
+    const controller = new AbortController();
+    const reason = new Error('user stopped the request');
+    const records: Record<string, unknown>[] = [];
+    try {
+      const pending = fetchWithNetworkDiagnostics(fetch, server.url, {
+        signal: controller.signal,
+      }, r => { records.push(r); });
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      expect(records.at(-1)?.phase).toBe('fetch_error');
+      expect(records.at(-1)?.aborted).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   it('keeps the cause code, redacts credentials and bounds cyclic causes', () => {
     const cause = Object.assign(new Error('timeout https://user:secret@host/v1?token=secret Bearer secret'), { code: 'ETIMEDOUT' });
     const error = new Error('fetch failed', { cause });

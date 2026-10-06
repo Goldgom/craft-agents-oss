@@ -15,7 +15,7 @@ const EMPTY_DRAWIO = '<mxfile host="TokenBird"><diagram name="Mind Map"><mxGraph
 function download(data: Blob | string, name: string) {
   const url = typeof data === 'string' ? data : URL.createObjectURL(data)
   const link = document.createElement('a')
-  link.href = url; link.download = name; link.click()
+  link.href = url; link.download = name; document.body.appendChild(link); link.click(); link.remove()
   if (typeof data !== 'string') setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
@@ -74,7 +74,7 @@ function MindMapEditor({ session, onSave, createSession, bindWorkDirectory, flus
   const pendingRef = useRef(new Map<string, { resolve: (message: DrawioMessage) => void; reject: (error: Error) => void }>())
   const [ready, setReady] = useState(false)
   const [frameDark, setFrameDark] = useState(isDark)
-  const [chatOpen, setChatOpen] = useState(true)
+  const [chatOpen, setChatOpen] = useState(() => new URLSearchParams(window.location.search).get('embedded') !== 'android')
   const [prompt, setPrompt] = useState(initial.current.prompt)
   const [thinkingLevel, setThinkingLevel] = useState<StudioThinkingLevel>(studioThinkingLevel(initial.current.thinkingLevel))
   const [mode, setMode] = useState<StudioExecutionMode>(studioExecutionMode(initial.current.mode))
@@ -267,7 +267,7 @@ function MindMapEditor({ session, onSave, createSession, bindWorkDirectory, flus
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div data-studio-editor="mindmap" className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex min-h-12 flex-wrap items-center gap-1.5 border-b border-border/70 bg-background px-3 py-2 text-xs">
         <strong className="mr-2 flex items-center gap-2 text-sm"><Sparkles className="size-4 text-primary" />思维导图</strong>
         <span className="max-w-[38vw] truncate text-xs text-muted-foreground" title={session.workspaceDir || '旧会话未设置工作目录'}>当前目录：{session.workspaceDir || '未设置'}</span>

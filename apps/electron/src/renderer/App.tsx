@@ -303,6 +303,20 @@ export default function App() {
   const { t } = useTranslation()
   const [studioMode, setStudioMode] = useState<'agent' | 'canvas' | 'mindmap' | 'super-agent'>('agent')
   const [studioVisited, setStudioVisited] = useState({ canvas: true, mindmap: false, 'super-agent': false })
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('embedded') !== 'android') return
+    const changeMode = (event: Event) => {
+      const mode = (event as CustomEvent).detail
+      if (!['agent', 'canvas', 'mindmap', 'super-agent'].includes(mode)) return
+      setStudioMode(mode)
+      if (mode !== 'agent') setStudioVisited(previous => ({ ...previous, [mode]: true }))
+    }
+    window.addEventListener('craft-agent:studio-mode', changeMode)
+    return () => window.removeEventListener('craft-agent:studio-mode', changeMode)
+  }, [])
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('craft-agent:studio-mode-changed', { detail: studioMode }))
+  }, [studioMode])
   const isAndroidEmbedded = useMemo(
     () => new URLSearchParams(window.location.search).get('embedded') === 'android',
     [],
@@ -517,7 +531,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (appState !== 'ready') return
+    if (appState !== 'ready' || isAndroidEmbedded) return
 
     let cancelled = false
     window.electronAPI.readPreferences()
@@ -537,7 +551,7 @@ export default function App() {
       })
 
     return () => { cancelled = true }
-  }, [appState])
+  }, [appState, isAndroidEmbedded])
 
   const handleGettingStartedComplete = useCallback(() => {
     setShowGettingStartedGuide(false)
@@ -951,10 +965,10 @@ export default function App() {
         const needs = await window.electronAPI.getSetupNeeds()
         setSetupNeeds(needs)
 
-        // Authentication setup is platform-independent. Android previously
-        // bypassed this gate entirely, which hid the provider connection guide
-        // on a fresh local-mode server.
-        setAppState(resolveAuthGatedAppState(needs.isFullyConfigured, wsId))
+        // Android local mode opens chat first. Model setup remains available
+        // through the inline connection prompt and AI settings.
+        const openLocalChat = isAndroidEmbedded && ctx?.mode === 'local'
+        setAppState(resolveAuthGatedAppState(needs.isFullyConfigured, wsId, openLocalChat))
       } catch (error) {
         console.error('Failed to check auth state:', error)
         // An unreachable remote server cannot report its setup state. Keep
@@ -2310,7 +2324,9 @@ export default function App() {
               setWindowWorkspaceId(id)
               const needs = await window.electronAPI.getSetupNeeds()
               setSetupNeeds(needs)
-              setAppState(resolveAuthGatedAppState(needs.isFullyConfigured, id))
+              setAppState(resolveAuthGatedAppState(
+                needs.isFullyConfigured, id, isAndroidEmbedded && serverContext?.mode === 'local',
+              ))
             }}
           />
         </ModalProvider>

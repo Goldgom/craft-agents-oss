@@ -87,7 +87,7 @@ export class SuperAgentTestHost implements SuperAgentSessionHost {
   /** Intentionally drop the completion notification while changing host state. */
   loseCompletion(sessionId: string) { this.sessions.get(sessionId)!.isProcessing = false }
 
-  complete(sessionId: string, finalText: string, reason: SessionCompletionEvent['reason'] = 'complete') {
+  complete(sessionId: string, finalText: string, reason: SessionCompletionEvent['reason'] = 'complete', failure: Pick<SessionCompletionEvent, 'errorCode' | 'canRetry'> = {}) {
     const session = this.sessions.get(sessionId)!
     session.isProcessing = false
     for (const [requestId, pending] of [...this.pendingPermissions]) {
@@ -97,7 +97,7 @@ export class SuperAgentTestHost implements SuperAgentSessionHost {
       this.emit({ type: 'permission_resolved', sessionId, requestId, allowed: false, reason: 'session_stopped' })
     }
     this.emit({ type: reason === 'complete' ? 'complete' : 'interrupted', sessionId })
-    for (const listener of this.listeners) listener({ sessionId, workspaceId: session.workspaceId, finalText, reason })
+    for (const listener of this.listeners) listener({ sessionId, workspaceId: session.workspaceId, finalText, reason, ...failure })
   }
 }
 

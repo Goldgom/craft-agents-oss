@@ -33,7 +33,7 @@ export function StudioSessionWorkspace({ mode, children }: {
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState('')
   const [draft, setDraft] = useState('')
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => new URLSearchParams(window.location.search).get('embedded') === 'android')
   const [creating, setCreating] = useState(false)
   const [workDirectory, setWorkDirectory] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)

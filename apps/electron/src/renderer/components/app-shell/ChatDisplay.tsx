@@ -79,6 +79,7 @@ import { useAtomValue } from 'jotai'
 import { sessionMetaMapAtom } from '@/atoms/sessions'
 import { getRechargeConnection, openConnectionRecharge } from '@/lib/tokennest-recharge'
 import { isInsufficientBalanceError } from '@craft-agent/shared/utils/billing'
+import tokenBirdIcon from '../../../../resources/icon.png'
 
 // ============================================================================
 // CSS Custom Highlight API helper
@@ -1653,9 +1654,24 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                   />
                   {/* Empty state for compact mode - inviting conversational prompt, centered in full popover */}
                   {compactMode && turns.length === 0 && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center select-none gap-1 pointer-events-none">
-                      <span className="text-sm text-muted-foreground">{t("editPopover.whatToChange")}</span>
-                      <span className="text-xs text-muted-foreground/50">{t("editPopover.justDescribe")}</span>
+                    <div data-chat-empty-state className="absolute inset-0 flex flex-col items-center justify-center select-none gap-1 pointer-events-none">
+                      <span className="text-sm text-muted-foreground mobile-chat-empty__legacy">{t("editPopover.whatToChange")}</span>
+                      <span className="text-xs text-muted-foreground/50 mobile-chat-empty__legacy">{t("editPopover.justDescribe")}</span>
+                      {new URLSearchParams(window.location.search).get('embedded') === 'android' && (
+                        <div className="mobile-chat-welcome">
+                          <img src={tokenBirdIcon} alt="" />
+                          <h1>你好，今天想做些什么？</h1>
+                          <p>聊聊想法，把灵感变成行动</p>
+                          <div className="mobile-chat-welcome__prompts">
+                            {['帮我整理今天的计划', '和我一起想个好点子', '帮我润色一段文字'].map(prompt => (
+                              <button key={prompt} type="button" onClick={() => {
+                                onInputChange?.(prompt)
+                                window.dispatchEvent(new CustomEvent('craft:focus-input'))
+                              }}>{prompt}<span aria-hidden="true">↗</span></button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   {!compactMode && hasUnrenderedLoadedMessages && (

@@ -16,6 +16,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "26.10.4"
+        manifestPlaceholders["appLabel"] = "@string/app_name"
 
         buildConfigField("String", "SERVER_URL", "\"${configuredServerUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
 
@@ -43,6 +44,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Optional side-by-side installation when a device's existing APK
+            // was signed with a different developer's debug key.
+            applicationIdSuffix = providers.gradleProperty("debugApplicationIdSuffix").orNull
+            if (!applicationIdSuffix.isNullOrBlank()) {
+                manifestPlaceholders["appLabel"] = "词元鸟 · 调试"
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(

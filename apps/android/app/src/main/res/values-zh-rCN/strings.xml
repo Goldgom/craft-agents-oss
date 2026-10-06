@@ -1,8 +1,8 @@
 <resources>
     <string name="app_name">词元鸟</string>
-    <string name="server_home_title">选择词元鸟的使用方式</string>
+    <string name="server_home_title">切换使用模式</string>
     <string name="server_home_description">本地模式可在手机上独立运行；服务器模式可连接您已有的词元鸟服务。</string>
-    <string name="local_server">本地模式</string>
+    <string name="local_server">本机聊天</string>
     <string name="local_server_description">服务和工作区都保存在此设备，无需填写地址或令牌。</string>
     <string name="local_server_unsupported">此设备的本地模式需要 Android 9 或更高版本，仍可使用服务器模式。</string>
     <string name="local_mode_badge">本机运行</string>
@@ -19,8 +19,8 @@
     <string name="server_token_hint">服务器未启用认证时可留空</string>
     <string name="save_and_connect">保存并连接</string>
     <string name="back_to_mode_selection">返回模式选择</string>
-    <string name="preparing_local_server">正在准备本地模式</string>
-    <string name="preparing_local_server_description">词元鸟正在校验并启动手机内的私有服务，首次启动可能需要稍长时间。</string>
+    <string name="preparing_local_server">正在打开本机聊天</string>
+    <string name="preparing_local_server_description">正在准备你的对话空间，首次打开请稍候。</string>
     <string name="choose_another_mode">选择其他模式</string>
     <string name="local_server_failed">本地模式启动失败</string>
     <string name="local_server_failed_description">您可以重试或改用服务器模式；下方技术信息可用于排查此设备。</string>

@@ -3,6 +3,11 @@ package com.craftagents.mobile;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.print.PrintManager;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
@@ -11,6 +16,8 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Insets;
 import android.graphics.Rect;
 import android.graphics.Typeface;
@@ -54,6 +61,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
+import android.util.Base64;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -73,13 +82,15 @@ public final class MainActivity extends Activity {
     private static final String ADB_HOST_KEY = "network_adb_host";
     private static final String ADB_PORT_KEY = "network_adb_port";
     private static final String DEFAULT_LOCAL_SERVER_URL = "ws://127.0.0.1:9100";
-    private static final int COLOR_BACKGROUND = Color.rgb(16, 17, 20);
-    private static final int COLOR_SURFACE = Color.rgb(25, 27, 32);
-    private static final int COLOR_SURFACE_ALT = Color.rgb(31, 34, 40);
-    private static final int COLOR_BORDER = Color.rgb(42, 45, 54);
-    private static final int COLOR_TEXT = Color.rgb(244, 245, 247);
-    private static final int COLOR_MUTED = Color.rgb(164, 169, 180);
-    private static final int COLOR_ACCENT = Color.rgb(129, 140, 248);
+    private int COLOR_BACKGROUND = Color.WHITE;
+    private int COLOR_SURFACE = Color.rgb(247, 248, 250);
+    private int COLOR_SURFACE_ALT = Color.rgb(240, 244, 250);
+    private int COLOR_BORDER = Color.rgb(228, 231, 237);
+    private int COLOR_TEXT = Color.rgb(25, 28, 34);
+    private int COLOR_MUTED = Color.rgb(117, 123, 134);
+    private static final int COLOR_ACCENT = Color.rgb(0, 102, 255);
+    private boolean darkTheme;
+    private static final String DARK_THEME_KEY = "dark_theme";
     private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
     private static final int PERMISSION_REQUEST_CODE_START = 4100;
     private static final String ANDROID_BACK_SCRIPT =
@@ -136,6 +147,10 @@ public final class MainActivity extends Activity {
     private final AtomicInteger permissionRequestCode = new AtomicInteger(PERMISSION_REQUEST_CODE_START);
     private final SparseArray<PendingPermissionRequest> pendingPermissionRequests = new SparseArray<>();
     private AdbClient adbClient;
+    private DocumentSaver documentSaver;
+    private boolean taskRunning;
+    private WebView printView;
+    private volatile String notificationSession = "";
 
     private static final class PendingPermissionRequest {
         final String requestId;
@@ -150,19 +165,22 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        WebView.enableSlowWholeDocumentDraw();
+        notificationSession = getIntent().getStringExtra("notification_session");
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        applyThemePalette(preferences.getBoolean(DARK_THEME_KEY, false));
         localAgentServer = new LocalAgentServer(this);
         adbClient = new AdbClient(this);
         migrateLegacyServerProfile();
         buildUi();
         registerBackHandler();
 
-        ServerMode savedMode = ServerMode.fromPreference(preferences.getString(MODE_KEY, null));
-        if (savedMode == null
-                || (savedMode == ServerMode.LOCAL && !LocalAgentServer.isSupportedOnThisDevice())) {
+        // Every fresh launch opens on-device chat. Remote credentials remain
+        // available through the menu, but never redirect the launch screen.
+        if (!LocalAgentServer.isSupportedOnThisDevice()) {
             showServerConfiguration(false);
         } else {
-            connect(savedMode);
+            connect(ServerMode.LOCAL);
         }
     }
 
@@ -243,6 +261,7 @@ public final class MainActivity extends Activity {
     }
 
     private void configureWebView(WebView view) {
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
         // The app owns the full-screen surface; native WebView chrome and
         // overscroll glow only add visual noise on Android.
         view.setBackgroundColor(COLOR_BACKGROUND);
@@ -262,9 +281,8 @@ public final class MainActivity extends Activity {
         settings.setDisplayZoomControls(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        // TokenBird supplies its own complete dark palette. Android WebView's
-        // algorithmic darkening can otherwise process that palette a second
-        // time and turn light text black on the already-dark surface.
+        // The bundled frontend owns its palette. Do not let Android recolor
+        // it independently of the app's CSS.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             settings.setAlgorithmicDarkeningAllowed(false);
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -495,10 +513,10 @@ public final class MainActivity extends Activity {
         TextView title = textView(titleRes, 17, COLOR_TEXT);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView badge = textView(badgeRes, 11, preferred ? COLOR_ACCENT : COLOR_MUTED);
+        TextView badge = textView(badgeRes, 11, preferred ? (darkTheme ? Color.rgb(128, 171, 255) : COLOR_ACCENT) : COLOR_MUTED);
         badge.setGravity(Gravity.CENTER);
         badge.setPadding(dp(9), dp(5), dp(9), dp(5));
-        badge.setBackground(roundedBackground(preferred ? Color.rgb(36, 40, 64) : COLOR_SURFACE_ALT, Color.TRANSPARENT, 8, 0));
+        badge.setBackground(roundedBackground(preferred ? (darkTheme ? Color.rgb(32, 50, 82) : Color.rgb(234, 242, 255)) : COLOR_SURFACE_ALT, Color.TRANSPARENT, 8, 0));
         heading.addView(badge);
         card.addView(heading, matchWrap());
 
@@ -515,7 +533,7 @@ public final class MainActivity extends Activity {
         input.setSingleLine(true);
         input.setTextColor(COLOR_TEXT);
         input.setTextSize(16);
-        input.setHintTextColor(Color.rgb(112, 117, 128));
+        input.setHintTextColor(COLOR_MUTED);
         input.setInputType(inputType);
         input.setHint(hintRes);
         input.setPadding(dp(15), 0, dp(15), 0);
@@ -538,7 +556,7 @@ public final class MainActivity extends Activity {
         button.setAllCaps(false);
         button.setTextSize(16);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        button.setTextColor(COLOR_BACKGROUND);
+        button.setTextColor(Color.WHITE);
         button.setMinHeight(dp(54));
         button.setElevation(0);
         button.setStateListAnimator(null);
@@ -609,11 +627,11 @@ public final class MainActivity extends Activity {
                 R.string.local_server_failed,
                 R.string.local_server_failed_description);
 
-        TextView error = textView(0, 12, Color.rgb(229, 156, 156));
+        TextView error = textView(0, 12, darkTheme ? Color.rgb(241, 143, 143) : Color.rgb(181, 51, 51));
         error.setText(details);
         error.setTextIsSelectable(true);
         error.setPadding(dp(14), dp(12), dp(14), dp(12));
-        error.setBackground(roundedBackground(Color.rgb(48, 28, 31), Color.rgb(101, 53, 59), 12, 1));
+        error.setBackground(roundedBackground(darkTheme ? Color.rgb(61, 38, 42) : Color.rgb(255, 245, 245), COLOR_BORDER, 12, 1));
         LinearLayout.LayoutParams errorParams = matchWrap();
         errorParams.setMargins(0, 0, 0, dp(22));
         page.addView(error, errorParams);
@@ -735,7 +753,7 @@ public final class MainActivity extends Activity {
         showingServerConfiguration = false;
         replaceContent(webView);
         updateWebViewImeInset(imeBottomInset);
-        enableImmersiveMode();
+        showSystemBars();
     }
 
     /** Keep the native configuration screen clear of cutouts and system bars. */
@@ -821,7 +839,9 @@ public final class MainActivity extends Activity {
     private int getLocalWebPort() throws IOException {
         if (localWebServer == null) {
             localWebServer = new LocalWebServer(getAssets(), this::dispatchTokenNestOAuthCallback);
-            return localWebServer.start();
+            int port = localWebServer.start(preferences.getInt("web_origin_port", 0));
+            preferences.edit().putInt("web_origin_port", port).apply();
+            return port;
         }
         return localWebServer.getPort();
     }
@@ -1143,12 +1163,17 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == DocumentSaver.REQUEST_CODE && documentSaver != null) {
+            documentSaver.complete(resultCode, data);
+            return;
+        }
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
             ValueCallback<Uri[]> callback = pendingFileChooser;
             pendingFileChooser = null;
             if (callback != null) {
                 callback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
             }
+            if (resultCode != RESULT_OK) webView.evaluateJavascript("window.dispatchEvent(new Event('craft-agent:file-picker-cancel'))", null);
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
@@ -1156,6 +1181,8 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (documentSaver != null) documentSaver.close();
+        if (printView != null) printView.destroy();
         connectionAttempt.incrementAndGet();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback);
@@ -1181,56 +1208,195 @@ public final class MainActivity extends Activity {
         if (showingServerConfiguration) {
             showSystemBars();
         } else {
-            enableImmersiveMode();
+            showSystemBars();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        notificationSession = intent.getStringExtra("notification_session");
+        if (webView != null && notificationSession != null && !notificationSession.isEmpty()) {
+            String detail = "{\"sessionId\":" + JSONObject.quote(notificationSession) + "}";
+            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('craft-agent:notification-navigate',{detail:" + detail + "}))", null);
         }
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus && !showingServerConfiguration) enableImmersiveMode();
+        if (hasFocus && !showingServerConfiguration) showSystemBars();
     }
 
-    /**
-     * Keep the chat surface edge-to-edge by default. Android still lets users
-     * reveal the system bars temporarily with an edge swipe.
-     */
-    private void enableImmersiveMode() {
-        Window window = getWindow();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false);
-            WindowInsetsController controller = window.getInsetsController();
-            if (controller != null) {
-                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                controller.setSystemBarsBehavior(
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-            }
-        } else {
-            window.getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-        }
+    private void applyThemePalette(boolean dark) {
+        darkTheme = dark;
+        COLOR_BACKGROUND = dark ? Color.rgb(22, 24, 29) : Color.WHITE;
+        COLOR_SURFACE = dark ? Color.rgb(29, 32, 39) : Color.rgb(247, 248, 250);
+        COLOR_SURFACE_ALT = dark ? Color.rgb(40, 45, 54) : Color.rgb(240, 244, 250);
+        COLOR_BORDER = dark ? Color.rgb(52, 58, 70) : Color.rgb(228, 231, 237);
+        COLOR_TEXT = dark ? Color.rgb(238, 240, 245) : Color.rgb(25, 28, 34);
+        COLOR_MUTED = dark ? Color.rgb(155, 164, 181) : Color.rgb(117, 123, 134);
     }
 
+    /** Match system bars to the effective frontend theme. */
     private void showSystemBars() {
         Window window = getWindow();
+        window.setStatusBarColor(COLOR_BACKGROUND);
+        window.setNavigationBarColor(COLOR_BACKGROUND);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(true);
             WindowInsetsController controller = window.getInsetsController();
             if (controller != null) {
                 controller.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                controller.setSystemBarsAppearance(
+                        darkTheme ? 0 : WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
             }
         } else {
-            window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+            window.getDecorView().setSystemUiVisibility(
+                    darkTheme ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         }
     }
 
     /** Methods intentionally limited to local app navigation, exposed to the bundled UI. */
     private final class AndroidBridge {
+        @JavascriptInterface
+        public void renderHtmlImage(String id, String name, String html) {
+            runOnUiThread(() -> {
+                if (html == null || html.length() > 5_000_000) {
+                    dispatchNativeResult("craft-agent:android-file-result", id, false, "export_limit", "对话过长，请使用 PDF 导出", null); return;
+                }
+                WebView imageView = new WebView(MainActivity.this);
+                imageView.setBackgroundColor(Color.WHITE);
+                imageView.getSettings().setJavaScriptEnabled(false);
+                imageView.getSettings().setAllowFileAccess(false);
+                imageView.getSettings().setBlockNetworkLoads(true);
+                imageView.setInitialScale(100);
+                content.addView(imageView, new FrameLayout.LayoutParams(1000, 900));
+                imageView.setTranslationX(-2000);
+                imageView.setWebViewClient(new WebViewClient() {
+                    @Override public void onPageFinished(WebView view, String url) {
+                        view.postDelayed(() -> {
+                            Bitmap bitmap = null;
+                            try {
+                                int height = Math.max(1, (int) Math.ceil(view.getContentHeight() * view.getScale()));
+                                if (height > 12000) throw new IllegalStateException("对话长图超过 12000 像素，请使用 PDF 导出");
+                                view.measure(View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+                                view.layout(0, 0, 1000, height);
+                                bitmap = Bitmap.createBitmap(1000, height, Bitmap.Config.ARGB_8888);
+                                view.draw(new Canvas(bitmap));
+                                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                                bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes);
+                                saveFile(id, name, "image/png", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP));
+                            } catch (Exception | OutOfMemoryError error) {
+                                dispatchNativeResult("craft-agent:android-file-result", id, false, "image_export_failed", "长图导出失败，请使用 PDF：" + error.getMessage(), null);
+                            } finally {
+                                if (bitmap != null) bitmap.recycle();
+                                content.removeView(view); view.destroy();
+                            }
+                        }, 600);
+                    }
+                });
+                imageView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+            });
+        }
+
+        @JavascriptInterface
+        public String takeNotificationSession() {
+            String session = notificationSession;
+            notificationSession = "";
+            return session == null ? "" : session;
+        }
+        @JavascriptInterface
+        public void saveFile(String id, String name, String mime, String base64) {
+            runOnUiThread(() -> {
+                if (documentSaver == null) documentSaver = new DocumentSaver(MainActivity.this,
+                        (requestId, success, error, json) -> dispatchNativeResult("craft-agent:android-file-result",
+                                requestId, success, success ? null : "file_save_failed", error, json));
+                documentSaver.save(id, name, mime, base64);
+            });
+        }
+
+        @JavascriptInterface
+        public void printHtml(String name, String html) {
+            runOnUiThread(() -> {
+                if (printView != null) printView.destroy();
+                printView = new WebView(MainActivity.this);
+                // Exported HTML contains only escaped content; scripting stays disabled.
+                printView.getSettings().setJavaScriptEnabled(false);
+                printView.getSettings().setAllowFileAccess(false);
+                printView.getSettings().setBlockNetworkLoads(true);
+                printView.setWebViewClient(new WebViewClient() {
+                    @Override public void onPageFinished(WebView view, String url) {
+                        PrintManager manager = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+                        manager.print(name, view.createPrintDocumentAdapter(name), null);
+                    }
+                });
+                printView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+            });
+        }
+
+        @JavascriptInterface
+        public boolean getKeepAwake() { return preferences.getBoolean("keep_awake", false); }
+
+        @JavascriptInterface
+        public void setKeepAwake(boolean enabled) {
+            preferences.edit().putBoolean("keep_awake", enabled).apply();
+            setTaskRunning(taskRunning);
+        }
+
+        @JavascriptInterface
+        public void setTaskRunning(boolean running) {
+            runOnUiThread(() -> {
+                taskRunning = running;
+                if (running && getKeepAwake()) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            });
+        }
+
+        @JavascriptInterface
+        public void showNotification(String title, String body, String sessionId) {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+                NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                manager.createNotificationChannel(new NotificationChannel("tasks", "任务与对话", NotificationManager.IMPORTANCE_DEFAULT));
+                Intent intent = new Intent(MainActivity.this, MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                intent.putExtra("notification_session", sessionId);
+                int id = sessionId.isEmpty() ? 1 : sessionId.hashCode();
+                PendingIntent open = PendingIntent.getActivity(MainActivity.this, id, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                manager.notify(id, new Notification.Builder(MainActivity.this, "tasks")
+                        .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title).setContentText(body)
+                        .setStyle(new Notification.BigTextStyle().bigText(body)).setContentIntent(open).setAutoCancel(true).build());
+            });
+        }
+
+        @JavascriptInterface
+        public String getThemeMode() {
+            return preferences.getString("theme_mode", "");
+        }
+
+        @JavascriptInterface
+        public void setThemeMode(String mode) {
+            if (!"light".equals(mode) && !"dark".equals(mode) && !"system".equals(mode)) return;
+            preferences.edit().putString("theme_mode", mode).apply();
+        }
+
+        @JavascriptInterface
+        public void setDarkTheme(boolean dark) {
+            runOnUiThread(() -> {
+                if (darkTheme == dark) return;
+                applyThemePalette(dark);
+                preferences.edit().putBoolean(DARK_THEME_KEY, dark).apply();
+                root.setBackgroundColor(COLOR_BACKGROUND);
+                webView.setBackgroundColor(COLOR_BACKGROUND);
+                showSystemBars();
+            });
+        }
+
         @JavascriptInterface
         public void reload() {
             runOnUiThread(() -> webView.reload());

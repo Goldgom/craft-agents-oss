@@ -1164,6 +1164,9 @@ export interface SessionCompletionEvent {
   sessionId: string
   workspaceId: string
   reason: 'complete' | 'interrupted' | 'error' | 'timeout'
+  /** Preserve recovery intent instead of making schedulers classify display text. */
+  errorCode?: string
+  canRetry?: boolean
   /** The final (non-intermediate) assistant message id for this turn, if any. */
   finalMessageId?: string
   /** Convenience copy of the final assistant message text (same as getSessionFinalText). */
@@ -7820,6 +7823,8 @@ export class SessionManager implements ISessionManager {
         reason,
         finalMessageId: completion.finalMessageId,
         finalText: completion.finalText,
+        errorCode: completion.errorCode,
+        canRetry: completion.canRetry,
         tokenUsage: managed.tokenUsage,
       })
 

@@ -179,8 +179,8 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
   const config = snapshot?.config
   const coordinator = config?.nodes.find(node => node.role === 'coordinator')
   const coordinatorStatus = snapshot?.state.nodes.find(node => node.nodeId === coordinator?.id)?.status
-  const coordinatorWorking = coordinatorStatus === 'working' || coordinatorStatus === 'preparing'
-  const teamWorking = snapshot?.state.nodes.some(node => node.status === 'working' || node.status === 'preparing')
+  const coordinatorWorking = coordinatorStatus != null && ['working', 'preparing', 'recovering'].includes(coordinatorStatus)
+  const teamWorking = snapshot?.state.nodes.some(node => ['working', 'preparing', 'recovering'].includes(node.status))
     || snapshot?.state.tasks.some(task => task.status === 'running' || task.status === 'queued')
   function openNodeSettings(nodeId?: string) { setSelectedNodeId(nodeId); setSettingsSection('settings'); setView('settings') }
   const headerActions = config ? <div className="flex items-center gap-1">
@@ -307,11 +307,12 @@ function NodeTeam({ snapshot, pendingPermissions, onEdit, onOpenSession, onTask,
       const activeTask = state.tasks.find(task => task.id === runtime?.activeTaskId)
       return <article key={node.id} className="min-w-0 space-y-4 rounded-xl border border-border/70 p-5">
         <div className="flex items-start gap-3"><AgentAvatar avatar={node.avatar} name={node.name} className="size-12 rounded-2xl text-2xl" /><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold">{node.name}</h3><p className="mt-1 truncate text-xs text-muted-foreground">{node.model}</p></div>
-          <span className={cn('rounded-full px-2 py-1 text-[10px]', runtime?.status === 'working' || runtime?.status === 'preparing' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : runtime?.status === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400')}>{text(runtime?.status ?? 'idle')}</span></div>
+          <span className={cn('rounded-full px-2 py-1 text-[10px]', runtime && ['working', 'preparing', 'recovering'].includes(runtime.status) ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : runtime?.status === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400')}>{text(runtime?.status ?? 'idle')}</span></div>
         <p className="text-xs leading-5 text-muted-foreground">{node.description}</p>
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground"><span className="rounded bg-foreground/5 px-2 py-1">{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span><span className="text-amber-500">{'★'.repeat(node.intelligenceRating)}</span><span>{node.maxCallsPerMinute}/min</span><span>{t('thinking.' + node.thinkingLevel)}</span></div>
         {activeTask && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5"><span className="font-medium">{text('tasks')}: </span>{activeTask.title}</p>}
         {runtime?.error && <p className="text-xs leading-5 text-destructive">{runtime.error}</p>}
+        {runtime?.status === 'recovering' && <p className="text-xs leading-5 text-amber-600 dark:text-amber-400">{text('recoveryNotice', { attempt: runtime.retryAttempt ?? 1 })}</p>}
         <div className="flex flex-wrap gap-2 border-t border-border/60 pt-3">
           <Button size="sm" variant="outline" onClick={() => onEdit(node.id)}><Settings2 className="size-3.5" />{text('editNode')}</Button>
           {runtime?.sessionId && onOpenSession && <Button size="sm" variant="outline" className={approvalCount ? 'border-amber-500/30 text-amber-600 dark:text-amber-400' : ''} onClick={() => onOpenSession(runtime.sessionId!)}><ExternalLink className="size-3.5" />{text('openSession')}{approvalCount > 0 && <span className="rounded-full bg-amber-500/10 px-1.5 text-[10px]">{approvalCount}</span>}</Button>}
@@ -357,9 +358,9 @@ function WorkerActivity({ activity }: { activity: SuperAgentActivity }) {
   return <details className="group/worker rounded-lg bg-foreground/3 p-3" aria-label={text('liveActivity')}>
     <summary className="cursor-pointer list-none space-y-2">
       <div className="flex items-center gap-1.5 text-[10px]"><BrainCircuit className="size-3 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 font-medium text-muted-foreground">{text('liveActivity')}</span>
-        {activity.status === 'working' && <LoaderCircle className="size-3 animate-spin text-muted-foreground" />}
+        {['working', 'recovering'].includes(activity.status) && <LoaderCircle className="size-3 animate-spin text-muted-foreground" />}
         {activity.status === 'waiting_permission' && <ShieldCheck className="size-3 text-amber-600 dark:text-amber-400" />}
-        <span className={cn(activity.status === 'waiting_permission' ? 'text-amber-600 dark:text-amber-400' : activity.status === 'error' ? 'text-destructive' : 'text-muted-foreground')}>{text(activity.status === 'waiting_permission' ? 'waitingPermission' : activity.status === 'error' ? 'error' : 'working')}</span>
+        <span className={cn(activity.status === 'waiting_permission' || activity.status === 'recovering' ? 'text-amber-600 dark:text-amber-400' : activity.status === 'error' ? 'text-destructive' : 'text-muted-foreground')}>{text(activity.status === 'waiting_permission' ? 'waitingPermission' : activity.status)}</span>
         <ChevronDown className="size-3 shrink-0 text-muted-foreground transition-transform group-open/worker:rotate-180" />
       </div>
       {preview && <p className="line-clamp-2 break-words text-[11px] leading-5 text-foreground/75">{preview}</p>}

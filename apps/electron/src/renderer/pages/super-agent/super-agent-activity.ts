@@ -51,7 +51,7 @@ export function tasklessWorkerActivities(snapshot: SuperAgentSnapshot): SuperAge
   const workers = new Set(snapshot.config?.nodes.filter(node => node.role === 'worker').map(node => node.id))
   return snapshot.activity?.filter(activity => workers.has(activity.nodeId) && !activity.taskId
     && snapshot.state.nodes.some(node => node.nodeId === activity.nodeId && node.sessionId === activity.sessionId
-      && (node.status === 'working' || node.status === 'preparing' || node.status === 'error'))) ?? []
+      && ['working', 'preparing', 'recovering', 'error'].includes(node.status))) ?? []
 }
 
 /** Bound progress disclosures to the most recently updated, visible provider events. */

@@ -7,6 +7,14 @@ const error = { id: 'error', role: 'error', content: 'Connection Error: Could no
 const answer = { id: 'new', role: 'assistant', content: 'Actual current result' }
 
 describe('current turn completion', () => {
+  test('preserves current structured failure metadata without using historical errors', () => {
+    const typed = { ...error, errorCode: 'network_error', errorCanRetry: true }
+    expect(resolveSessionTurnCompletion([oldAnswer, user, typed], 'complete', 'old', 'old'))
+      .toEqual({ reason: 'error', finalText: error.content, errorCode: 'network_error', canRetry: true })
+    expect(resolveSessionTurnCompletion([oldAnswer, user, { ...typed, errorCanRetry: false }], 'error', 'old', 'old').canRetry).toBe(false)
+    expect(resolveSessionTurnCompletion([typed, oldAnswer, user, answer], 'complete', 'old', 'new'))
+      .toEqual({ reason: 'complete', finalMessageId: 'new', finalText: answer.content })
+  })
   test('a provider error followed by complete reports failure instead of replaying old actions', () => {
     expect(resolveSessionTurnCompletion([oldAnswer, user, error], 'complete', 'old', 'old'))
       .toEqual({ reason: 'error', finalText: error.content })

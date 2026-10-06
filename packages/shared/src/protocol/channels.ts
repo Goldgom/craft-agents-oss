@@ -255,6 +255,10 @@ export const RPC_CHANNELS = {
     ASSIST_CANVAS: 'studio:assistCanvas',
     GENERATE_MIND_MAP: 'studio:generateMindMap',
     EXPORT_VISIO: 'studio:exportVisio',
+    READ_MINDMAP_SESSION: 'studio:mindmap:read',
+    WRITE_MINDMAP_SESSION: 'studio:mindmap:write',
+    DELETE_MINDMAP_SESSION: 'studio:mindmap:delete',
+    MINDMAP_WORKSPACE_CONTEXT: 'studio:mindmap:context',
   },
   superAgent: {
     GET: 'superAgent:get',
@@ -307,6 +311,7 @@ export const RPC_CHANNELS = {
     PROMPTS_SYSTEM_SETTINGS_GET: 'settings:getSystemPromptSettings',
     PROMPTS_SYSTEM_SETTINGS_SET: 'settings:setSystemPromptSettings',
     EXPORT_ALL_DATA: 'settings:exportAllData',
+    EXPORT_ALL_DATA_BUNDLE: 'settings:exportAllDataBundle',
     IMPORT_ALL_DATA: 'settings:importAllData',
     IMPORT_ALL_DATA_FROM_PATH: 'settings:importAllDataFromPath',
     IMPORT_ALL_DATA_FROM_PAYLOAD: 'settings:importAllDataFromPayload',

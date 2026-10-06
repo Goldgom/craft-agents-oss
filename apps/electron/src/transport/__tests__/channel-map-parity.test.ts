@@ -59,10 +59,6 @@ type ApiToChannelMapKeys = Exclude<
   | 'getClientVersion' // direct IPC to main process; local Electron metadata
   | 'onStudioCanvasRequest' // client capability callback for renderer-owned canvas sessions
   | 'pickStudioMindMapDirectory' // local directory picker and project files
-  | 'readStudioMindMapSession'
-  | 'writeStudioMindMapSession'
-  | 'deleteStudioMindMapSession'
-  | 'getStudioMindMapWorkspaceContext'
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

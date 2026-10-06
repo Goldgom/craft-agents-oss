@@ -9,15 +9,21 @@
  */
 
 import i18n from 'i18next'
+import webuiPackage from '../../package.json'
 import { toast } from 'sonner'
 import { openExternalUrl } from '@craft-agent/ui'
 import { WsRpcClient } from '../../../electron/src/transport/client'
 import { buildClientApi } from '../../../electron/src/transport/build-api'
 import { CHANNEL_MAP } from '../../../electron/src/transport/channel-map'
+import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
+import { blobBase64, getPickedFile, pickedAttachment, saveBlob, webFilePicker } from './browser-files'
+import { pickServerDirectory } from './directory-picker'
+import { exportWebChat } from './chat-export'
 import type { ElectronAPI, TransportConnectionState } from '../../../electron/src/shared/types'
 import {
   CLIENT_ANDROID_ADB,
   CLIENT_ANDROID_PERMISSION,
+  CLIENT_CANVAS_INVOKE,
   type AndroidAdbRequest,
   type AndroidPermissionRequest,
 } from '@craft-agent/server-core/transport'
@@ -31,26 +37,6 @@ import {
 // ---------------------------------------------------------------------------
 // Web file picker (replaces native Electron dialog)
 // ---------------------------------------------------------------------------
-
-function webFilePicker(): Promise<string[]> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.multiple = true
-    input.onchange = () => {
-      const files = input.files
-      if (!files || files.length === 0) {
-        resolve([])
-        return
-      }
-      // Return file names — actual file reading is handled elsewhere
-      resolve(Array.from(files).map(f => f.name))
-    }
-    // If user cancels the dialog
-    input.oncancel = () => resolve([])
-    input.click()
-  })
-}
 
 // ---------------------------------------------------------------------------
 // System theme detection
@@ -133,8 +119,8 @@ export function createWebApi(options: WebApiOptions): {
   let activeWorkspaceId = workspaceId
   const androidBridge = window.CraftAgentAndroid
   const androidCapabilities = androidBridge
-    ? [CLIENT_ANDROID_PERMISSION, CLIENT_ANDROID_ADB]
-    : []
+    ? [CLIENT_ANDROID_PERMISSION, CLIENT_ANDROID_ADB, CLIENT_CANVAS_INVOKE]
+    : [CLIENT_CANVAS_INVOKE]
 
   const client = new WsRpcClient(serverUrl, {
     workspaceId,
@@ -192,9 +178,41 @@ export function createWebApi(options: WebApiOptions): {
     (ch) => client.isChannelAvailable(ch),
   )
 
+  let canvasHandler: ((input: Record<string, unknown>) => Promise<unknown>) | null = null
+  client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unknown>) => {
+    if (!canvasHandler) throw new Error('画布正在加载，请稍后重试')
+    const input = { ...request }
+    if (input.action === 'import_image' && typeof input.imagePath === 'string') {
+      const bytes = await baseApi.readFileBinary(input.imagePath)
+      if (bytes.length > 30_000_000) throw new Error('图片超过 30 MB')
+      input.imageBase64 = await blobBase64(new Blob([bytes as BlobPart]))
+      input.imageName = input.imagePath.split(/[\\/]/).pop()
+    }
+    if (input.action === 'open_project' && typeof input.projectPath === 'string') input.projectText = await baseApi.readFile(input.projectPath)
+    const result = await canvasHandler(input) as Record<string, unknown>
+    if (['export_png', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
+      const project = input.action === 'save_project'
+      const name = typeof input.outputPath === 'string' ? input.outputPath.split(/[\\/]/).pop()! : `TokenBird-canvas.${project ? 'tbcanvas' : 'png'}`
+      const bytes = Uint8Array.from(atob(result.base64), char => char.charCodeAt(0))
+      const saved = await saveBlob(new Blob([bytes], { type: project ? 'application/json' : 'image/png' }), name)
+      return { saved: !saved.canceled, canceled: Boolean(saved.canceled), outputPath: saved.path, bytes: bytes.length }
+    }
+    return result
+  })
+  const downloadServerFile = async (path: string) => {
+    const file = getPickedFile(path)
+    const blob = file ?? new Blob([await baseApi.readFileBinary(path) as BlobPart], { type: 'application/octet-stream' })
+    await saveBlob(blob, file?.name ?? path.split(/[\\/]/).pop() ?? 'TokenBird-file')
+  }
+
   // Override LOCAL_ONLY methods with web-compatible implementations
   const webOverrides: Partial<ElectronAPI> = {
+    // The shared studio mounts with chat. Browsers do not advertise native
+    // canvas export, but must provide the subscription contract to mount.
+    onStudioCanvasRequest: handler => { canvasHandler = handler; return () => { if (canvasHandler === handler) canvasHandler = null } },
+    exportChatTranscript: exportWebChat,
     openTokenNestRecharge: (url: string) => {
+      if (androidBridge) { openExternalUrl(url); return Promise.resolve() }
       const popup = window.open(url, 'tokennest-recharge', 'popup,width=1000,height=760')
       if (!popup) return Promise.reject(new Error('Please allow pop-ups to open TokenNest.'))
       popup.focus()
@@ -218,14 +236,42 @@ export function createWebApi(options: WebApiOptions): {
       }
       return Promise.resolve()
     },
-    openFile: () => Promise.resolve(), // no-op in browser
-    showInFolder: () => Promise.resolve(), // no-op in browser
+    openFile: downloadServerFile,
+    showInFolder: async path => { await pickServerDirectory(path.replace(/[\\/][^\\/]+$/, '')) },
 
     // File dialogs
-    openFileDialog: webFilePicker,
-    openFolderDialog: () => Promise.resolve(null), // not possible in browser
+    openFileDialog: () => webFilePicker(),
+    getFilePath: () => null, // browser File bytes are handled by the attachment input
+    openFolderDialog: () => pickServerDirectory(),
+    pickStudioMindMapDirectory: pickServerDirectory,
+    readFile: path => getPickedFile(path)?.text() ?? baseApi.readFile(path),
+    readFileBinary: async path => getPickedFile(path) ? new Uint8Array(await getPickedFile(path)!.arrayBuffer()) : baseApi.readFileBinary(path),
+    readFileAttachment: path => getPickedFile(path) ? pickedAttachment(path) : baseApi.readFileAttachment(path),
+    readUserAttachment: path => getPickedFile(path) ? pickedAttachment(path) : baseApi.readUserAttachment(path),
+    readFileDataUrl: async path => getPickedFile(path) ? `data:${getPickedFile(path)!.type};base64,${await blobBase64(getPickedFile(path)!)}` : baseApi.readFileDataUrl(path),
+    exportAllData: async () => {
+      const result = await client.invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA_BUNDLE)
+      if (!result.success) return result
+      const binary = Uint8Array.from(atob(result.bundleBase64), char => char.charCodeAt(0))
+      const saved = await saveBlob(new Blob([binary], { type: 'application/zip' }), result.fileName)
+      const { bundleBase64: _bundle, ...metadata } = result
+      return { ...metadata, success: !saved.canceled, canceled: Boolean(saved.canceled), destPath: saved.path }
+    },
+    importAllData: async () => {
+      const paths = await webFilePicker('.zip')
+      if (!paths[0]) return { canceled: true }
+      return webOverrides.importAllDataFromLocalFile!(paths[0])
+    },
+    importAllDataFromLocalFile: async path => {
+      const file = getPickedFile(path)
+      if (!file) throw new Error('请重新选择这台设备上的备份文件')
+      if (file.size > 50 * 1024 * 1024) throw new Error('备份超过 50 MB，请在服务器端导入')
+      return client.invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD, { bundleBase64: await blobBase64(file), fileName: 'backup.zip' })
+    },
+    changeLanguage: async language => { await i18n.changeLanguage(language) },
 
     // System info
+    getClientVersion: () => Promise.resolve(webuiPackage.version),
     getVersions: () => ({ node: 'n/a', chrome: navigator.userAgent, electron: 'web' }),
     getRuntimeEnvironment: () => 'web',
     getStartupContext: () => Promise.resolve({
@@ -271,7 +317,12 @@ export function createWebApi(options: WebApiOptions): {
       await client.invoke('window:switchWorkspace', wsId)
       activeWorkspaceId = wsId
     },
-    openWorkspace: async () => {},
+    openWorkspace: async wsId => {
+      await webOverrides.switchWorkspace!(wsId)
+      const url = new URL(window.location.href); url.searchParams.set('workspace', wsId)
+      for (const key of ['route', 'panels', 'session', 'sessionId']) url.searchParams.delete(key)
+      window.location.assign(url.toString())
+    },
     openSessionInNewWindow: async (_wsId: string, sessionId: string) => {
       // Open in new tab
       window.open(`${window.location.origin}/?session=${sessionId}`, '_blank')
@@ -316,12 +367,19 @@ export function createWebApi(options: WebApiOptions): {
     onBadgeDrawWindows: () => () => {},
 
     // Notifications — Web Notifications API
-    showNotification: async (title: string, body: string) => {
+    showNotification: async (title: string, body: string, _workspaceId: string, sessionId: string) => {
+      if (androidBridge?.showNotification) { androidBridge.showNotification(title, body, sessionId); return }
       if ('Notification' in window && Notification.permission === 'granted') {
         new Notification(title, { body })
       }
     },
-    onNotificationNavigate: () => () => {},
+    onNotificationNavigate: cb => {
+      const handler = (event: Event) => cb((event as CustomEvent).detail)
+      window.addEventListener('craft-agent:notification-navigate', handler)
+      const sessionId = androidBridge?.takeNotificationSession?.()
+      if (sessionId) queueMicrotask(() => cb({ workspaceId: activeWorkspaceId ?? '', sessionId }))
+      return () => window.removeEventListener('craft-agent:notification-navigate', handler)
+    },
 
     // Git bash (Windows-only) — not applicable
     checkGitBash: () => Promise.resolve({ available: true } as any),
@@ -329,16 +387,16 @@ export function createWebApi(options: WebApiOptions): {
     setGitBashPath: () => Promise.resolve({ success: true }),
 
     // Skills — open in browser not possible
-    openSkillInEditor: () => Promise.resolve(),
-    openSkillInFinder: () => Promise.resolve(),
+    openSkillInEditor: async (wsId, slug) => { const skills = await baseApi.getSkills(wsId); const skill = skills.find(item => item.slug === slug); if (skill) await downloadServerFile(`${skill.path}/SKILL.md`) },
+    openSkillInFinder: async (wsId, slug) => { const skills = await baseApi.getSkills(wsId); const skill = skills.find(item => item.slug === slug); if (skill) await pickServerDirectory(skill.path) },
 
     // Confirmation dialogs — use browser confirm()
     showLogoutConfirmation: () => Promise.resolve(window.confirm(i18n.t('dialog.logoutConfirmation'))),
     showDeleteSessionConfirmation: (name: string) => Promise.resolve(window.confirm(i18n.t('dialog.deleteSessionConfirmation', { name }))),
 
     // Power settings — not applicable
-    getKeepAwakeWhileRunning: () => Promise.resolve(false),
-    setKeepAwakeWhileRunning: () => Promise.resolve(),
+    getKeepAwakeWhileRunning: () => Promise.resolve(androidBridge?.getKeepAwake?.() ?? false),
+    setKeepAwakeWhileRunning: async enabled => { androidBridge?.setKeepAwake?.(enabled) },
 
     // Transport state
     getTransportConnectionState: () => Promise.resolve(client.getConnectionState() as TransportConnectionState),
@@ -346,11 +404,28 @@ export function createWebApi(options: WebApiOptions): {
       return client.onConnectionStateChanged(cb as any)
     },
     reconnectTransport: () => { client.reconnectNow(); return Promise.resolve() },
-    isChannelAvailable: (ch: string) => client.isChannelAvailable(ch),
+    isChannelAvailable: (ch: string) => (Boolean(androidBridge?.showNotification) && ch === RPC_CHANNELS.notification.SHOW) || client.isChannelAvailable(ch),
 
     // Relaunch — reload page
     relaunchApp: () => { window.location.reload(); return Promise.resolve() },
-    removeWorkspace: () => Promise.resolve(false), // not supported in web UI
+    removeWorkspace: async () => { throw new Error('安卓尚未提供工作区移除流程，请在服务器或桌面端管理') },
+    getNativeCredentialStatus: async () => ({ ok: false, code: 'VAULT_NATIVE_ONLY', message: '安卓使用模型与数据源配置管理凭据；Windows 原生凭据库仅在桌面端可用。' }),
+    listNativeCredentials: async () => ({ ok: false, code: 'VAULT_NATIVE_ONLY', message: '请在模型与数据源配置中管理凭据。' }),
+    applyNativeCredentialChanges: async () => ({ ok: false, code: 'VAULT_NATIVE_ONLY', message: 'Windows 原生凭据库不可在安卓修改。' }),
+    migrateNativeCredentials: async () => ({ ok: false, code: 'VAULT_NATIVE_ONLY', message: '请在 Windows 端迁移原生凭据。' }),
+    getStartupLocation: async () => connectionMode ?? 'local',
+    setStartupLocation: async () => { throw new Error('请从安卓菜单的连接方式设置启动服务器') },
+    switchServer: async () => { androidBridge?.configureServer(); return { success: false } },
+    selectStartupServer: async () => { androidBridge?.configureServer(); return { success: false } },
+    onTransferProgress: () => () => {},
+    transferSessionToWorkspace: async (sessionId, targetWorkspaceId) => {
+      const bundle = await baseApi.exportSession(sessionId)
+      return baseApi.importSession(targetWorkspaceId, bundle, 'move')
+    },
+    testRemoteServerSftp: async () => ({ ok: false, error: '安卓尚未提供 SFTP 客户端，请使用服务器文件操作' }),
+    transferRemoteServerFile: async () => { throw new Error('安卓尚未提供 SFTP 客户端，请使用服务器文件操作') },
+    pickSftpUploadFile: async () => { throw new Error('安卓尚未提供 SFTP 客户端') },
+    pickSftpDownloadDestination: async () => { throw new Error('安卓尚未提供 SFTP 客户端') },
     invokeOnServer: () => Promise.reject(new Error('Cross-server RPC not available in web UI')),
     listRemoteCollaborationWorkspaces: () => Promise.reject(new Error('Saved server selection requires the desktop app')),
     listRemoteCollaborationCandidates: () => Promise.reject(new Error('Saved server selection requires the desktop app')),

@@ -98,6 +98,8 @@ describe('Super Agent worker progress', () => {
     const taskless = { ...worker, taskId: undefined, status: 'working' as const }
     snapshot.activity = [worker, taskless, { ...taskless, nodeId: 'main', sessionId: 'session-main' }, { ...taskless, sessionId: 'session-old' }]
     expect(tasklessWorkerActivities(snapshot)).toEqual([taskless])
+    snapshot.state.nodes[1].status = 'recovering'
+    expect(tasklessWorkerActivities(snapshot)).toEqual([taskless])
     snapshot.state.nodes[1].status = 'idle'
     expect(tasklessWorkerActivities(snapshot)).toEqual([])
   })

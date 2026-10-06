@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, ArrowLeft, ArrowRight, Check, KeyRound, LoaderCircle, RefreshCw, Settings2, Sparkles } from 'lucide-react'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StudioConnectionPicker } from './useStudioConnections'
 import { isImageConnection } from './image-connections'
 import type { StudioConnectionIssue } from './studio-connection-error'
@@ -105,7 +105,7 @@ export function StudioImageConnectionDialog(props: Props) {
         {props.imageReady && !tokenNestSelected && <button className={`${primaryClass} w-full`} onClick={props.onFinish}>开始绘画</button>}
       </div>}
       {error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>}
-      <button className="w-full rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={props.onClose}>稍后设置，返回画布</button>
+      <DialogFooter><button className="w-full rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={props.onClose}>稍后设置，返回画布</button></DialogFooter>
     </DialogContent>
   </Dialog>
 }

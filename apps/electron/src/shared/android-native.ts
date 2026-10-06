@@ -37,6 +37,17 @@ export interface AndroidBridge {
   reload: () => void
   configureServer: () => void
   dismissKeyboard: () => void
+  setDarkTheme?: (dark: boolean) => void
+  getThemeMode?: () => string
+  setThemeMode?: (mode: 'light' | 'dark' | 'system') => void
+  saveFile?: (requestId: string, name: string, mimeType: string, base64: string) => void
+  printHtml?: (name: string, html: string) => void
+  renderHtmlImage?: (requestId: string, name: string, html: string) => void
+  showNotification?: (title: string, body: string, sessionId: string) => void
+  takeNotificationSession?: () => string
+  getKeepAwake?: () => boolean
+  setKeepAwake?: (enabled: boolean) => void
+  setTaskRunning?: (running: boolean) => void
   getOAuthCallbackUrl: () => string
   openTokenNestOAuth: (url: string) => void
   getPermissionSnapshot: () => string
@@ -64,7 +75,7 @@ export function parseAndroidJson<T>(value: string, fallback: T): T {
 }
 
 export function invokeAndroidNative<T>(
-  eventName: 'craft-agent:android-permission-result' | 'craft-agent:android-adb-result',
+  eventName: 'craft-agent:android-permission-result' | 'craft-agent:android-adb-result' | 'craft-agent:android-file-result',
   invoke: (requestId: string) => void,
   timeoutMs = 130_000,
 ): Promise<T> {

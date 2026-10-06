@@ -106,7 +106,9 @@ export interface SuperAgentTask {
 export interface SuperAgentNodeRuntime {
   nodeId: string
   sessionId?: string
-  status: 'idle' | 'preparing' | 'working' | 'error'
+  status: 'idle' | 'preparing' | 'working' | 'recovering' | 'error'
+  retryAt?: number
+  retryAttempt?: number
   activeTaskId?: string
   lastStartedAt?: number
   lastCompletedAt?: number
@@ -241,7 +243,7 @@ export interface SuperAgentNodeActivity {
   nodeId: string
   sessionId: string
   taskId?: string
-  status: 'working' | 'waiting_permission' | 'error'
+  status: 'working' | 'recovering' | 'waiting_permission' | 'error'
   startedAt: number
   updatedAt: number
   entries: SuperAgentActivityEntry[]

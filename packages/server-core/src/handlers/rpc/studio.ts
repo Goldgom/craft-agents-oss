@@ -4,6 +4,8 @@ import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { fetchTokenNestChannelGroups, getValidTokenNestCredentials, TokenNestGroupsScopeError, TOKENNEST_OAUTH_CONFIG } from '@craft-agent/shared/auth'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import { exportDrawioToVisio } from './studio-visio'
+import { readMindMapSession, writeMindMapSession, deleteMindMapSession, mindMapWorkspaceContext } from '../../services/studio-mindmap-files'
+import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import { inflateRawSync } from 'node:zlib'
 import { isValidThinkingLevel, type ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 
@@ -244,6 +246,16 @@ export async function generateStudioImage(input: ImageInput): Promise<{ imageBas
 }
 
 export function registerStudioHandlers(server: RpcServer): void {
+  server.handle(RPC_CHANNELS.studio.READ_MINDMAP_SESSION, async (ctx, directory: string, id: string) =>
+    readMindMapSession(await validateFilePath(directory, getWorkspaceAllowedDirs(ctx.workspaceId)), id))
+  server.handle(RPC_CHANNELS.studio.WRITE_MINDMAP_SESSION, async (ctx, directory: string, id: string, data: string) => {
+    if (typeof data !== 'string' || data.length > 10_000_000) throw new Error('导图内容超过限制')
+    return writeMindMapSession(await validateFilePath(directory, getWorkspaceAllowedDirs(ctx.workspaceId)), id, data)
+  })
+  server.handle(RPC_CHANNELS.studio.DELETE_MINDMAP_SESSION, async (ctx, directory: string, id: string) =>
+    deleteMindMapSession(await validateFilePath(directory, getWorkspaceAllowedDirs(ctx.workspaceId)), id))
+  server.handle(RPC_CHANNELS.studio.MINDMAP_WORKSPACE_CONTEXT, async (ctx, directory: string) =>
+    mindMapWorkspaceContext(await validateFilePath(directory, getWorkspaceAllowedDirs(ctx.workspaceId))))
   server.handle(RPC_CHANNELS.studio.EXPORT_VISIO, async (_ctx, xml: string) => ({ base64: await exportDrawioToVisio(xml) }))
   server.handle(RPC_CHANNELS.studio.GENERATE_IMAGE, async (_ctx, input: ImageInput) => generateStudioImage(input))
 

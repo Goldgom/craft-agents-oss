@@ -15,6 +15,8 @@ export interface SuperAgentPendingTurn {
   scriptRunId?: string
   createdAt: number
   startedAt?: number
+  retryAt?: number
+  retryAttempt?: number
   backgroundInspection?: boolean
   /** Bound model-to-model message chains to prevent autonomous ping-pong. */
   depth: number
@@ -46,7 +48,7 @@ const ActionReceiptSchema = z.object({
 }).strict()
 const StateSchema = z.object({
   version: z.literal(1), revision: number.int(),
-  nodes: z.array(z.object({ nodeId: string, sessionId: string.optional(), status: z.enum(['idle', 'preparing', 'working', 'error']), activeTaskId: string.optional(), lastStartedAt: number.optional(), lastCompletedAt: number.optional(), error: string.optional() }).strict()).max(32),
+  nodes: z.array(z.object({ nodeId: string, sessionId: string.optional(), status: z.enum(['idle', 'preparing', 'working', 'recovering', 'error']), retryAt: number.optional(), retryAttempt: number.int().optional(), activeTaskId: string.optional(), lastStartedAt: number.optional(), lastCompletedAt: number.optional(), error: string.optional() }).strict()).max(32),
   tasks: z.array(z.object({ id: string, title: string, instructions: string, nodeId: string, planId: string.optional(), sessionId: string.optional(), status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']), createdAt: number, startedAt: number.optional(), completedAt: number.optional(), output: string.optional(), error: string.optional(), actionReceipt: ActionReceiptSchema.optional() }).strict()).max(500),
   messages: z.array(z.object({ id: string, fromNodeId: string, toNodeId: string, kind: z.enum(['chat', 'message', 'task', 'result', 'inspection', 'script', 'error']), body: string, taskId: string.optional(), createdAt: number, actionReceipt: ActionReceiptSchema.optional(), permission: PermissionRecordSchema.optional() }).strict()).max(500),
   board: z.array(z.object({ id: string, title: string, content: string, revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256),
@@ -55,7 +57,7 @@ const StateSchema = z.object({
   allIdleSince: number.optional(),
   plans: z.array(z.object({ id: string, title: string, instructions: string, status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: string, revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256).default([]),
 }).strict()
-const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, taskId: string.optional(), scriptRunId: string.optional(), createdAt: number, startedAt: number.optional(), backgroundInspection: z.boolean().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
+const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, taskId: string.optional(), scriptRunId: string.optional(), createdAt: number, startedAt: number.optional(), retryAt: number.optional(), retryAttempt: number.int().optional(), backgroundInspection: z.boolean().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
 
 export async function loadSuperAgentDocument(workspaceRoot: string): Promise<SuperAgentDocument> {
   try {

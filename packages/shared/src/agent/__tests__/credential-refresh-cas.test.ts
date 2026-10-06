@@ -33,6 +33,54 @@ function remoteGate(failure = false) {
 }
 
 describe('Pi OAuth refresh recovery', () => {
+  test('refreshes an expired TokenNest token inside an active turn before releasing the next model request', async () => {
+    const f = fixture();
+    await f.backend.set(f.id, { ...f.credential, expiresAt: Date.now() + 60 * 60_000 });
+    const agent: any = new PiAgent({ ...f.config, runtime: { piAuthProvider: 'openai', oauthProvider: 'tokennest' } });
+    cleanups.push(() => agent.destroy());
+    agent.subprocess = { kill() {} };
+    agent._isProcessing = true;
+    agent.lastInjectedAuthFingerprint = agent.authFingerprint(await agent.getPiAuth());
+    agent.lastInjectedAuthHadCredential = true;
+    const sent: any[] = [];
+    agent.send = (command: any) => {
+      sent.push(command);
+      if (command.type === 'token_update') queueMicrotask(() => agent.handleLine(JSON.stringify({
+        type: 'token_update_result', id: command.id, success: true,
+      })));
+    };
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests++;
+      return Response.json({ access_token: 'dummy-new', refresh_token: 'dummy-rotated', expires_in: 3600 });
+    }) as unknown as typeof fetch;
+    await agent.handleRequestAuthRefresh('before-expiry');
+    expect(requests).toBe(0);
+    expect(sent.at(-1)).toEqual({ type: 'auth_refresh_result', id: 'before-expiry', success: true });
+    sent.length = 0;
+    await f.backend.set(f.id, { ...f.credential, expiresAt: 1 });
+    await agent.handleRequestAuthRefresh('after-expiry');
+    expect(requests).toBe(1);
+    expect(sent.map(command => command.type)).toEqual(['token_update', 'auth_refresh_result']);
+    expect(sent[0].piAuth.credential.key).toBe('dummy-new');
+    expect(sent[1]).toEqual({ type: 'auth_refresh_result', id: 'after-expiry', success: true });
+    expect((await f.backend.get(f.id))?.refreshToken).toBe('dummy-rotated');
+  });
+
+  test('blocks a model request with a safe message when its TokenNest grant cannot refresh', async () => {
+    const f = fixture(); await f.backend.set(f.id, f.credential);
+    const agent: any = new PiAgent({ ...f.config, runtime: { piAuthProvider: 'openai', oauthProvider: 'tokennest' } });
+    cleanups.push(() => agent.destroy());
+    agent.subprocess = { kill() {} };
+    const sent: any[] = []; agent.send = (command: any) => sent.push(command);
+    globalThis.fetch = (async () => Response.json({ error: 'invalid_grant', error_description: 'dummy-secret-echo' }, { status: 401 })) as unknown as typeof fetch;
+    await agent.handleRequestAuthRefresh('rejected-grant');
+    expect(sent).toHaveLength(1);
+    expect(sent[0].success).toBe(false);
+    expect(sent[0].message).toContain('login has expired');
+    expect(JSON.stringify(sent)).not.toContain('dummy-secret-echo');
+  });
+
   for (const status of [400, 401]) test(`TokenNest HTTP ${status} without OAuth detail requests reauthentication`, async () => {
     const f = fixture(); await f.backend.set(f.id, { ...f.credential, expiresAt: Date.now() + 10 * 60_000 });
     const agent: any = new PiAgent({ ...f.config, runtime: { piAuthProvider: 'openai', oauthProvider: 'tokennest' } });

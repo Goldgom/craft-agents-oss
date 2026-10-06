@@ -1,12 +1,18 @@
 import * as React from "react"
 import { Drawer as DrawerPrimitive } from "vaul"
+import { XIcon } from "lucide-react"
+import { useTranslation } from "react-i18next"
 
 import { cn } from "../../lib/utils"
 
 function Drawer({
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
-  return <DrawerPrimitive.Root data-slot="drawer" {...props} />
+  const android = typeof document !== 'undefined' && document.documentElement.dataset.mobileApp === 'android'
+  return <DrawerPrimitive.Root data-slot="drawer" {...props}
+    handleOnly={android || props.handleOnly}
+    repositionInputs={android ? false : props.repositionInputs}
+  />
 }
 
 function DrawerTrigger({
@@ -51,6 +57,7 @@ function DrawerContent({
 }: React.ComponentProps<typeof DrawerPrimitive.Content> & {
   overlay?: React.ReactNode
 }) {
+  const { t } = useTranslation()
   return (
     <DrawerPortal data-slot="drawer-portal">
       {overlay !== undefined ? overlay : <DrawerOverlay />}
@@ -68,6 +75,9 @@ function DrawerContent({
       >
         <div className="bg-muted mx-auto mt-4 hidden h-2 w-[100px] shrink-0 rounded-full group-data-[vaul-drawer-direction=bottom]/drawer-content:block" />
         {children}
+        <DrawerPrimitive.Close data-slot="drawer-dismiss" className="hidden" aria-label={t('common.close')}>
+          <XIcon className="size-5" />
+        </DrawerPrimitive.Close>
       </DrawerPrimitive.Content>
     </DrawerPortal>
   )

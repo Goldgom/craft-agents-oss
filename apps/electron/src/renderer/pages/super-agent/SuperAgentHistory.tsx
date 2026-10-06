@@ -49,7 +49,7 @@ export function SuperAgentHistory({ workspaceId, snapshot, busy, onCommand }: {
   const selected = eligible.filter(session => selectedSessions.includes(session.id))
   const nodes = snapshot.state.nodes.filter(node => node.sessionId)
   const chosenNodes = nodes.filter(node => selectedNodes.includes(node.nodeId))
-  const locked = busy || pending || snapshot.state.nodes.some(node => ['working', 'preparing'].includes(node.status))
+  const locked = busy || pending || snapshot.state.nodes.some(node => ['working', 'preparing', 'recovering'].includes(node.status))
     || snapshot.state.tasks.some(task => ['queued', 'running'].includes(task.status))
     || snapshot.state.scripts.some(script => ['running', 'untracked'].includes(script.status))
     || snapshot.permissionRequests?.some(request => request.status === 'pending')

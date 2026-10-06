@@ -3,6 +3,8 @@ type CompletionMessage = {
   role: string
   content: string
   statusType?: string
+  errorCode?: string
+  errorCanRetry?: boolean
 }
 
 /** A persistent session's previous answer must never settle a later turn. */
@@ -11,7 +13,7 @@ export function resolveSessionTurnCompletion(
   reason: 'complete' | 'interrupted' | 'error' | 'timeout',
   startFinalMessageId: string | undefined,
   currentFinalMessageId: string | undefined,
-): { reason: typeof reason; finalMessageId?: string; finalText?: string } {
+): { reason: typeof reason; finalMessageId?: string; finalText?: string; errorCode?: string; canRetry?: boolean } {
   const finalIndex = currentFinalMessageId && currentFinalMessageId !== startFinalMessageId
     ? messages.findIndex(message => message.id === currentFinalMessageId) : -1
   const userIndex = messages.findLastIndex(message => message.role === 'user')
@@ -20,7 +22,9 @@ export function resolveSessionTurnCompletion(
   const terminalError = errorIndex > Math.max(userIndex, startIndex, finalIndex) ? messages[errorIndex] : undefined
   const final = finalIndex > userIndex ? messages[finalIndex] : undefined
   if (terminalError) {
-    return { reason: reason === 'complete' ? 'error' : reason, finalText: terminalError.content }
+    return { reason: reason === 'complete' ? 'error' : reason, finalText: terminalError.content,
+      ...(terminalError.errorCode ? { errorCode: terminalError.errorCode } : {}),
+      ...(terminalError.errorCanRetry != null ? { canRetry: terminalError.errorCanRetry } : {}) }
   }
   if (reason === 'complete' && !final) {
     // Native /compact produces a completion notice instead of an assistant answer.

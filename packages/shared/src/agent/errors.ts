@@ -132,7 +132,7 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
   },
   network_error: {
     title: 'Connection Error',
-    message: 'Could not reach the AI service. Check your internet connection or VPN settings.',
+    message: 'The connection to the AI service failed or was interrupted. This may be a temporary timeout or gateway/network issue. Please retry.',
     actions: [
       { key: 'r', label: 'Retry', action: 'retry' },
     ],

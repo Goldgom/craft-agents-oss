@@ -144,6 +144,7 @@ export function FullscreenOverlayBase({
     <Dialog.Root open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
         <Dialog.Content
+          data-fullscreen-overlay
           className={cn(
             'fixed inset-0 overflow-hidden outline-none',
             'bg-foreground-3 fullscreen-overlay-background',

@@ -70,7 +70,7 @@ export function ChatInputZone({
   }, [labels, onLabelsChange, sessionLabels])
 
   return (
-    <div className={cn(
+    <div data-chat-input-zone className={cn(
       CHAT_LAYOUT.maxWidth,
       'mx-auto w-full mt-1',
       compactMode ? 'px-2 pb-3' : 'px-3 @xs/panel:px-4 pb-4',

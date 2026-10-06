@@ -26,6 +26,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_GET,
   RPC_CHANNELS.settings.PROMPTS_SYSTEM_SETTINGS_SET,
   RPC_CHANNELS.settings.EXPORT_ALL_DATA,
+  RPC_CHANNELS.settings.EXPORT_ALL_DATA_BUNDLE,
   RPC_CHANNELS.settings.IMPORT_ALL_DATA,
   RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PATH,
   RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD,
@@ -752,6 +753,21 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
         error: error instanceof Error ? error.message : 'Unknown error',
       }
     }
+  })
+
+  // Browser/mobile clients save on their device, not on the server filesystem.
+  server.handle(RPC_CHANNELS.settings.EXPORT_ALL_DATA_BUNDLE, async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'craft-export-'))
+    try {
+      const { exportAllData } = await import('@craft-agent/shared/migration')
+      const result = await exportAllData({ destPath: join(temp, 'backup.zip') })
+      if (result.bytes > 50 * 1024 * 1024) throw new Error('备份超过 50 MB，请使用服务器端导出')
+      return { success: true, canceled: false, ...result, destPath: undefined,
+        fileName: `tokenbird-backup-${new Date().toISOString().slice(0, 10)}.zip`,
+        bundleBase64: readFileSync(result.destPath).toString('base64') }
+    } catch (error) {
+      return { success: false, canceled: false, error: error instanceof Error ? error.message : String(error) }
+    } finally { rmSync(temp, { recursive: true, force: true }) }
   })
 
   // Ask the client for a backup archive, then restore all workspaces and

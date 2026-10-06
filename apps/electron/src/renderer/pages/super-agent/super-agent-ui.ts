@@ -154,6 +154,8 @@ const strings = {
   idle: ['空闲', 'Idle'],
   working: ['工作中', 'Working'],
   preparing: ['准备环境', 'Preparing environment'],
+  recovering: ['恢复中', 'Recovering'],
+  recoveryNotice: ['请求暂时失败，将自动继续（第 {{attempt}} 次恢复）。', 'The request failed temporarily. Continuing automatically (recovery {{attempt}}).'],
   error: ['异常', 'Error'],
   queued: ['排队中', 'Queued'],
   running: ['运行中', 'Running'],

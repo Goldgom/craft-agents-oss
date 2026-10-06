@@ -103,8 +103,14 @@ export async function validateFilePath(
     ...(additionalAllowedDirs ?? []),
   ].filter(Boolean)
 
+  // Android aliases /data/user/0 to /data/data. Canonicalize both sides so a
+  // legitimate app-private workspace is not rejected after realpath(file).
+  const canonicalAllowedDirs = await Promise.all(allowedDirs.map(async dir => {
+    try { return await realpath(dir) } catch { return dir }
+  }))
+
   // Check if the real path is within an allowed directory (cross-platform)
-  const isAllowed = allowedDirs.some(dir => {
+  const isAllowed = canonicalAllowedDirs.some(dir => {
     const normalizedDir = normalize(dir)
     const normalizedReal = normalize(realFilePath)
     return normalizedReal.startsWith(normalizedDir + sep) || normalizedReal === normalizedDir

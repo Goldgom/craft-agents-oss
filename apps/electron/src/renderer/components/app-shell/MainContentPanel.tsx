@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAtomValue } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { Panel } from './Panel'
+import { PanelHeader } from './PanelHeader'
 import { MultiSelectPanel } from './MultiSelectPanel'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { sessionMetaMapAtom, type SessionMeta } from '@/atoms/sessions'
@@ -43,6 +44,7 @@ import { SourceInfoPage, ChatPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
 import AndroidSettingsPage from '@/pages/settings/AndroidSettingsPage'
+import { navigate, routes } from '@/lib/navigate'
 import { AutomationInfoPage } from '../automations/AutomationInfoPage'
 import ProjectInfoPage from '@/pages/ProjectInfoPage'
 import { KanbanBoardContainer } from './kanban/KanbanBoardContainer'
@@ -121,6 +123,7 @@ export function MainContentPanel({
     automationTestResults,
     getAutomationHistory,
     activeSessionWorkingDirectory,
+    isCompactMode,
   } = useAppShellContext()
 
   // Session multi-select state
@@ -275,12 +278,18 @@ export function MainContentPanel({
   // PanelStackContainer hides the content panel entirely. On desktop the panel still
   // mounts, so fall back to the App page so it isn't empty.
   if (isSettingsNavigation(navState)) {
+    // Bare settings is the compact navigator list. Do not mount a hidden
+    // desktop App page (or trigger its metadata requests) behind that list.
+    if (isCompactMode && !navState.subpage) return null
     // Android uses a single WebView panel; the desktop settings navigator
     // depends on the three-column shell and is not a reliable mobile surface.
     // Keep the Android entry point self-contained and touch friendly.
     const isAndroidEmbedded = new URLSearchParams(window.location.search).get('embedded') === 'android'
     if (isAndroidEmbedded && navState.subpage === 'app') {
       return wrapWithStoplight(<AndroidSettingsPage />)
+    }
+    if (isAndroidEmbedded && navState.subpage === 'messaging' && !window.electronAPI.isChannelAvailable('messaging:getConfig')) {
+      return wrapWithStoplight(<div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center"><h1 className="text-xl font-semibold">消息集成</h1><p className="max-w-sm text-sm text-muted-foreground">本机运行包尚未包含消息网关。连接启用了消息网关的服务器，即可管理 Telegram、飞书和其他消息平台。</p><button className="min-h-11 rounded-xl bg-primary px-5 text-primary-foreground" onClick={() => window.CraftAgentAndroid?.configureServer()}>切换服务器</button><button className="min-h-11 px-4 text-sm" onClick={() => navigate(routes.view.settings())}>返回设置</button></div>)
     }
     const subpage = navState.subpage ?? 'app'
     const SettingsPageComponent = getSettingsPageComponent(subpage)
@@ -374,7 +383,12 @@ export function MainContentPanel({
       const isAgents = navState.section === 'agents'
       return wrapWithStoplight(
         <Panel variant="grow" className={className}>
-          {isAgents ? <AgentManagerPage workspaceId={activeWorkspaceId ?? ''} workspaceRootPath={workspaces.find(workspace => workspace.id === activeWorkspaceId)?.rootPath ?? ''} /> : <ScriptMonitorPage automations={automations} />}
+          <div className="flex h-full min-h-0 flex-col">
+            {isCompactMode && <PanelHeader title={t(isAgents ? 'sidebar.agents' : 'sidebar.scriptMonitor')} />}
+            <div className="min-h-0 flex-1">
+              {isAgents ? <AgentManagerPage workspaceId={activeWorkspaceId ?? ''} workspaceRootPath={workspaces.find(workspace => workspace.id === activeWorkspaceId)?.rootPath ?? ''} /> : <ScriptMonitorPage automations={automations} />}
+            </div>
+          </div>
         </Panel>
       )
     }

@@ -52,6 +52,7 @@ import {
 import { routes, type Route, type ViewRoute } from '../../shared/routes'
 import { parsePermissionMode } from '@craft-agent/shared/agent/mode-types'
 import { NAVIGATE_EVENT, type NavigateOptions } from '../lib/navigate'
+import { isAndroidEmbedded } from '../lib/platform'
 import { normalizePanelRouteForReconcile } from './navigation-reconcile'
 import { buildSemanticHistoryKey, canRunInitialRestore } from './navigation-history'
 import * as storage from '@/lib/local-storage'
@@ -639,6 +640,10 @@ export function NavigationProvider({
         }
       }
 
+      // Android opens the list first, including reloads and browser Back.
+      // Explicit entity routes keep their details; choosing a row opens them.
+      if (isAndroidEmbedded()) return nextState
+
       // Sessions: auto-select last/first session.
       // Board view has no per-session detail, so skip auto-selection — otherwise
       // navigating to the board would immediately resolve into a chat route.
@@ -1072,7 +1077,7 @@ export function NavigationProvider({
 
     // If nothing was in the URL, navigate to default
     if (!params.get('route') && !params.get('panels')) {
-      navigate(routes.view.allSessions())
+      navigate(isAndroidEmbedded() ? routes.action.newSession() : routes.view.allSessions())
     }
 
     // Initialize history with seq=0 (replaceState so we don't create an extra entry)

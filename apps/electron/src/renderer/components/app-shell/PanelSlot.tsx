@@ -24,6 +24,9 @@ import { useAppShellContext, AppShellProvider } from '@/context/AppShellContext'
 import { PanelHeaderCenterButton } from '@/components/ui/PanelHeaderCenterButton'
 import { MainContentPanel } from './MainContentPanel'
 import { PANEL_MIN_WIDTH, RADIUS_EDGE, RADIUS_INNER } from './panel-constants'
+import { getCompactListRoute } from '@/lib/nav-helpers'
+import { useNavigation } from '@/contexts/NavigationContext'
+import { routes } from '@/lib/navigate'
 
 interface PanelSlotProps {
   entry: PanelStackEntry
@@ -58,12 +61,20 @@ export function PanelSlot({
   const closePanel = useSetAtom(closePanelAtom)
   const setFocusedPanel = useSetAtom(focusedPanelIdAtom)
   const parentContext = useAppShellContext()
+  const { navigate, goBack, canGoBack } = useNavigation()
   const navState = parseRouteToNavigationState(entry.route)
   const isChatPanel = navState?.navigator === 'sessions' && !!navState.details
 
   const handleClose = useCallback(() => {
+    if (isCompact) {
+      const listRoute = getCompactListRoute(navState)
+      if (listRoute) navigate(listRoute, { skipAutoSelect: true })
+      else if (canGoBack) goBack()
+      else navigate(routes.view.allSessions(), { skipAutoSelect: true })
+      return
+    }
     closePanel(entry.id)
-  }, [closePanel, entry.id])
+  }, [isCompact, navState, navigate, goBack, canGoBack, closePanel, entry.id])
 
   // Build close button for PanelHeader (via context override)
   const closeButton = useMemo(() => {
@@ -76,7 +87,7 @@ export function PanelSlot({
     )
   }, [handleClose])
 
-  // Build back button for compact mode — closes the panel to reveal the session list.
+  // Compact Back returns to the parent list while retaining its filter.
   // Same PanelHeaderCenterButton style as X and share, just on the left side.
   const backButton = useMemo(() => {
     if (!isCompact) return undefined

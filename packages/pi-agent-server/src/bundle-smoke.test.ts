@@ -66,14 +66,18 @@ function createOfflineEnvironment(): NodeJS.ProcessEnv {
 }
 
 /** Spawn the bundle, send JSONL messages, and collect output until `done` matches or timeout. */
-function driveBundle(messages: object[], done: (output: string) => boolean, afterReady: object[] = []): Promise<string> {
+function driveBundle(
+  messages: object[], done: (output: string) => boolean, afterReady: object[] = [],
+  options: { preload?: string; onMessage?: (message: Record<string, any>) => object[] } = {},
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--preload', blockNetworkPreloadPath, bundlePath], {
+    const child = spawn(process.execPath, ['--preload', options.preload ?? blockNetworkPreloadPath, bundlePath], {
       cwd: scratchDir,
       env: createOfflineEnvironment(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let output = '';
+    let protocolBuffer = '';
     let sentAfterReady = false;
     const finish = (error?: Error) => {
       clearTimeout(timer);
@@ -87,6 +91,16 @@ function driveBundle(messages: object[], done: (output: string) => boolean, afte
     );
     const onData = (chunk: Buffer) => {
       output += chunk.toString();
+      if (options.onMessage) {
+        protocolBuffer += chunk.toString();
+        const lines = protocolBuffer.split('\n');
+        protocolBuffer = lines.pop() ?? '';
+        for (const line of lines) {
+          let message: Record<string, any>;
+          try { message = JSON.parse(line); } catch { continue; }
+          for (const command of options.onMessage(message)) child.stdin.write(`${JSON.stringify(command)}\n`);
+        }
+      }
       if (!sentAfterReady && output.includes('"type":"ready"')) {
         sentAfterReady = true;
         for (const msg of afterReady) child.stdin.write(`${JSON.stringify(msg)}\n`);
@@ -106,6 +120,42 @@ function driveBundle(messages: object[], done: (output: string) => boolean, afte
 }
 
 describe('pi-agent-server bundle', () => {
+  it('awaits a TokenNest refresh ACK and sends the replacement token to a custom endpoint', async () => {
+    let refreshId = '';
+    let refreshed = false;
+    const output = await driveBundle([{
+      type: 'init', apiKey: '', model: 'auth-test', cwd: scratchDir,
+      workspaceRootPath: scratchDir, sessionId: 'bundle-tokennest-refresh',
+      sessionPath: scratchDir, workingDirectory: scratchDir,
+      plansFolderPath: join(scratchDir, 'plans'), providerType: 'pi_compat', authType: 'oauth',
+      oauthProvider: 'tokennest', baseUrl: 'https://tokennest.invalid/v1',
+      customEndpoint: { api: 'openai-completions' }, customModels: ['auth-test'],
+      piAuth: { provider: 'openai', credential: { type: 'api_key', key: 'dummy-old' } },
+    }], out => out.includes('"type":"test_wire_auth"'), [
+      { type: 'prompt', id: 'p1', message: 'hi', systemPrompt: 'Offline test.' },
+    ], {
+      preload: join(import.meta.dir, 'test-fixtures', 'assert-token-rotation.ts'),
+      onMessage(message) {
+        if (message.type === 'auth_refresh_request') {
+          if (refreshed) return [{ type: 'auth_refresh_result', id: message.id, success: true }];
+          refreshId = message.id;
+          return [{ type: 'token_update', id: 'test-rotation', piAuth: {
+            provider: 'openai', credential: { type: 'api_key', key: 'dummy-replacement' },
+          } }];
+        }
+        if (message.type === 'token_update_result' && message.id === 'test-rotation' && message.success) {
+          refreshed = true;
+          return [{ type: 'auth_refresh_result', id: refreshId, success: true }];
+        }
+        return [];
+      },
+    });
+    expect(refreshed).toBe(true);
+    expect(output).toContain('"type":"test_wire_auth","fresh":true');
+    expect(output).not.toContain('"fresh":false');
+    expect(output).not.toContain('dummy-replacement');
+  }, RUN_TIMEOUT_MS + 130_000);
+
   it('acknowledges credential updates by request id in the built runtime', async () => {
     const output = await driveBundle(
       [{

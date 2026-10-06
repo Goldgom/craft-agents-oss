@@ -25,7 +25,7 @@ function download(record: StudioGeneration) {
   const link = document.createElement('a')
   link.href = url
   link.download = `tokenbird-${record.kind}-${new Date(record.createdAt).toISOString().replace(/[:.]/g, '-')}.png`
-  link.click()
+  document.body.appendChild(link); link.click(); link.remove()
   setTimeout(() => URL.revokeObjectURL(url), 30_000)
 }
 

@@ -49,7 +49,7 @@ function editIssueMessage(issue: EditOutputIssue) {
 }
 function saveFile(data: string | Blob, name: string) {
   const url = typeof data === 'string' ? data : URL.createObjectURL(data)
-  const link = document.createElement('a'); link.href = url; link.download = name; link.click()
+  const link = document.createElement('a'); link.href = url; link.download = name; document.body.appendChild(link); link.click(); link.remove()
   if (typeof data !== 'string') setTimeout(() => URL.revokeObjectURL(url), 30_000)
 }
 async function decode(url: string): Promise<HTMLImageElement> {
@@ -114,6 +114,8 @@ export default function StudioCanvas({ active = true, onOpenAiSettings }: { acti
 }
 
 function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession, selectSession, renameSession, deleteSession, flushRef, setLocked, suggestTitle }: StudioSessionEditorProps & { active: boolean; onOpenAiSettings: () => void }) {
+  const android = new URLSearchParams(window.location.search).get('embedded') === 'android'
+  const [inspectorOpen, setInspectorOpen] = useState(!android)
   const [layers, setLayers] = useState<CanvasLayer[]>(() => [createLayer()])
   const layersRef = useRef(layers); layersRef.current = layers
   const [activeId, setActiveId] = useState(() => layers[0].id)
@@ -1066,7 +1068,7 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
     { id: 'adjust', label: '调节', icon: SlidersHorizontal }, { id: 'ai', label: 'AI 绘图 G', icon: Sparkles },
     { id: 'assist', label: 'GPT 绘画助手', icon: MessageCircle },
   ]
-  return <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+  return <div data-studio-editor="canvas" className="flex h-full min-h-0 flex-col bg-background text-foreground">
     <header className="flex h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-border/70 px-3">
       <div className="mr-2 flex items-center gap-2 border-r border-border pr-4"><Layers3 className="h-4 w-4 text-primary" /><strong className="text-sm">画布</strong><span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">无限</span></div>
       <button className={actionClass} onClick={() => void createSession()}><Plus className="h-3.5 w-3.5" />新建会话</button>
@@ -1075,13 +1077,13 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
       <span className="mx-1 h-5 w-px bg-border" />
       <button className={iconClass} title="撤销 Ctrl+Z" disabled={!undoStack.current.length} onClick={undo}><Undo2 className="h-4 w-4" /></button>
       <button className={iconClass} title="重做 Ctrl+Y" disabled={!redoStack.current.length} onClick={redo}><Redo2 className="h-4 w-4" /></button>
-      <div className="ml-auto flex gap-2"><button className={actionClass} onClick={saveProject}><Download className="h-3.5 w-3.5" />保存工程</button><button className={actionClass} onClick={exportPng}>导出 PNG</button></div>
+      <div className="ml-auto flex gap-2">{android && <button className={actionClass} aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(open => !open)}>{inspectorOpen ? '收起属性' : '图层与属性'}</button>}<button className={actionClass} onClick={saveProject}><Download className="h-3.5 w-3.5" />保存工程</button><button className={actionClass} onClick={exportPng}>导出 PNG</button></div>
       <input ref={imageInput} hidden type="file" accept="image/*" onChange={event => { const file = event.target.files?.[0]; if (file) void importImage(file).catch(cause => setError(String(cause))); event.target.value = '' }} />
       <input ref={projectInput} hidden type="file" accept=".tbcanvas,application/json" onChange={event => { const file = event.target.files?.[0]; if (file) void openProject(file).catch(cause => setError(String(cause))); event.target.value = '' }} />
     </header>
     <div className="flex min-h-0 flex-1">
       <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border/70 px-1.5 py-3">
-        {tools.map(({ id, label, icon: Icon }) => <button key={id} title={label} aria-label={label} onClick={() => setTool(id)}
+        {tools.map(({ id, label, icon: Icon }) => <button key={id} title={label} aria-label={label} onClick={() => { setTool(id); if (android && (id === 'ai' || id === 'assist')) setInspectorOpen(true) }}
           className={`flex h-9 w-9 items-center justify-center rounded-lg ${tool === id ? 'bg-primary/15 text-primary ring-1 ring-primary/30' : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}><Icon className="h-[18px] w-[18px]" /></button>)}
       </nav>
       <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -1115,7 +1117,7 @@ function CanvasEditor({ active, onOpenAiSettings, session, onSave, createSession
           <div className="ml-auto flex items-center gap-1"><button className={iconClass} aria-label="缩小" onClick={() => zoomAt({ x: size.width / 2, y: size.height / 2 }, view.zoom / 1.25)}><ZoomOut className="h-3.5 w-3.5" /></button><span className="min-w-10 text-center tabular-nums">{Math.round(view.zoom * 100)}%</span><button className={iconClass} aria-label="放大" onClick={() => zoomAt({ x: size.width / 2, y: size.height / 2 }, view.zoom * 1.25)}><ZoomIn className="h-3.5 w-3.5" /></button><button className={iconClass} aria-label="适合内容" onClick={fit}><Maximize2 className="h-3.5 w-3.5" /></button></div>
         </footer>
       </main>
-      <aside className={`${tool === 'assist' ? 'w-[min(420px,40vw)] overflow-hidden' : 'w-[320px] overflow-y-auto'} min-h-0 shrink-0 border-l border-border/70 bg-background`}>
+      <aside data-studio-inspector hidden={android && !inspectorOpen} className={`${tool === 'assist' ? 'w-[min(420px,40vw)] overflow-hidden' : 'w-[320px] overflow-y-auto'} min-h-0 shrink-0 border-l border-border/70 bg-background`}>
         {tool === 'ai' && <section className={sectionClass}>
           <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary" /><h2 className="text-sm font-semibold">AI 绘图</h2><span className="ml-auto text-[11px] text-muted-foreground">{aiMode === 'inpaint' || aiMode === 'outpaint' ? '直接修改当前图层' : '结果作为新图层'}</span></div>
           <StudioConnectionPicker image connections={connections} connectionSlug={connectionSlug} setConnectionSlug={setConnectionSlug} model={model} setModel={setModel} channelGroup={channelGroup} setChannelGroup={setChannelGroup} />

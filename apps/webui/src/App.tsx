@@ -83,6 +83,7 @@ export default function App() {
   useMobileAppViewport()
   const [phase, setPhase] = useState<Phase>('loading')
   const [error, setError] = useState('')
+  const [connectionMode, setConnectionMode] = useState<'local' | 'remote'>('local')
   const clientRef = useRef<WsRpcClient | null>(null)
   const initRef = useRef(false)
   const initialParams = new URLSearchParams(window.location.search)
@@ -115,6 +116,7 @@ export default function App() {
         embeddedWsUrl = mobileConfig.wsUrl ?? null
         embeddedToken = mobileConfig.token || undefined
         embeddedConnectionMode = mobileConfig.mode
+        setConnectionMode(mobileConfig.mode ?? 'local')
       }
       let wsUrl = embeddedWsUrl ?? ''
       if (!wsUrl) {
@@ -170,6 +172,16 @@ export default function App() {
       // 5. Connect the WebSocket client
       client.connect()
 
+      // A fresh on-device install should open chat without requiring users to
+      // choose or create a workspace before their first conversation.
+      if (embeddedPlatform === 'android' && embeddedConnectionMode === 'local') {
+        const available = await api.getWorkspaces()
+        const workspace = available.find(item => item.id === workspaceId)
+          ?? available.find(item => !item.remoteServer)
+          ?? await api.createServerWorkspace('我的空间')
+        await api.switchWorkspace(workspace.id)
+      }
+
       setPhase('ready')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -196,7 +208,7 @@ export default function App() {
   return (
     <Suspense fallback={<LoadingScreen />}>
       <ElectronApp />
-      <MobileControls />
+      <MobileControls connectionMode={connectionMode} />
     </Suspense>
   )
 }
