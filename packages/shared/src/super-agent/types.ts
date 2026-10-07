@@ -63,8 +63,9 @@ export interface SuperAgentConfig {
   name: string
   avatar: string
   nodes: SuperAgentNode[]
+  /** Idle inspection interval in minutes (1–1440), including continuous work reviews. */
   idleInspectionMinutes: number
-  /** Wake the coordinator after 30 minutes of complete team inactivity. Defaults to false. */
+  /** Wake after idleInspectionMinutes of complete team inactivity. Defaults to true. */
   continuousWork?: boolean
   environment: SuperAgentEnvironment
   /** Sources available for assignment; individual nodes need their own binding. */

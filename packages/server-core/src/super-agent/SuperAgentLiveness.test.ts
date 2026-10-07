@@ -269,7 +269,7 @@ describe('Super Agent runtime turn reconciliation', () => {
     const reviewing = await until(() => service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'working' && host.sends.length === 2)
     host.complete(reviewing.state.nodes.find(node => node.nodeId === 'main')!.sessionId!, 'Recorded the blocker and remaining verification.')
     await until(() => service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'idle')
-    context.advance(30 * 60_000 - 1)
+    context.advance(config.idleInspectionMinutes * 60_000 - 1)
     await service.tick()
     expect(host.sends).toHaveLength(2)
     context.advance(1)

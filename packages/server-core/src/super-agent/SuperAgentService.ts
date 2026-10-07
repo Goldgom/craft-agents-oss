@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { CreateSessionOptions, Session, SessionEvent } from '@craft-agent/shared/protocol'
 import type { SessionCompletionEvent } from '../sessions/SessionManager'
 import { buildSuperAgentNodePrompt } from './SuperAgentPrompt'
+import { nodeSchedulingState, sameNodeSessionIdentity, selectSuperAgentWorker } from './SuperAgentScheduling'
 import { canRecoverSuperAgentTurn, superAgentRetryDelay } from './SuperAgentRetry'
 import { parseSuperAgentActionBlock, stripSuperAgentActionBlocks, SuperAgentActionProtocolError } from './SuperAgentActions'
 import {
@@ -95,7 +96,6 @@ const MAX_ACTIVITY_ENTRIES = 80
 const MAX_ACTIVITY_TEXT = 8_000
 const MAX_PERMISSION_HISTORY = 100
 const MAX_PENDING_PERMISSIONS = 200
-const CONTINUOUS_WORK_IDLE_MS = 30 * 60_000
 const TURN_START_GRACE_MS = 10_000
 const STOPPED_TURN_CONFIRM_MS = 1_000
 /** Bound optional history without silently turning a partial log into a full result. */
@@ -193,7 +193,9 @@ export class SuperAgentService {
       const fullControlChanged = !!previous && previous.environment.fullControl !== config.environment.fullControl
       const withoutControl = (value: SuperAgentConfig) => ({ ...value, environment: { ...value.environment, fullControl: false } })
       const onlyControlChanged = fullControlChanged && JSON.stringify(withoutControl(previous!)) === JSON.stringify(withoutControl(config))
-      if ((!onlyControlChanged || config.environment.kind === 'sandbox') && (document.pendingTurns.length || document.state.scripts.some(script => script.status === 'running'))) {
+      const onlyIntervalChanged = !!previous && previous.idleInspectionMinutes !== config.idleInspectionMinutes
+        && JSON.stringify({ ...previous, idleInspectionMinutes: config.idleInspectionMinutes }) === JSON.stringify(config)
+      if ((!onlyIntervalChanged && (!onlyControlChanged || config.environment.kind === 'sandbox')) && (document.pendingTurns.length || document.state.scripts.some(script => script.status === 'running'))) {
         throw new Error('Stop active and queued work before changing Super Agent settings')
       }
       if (document.state.scripts.some(script => (script.resultPending || script.resultQueuedAt != null) && !config.scripts.some(item => item.id === script.scriptId))) {
@@ -216,18 +218,17 @@ export class SuperAgentService {
         }
       }
       const environmentChanged = JSON.stringify(previous?.environment) !== JSON.stringify(config.environment)
-      const promptChanged = previous?.name !== config.name || JSON.stringify(previous?.sourceSlugs) !== JSON.stringify(config.sourceSlugs) || JSON.stringify(previous?.abilityProfiles) !== JSON.stringify(config.abilityProfiles)
       const previousNodes = document.state.nodes
       const previousScripts = document.state.scripts
       document.state.nodes = config.nodes.map(node => {
         const oldNode = previous?.nodes.find(item => item.id === node.id)
         const oldRuntime = document.state.nodes.find(item => item.nodeId === node.id)
-        if (onlyControlChanged || (!environmentChanged && !promptChanged && JSON.stringify(oldNode) === JSON.stringify(node))) return oldRuntime ?? { nodeId: node.id, status: 'idle' }
+        if (onlyControlChanged || onlyIntervalChanged || (!environmentChanged && sameNodeSessionIdentity(oldNode, node))) return oldRuntime ?? { nodeId: node.id, status: 'idle' }
         return { nodeId: node.id, status: 'idle' }
       })
       document.state.scripts = config.scripts.map(script => document.state.scripts.find(item => item.scriptId === script.id) ?? { scriptId: script.id, status: 'idle' })
       document.config = config
-      if (!onlyControlChanged) {
+      if (!onlyControlChanged && !onlyIntervalChanged) {
         this.activities.delete(workspaceId)
         this.permissions.delete(workspaceId)
         this.permissionDeadlines.delete(workspaceId)
@@ -525,7 +526,7 @@ export class SuperAgentService {
       document.state.allIdleSince = Math.max(lastActivity, this.now())
       await this.commit(workspaceId, document)
     }
-    if (this.now() - Math.max(document.state.allIdleSince!, lastActivity) >= CONTINUOUS_WORK_IDLE_MS) {
+    if (this.now() - Math.max(document.state.allIdleSince!, lastActivity) >= document.config!.idleInspectionMinutes * 60_000) {
       this.inspect(document, true)
       await this.commit(workspaceId, document)
     }
@@ -953,8 +954,7 @@ export class SuperAgentService {
     if (command.planId && !plan) throw new Error('Unknown plan item')
     if (plan && ['completed', 'cancelled', 'blocked'].includes(plan.status)) throw new Error('Only actionable plans may be assigned')
     const workers = this.configured(document).nodes.filter(node => node.role === 'worker')
-    const load = (nodeId: string) => document.pendingTurns.filter(turn => turn.nodeId === nodeId).length
-    const worker = command.nodeId ? workers.find(node => node.id === command.nodeId) : [...workers].sort((a, b) => load(a.id) - load(b.id))[0]
+    const worker = command.nodeId ? workers.find(node => node.id === command.nodeId) : selectSuperAgentWorker(document, this.now())
     if (!worker) throw new Error('Work must be assigned to a worker node')
     if (document.state.tasks.length >= 500) {
       const oldestFinished = document.state.tasks.findIndex(task => !['queued', 'running'].includes(task.status))
@@ -1019,7 +1019,7 @@ export class SuperAgentService {
     const coordinator = this.coordinator(document)
     if (document.pendingTurns.some(turn => turn.nodeId === coordinator.id && turn.kind === 'inspection')) return
     const turn = this.enqueue(document, coordinator.id, 'inspection', continuous
-      ? '持续工作后台自检：所有节点、队列和受管脚本已连续空闲至少 30 分钟。反思用户已提出的目标、计划列表、任务结果和共享板，检查遗漏、未完成工作及可验证的后续步骤。维护计划状态、优先级和受阻原因，按优先级向已有工作节点分派下一项可执行工作，并在 tasks 中携带 planId。已完成或取消的工作不要重复执行；受阻计划仅在阻碍已解除时恢复。只能推进用户已授权目标，不擅自扩展目标或绕过审批。如果确实无事可做，简短记录自检结果，等待下一次空闲自检。'
+      ? `持续工作后台自检：所有节点、队列和受管脚本已连续空闲至少 ${document.config!.idleInspectionMinutes} 分钟。反思用户已提出的目标、计划列表、任务结果和共享板，检查遗漏、未完成工作及可验证的后续步骤。维护计划状态、优先级和受阻原因，按优先级向已有工作节点分派下一项可执行工作，并在 tasks 中携带 planId。已完成或取消的工作不要重复执行；受阻计划仅在阻碍已解除时恢复。只能推进用户已授权目标，不擅自扩展目标或绕过审批。如果确实无事可做，简短记录自检结果，等待下一次空闲自检。`
       : 'Inspect worker and script statuses, identify blocked work and summarize results for the user. Do not invent new goals or perform worker work yourself.')
     turn.backgroundInspection = continuous
     document.state.lastInspectionAt = this.now()
@@ -1422,9 +1422,11 @@ export class SuperAgentService {
       .slice(coordinator ? -6 : -3)
     const permissions = [...(this.permissions.get(workspaceId)?.values() ?? [])].filter(request => request.status === 'pending' && (coordinator || request.nodeId === recipient.id))
     return JSON.stringify({ nodes: nodes.map(node => ({ id: node.id, name: node.name, role: node.role,
-        ...(coordinator ? { description: contextExcerpt(node.description, 300), model: node.model, intelligenceRating: node.intelligenceRating, workPreferences: contextExcerpt(node.workPreferences, 200), sourceSlugs: node.sourceSlugs, abilityProfileIds: node.abilityProfileIds } : {}) })),
+        ...(coordinator ? { description: contextExcerpt(node.description, 300), model: node.model, intelligenceRating: node.intelligenceRating, workPreferences: contextExcerpt(node.workPreferences, 200), sourceSlugs: node.sourceSlugs, abilityProfileIds: node.abilityProfileIds,
+          scheduling: nodeSchedulingState(document, node, this.now()) } : {}) })),
       executionMode: 'allow-all',
-      ...(coordinator ? { continuousWork: config.continuousWork === true, planCount: document.state.plans.length,
+      communicationBudget: { remainingHops: Math.max(0, MAX_CHAIN_DEPTH - turn.depth), remainingTurns: Math.max(0, MAX_CHAIN_TURNS - (document.chainCounts[turn.chainId] ?? 0)) },
+      ...(coordinator ? { continuousWork: config.continuousWork === true, idleInspectionMinutes: config.idleInspectionMinutes, planCount: document.state.plans.length,
         abilityProfiles: config.abilityProfiles.map(profile => ({ id: profile.id, name: profile.name, description: contextExcerpt(profile.description, 200) })) } : {}),
       environment: { kind: config.environment.kind, workingDirectory: config.environment.workingDirectory,
         fullControl: config.environment.fullControl === true, sourceSlugs: recipient.sourceSlugs,

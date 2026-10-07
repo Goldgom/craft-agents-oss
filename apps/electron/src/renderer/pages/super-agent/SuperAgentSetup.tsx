@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, Circle, LoaderCircle, Plus, Settings2, Sparkles, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Circle, LoaderCircle, Plus, Settings2, Sparkles } from 'lucide-react'
 import type { SuperAgentConfig } from '@craft-agent/shared/super-agent'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { AgentAvatar, AvatarEditor, EnvironmentEditor, FormField, NodeEditor } from './SuperAgentForms'
+import { SuperAgentPresetPicker } from './SuperAgentPresetPicker'
+import { Switch } from '@/components/ui/switch'
 import { applyPreset, configError, createConfig, createNode, nodeModels, useSuperAgentText, type SuperAgentPreset } from './super-agent-ui'
 
 export function SuperAgentSetup({ connections, defaultConnection, onSave, onOpenAiSettings, onLoginTokenNest, onRefreshConnections }: {
@@ -19,20 +21,29 @@ export function SuperAgentSetup({ connections, defaultConnection, onSave, onOpen
   const text = useSuperAgentText()
   const [config, setConfig] = useState(() => createConfig(connections, text, defaultConnection))
   const [step, setStep] = useState(0)
-  const [preset, setPreset] = useState<SuperAgentPreset>('custom')
+  const [preset, setPreset] = useState<SuperAgentPreset>('daily')
+  const [presetConnectionSlug, setPresetConnectionSlug] = useState(config.nodes[0]?.llmConnection ?? '')
   const [selectedNodeId, setSelectedNodeId] = useState(config.nodes[0]?.id ?? '')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const tokenNest = connections.find(item => item.oauthProvider === 'tokennest' && item.isAuthenticated && nodeModels(item).length)
   const readyConnections = connections.filter(item => item.isAuthenticated)
+  const presetConnection = connections.find(item => item.slug === presetConnectionSlug && item.isAuthenticated && nodeModels(item).length)
+    ?? connections.find(item => item.isAuthenticated && nodeModels(item).length)
   const selectedNode = config.nodes.find(node => node.id === selectedNodeId) ?? config.nodes[0]
   const steps = ['identity', 'team', 'environment', 'review'] as const
 
   useEffect(() => {
     if (!connections.some(item => item.isAuthenticated && nodeModels(item).length)) return
-    setConfig(current => ({ ...current, nodes: current.nodes.map(node => !node.llmConnection
-      ? { ...node, ...createNode(node.role, connections, text, defaultConnection), id: node.id, name: node.name, avatar: node.avatar, description: node.description }
-      : node) }))
+    setConfig(current => {
+      if (current.nodes.some(node => node.llmConnection)) return current
+      const connection = connections.find(item => item.slug === defaultConnection && item.isAuthenticated && nodeModels(item).length)
+        ?? connections.find(item => item.isAuthenticated && nodeModels(item).length)!
+      if (preset !== 'custom') return applyPreset(current, preset, connection, text)
+      return { ...current, nodes: current.nodes.map(node => ({ ...node,
+        llmConnection: connection.slug, model: createNode(node.role, [connection], text).model,
+      })) }
+    })
   }, [connections, defaultConnection])
 
   async function run(action: () => Promise<void>) {
@@ -49,8 +60,8 @@ export function SuperAgentSetup({ connections, defaultConnection, onSave, onOpen
   }
   function choosePreset(value: SuperAgentPreset) {
     setPreset(value)
-    if (value !== 'custom' && tokenNest) {
-      const nextConfig = applyPreset(config, value, tokenNest, text)
+    if (value !== 'custom' && presetConnection) {
+      const nextConfig = applyPreset(config, value, presetConnection, text)
       setConfig(nextConfig); setSelectedNodeId(nextConfig.nodes[0].id)
     }
   }
@@ -91,20 +102,13 @@ export function SuperAgentSetup({ connections, defaultConnection, onSave, onOpen
               {!tokenNest && <Button type="button" className={readyConnections.length ? 'mt-3' : ''} size="sm" variant="outline" onClick={() => void run(onLoginTokenNest)}>{text('login')}</Button>}
             </div>
           </section>
-          <section>
-            <h2 className="text-sm font-semibold">{text('preset')}</h2>
-            {tokenNest && <p className="mt-1 text-xs leading-5 text-muted-foreground">{text('presetDescription')}</p>}
-            <div className={cn('mt-3 grid gap-3', tokenNest ? 'sm:grid-cols-2' : '')}>
-              {(tokenNest ? ['balanced', 'fast', 'deep', 'custom'] as const : ['custom'] as const).map(value => <button key={value} type="button"
-                onClick={() => choosePreset(value)} aria-pressed={preset === value}
-                className={cn('flex items-start gap-3 rounded-xl border p-4 text-left transition-colors', preset === value ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent/50')}>
-                <span className={cn('mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg', preset === value ? 'bg-primary/10 text-primary' : 'bg-foreground/5 text-muted-foreground')}>
-                  {value === 'fast' ? <Zap className="size-4" /> : value === 'custom' ? <Settings2 className="size-4" /> : <Sparkles className="size-4" />}
-                </span><span className="min-w-0 flex-1"><span className="text-sm font-medium">{text(value)}</span><span className="mt-1 block text-xs leading-5 text-muted-foreground">{text((value + 'Description') as 'balancedDescription' | 'fastDescription' | 'deepDescription' | 'customDescription')}</span></span>
-                {preset === value && <Check className="mt-1 size-4 shrink-0 text-primary" />}
-              </button>)}
-            </div>
-          </section>
+          <SuperAgentPresetPicker connections={connections} connectionSlug={presetConnection?.slug ?? ''}
+            onConnectionChange={slug => {
+              setPresetConnectionSlug(slug)
+              const connection = connections.find(item => item.slug === slug)!
+              const nextConfig = applyPreset(config, preset, connection, text)
+              setConfig(nextConfig); setSelectedNodeId(nextConfig.nodes[0].id)
+            }} preset={preset} onChoose={choosePreset} text={text} />
         </>}
         {step === 1 && <>
           <p className="rounded-xl bg-primary/5 p-4 text-xs leading-5 text-muted-foreground">{text('coordinatorRule')}</p>
@@ -122,13 +126,16 @@ export function SuperAgentSetup({ connections, defaultConnection, onSave, onOpen
               onRemove={selectedNode.role === 'worker' && config.nodes.filter(node => node.role === 'worker').length > 1
                 ? () => { setConfig(current => ({ ...current, nodes: current.nodes.filter(node => node.id !== selectedNode.id) })); setSelectedNodeId(config.nodes[0].id) } : undefined} />
           </div>
-          <FormField label={text('idleInterval')} hint={text('idleHint')}><Input type="number" min={1} max={1440} value={config.idleInspectionMinutes} className="max-w-40" onChange={event => setConfig(current => ({ ...current, idleInspectionMinutes: Number(event.target.value) }))} /></FormField>
+          <FormField label={text('idleInterval')} hint={text('idleHint')}><Input type="number" min={1} max={1440} step={1} value={config.idleInspectionMinutes} className="max-w-40" onChange={event => setConfig(current => ({ ...current, idleInspectionMinutes: Number(event.target.value) }))} /></FormField>
+          <div className="flex items-start justify-between gap-4"><label htmlFor="setup-continuous-work" className="text-sm">{text('continuousWork')}<span className="mt-1 block text-xs leading-5 text-muted-foreground">{text('continuousWorkHint')}</span></label>
+            <Switch id="setup-continuous-work" type="button" checked={config.continuousWork === true} onCheckedChange={continuousWork => setConfig(current => ({ ...current, continuousWork }))} /></div>
         </>}
         {step === 2 && <EnvironmentEditor environment={config.environment} onChange={environment => setConfig(current => ({ ...current, environment }))} />}
         {step === 3 && <div className="space-y-5 rounded-2xl border border-border/70 p-6">
           <div className="flex items-center gap-4"><AgentAvatar avatar={config.avatar} name={config.name} className="size-14 rounded-2xl text-3xl" />
             <div><h2 className="text-lg font-semibold">{config.name}</h2><p className="mt-1 text-xs text-muted-foreground">{text('setupSummary', { workers: config.nodes.filter(node => node.role === 'worker').length, minutes: config.idleInspectionMinutes })}</p></div>
           </div>
+          <p className="text-xs text-muted-foreground">{text('continuousWork')}：{text(config.continuousWork ? 'enabled' : 'disabled')}</p>
           <div className="space-y-2">{config.nodes.map(node => <div key={node.id} className="flex items-center gap-3 rounded-lg bg-foreground/3 p-3">
             <AgentAvatar avatar={node.avatar} name={node.name} className="size-8 rounded-lg text-base" />
             <div className="min-w-0 flex-1"><p className="text-sm font-medium">{node.name}<span className="ml-2 text-xs font-normal text-muted-foreground">{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span></p><p className="mt-0.5 truncate text-xs text-muted-foreground">{connections.find(connection => connection.slug === node.llmConnection)?.name} · {node.model}</p></div>

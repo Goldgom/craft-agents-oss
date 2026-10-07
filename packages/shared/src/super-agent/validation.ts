@@ -25,8 +25,8 @@ const ConfigSchema = z.object({
     sourceSlugs: list,
     abilityProfileIds: z.array(id).max(100),
   }).strict()).min(2).max(32),
-  idleInspectionMinutes: z.number().finite().min(1).max(1_440),
-  continuousWork: z.boolean().default(false),
+  idleInspectionMinutes: z.number().finite().int().min(1).max(1_440),
+  continuousWork: z.boolean().default(true),
   environment: z.object({
     kind: z.enum(['folder', 'sandbox', 'vm']),
     workingDirectory: z.string().trim().min(1).max(4_096),

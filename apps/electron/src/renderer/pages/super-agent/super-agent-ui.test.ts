@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import { applyPreset, configError, createConfig, nodeModels, scriptAccessGranted, withExecuteMode, type SuperAgentText } from './super-agent-ui'
+import { SUPER_AGENT_PRESETS, PRESET_RECIPES } from './super-agent-presets'
+import { validateSuperAgentConfig } from '@craft-agent/shared/super-agent'
 
 const text: SuperAgentText = key => key
 const tokenNest: LlmConnectionWithStatus = {
@@ -31,7 +33,7 @@ describe('Super Agent model authorization and setup', () => {
       config.environment.fullControl = fullControl
       const environment = structuredClone(config.environment)
       expect(withExecuteMode(config).environment).toEqual(environment)
-      for (const preset of ['custom', 'balanced', 'fast', 'deep'] as const) {
+      for (const preset of ['custom', ...SUPER_AGENT_PRESETS] as const) {
         expect(applyPreset(config, preset, tokenNest, text).environment).toEqual(environment)
       }
     }
@@ -58,7 +60,7 @@ describe('Super Agent model authorization and setup', () => {
     const edited = withExecuteMode(legacy)
     expect(edited.environment).toEqual({ ...legacy.environment, permissionMode: 'allow-all' })
     expect(legacy.environment.permissionMode).toBe('safe')
-    for (const preset of ['custom', 'balanced', 'fast', 'deep'] as const) {
+    for (const preset of ['custom', ...SUPER_AGENT_PRESETS] as const) {
       expect(applyPreset(legacy, preset, tokenNest, text).environment).toEqual(edited.environment)
     }
   })
@@ -69,7 +71,7 @@ describe('Super Agent model authorization and setup', () => {
 
   it('builds every preset from available account models without crossing groups', () => {
     const config = createConfig([tokenNest], text)
-    for (const preset of ['balanced', 'fast', 'deep'] as const) {
+    for (const preset of SUPER_AGENT_PRESETS) {
       const result = applyPreset(config, preset, tokenNest, text)
       expect(result.nodes.filter(node => node.role === 'coordinator')).toHaveLength(1)
       expect(result.nodes.some(node => node.role === 'worker')).toBe(true)
@@ -78,7 +80,51 @@ describe('Super Agent model authorization and setup', () => {
         expect(node.llmConnection).toBe(tokenNest.slug)
       }
     }
-    expect(applyPreset(config, 'fast', tokenNest, text).nodes.every(node => node.model === 'available-mini')).toBe(true)
+    expect(applyPreset(config, 'daily', tokenNest, text).nodes[1].model).toBe('available-mini')
+  })
+
+  it('defaults to daily assistance and gives autonomous scenarios distinct roles and continuation settings', () => {
+    const config = createConfig([tokenNest], text)
+    expect(config.nodes.map(node => node.name)).toEqual(['dailyLeadName', 'dailyWorkerName'])
+    for (const preset of SUPER_AGENT_PRESETS) {
+      const result = applyPreset(config, preset, tokenNest, text)
+      result.environment.workingDirectory = 'C:\\work'
+      expect(() => validateSuperAgentConfig(result)).not.toThrow()
+      expect(result.nodes).toHaveLength(preset === 'daily' ? 2 : 4)
+      expect(result.continuousWork).toBe(true)
+      expect(result.idleInspectionMinutes).toBe({ daily: 60, coding: 10, research: 30, work: 15 }[preset])
+      expect(result.nodes.map(node => node.workPreferences)).toEqual(PRESET_RECIPES[preset].nodes.map(node => `${node.profile}Preferences`))
+    }
+  })
+
+  it('preserves ids and resource ownership when a smaller preset replaces a configured team', () => {
+    const config = applyPreset(createConfig([tokenNest], text), 'coding', tokenNest, text)
+    config.environment.workingDirectory = 'C:\\work'
+    config.sourceSlugs = ['repo']
+    config.nodes[1].sourceSlugs = ['repo']
+    config.abilityProfiles = [{ id: 'review', name: 'Review', description: '', instructions: 'Review artifacts' }]
+    config.nodes[2].abilityProfileIds = ['review']
+    config.scripts = [{ id: 'checks', name: 'Checks', path: 'checks.ts', args: [], timeoutSeconds: 60, nodeId: config.nodes[3].id }]
+    const original = structuredClone(config)
+    const result = applyPreset(config, 'daily', tokenNest, text)
+    expect(result.nodes.map(node => node.id)).toEqual(config.nodes.map(node => node.id))
+    expect(result.nodes[1].sourceSlugs).toEqual(['repo'])
+    expect(result.nodes[2].abilityProfileIds).toEqual(['review'])
+    expect(result.scripts).toEqual(config.scripts)
+    expect(() => validateSuperAgentConfig(result)).not.toThrow()
+    expect(config).toEqual(original)
+  })
+
+  it('uses standard and expert models by role, works without TokenNest, and falls back to a single model', () => {
+    const provider = { ...tokenNest, oauthProvider: undefined, channelGroups: undefined, models: ['gpt-6-luna', 'gpt-6-astra', 'gpt-6.1-sol'], defaultModel: 'gpt-6-astra' }
+    const coding = applyPreset(createConfig([provider], text), 'coding', provider, text)
+    expect(coding.nodes.map(node => node.model)).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-astra'])
+    const single = { ...provider, models: ['only-model'] }
+    for (const preset of SUPER_AGENT_PRESETS) {
+      expect(applyPreset(coding, preset, single, text).nodes.every(node => node.model === 'only-model')).toBe(true)
+    }
+    expect(applyPreset(coding, 'daily', { ...provider, isAuthenticated: false }, text)).toEqual(coding)
+    expect(applyPreset(coding, 'daily', { ...provider, models: ['gpt-image-1'] }, text)).toEqual(coding)
   })
 
   it('rejects saved model choices after authentication or group access is removed', () => {

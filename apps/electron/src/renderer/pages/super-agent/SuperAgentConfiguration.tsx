@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Check, LoaderCircle, Plus, Settings2, Sparkles } from 'lucide-react'
 import type { SuperAgentConfig, SuperAgentEnvironmentStatus } from '@craft-agent/shared/super-agent'
 import type { LlmConnectionWithStatus, LoadedSource } from '../../../shared/types'
@@ -7,7 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { AgentAvatar, AvatarEditor, EnvironmentEditor, FormField, FormSection, NodeEditor } from './SuperAgentForms'
-import { configError, createNode, useSuperAgentText, withExecuteMode } from './super-agent-ui'
+import { applyPreset, configError, createNode, nodeModels, useSuperAgentText, withExecuteMode, type SuperAgentPreset } from './super-agent-ui'
+import { SuperAgentPresetPicker } from './SuperAgentPresetPicker'
 
 export function SuperAgentConfiguration({ config, connections, sources, environmentStatus, onSave, onContinuousWork, onOpenAiSettings, initialNodeId }: {
   config: SuperAgentConfig
@@ -26,17 +27,25 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const [preset, setPreset] = useState<SuperAgentPreset>('custom')
+  const [presetConnectionSlug, setPresetConnectionSlug] = useState(config.nodes[0].llmConnection)
+  // The page header can change this live setting while the rest of the form is unsaved.
+  useEffect(() => {
+    setDraft(current => ({ ...current, continuousWork: config.continuousWork }))
+  }, [config.continuousWork])
+  const presetConnection = connections.find(item => item.slug === presetConnectionSlug && item.isAuthenticated && nodeModels(item).length)
+    ?? connections.find(item => item.isAuthenticated && nodeModels(item).length)
   const selected = draft.nodes.find(node => node.id === selectedNodeId) ?? draft.nodes[0]
   const patch = (updates: Partial<SuperAgentConfig>) => { setDraft(current => ({ ...current, ...updates })); setSaved(false) }
   async function save() {
     const validation = configError(draft, connections, text)
     if (validation) { setError(validation); return }
     setPending(true); setError('')
-    try { await onSave({ ...draft, continuousWork: config.continuousWork }); setSaved(true) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
+    try { await onSave(draft); setSaved(true) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
   }
   async function toggleContinuousWork(enabled: boolean) {
     setPending(true); setError('')
-    try { await onContinuousWork(enabled) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
+    try { await onContinuousWork(enabled); patch({ continuousWork: enabled }) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
   }
   return <div className="h-full min-h-0 overflow-y-auto">
     <div className="mx-auto max-w-3xl space-y-6 p-6">
@@ -51,10 +60,20 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
           <AvatarEditor avatar={draft.avatar} name={draft.name} onChange={avatar => patch({ avatar })} />
           <FormField label={text('assistantName')}><Input value={draft.name} maxLength={80} onChange={event => patch({ name: event.target.value })} /></FormField>
           <div className="flex items-start justify-between gap-4"><div><label htmlFor="continuous-work-setting" className="text-sm font-medium">{text('continuousWork')}</label><p id="continuous-work-setting-hint" className="mt-1 text-xs leading-5 text-muted-foreground">{text('continuousWorkHint')}</p></div>
-            <Switch id="continuous-work-setting" type="button" checked={config.continuousWork === true} aria-describedby="continuous-work-setting-hint" onCheckedChange={enabled => void toggleContinuousWork(enabled)} /></div>
-          <FormField label={text('idleInterval')} hint={text(config.continuousWork ? 'continuousWorkHint' : 'idleHint')}><Input type="number" min={1} max={1440} disabled={config.continuousWork === true} className="max-w-44" value={draft.idleInspectionMinutes} onChange={event => patch({ idleInspectionMinutes: Number(event.target.value) })} /></FormField>
+            <Switch id="continuous-work-setting" type="button" checked={draft.continuousWork === true} aria-describedby="continuous-work-setting-hint" onCheckedChange={enabled => void toggleContinuousWork(enabled)} /></div>
+          <FormField label={text('idleInterval')} hint={text('idleHint')}><Input type="number" min={1} max={1440} step={1} className="max-w-44" value={draft.idleInspectionMinutes} onChange={event => patch({ idleInspectionMinutes: Number(event.target.value) })} /></FormField>
         </FormSection>}
         {section === 'team' && <>
+          <SuperAgentPresetPicker connections={connections} connectionSlug={presetConnection?.slug ?? ''}
+            onConnectionChange={slug => { setPresetConnectionSlug(slug); setPreset('custom') }}
+            preset={preset} onChoose={value => {
+              setPreset(value)
+              if (presetConnection && value !== 'custom') {
+                const next = applyPreset(draft, value, presetConnection, text)
+                setDraft(next); setSelectedNodeId(next.nodes[0].id); setSaved(false)
+              }
+            }} text={text} />
+          <p className="text-xs leading-5 text-muted-foreground">{text('presetReplaceHint')}</p>
           <p className="rounded-lg bg-primary/5 p-3 text-xs leading-5 text-muted-foreground">{text('coordinatorRule')}</p>
           <div className="flex flex-wrap gap-2">
             {draft.nodes.map(node => <button key={node.id} type="button" onClick={() => setSelectedNodeId(node.id)}

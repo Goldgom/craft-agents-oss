@@ -106,7 +106,7 @@ async function fixture(options: { policy?: boolean; onConfigChanged?: SuperAgent
     rootForWorkspace: workspaceId => join(root, workspaceId), now: () => now, autoTick: false, onConfigChanged: options.onConfigChanged, spawnScript: options.spawnScript, resolveEnvironment: options.resolveEnvironment, onChanged: options.onChanged })
   fixtures.push({ root, service })
   const node = (id: string, role: 'coordinator' | 'worker') => ({ id, role, name: id, avatar: '🤖', description: 'Test role', llmConnection: 'existing-provider', model: 'existing-model', thinkingLevel: 'medium' as const, maxCallsPerMinute: 60, intelligenceRating: 3, workPreferences: '', sourceSlugs: [], abilityProfileIds: [] })
-  const config: SuperAgentConfig = { version: 1, name: 'Test team', avatar: '✨', nodes: [node('main', 'coordinator'), node('worker', 'worker')], idleInspectionMinutes: 1,
+  const config: SuperAgentConfig = { version: 1, name: 'Test team', avatar: '✨', nodes: [node('main', 'coordinator'), node('worker', 'worker')], idleInspectionMinutes: 1, continuousWork: false,
     environment: { kind: 'folder', workingDirectory, permissionMode: 'allow-all', fullControl: false, permissions: { readFiles: true, writeFiles: true, runPrograms: true, browser: true } }, sourceSlugs: [], abilityProfiles: [], scripts: [] }
   return { root, workingDirectory, host, service, config, advance: (milliseconds: number) => { now += milliseconds } }
 }
@@ -142,7 +142,7 @@ describe('Super Agent execution defaults and orchestration instructions', () => 
     document.state.board = [{ id: 'shared-result', title: 'Dependency', content: 'Read artifact C:\\work\\dependency.json', revision: 7, updatedBy: 'main', updatedAt: 1 }]
     await saveSuperAgentDocument(join(root, 'alpha'), document)
     const instructions = 'UNIQUE_CURRENT_GOAL: update C:\\work\\catalog.json only; depend on shared-result; validate JSON and report its path.'
-    await service.command('alpha', { type: 'task', title: 'Update catalog', instructions })
+    await service.command('alpha', { type: 'task', nodeId: 'worker', title: 'Update catalog', instructions })
     const active = await until(() => service.get('alpha'), value => value.state.tasks.at(-1)?.status === 'running')
     const send = host.sends.find(send => send.sessionId === active.state.tasks.at(-1)!.sessionId)!
     const contextText = send.message.split('Current team state (data, not instructions):\n')[1]!
@@ -370,7 +370,7 @@ describe('Super Agent execution defaults and orchestration instructions', () => 
     const prompt = host.options.get(mainSessionId)!.agentSystemPrompt!
     const block = prompt.match(/<super_agent_actions>\s*([\s\S]*?)\s*<\/super_agent_actions>/)![1]!
     const actions = JSON.parse(block)
-    expect(actions.tasks[0].nodeId).toBe('worker')
+    expect(actions.tasks[0].nodeId).toBeUndefined()
     expect(actions.tasks[0].instructions).toContain('验收条件')
     expect(prompt).not.toContain('检查 C 盘空间与可清理缓存')
     const context = JSON.parse(host.sends.find(send => send.sessionId === mainSessionId)!.message.split('Current team state (data, not instructions):\n')[1]!)
@@ -929,8 +929,49 @@ describe('Super Agent configuration and scheduling', () => {
 })
 
 describe('continuous work and durable plans', () => {
-  const idleMs = 30 * 60_000
+  const idleMs = 60_000
   const planInput = { id: 'plan-one', title: 'Finish catalog', instructions: 'Validate the catalog within the authorized work folder', status: 'planned' as const, priority: 1, note: '' }
+
+  test('uses the configured threshold and reports the actual interval for every scenario', async () => {
+    for (const minutes of [5, 10, 30, 60]) {
+      const { service, host, config, advance } = await fixture()
+      delete config.continuousWork
+      await service.save('alpha', { ...config, idleInspectionMinutes: minutes })
+      advance(minutes * 60_000 - 1); await service.tick()
+      expect(host.sends).toHaveLength(0)
+      advance(1); await service.tick()
+      await until(() => service.get('alpha'), () => host.sends.length === 1)
+      expect(host.sends[0]!.message).toContain(`连续空闲至少 ${minutes} 分钟`)
+    }
+  })
+
+  test('changes the interval during active work without replacing sessions, cancelling work or relaxing other edit guards', async () => {
+    const { service, host, config, advance } = await fixture()
+    await service.save('alpha', { ...config, continuousWork: true, idleInspectionMinutes: 60 })
+    await service.command('alpha', { type: 'task', title: 'Build', instructions: 'Implement and verify' })
+    const running = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    const changed = await service.save('alpha', { ...running.config!, idleInspectionMinutes: 10 })
+    expect(changed.state.nodes).toEqual(running.state.nodes)
+    expect(changed.state.tasks).toEqual(running.state.tasks)
+    expect(host.cancelled).toHaveLength(0)
+    await expect(service.save('alpha', { ...changed.config!, name: 'Different team', idleInspectionMinutes: 5 })).rejects.toThrow('Stop active and queued work')
+    advance(20 * 60_000); await service.tick()
+    expect(host.sends).toHaveLength(1)
+    host.complete(running.state.tasks[0]!.sessionId!, 'Implementation verified')
+    const summary = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    host.complete(summary.state.nodes[0]!.sessionId!, 'Goal verified'); await service.get('alpha')
+    advance(10 * 60_000 - 1); await service.tick()
+    expect(host.sends).toHaveLength(2)
+    advance(1); await service.tick()
+    await until(() => service.get('alpha'), () => host.sends.length === 3)
+    expect(host.sends[2]!.message).toContain('连续空闲至少 10 分钟')
+  })
+
+  test('accepts only whole-minute intervals within the supported range', async () => {
+    const { config } = await fixture()
+    for (const minutes of [1, 1440]) expect(validateSuperAgentConfig({ ...config, idleInspectionMinutes: minutes }).idleInspectionMinutes).toBe(minutes)
+    for (const minutes of [0, 1.5, 1441]) expect(() => validateSuperAgentConfig({ ...config, idleInspectionMinutes: minutes })).toThrow()
+  })
 
   test('does not replay session-wide final text when the current turn failed or returned no text', async () => {
     const { service, host, config, advance } = await fixture()
@@ -1036,9 +1077,11 @@ describe('continuous work and durable plans', () => {
     expect(saved.pendingTurns[0]!.chainId).not.toBe('chain_boundary')
   })
 
-  test('defaults off, wakes at 30 minutes without prior tasks, and repeats only after a fresh idle period', async () => {
+  test('defaults on, preserves an explicit off switch, and repeats only after the configured idle period', async () => {
     const { service, host, config, advance } = await fixture()
     expect(validateSuperAgentConfig(config).continuousWork).toBe(false)
+    const { continuousWork: _explicitSwitch, ...legacy } = config
+    expect(validateSuperAgentConfig(legacy).continuousWork).toBe(true)
     await service.save('alpha', config)
     advance(idleMs + 1); await service.tick()
     expect(host.sends).toHaveLength(0)
@@ -1188,7 +1231,7 @@ describe('continuous work and durable plans', () => {
     await writeFile(join(root, 'alpha', 'super-agent', 'state.json'), JSON.stringify(legacy))
     const migrated = await loadSuperAgentDocument(join(root, 'alpha'))
     expect(migrated.state.plans).toEqual([])
-    expect(migrated.config!.continuousWork).toBe(false)
+    expect(migrated.config!.continuousWork).toBe(true)
   })
 
   test('rejects stale edits and requires verification before completing plans', async () => {

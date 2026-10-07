@@ -186,6 +186,7 @@ describe('Super Agent durable network recovery', () => {
   test('disabling continuous work clears a recovering background inspection', async () => {
     const context = await superAgentFixture()
     context.config.continuousWork = true
+    context.config.idleInspectionMinutes = 30
     await context.service.save('alpha', context.config)
     context.advance(30 * 60000)
     await context.service.tick()

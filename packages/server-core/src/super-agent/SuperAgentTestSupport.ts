@@ -127,7 +127,7 @@ export async function superAgentFixture(options: Partial<Pick<SuperAgentServiceD
   const node = (id: string, role: 'coordinator' | 'worker') => ({ id, role, name: id, avatar: '🤖', description: 'Test role',
     llmConnection: 'existing-provider', model: 'existing-model', thinkingLevel: 'medium' as const, maxCallsPerMinute: 60,
     intelligenceRating: 3, workPreferences: '', sourceSlugs: [], abilityProfileIds: [] })
-  const config: SuperAgentConfig = { version: 1, name: 'Test team', avatar: '✨', nodes: [node('main', 'coordinator'), node('worker', 'worker')], idleInspectionMinutes: 1,
+  const config: SuperAgentConfig = { version: 1, name: 'Test team', avatar: '✨', nodes: [node('main', 'coordinator'), node('worker', 'worker')], idleInspectionMinutes: 1, continuousWork: false,
     environment: { kind: 'folder', workingDirectory, permissionMode: 'allow-all', fullControl: false,
       permissions: { readFiles: true, writeFiles: true, runPrograms: true, browser: true } }, sourceSlugs: [], abilityProfiles: [], scripts: [] }
   return { root, workingDirectory, host, service, config, now: () => now, advance: (milliseconds: number) => { now += milliseconds } }

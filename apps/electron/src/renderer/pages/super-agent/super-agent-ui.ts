@@ -2,8 +2,11 @@ import { useTranslation } from 'react-i18next'
 import { getModelsForProviderType, isImageGenerationModelId } from '@config/llm-connections'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import type { SuperAgentConfig, SuperAgentEnvironment, SuperAgentNode } from '@craft-agent/shared/super-agent'
+import { PRESET_RECIPES, presetModels, presetStrings, type SuperAgentPreset } from './super-agent-presets'
+export type { SuperAgentPreset } from './super-agent-presets'
 
 const strings = {
+  ...presetStrings,
   title: ['超级智能体', 'Super Agent'],
   subtitle: ['一个和你沟通的主节点，一组专注工作的独立节点。', 'One coordinator to talk with you, independent nodes to do the work.'],
   welcome: ['创建你的超级智能体', 'Create your Super Agent'],
@@ -28,13 +31,7 @@ const strings = {
   preset: ['选择配置方案', 'Choose a setup'],
   custom: ['自定义', 'Custom'],
   customDescription: ['逐个设置模型、思考能力和工作偏好。', 'Choose each model, thinking level and work preferences.'],
-  balanced: ['均衡协作', 'Balanced team'],
-  balancedDescription: ['主节点整理和协调，工作节点执行任务。', 'The coordinator organizes; a worker executes tasks.'],
-  fast: ['快速响应', 'Fast response'],
-  fastDescription: ['优先选择账户中可用的轻量模型。', 'Prefer lightweight models available in your account.'],
-  deep: ['深入研究', 'Deep research'],
-  deepDescription: ['提高思考强度，添加研究和执行两个工作节点。', 'Use deeper thinking with research and execution workers.'],
-  presetDescription: ['TokenNest 预设使用你当前分组中可用的模型，设置后仍可调整。', 'TokenNest presets use models available in your current group and remain editable.'],
+  presetDescription: ['方案仅使用所选连接及当前分组可用的文本模型；优先按职责选择模型，不足时复用可用模型。全部设置可调整。', 'Setups use available text models in the selected connection and group, with role-based choices and fallback to available models. All settings remain editable.'],
   noConnections: ['尚无可用的 AI 连接。请登录 TokenNest 或在 AI 设置中添加提供商。', 'No AI connection is ready. Sign in to TokenNest or add a provider in AI settings.'],
   selectConnection: ['选择连接', 'Choose connection'],
   model: ['模型', 'Model'],
@@ -47,7 +44,7 @@ const strings = {
   researcherName: ['研究助手', 'Research assistant'],
   coordinatorDescription: ['与用户交互、分配工作、定期检查节点状态并整理结果。', 'Talk with the user, assign work, inspect node status and assemble results.'],
   workerDescription: ['执行分配的工作，向主节点报告进展、发现和结果。', 'Complete assigned work and report progress, findings and results.'],
-  coordinatorRule: ['主节点只负责沟通、检查和整理结果；具体工作交给工作节点。每个节点同时只有一个模型进程。', 'The coordinator handles communication, inspection and summaries. Workers execute tasks. Each node runs one model turn at a time.'],
+  coordinatorRule: ['主节点负责沟通、分工与验收，可直接回答普通问答；主要工具操作交给工作节点，独立工作按需并行。每个节点同时只有一个模型轮次。', 'The coordinator communicates, assigns and verifies work, and can answer ordinary questions directly. Workers perform tool work; independent tasks run in parallel when useful. Each node runs one turn at a time.'],
   addWorker: ['添加工作节点', 'Add worker'],
   removeNode: ['移除节点', 'Remove node'],
   description: ['基本描述', 'Description'],
@@ -58,8 +55,8 @@ const strings = {
   ratingHint: ['你对该节点能力的评级，用于描述和分工。', 'Your assessment of the node, used to describe its role.'],
   preferences: ['工作偏好', 'Work preferences'],
   preferencesPlaceholder: ['例如：先查证再下结论，结果用中文，优先复用现有文件。', 'For example: verify before concluding, write concise results, reuse existing files.'],
-  idleInterval: ['空闲检查间隔（分钟）', 'Idle inspection interval (minutes)'],
-  idleHint: ['到达指定空闲时间后，主节点检查工作状态和共享数据板。', 'After this idle interval, the coordinator inspects work status and the shared board.'],
+  idleInterval: ['空闲自检间隔（分钟）', 'Idle review interval (minutes)'],
+  idleHint: ['可设置 1～1440 分钟。持续工作开启时，全队连续空闲达到此间隔后自检；关闭时只检查已有工作活动。运行中也可单独调整此间隔，保存后生效。', 'Set 1–1440 minutes. With continuous work, review after the whole team is idle for this interval; otherwise inspect existing activity only. The interval alone can be changed during work and takes effect on save.'],
   folder: ['指定文件夹', 'Folder'],
   sandbox: ['容器沙箱', 'Container sandbox'],
   vm: ['虚拟机', 'Virtual machine'],
@@ -128,7 +125,9 @@ const strings = {
   historyArchiveOpen: ['查看归档文件', 'Show archive file'],
   historyFailed: ['{{count}} 项操作未完成，详见下方原因。', '{{count}} operations did not finish. Reasons are shown below.'],
   continuousWork: ['持续工作', 'Continuous work'],
-  continuousWorkHint: ['开启后主动推进未完成计划；整个团队连续空闲 30 分钟时在后台自检。程序运行期间生效。', 'Advance unfinished plans. Run a background review after the whole team has been idle for 30 minutes. Requires the server to be running.'],
+  enabled: ['已开启', 'Enabled'],
+  disabled: ['已关闭', 'Disabled'],
+  continuousWorkHint: ['默认开启，主动推进已授权目标的未完成计划；全队连续空闲达到下方设置的间隔后自检。自检间隔可调整，程序运行期间生效。', 'Enabled by default. Advance unfinished authorized plans and review after the configured team idle interval. The interval is adjustable. Requires the server to be running.'],
   plans: ['计划列表', 'Plans'],
   planHint: ['主智能体按优先级安排工作，记录进展与阻碍，并核验完成情况。你也可以添加或调整计划。', 'The coordinator schedules work by priority, records progress and blockers, and verifies completion. You can also add or edit plans.'],
   noPlans: ['暂无计划。添加目标，或在聊天中让主智能体安排工作。', 'No plans yet. Add a goal or ask the coordinator to arrange work in chat.'],
@@ -328,20 +327,20 @@ export function createNode(
 }
 
 export function createConfig(connections: LlmConnectionWithStatus[], text: SuperAgentText, preferredSlug?: string): SuperAgentConfig {
-  return {
+  const config: SuperAgentConfig = {
     version: 1, name: text('defaultName'), avatar: '✦',
     nodes: [createNode('coordinator', connections, text, preferredSlug), createNode('worker', connections, text, preferredSlug)],
-    idleInspectionMinutes: 15,
-    continuousWork: false,
+    idleInspectionMinutes: 60,
+    continuousWork: true,
     environment: {
       kind: 'folder', workingDirectory: '', permissionMode: 'allow-all', fullControl: true,
       permissions: { readFiles: true, writeFiles: false, runPrograms: false, browser: false },
     },
     sourceSlugs: [], abilityProfiles: [], scripts: [],
   }
+  const connection = connections.find(item => item.slug === config.nodes[0].llmConnection && item.isAuthenticated && nodeModels(item).length)
+  return connection ? applyPreset(config, 'daily', connection, text) : config
 }
-
-export type SuperAgentPreset = 'custom' | 'balanced' | 'fast' | 'deep'
 
 /** Missing legacy settings inherit full control; an explicit limited mode is preserved. */
 export function withExecuteMode(config: SuperAgentConfig): SuperAgentConfig {
@@ -357,19 +356,24 @@ export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, 
   const executionConfig = withExecuteMode(config)
   if (preset === 'custom') return executionConfig
   const models = nodeModels(connection)
-  const preferred = connection.defaultModel && models.includes(connection.defaultModel) ? connection.defaultModel : models[0] ?? ''
-  const fast = models.find(id => /haiku|flash|mini|nano|luna/i.test(id)) ?? preferred
-  const deep = models.find(id => /opus|astra|pro|reasoner/i.test(id)) ?? preferred
-  const coordinator = createNode('coordinator', [connection], text, connection.slug)
-  const worker = createNode('worker', [connection], text, connection.slug)
-  coordinator.model = preset === 'fast' ? fast : preset === 'deep' ? deep : preferred
-  coordinator.thinkingLevel = preset === 'fast' ? 'low' : 'high'
-  worker.model = preset === 'fast' ? fast : preferred
-  worker.thinkingLevel = preset === 'deep' ? 'high' : preset === 'fast' ? 'low' : 'medium'
-  worker.maxCallsPerMinute = preset === 'fast' ? 12 : 6
-  const nodes = [coordinator, worker]
-  if (preset === 'deep') nodes.push({ ...createNode('worker', [connection], text, connection.slug), name: text('researcherName'), model: deep, thinkingLevel: 'high' })
-  return { ...executionConfig, nodes }
+  if (!connection.isAuthenticated || !models.length) return executionConfig
+  const choices = presetModels(models, connection.defaultModel)
+  const recipe = PRESET_RECIPES[preset]
+  const existing = [config.nodes.find(node => node.role === 'coordinator'), ...config.nodes.filter(node => node.role === 'worker')]
+  const nodes = recipe.nodes.map((item, index) => {
+    const old = existing[index]
+    return {
+      ...createNode(index === 0 ? 'coordinator' : 'worker', [connection], text, connection.slug),
+      ...(old ? { id: old.id, sourceSlugs: [...old.sourceSlugs], abilityProfileIds: [...old.abilityProfileIds] } : {}),
+      name: text(`${item.profile}Name`), description: text(`${item.profile}Description`), workPreferences: text(`${item.profile}Preferences`),
+      model: choices[item.model], thinkingLevel: item.thinking,
+      maxCallsPerMinute: item.rate, intelligenceRating: item.rating,
+    }
+  })
+  // Keep extra resource-bound nodes so choosing a smaller team never orphans scripts or bindings.
+  nodes.push(...config.nodes.filter(node => !nodes.some(item => item.id === node.id)
+    && (node.sourceSlugs.length || node.abilityProfileIds.length || config.scripts.some(script => script.nodeId === node.id))))
+  return { ...executionConfig, nodes, continuousWork: recipe.continuousWork, idleInspectionMinutes: recipe.idleInspectionMinutes }
 }
 
 export function configError(config: SuperAgentConfig, connections: LlmConnectionWithStatus[], text: SuperAgentText): string | null {
