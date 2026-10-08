@@ -1675,9 +1675,11 @@ export class SuperAgentService {
       try {
         const path = await this.scriptPath(document.config!.environment, script)
         const metadata = await stat(path)
-        if (metadata.mtimeMs === runtime.lastModifiedAt && runtime.sha256) { this.scriptScanErrors.delete(runtime); continue }
+        // Timestamp precision varies by filesystem, and editors can preserve it.
+        // Hash the bounded script file on every scan to detect content changes.
         const sha256 = createHash('sha256').update(await readFile(path)).digest('hex')
         this.scriptScanErrors.delete(runtime)
+        if (metadata.mtimeMs === runtime.lastModifiedAt && runtime.sha256 === sha256) continue
         const modified = runtime.sha256 != null && runtime.sha256 !== sha256
         runtime.lastModifiedAt = metadata.mtimeMs; runtime.sha256 = sha256
         if (runtime.status === 'missing') { runtime.status = 'idle'; runtime.error = undefined }
@@ -1723,7 +1725,8 @@ export class SuperAgentService {
   }
 
   private scriptResultText(script: Pick<SuperAgentScript, 'id' | 'name'>, runtime: SuperAgentScriptRuntime): string {
-    return `Script ${script.name} ${runtime.status}, exit code ${runtime.exitCode ?? 'unknown'}.\nRun: ${runtime.runId ?? 'legacy'}; script: ${script.id}; task: ${runtime.taskId ?? 'manual run'}; plan: ${runtime.planId ?? 'none'}.\n${runtime.error ?? ''}\n${runtime.output?.slice(-8_000) ?? ''}`
+    const termination = runtime.exitSignal ? `signal ${runtime.exitSignal}` : `exit code ${runtime.exitCode ?? 'unknown'}`
+    return `Script ${script.name} ${runtime.status}, ${termination}.\nRun: ${runtime.runId ?? 'legacy'}; script: ${script.id}; task: ${runtime.taskId ?? 'manual run'}; plan: ${runtime.planId ?? 'none'}.\n${runtime.error ?? ''}\n${runtime.output?.slice(-8_000) ?? ''}`
   }
 
   /** Called after queue slots open. Terminal results remain durable under backpressure. */
@@ -1841,7 +1844,7 @@ export class SuperAgentService {
       const remote = config.environment.kind !== 'folder' ? await this.deps.spawnScript!({ workspaceId, environment: config.environment, resolved: environment, script, path }) : undefined
       const child = remote?.child ?? spawn(runtime[0], [...runtime[1], ...script.args], { cwd: environment.workingDirectory, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], shell: false })
       Object.assign(state, { runId, taskId: context.taskId, planId, resultPending: undefined, resultQueuedAt: undefined, resultReportedAt: undefined, resultDeliveryAttempts: undefined, resultDeliveryPaused: undefined, resultDeliveryError: undefined,
-        status: 'running', startedAt: this.now(), completedAt: undefined, output: '', error: undefined, exitCode: undefined })
+        status: 'running', startedAt: this.now(), completedAt: undefined, output: '', error: undefined, exitCode: undefined, exitSignal: undefined })
       document.state.allIdleSince = undefined
       const record = { child, timer: setTimeout(() => { void this.serial(workspaceId, async () => { await this.stopScript(workspaceId, document, scriptId, 'Script exceeded its timeout'); await this.commit(workspaceId, document) }).catch(() => undefined) }, script.timeoutSeconds * 1_000), output: '', stopping: false, stop: remote?.stop }
       record.timer.unref?.()
@@ -1852,13 +1855,13 @@ export class SuperAgentService {
       }
       child.stdout?.on('data', append); child.stderr?.on('data', append)
       child.once('error', error => { state.error = error.message })
-      child.once('close', exitCode => {
+      child.once('close', (exitCode, exitSignal) => {
         clearTimeout(record.timer)
         if (this.closed) { this.scriptProcesses.delete(key); return }
         void this.serial(workspaceId, async () => {
           if (this.scriptProcesses.get(key) !== record) return
           this.scriptProcesses.delete(key)
-          state.exitCode = exitCode; state.completedAt = this.now(); state.output = record.output
+          state.exitCode = exitCode; state.exitSignal = exitSignal ?? undefined; state.completedAt = this.now(); state.output = record.output
           let confirmed = true
           if (record.stop && !record.stopping) {
             // An attached container CLI can disconnect while the actual program
@@ -1882,7 +1885,7 @@ export class SuperAgentService {
       // failures are assignment results and must become visible to the coordinator.
       if (!context.taskId && !context.planId && !this.scriptProcesses.has(key)) throw error
       Object.assign(state, { runId, taskId: context.taskId, planId, resultPending: undefined, resultQueuedAt: undefined, resultReportedAt: undefined, resultDeliveryAttempts: undefined, resultDeliveryPaused: undefined, resultDeliveryError: undefined,
-        status: 'failed', startedAt: this.now(), completedAt: this.now(), output: '', error: (error instanceof Error ? error.message : String(error)).slice(0, MAX_OUTPUT), exitCode: undefined })
+        status: 'failed', startedAt: this.now(), completedAt: this.now(), output: '', error: (error instanceof Error ? error.message : String(error)).slice(0, MAX_OUTPUT), exitCode: undefined, exitSignal: undefined })
       this.notifyScript(document, script, '', state)
       await this.commit(workspaceId, document)
       this.schedule(workspaceId)

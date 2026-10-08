@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { access, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -1522,15 +1522,41 @@ describe('managed scripts', () => {
     expect(snapshot.state.messages.some(message => message.body.includes('not been restarted'))).toBe(true)
   })
 
+  test('detects a same-size script edit with an unchanged modification time', async () => {
+    const { workingDirectory, service, config, advance } = await fixture()
+    const path = join(workingDirectory, 'check.cjs')
+    const timestamp = new Date('2026-01-01T00:00:00Z')
+    await writeFile(path, 'console.log("first")'); await utimes(path, timestamp, timestamp)
+    config.scripts = [{ id: 'check', name: 'Check', path: 'check.cjs', args: [], nodeId: 'worker', timeoutSeconds: 10 }]
+    await service.save('alpha', config)
+    advance(5_000); await service.tick()
+    const before = (await service.get('alpha')).state.scripts[0]!
+    await writeFile(path, 'console.log("other")'); await utimes(path, timestamp, timestamp)
+    advance(5_000); await service.tick()
+    const after = (await service.get('alpha')).state.scripts[0]!
+    expect(after.lastModifiedAt).toBe(before.lastModifiedAt)
+    expect(after.sha256).not.toBe(before.sha256)
+    expect(after.status).toBe('idle')
+    expect(after.startedAt).toBeUndefined()
+    expect(after.changedAt).toBe(11_000)
+    expect((await service.get('alpha')).state.messages.some(message => message.body.includes('not been restarted'))).toBe(true)
+  })
+
   test('stops a real script process and records its completion', async () => {
-    const { workingDirectory, service, config } = await fixture()
+    const { root, workingDirectory, service, config } = await fixture()
     await writeFile(join(workingDirectory, 'long.cjs'), 'setInterval(() => {}, 1000)')
     config.scripts = [{ id: 'long', name: 'Long running', path: 'long.cjs', args: [], timeoutSeconds: 10 }]
     await service.save('alpha', config)
     await service.command('alpha', { type: 'script-run', scriptId: 'long' })
     await service.command('alpha', { type: 'script-stop', scriptId: 'long' })
-    const snapshot = await until(() => service.get('alpha'), value => value.state.scripts[0]?.exitCode != null)
+    // POSIX reports null for a signal exit; undefined means close is still pending.
+    const snapshot = await until(() => service.get('alpha'), value => value.state.scripts[0]?.exitCode !== undefined)
     expect(snapshot.state.scripts[0]!.status).toBe('stopped')
+    if (process.platform !== 'win32') {
+      expect(snapshot.state.scripts[0]!.exitCode).toBeNull()
+      expect(snapshot.state.scripts[0]!.exitSignal).toBe('SIGKILL')
+    }
+    expect((await loadSuperAgentDocument(join(root, 'alpha'))).state.scripts[0]).toEqual(snapshot.state.scripts[0])
   })
 
   test('untracked processes after a crash are reported honestly and cannot be relaunched', async () => {

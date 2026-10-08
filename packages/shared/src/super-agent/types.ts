@@ -184,6 +184,8 @@ export interface SuperAgentScriptRuntime {
   startedAt?: number
   completedAt?: number
   exitCode?: number | null
+  /** Signal termination has a null exit code on POSIX. */
+  exitSignal?: string
   output?: string
   error?: string
 }
