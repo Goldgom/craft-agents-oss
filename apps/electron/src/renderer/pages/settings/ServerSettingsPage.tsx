@@ -17,6 +17,7 @@ import { Spinner } from '@craft-agent/ui'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { ServerConfig, ServerStatus } from '@craft-agent/shared/config/server-config'
 import type { RemoteServerProfileInfo } from '../../../shared/types'
+import { CloudServerSection } from './CloudServerSection'
 
 import {
   SettingsSection,
@@ -266,6 +267,7 @@ export default function ServerSettingsPage() {
 
           {/* The remote host has no Electron server-mode configuration API. */}
           {!isRemoteMode && <>
+          <CloudServerSection />
           {/* Enable toggle + restart banner */}
           <SettingsSection title={t("settings.server.remoteAccess")}>
             <SettingsCard>

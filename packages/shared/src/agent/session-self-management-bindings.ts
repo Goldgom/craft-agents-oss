@@ -64,6 +64,11 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'requestClientFilesFn', {
+    get() { return getSessionScopedToolCallbacks(sessionId)?.requestClientFilesFn; },
+    configurable: true, enumerable: true,
+  });
+
   Object.defineProperty(context, 'transferSftpFileFn', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.transferSftpFileFn;

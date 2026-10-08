@@ -213,6 +213,8 @@ export interface SessionToolContext {
   canvasToolFn?: (args: Record<string, unknown>) => Promise<unknown>;
 
   /** Transfer files through the connected desktop client's configured SFTP profile. */
+  requestClientFilesFn?: (args: import('@craft-agent/core/types').ClientFileRequest) => Promise<import('@craft-agent/core/types').SavedClientFiles>;
+
   transferSftpFileFn?: (args: SftpTransferArgs) => Promise<SftpTransferResult>;
 
   /** Ask the connected Android client to report or request an allowlisted runtime permission. */

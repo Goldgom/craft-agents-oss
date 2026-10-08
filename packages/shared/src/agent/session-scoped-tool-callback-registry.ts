@@ -102,6 +102,8 @@ export interface SessionScopedToolCallbacks {
   canvasToolFn?: (args: Record<string, unknown>) => Promise<unknown>;
 
   /** Client-owned SFTP bridge for transferring files without exposing credentials to the server. */
+  requestClientFilesFn?: (args: import('@craft-agent/core/types').ClientFileRequest) => Promise<import('@craft-agent/core/types').SavedClientFiles>;
+
   transferSftpFileFn?: (
     args: import('@craft-agent/session-tools-core').SftpTransferArgs,
   ) => Promise<import('@craft-agent/session-tools-core').SftpTransferResult>;

@@ -345,6 +345,14 @@ export interface ElectronAPI {
   getRuntimeServerStatus(): Promise<import('@craft-agent/core/types').ServerStatus>
 
   // Server mode configuration
+  getCloudConfig(): Promise<import('../../../../packages/shared/src/cloud/types').CloudConfig>
+  setCloudConfig(config: import('../../../../packages/shared/src/cloud/types').CloudConfig): Promise<void>
+  getCloudStatus(): Promise<import('../../../../packages/shared/src/cloud/types').CloudStatus>
+  listCloudDevices(): Promise<import('../../../../packages/shared/src/cloud/types').CloudDevice[]>
+  connectCloudDevice(id: string): Promise<{ url: string; token: string; expiresAt: number }>
+  shareCloudChat(sessionId: string): Promise<import('../../../../packages/shared/src/cloud/types').CloudShare>
+  listCloudShares(): Promise<import('../../../../packages/shared/src/cloud/types').CloudShare[]>
+  revokeCloudShare(id: string): Promise<{ ok: boolean }>
   getServerConfig(): Promise<import('@craft-agent/shared/config/server-config').ServerConfig>
   setServerConfig(config: import('@craft-agent/shared/config/server-config').ServerConfig): Promise<void>
   getServerStatus(): Promise<import('@craft-agent/shared/config/server-config').ServerStatus>

@@ -1,7 +1,7 @@
 /** Main owns all remote transport credentials. Preload receives opaque handles only. */
 import { createHash, randomUUID } from 'node:crypto'
 import { getAllChannelValues, isRemoteEligible } from '@craft-agent/shared/protocol'
-import { CLIENT_SFTP_TRANSFER, LOCAL_CLIENT_CAPABILITIES, type TransportConnectionState, type RpcClient, type WsRpcHandshakeGuard } from '@craft-agent/server-core/transport'
+import { CLIENT_REMOTE_ACCESS, CLIENT_SFTP_TRANSFER, LOCAL_CLIENT_CAPABILITIES, type TransportConnectionState, type RpcClient, type WsRpcHandshakeGuard } from '@craft-agent/server-core/transport'
 import { CHANNEL_MAP } from '../transport/channel-map'
 import type { NativeAuthorityEvent, NativeWebContentsIdentity } from './native-window-authority'
 import { NATIVE_REMOTE_TRANSPORT as IPC, type NativeRemoteMode, type NativeRemotePacket, type NativeRemoteResult, type NativeRemoteFailureCode, type NativeRemoteCapabilityResult } from '../shared/native-remote-transport'
@@ -204,7 +204,7 @@ export function registerNativeRemoteTransport(ipc: NativeRegistrar, deps: Native
     const old = active.get(event.sender)
     if (!old && handles.size >= (deps.maxHandles ?? 64)) throw new BoundaryError('LIMIT')
     if (old) dispose(old)
-    const client = deps.createClient(target, LOCAL_CLIENT_CAPABILITIES, authority)
+    const client = deps.createClient(target, [...LOCAL_CLIENT_CAPABILITIES, CLIENT_REMOTE_ACCESS], authority)
     const entry: Handle = { id: randomUUID(), event, authority, target: { ...target }, fingerprint: targetFingerprint, client,
       started: false, closed: false, subscriptions: new Set(), capabilities: new Map(), pendingRequests: 0, pendingMainCapabilities: 0, cleanups: [], pushTail: Promise.resolve() }
     handles.set(entry.id, entry); active.set(event.sender, entry)

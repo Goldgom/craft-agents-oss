@@ -104,6 +104,7 @@ export interface CompactSessionMenuProps {
   onOpenInNewWindow: () => void
   onSendToWorkspace?: () => void
   onDelete: () => void
+  onCloudShare?: () => void
   onConfigureCollaboration?: () => void
 
   // ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ export function CompactSessionMenu({
   onOpenInNewWindow,
   onSendToWorkspace,
   onDelete,
+  onCloudShare,
   onConfigureCollaboration,
   open: controlledOpen,
   onOpenChange,
@@ -312,6 +314,7 @@ export function CompactSessionMenu({
               onShowInFinder={closeAfter(actions.showInFinder)}
               onCopyPath={closeAfter(actions.copyPath)}
               onDelete={closeAfter(onDelete)}
+              onCloudShare={closeAfter(onCloudShare)}
               onConfigureCollaboration={closeAfter(onConfigureCollaboration)}
             />
           )}
@@ -374,6 +377,7 @@ interface RootPaneProps {
   onShowInFinder?: () => void
   onCopyPath?: () => void
   onDelete?: () => void
+  onCloudShare?: () => void
   onConfigureCollaboration?: () => void
 }
 
@@ -403,6 +407,7 @@ function RootPane({
   onShowInFinder,
   onCopyPath,
   onDelete,
+  onCloudShare,
   onConfigureCollaboration,
 }: RootPaneProps) {
   const { t } = useTranslation()
@@ -417,6 +422,7 @@ function RootPane({
 
   return (
     <div className="flex flex-col">
+      {onCloudShare && <Row icon={<Send className="h-4 w-4" />} label={t('cloud.shareChat')} onTap={onCloudShare} />}
       {hasTransferTargets && onSendToWorkspace && (
         <Row icon={<Send className="h-4 w-4" />} label={t('sessionMenu.sendToWorkspace')} onTap={onSendToWorkspace} />
       )}

@@ -4,6 +4,9 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { getSessionFilePath } from '@craft-agent/shared/sessions/storage'
 import { sessionPersistenceQueue } from '@craft-agent/shared/sessions'
+import { TurnClientContexts } from './turn-client-context'
+import { CLIENT_REMOTE_ACCESS } from '../transport/capabilities'
+import type { RpcServer } from '../transport/types'
 import { SessionManager, createManagedSession } from './SessionManager.ts'
 
 // Regression test for the High-severity finding in eb81086e:
@@ -92,6 +95,9 @@ describe('sendMessage durability', () => {
     // Force the mid-stream branch. Agent is null, so redirect() falls back to
     // false and the queue path runs.
     managed.isProcessing = true
+    const contexts = (sm as unknown as { turnClients: TurnClientContexts }).turnClients
+    contexts.bind(sessionId, { callerClientId: 'active-device', remoteAccess: true })
+    sm.setRpcServer({ hasClientCapability: (_id, cap) => cap === CLIENT_REMOTE_ACCESS } as RpcServer)
 
     let ackedMessageId: string | null = null
     let onDiskAtAck = false
@@ -108,7 +114,10 @@ describe('sendMessage durability', () => {
         ackedMessageId = messageId
         onDiskAtAck = readPersistedMessageIds(sessionId).includes(messageId)
       },
+      { callerClientId: 'queued-device' },
     )
+    expect(contexts.get(sessionId)?.callerClientId).toBe('active-device')
+    expect(managed.messageQueue[0]?.rpcContext).toEqual({ callerClientId: 'queued-device', remoteAccess: true })
 
     expect(ackedMessageId).not.toBeNull()
     expect(onDiskAtAck).toBe(true)

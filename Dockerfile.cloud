@@ -1,0 +1,13 @@
+FROM oven/bun:1.3.9 AS build
+WORKDIR /app
+COPY . .
+RUN bun install --frozen-lockfile && bun run webui:build && bun build packages/cloud-server/src/index.ts --target=bun --outfile=cloud.js
+
+FROM oven/bun:1.3.9
+WORKDIR /app
+COPY --from=build /app/cloud.js ./cloud.js
+COPY --from=build /app/apps/webui/dist ./webui
+ENV TOKENBIRD_CLOUD_PORT=8080 TOKENBIRD_CLOUD_HOST=0.0.0.0 TOKENBIRD_CLOUD_DATA_DIR=/data TOKENBIRD_CLOUD_WEBUI_DIR=/app/webui
+VOLUME /data
+EXPOSE 8080
+CMD ["bun", "run", "cloud.js"]

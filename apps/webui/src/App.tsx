@@ -21,6 +21,16 @@ const ElectronApp = lazy(() => import('@/App'))
 
 type Phase = 'loading' | 'error' | 'ready'
 
+// TokenNest opens this URL after authorizing the device. Strip the temporary
+// grant from browser history immediately and keep it only in this page's memory.
+const cloudGrant = (() => {
+  const match = window.location.pathname.match(/^\/connect\/([a-f0-9-]{36})$/)
+  const token = new URLSearchParams(window.location.hash.slice(1)).get('ticket')
+  if (!match || !token) return undefined
+  window.history.replaceState(null, '', window.location.pathname)
+  return { url: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/v1/connect/${match[1]}`, token }
+})()
+
 function LoadingScreen() {
   const { t } = useTranslation()
 
@@ -28,7 +38,7 @@ function LoadingScreen() {
     <div className="relative flex h-screen items-center justify-center overflow-hidden bg-background px-6 font-sans text-foreground">
       <div className="pointer-events-none absolute -top-24 left-1/2 size-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
       <div className="relative flex w-full max-w-sm flex-col items-center rounded-3xl border border-border/60 bg-card/80 px-7 py-10 text-center shadow-modal-small">
-        <img src="./icon-192.png" alt="" className="mb-5 size-16 rounded-2xl shadow-minimal" />
+        <img src="/icon-192.png" alt="" className="mb-5 size-16 rounded-2xl shadow-minimal" />
         <h1 className="text-xl font-semibold tracking-tight">TokenBird</h1>
         <div className="mt-5 size-7 animate-spin rounded-full border-2 border-primary/25 border-t-primary" />
         <p className="mt-4 text-sm text-muted-foreground">{t("webui.connectingToServer")}</p>
@@ -88,7 +98,7 @@ export default function App() {
   const initRef = useRef(false)
   const initialParams = new URLSearchParams(window.location.search)
   const embeddedPlatform = initialParams.get('embedded')
-  const embedded = Boolean(initialParams.get('ws')) || embeddedPlatform === 'android'
+  const embedded = Boolean(cloudGrant || initialParams.get('ws')) || embeddedPlatform === 'android'
 
   const initialize = async () => {
     setPhase('loading')
@@ -97,9 +107,9 @@ export default function App() {
     try {
       // 1. Fetch WS URL from the server (cookie auth)
       const params = new URLSearchParams(window.location.search)
-      let embeddedWsUrl = params.get('ws')
-      let embeddedToken = params.get('token') ?? undefined
-      let embeddedConnectionMode: 'local' | 'remote' | undefined
+      let embeddedWsUrl = cloudGrant?.url ?? params.get('ws')
+      let embeddedToken = cloudGrant?.token ?? params.get('token') ?? undefined
+      let embeddedConnectionMode: 'local' | 'remote' | undefined = cloudGrant ? 'remote' : undefined
       if (params.get('embedded') === 'android') {
         const mobileConfigResponse = await fetch('/api/mobile-config', {
           credentials: 'same-origin',

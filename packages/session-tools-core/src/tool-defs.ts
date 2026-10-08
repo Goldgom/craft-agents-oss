@@ -34,6 +34,7 @@ import { handleTransformData } from './handlers/transform-data.ts';
 import { handleScriptSandbox } from './handlers/script-sandbox.ts';
 import { handleRunShell, handleLocalBash } from './handlers/shell-tools.ts';
 import { handleAndroidPermission, handleAndroidAdb } from './handlers/android-device.ts';
+import { handleRequestClientFiles } from './handlers/request-client-files.ts';
 import { handleSftpTransfer } from './handlers/sftp-transfer.ts';
 import { handleRenderTemplate } from './handlers/render-template.ts';
 import { handleSendDeveloperFeedback } from './handlers/send-developer-feedback.ts';
@@ -65,6 +66,12 @@ import { ComputerUseSchema } from './computer-use.ts';
 // ============================================================
 // Canonical Zod Schemas
 // ============================================================
+
+export const RequestClientFilesSchema = z.object({
+  reason: z.string().trim().min(1).max(240).describe('Explain why these files are needed; shown to the user'),
+  allowMultiple: z.boolean().optional(),
+  extensions: z.array(z.string().regex(/^[a-zA-Z0-9]{1,16}$/)).max(20).optional().describe('Suggested file extensions without dots'),
+});
 
 export const SubmitPlanSchema = z.object({
   planPath: z.string().describe('Absolute path to the plan markdown file you wrote'),
@@ -673,6 +680,8 @@ Use action=status before assuming access. For action=request, provide one allowl
 
 Use action=status first. action=shell is available only after the user explicitly enables and configures network ADB in Android settings. Every command is displayed verbatim in a native confirmation and runs only after approval. Prefer normal app APIs and android_permission; use ADB only when the task genuinely requires device-level diagnostics or automation. Do not disable security controls, alter ADB authorization, or hide the purpose of a command.`,
 
+  request_client_files: `Ask the user on the device that initiated this turn to select files and upload them to the session host. Provide a short reason in the user's language. The user must explicitly choose files and can cancel. Up to 5 files, 8 MiB total. Returns saved host paths, never client paths. Use Read or file tools on the returned paths. Works in remote browser and desktop connections without SFTP. Never assume the client filesystem is the host filesystem; never retry a cancellation without the user's request.`,
+
   sftp_transfer: `Transfer a file between the CLIENT machine and the remote server over the configured SFTP connection.
 
 Use this for binary or large files that should not be copied through shell output. Upload reads a local client path and writes it under the configured remote SFTP root. Download reads a remote path and writes it to an absolute local client path.
@@ -958,6 +967,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'localbash', description: TOOL_DESCRIPTIONS.localbash, inputSchema: LocalBashSchema, executionMode: 'registry', safeMode: 'block', handler: handleLocalBash },
   { name: 'android_permission', description: TOOL_DESCRIPTIONS.android_permission, inputSchema: AndroidPermissionSchema, executionMode: 'registry', safeMode: 'block', handler: handleAndroidPermission },
   { name: 'android_adb', description: TOOL_DESCRIPTIONS.android_adb, inputSchema: AndroidAdbSchema, executionMode: 'registry', safeMode: 'block', handler: handleAndroidAdb },
+  { name: 'request_client_files', description: TOOL_DESCRIPTIONS.request_client_files, inputSchema: RequestClientFilesSchema, executionMode: 'registry', safeMode: 'allow', handler: handleRequestClientFiles },
   { name: 'sftp_transfer', description: TOOL_DESCRIPTIONS.sftp_transfer, inputSchema: SftpTransferSchema, executionMode: 'registry', safeMode: 'block', handler: handleSftpTransfer },
   { name: 'render_template', description: TOOL_DESCRIPTIONS.render_template, inputSchema: RenderTemplateSchema, executionMode: 'registry', safeMode: 'allow', handler: handleRenderTemplate },
   { name: 'send_developer_feedback', description: TOOL_DESCRIPTIONS.send_developer_feedback, inputSchema: SendDeveloperFeedbackSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSendDeveloperFeedback },

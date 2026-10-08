@@ -39,6 +39,8 @@ import {
   CLIENT_BROWSER_INVOKE,
   CLIENT_CANVAS_INVOKE,
   CLIENT_RUN_SHELL,
+  CLIENT_REMOTE_ACCESS,
+  CLIENT_REQUEST_FILES,
   CLIENT_SFTP_TRANSFER,
   LOCAL_CLIENT_CAPABILITIES,
 } from '@craft-agent/server-core/transport'
@@ -160,7 +162,7 @@ if (isClientOnly) {
     webContentsId,
     autoReconnect: true,
     mode: 'remote',
-    clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES],
+    clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES, CLIENT_REMOTE_ACCESS],
   })
   wsClient.connect()
   client = wsClient
@@ -280,6 +282,10 @@ client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unk
 // behalf of the agent (remote-mode local execution bridge).
 client.handleCapability(CLIENT_RUN_SHELL, async (req: { command: string; cwd?: string; timeoutMs?: number }) => {
   return await ipcRenderer.invoke('__shell:run', req)
+})
+
+client.handleCapability(CLIENT_REQUEST_FILES, async (req: import('@craft-agent/core/types').ClientFileRequest) => {
+  return await ipcRenderer.invoke('__client:request-files', req)
 })
 
 client.handleCapability(CLIENT_SFTP_TRANSFER, async (req: { direction: 'upload' | 'download'; localPath: string; remotePath: string }) => {

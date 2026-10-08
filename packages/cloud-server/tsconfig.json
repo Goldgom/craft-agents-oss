@@ -1,0 +1,9 @@
+{
+  "extends": "../server-core/tsconfig.json",
+  "compilerOptions": {
+    "target": "ESNext", "module": "ESNext", "moduleResolution": "bundler",
+    "strict": true, "noEmit": true, "skipLibCheck": true,
+    "types": ["bun", "node"], "lib": ["ESNext", "DOM"]
+  },
+  "include": ["src/**/*.ts", "../shared/src/agent/bash-parser.d.ts"]
+}

@@ -62,6 +62,9 @@ export interface ServerBootstrapOptions<TSessionManager, THandlerDeps> {
 }
 
 export interface ServerHandlerContext {
+  cloudTarget?: import('../cloud/client').LocalCloudTarget
+  onReady?: (callback: () => void) => void
+  onStop?: (callback: () => void) => void
   getConnectedClientCount: () => number
   serverId: string
   startedAt: number
@@ -413,7 +416,12 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
   })
 
   const startedAt = Date.now()
+  const readyCallbacks: Array<() => void> = []
+  const stopCallbacks: Array<() => void> = []
   const serverHandlerContext: ServerHandlerContext = {
+    cloudTarget: { url: `${wsServer.protocol}://${rpcHost === '0.0.0.0' || rpcHost === '::' ? '127.0.0.1' : rpcHost}:${wsServer.port}`, token: serverToken, tlsCert: options.tls?.cert },
+    onReady: callback => readyCallbacks.push(callback),
+    onStop: callback => stopCallbacks.push(callback),
     getConnectedClientCount: () => wsServer.getConnectedClientCount(),
     serverId: options.serverId ?? 'headless',
     startedAt,
@@ -425,6 +433,7 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
   options.setSessionEventSink(sessionManager, wsServer.push.bind(wsServer))
 
   await options.initializeSessionManager(sessionManager)
+  for (const callback of readyCallbacks) callback()
 
   modelRefreshService.startAll()
   options.refreshStartupModels?.(deps)
@@ -435,6 +444,7 @@ export async function bootstrapServer<TSessionManager, THandlerDeps>(
   const stop = async (): Promise<void> => {
     if (stopped) return
     stopped = true
+    for (const callback of stopCallbacks) callback()
 
     platform.logger.info('Shutting down...')
 

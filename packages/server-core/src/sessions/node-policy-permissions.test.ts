@@ -10,6 +10,7 @@ import {
 import type { SessionEvent } from '@craft-agent/shared/protocol'
 import type { ShellExecArgs } from '@craft-agent/session-tools-core'
 import { CLIENT_RUN_SHELL, type ClientShellResult } from '../transport'
+import { TurnClientContexts } from './turn-client-context'
 import { SessionManager } from './SessionManager'
 
 type ManagedTestSession = {
@@ -25,6 +26,7 @@ type ManagedTestSession = {
 }
 type PermissionEvent = Extract<SessionEvent, { type: 'permission_request' }>
 type NodePermissionHarness = {
+  turnClients: TurnClientContexts
   sessions: Map<string, ManagedTestSession>
   pendingPermissionRequests: Map<string, { sessionId: string }>
   pendingNodePermissions: Map<string, {
@@ -75,6 +77,7 @@ beforeEach(() => {
   managed = { id: sessionId, workspace: { id: 'workspace', rootPath: root }, workingDirectory: root,
     executionPolicy: policy, isProcessing: true, stopRequested: false }
   manager = Object.create(SessionManager.prototype) as NodePermissionHarness
+  manager.turnClients = new TurnClientContexts()
   manager.sessions = new Map([
     [sessionId, managed], [otherSessionId, { ...managed, id: otherSessionId }],
   ])

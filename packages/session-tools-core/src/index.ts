@@ -241,6 +241,7 @@ export {
   AndroidPermissionSchema,
   AndroidAdbSchema,
   SftpTransferSchema,
+  RequestClientFilesSchema,
   RenderTemplateSchema,
   // Browser tool schema
   BrowserToolSchema,

@@ -6,6 +6,16 @@
 import { COLLABORATION_RELAY_RPC } from './collaboration-relay'
 
 export const RPC_CHANNELS = {
+  cloud: {
+    GET_CONFIG: 'cloud:getConfig',
+    SET_CONFIG: 'cloud:setConfig',
+    GET_STATUS: 'cloud:getStatus',
+    LIST_DEVICES: 'cloud:listDevices',
+    CONNECT_DEVICE: 'cloud:connectDevice',
+    SHARE_CHAT: 'cloud:shareChat',
+    LIST_SHARES: 'cloud:listShares',
+    REVOKE_SHARE: 'cloud:revokeShare',
+  },
   collaborationRelay: COLLABORATION_RELAY_RPC,
   remote: {
     TEST_CONNECTION: 'remote:testConnection',

@@ -12,6 +12,7 @@
     "sync:craft-agent-bash-patterns": "bun run src/config/sync-craft-agent-bash-patterns.ts"
   },
   "exports": {
+    "./cloud": "./src/cloud/types.ts",
     ".": "./src/index.ts",
     "./agent": "./src/agent/index.ts",
     "./agent/modes": "./src/agent/mode-types.ts",

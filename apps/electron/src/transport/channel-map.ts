@@ -17,6 +17,14 @@ function listener(channel: string) {
 }
 
 export const CHANNEL_MAP = {
+  getCloudConfig: invoke(RPC_CHANNELS.cloud.GET_CONFIG),
+  setCloudConfig: invoke(RPC_CHANNELS.cloud.SET_CONFIG),
+  getCloudStatus: invoke(RPC_CHANNELS.cloud.GET_STATUS),
+  listCloudDevices: invoke(RPC_CHANNELS.cloud.LIST_DEVICES),
+  connectCloudDevice: invoke(RPC_CHANNELS.cloud.CONNECT_DEVICE),
+  shareCloudChat: invoke(RPC_CHANNELS.cloud.SHARE_CHAT),
+  listCloudShares: invoke(RPC_CHANNELS.cloud.LIST_SHARES),
+  revokeCloudShare: invoke(RPC_CHANNELS.cloud.REVOKE_SHARE),
   // Workspace-scoped Super Agent configuration and orchestration
   getSuperAgent: invoke(RPC_CHANNELS.superAgent.GET),
   saveSuperAgent: invoke(RPC_CHANNELS.superAgent.SAVE),

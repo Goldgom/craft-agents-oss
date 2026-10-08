@@ -90,3 +90,8 @@ credentials.enc
 # Local verification screenshots and build logs
 /artifacts/
 /.tmp/
+
+# Cloud build runtime cache and local deployment credentials/state
+/.bun-cache/
+/deploy/cloud/cloud.env
+/data/cloud.sqlite*

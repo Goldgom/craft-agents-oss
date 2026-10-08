@@ -15,6 +15,14 @@ import { RPC_CHANNELS } from './channels'
 // ---------------------------------------------------------------------------
 
 export const LOCAL_ONLY_CHANNELS = new Set<string>([
+  RPC_CHANNELS.cloud.GET_CONFIG,
+  RPC_CHANNELS.cloud.SET_CONFIG,
+  RPC_CHANNELS.cloud.GET_STATUS,
+  RPC_CHANNELS.cloud.LIST_DEVICES,
+  RPC_CHANNELS.cloud.CONNECT_DEVICE,
+  RPC_CHANNELS.cloud.LIST_SHARES,
+  RPC_CHANNELS.cloud.REVOKE_SHARE,
+  RPC_CHANNELS.settings.EXPORT_ALL_DATA_BUNDLE,
   // remote — local connectivity management (reaches out to remote server from local app)
   RPC_CHANNELS.remote.TEST_CONNECTION,
   RPC_CHANNELS.remoteServers.LIST,
@@ -242,6 +250,7 @@ export const LOCAL_ONLY_CHANNELS = new Set<string>([
 // ---------------------------------------------------------------------------
 
 export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
+  RPC_CHANNELS.cloud.SHARE_CHAT,
   ...Object.values(RPC_CHANNELS.collaborationRelay),
   // workspace agents and collaboration state live with the workspace server
   RPC_CHANNELS.agents.LIST,
@@ -365,6 +374,10 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.studio.ASSIST_CANVAS,
   RPC_CHANNELS.studio.GENERATE_MIND_MAP,
   RPC_CHANNELS.studio.EXPORT_VISIO,
+  RPC_CHANNELS.studio.READ_MINDMAP_SESSION,
+  RPC_CHANNELS.studio.WRITE_MINDMAP_SESSION,
+  RPC_CHANNELS.studio.DELETE_MINDMAP_SESSION,
+  RPC_CHANNELS.studio.MINDMAP_WORKSPACE_CONTEXT,
   RPC_CHANNELS.superAgent.GET,
   RPC_CHANNELS.superAgent.SAVE,
   RPC_CHANNELS.superAgent.COMMAND,

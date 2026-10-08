@@ -18,6 +18,7 @@ import { buildClientApi } from '../../../electron/src/transport/build-api'
 import { CHANNEL_MAP } from '../../../electron/src/transport/channel-map'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { blobBase64, getPickedFile, pickedAttachment, saveBlob, webFilePicker } from './browser-files'
+import { requestBrowserClientFiles } from './client-files'
 import { pickServerDirectory } from './directory-picker'
 import { exportWebChat } from './chat-export'
 import type { ElectronAPI, TransportConnectionState } from '../../../electron/src/shared/types'
@@ -25,6 +26,8 @@ import {
   CLIENT_ANDROID_ADB,
   CLIENT_ANDROID_PERMISSION,
   CLIENT_CANVAS_INVOKE,
+  CLIENT_REMOTE_ACCESS,
+  CLIENT_REQUEST_FILES,
   type AndroidAdbRequest,
   type AndroidPermissionRequest,
 } from '@craft-agent/server-core/transport'
@@ -128,9 +131,11 @@ export function createWebApi(options: WebApiOptions): {
     token,
     autoReconnect: true,
     mode: 'remote',
-    clientCapabilities: androidCapabilities,
+    clientCapabilities: [...androidCapabilities, CLIENT_REQUEST_FILES, ...(connectionMode === 'local' ? [] : [CLIENT_REMOTE_ACCESS])],
     // No token — auth is via session cookie sent on WebSocket upgrade
   })
+
+  client.handleCapability(CLIENT_REQUEST_FILES, requestBrowserClientFiles)
 
   if (androidBridge) {
     client.handleCapability(CLIENT_ANDROID_PERMISSION, async (request: AndroidPermissionRequest) => {

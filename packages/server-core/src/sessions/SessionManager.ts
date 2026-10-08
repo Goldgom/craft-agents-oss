@@ -1,5 +1,8 @@
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
-import { CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_CANVAS_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
+import { TurnClientContexts, type TurnClientContext } from './turn-client-context'
+import { saveClientFiles } from './client-files'
+import { CLIENT_FILE_TIMEOUT_MS, validateClientFileRequest, type ClientFileSelection } from '@craft-agent/core/types'
+import { CLIENT_REQUEST_FILES, CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_CANVAS_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
 import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
@@ -875,6 +878,7 @@ interface ManagedSession {
     storedAttachments?: StoredAttachment[]
     options?: SendMessageOptions
     messageId?: string  // Pre-generated ID for matching with UI
+    rpcContext?: TurnClientContext
     optimisticMessageId?: string  // Frontend's ID for reliable event matching
   }>
   // Map of shellId -> command for killing background shells
@@ -1502,6 +1506,7 @@ export class SessionManager implements ISessionManager {
 
   private browserPaneManager: IBrowserPaneManager | null = null
   private enqueuePageThumbnailFn?: (req: { workspaceId: string; workspaceRootPath: string; slug: string }) => void
+  private turnClients = new TurnClientContexts()
   private rpcServer: RpcServer | null = null
   private remoteBpms = new Map<string, RemoteBrowserPaneManager>()
   /** Pinned desktop client per session for `client:browser:invoke` routing. */
@@ -1644,6 +1649,9 @@ export class SessionManager implements ISessionManager {
     if (!this.rpcServer) return null
     const session = this.sessions.get(sid)
     if (!session) return null
+    if (this.turnClients.get(sid)?.remoteAccess) {
+      return this.turnClients.requireClient(this.rpcServer, sid, session.workspace.id, CLIENT_RUN_SHELL)
+    }
     const candidates = this.rpcServer.findClientsWithCapability(
       CLIENT_RUN_SHELL,
       { workspaceId: session.workspace.id },
@@ -1677,6 +1685,7 @@ export class SessionManager implements ISessionManager {
       )) as ClientShellResult
       return result
     }
+    if (this.turnClients.get(managed.id)?.remoteAccess) throw new Error('The accessing device does not support local shell execution')
     return await executeShell(args)
   }
 
@@ -5048,6 +5057,17 @@ export class SessionManager implements ISessionManager {
         // is connected (remote mode). Falls back to this host (embedded/local
         // server shares the client's machine) so local sessions keep working.
         runLocalShellFn: (args: ShellExecArgs): Promise<ClientShellResult> => this.runSessionLocalShell(managed, args),
+        requestClientFilesFn: async (input) => {
+          // Restricted nodes cannot acquire files outside their assigned environment.
+          if (managed.executionPolicy && !managed.executionPolicy.fullControl) throw new Error('This node policy does not permit requesting client files')
+          const request = validateClientFileRequest(input)
+          const clientId = this.turnClients.requireClient(this.rpcServer, managed.id, managed.workspace.id, CLIENT_REQUEST_FILES)
+          const requestContext = this.turnClients.get(managed.id)
+          const result = await this.rpcServer!.invokeClientWithTimeout!(clientId, CLIENT_REQUEST_FILES, CLIENT_FILE_TIMEOUT_MS, request) as ClientFileSelection
+          if (this.sessions.get(managed.id) !== managed || managed.persistenceRetired || managed.stopRequested || !managed.isProcessing || this.turnClients.get(managed.id) !== requestContext) throw new Error('The requesting session has changed')
+          if (!request.allowMultiple && result?.files?.length > 1) throw new Error('Only one file was requested')
+          return await saveClientFiles(join(getSessionStoragePath(managed.workspace.rootPath, managed.id), 'data', 'client-files'), result)
+        },
         transferSftpFileFn: async (args: SftpTransferArgs): Promise<ClientSftpTransferResult> => {
           const clientId = this.getSftpTransferClient(managed.id)
           if (!clientId || !this.rpcServer) {
@@ -6719,6 +6739,7 @@ export class SessionManager implements ISessionManager {
     // Drop the per-session remote bridge + host-client pin on destroy.
     this.remoteBpms.delete(sessionId)
     this.browserHostByCanvas.delete(sessionId)
+    this.turnClients.delete(sessionId)
 
     // Runtime construction/refresh can outlive the caller that started it.
     // Wait for those operations before disposal so they cannot attach a new
@@ -6796,7 +6817,7 @@ export class SessionManager implements ISessionManager {
      * that should host this session's browser tools. Pass undefined when calling
      * directly (tests, intra-server flows) to leave the existing pin in place.
      */
-    rpcContext?: { callerClientId?: string },
+    rpcContext?: TurnClientContext,
   ): Promise<void> {
     if (this.nodeSettingsLocks?.has(sessionId)) await this.waitForNodeSettings(sessionId)
     const managed = this.sessions.get(sessionId)
@@ -6804,7 +6825,7 @@ export class SessionManager implements ISessionManager {
       throw new Error(`Session ${sessionId} not found`)
     }
     if (managed.persistenceRetired) throw new Error('Session is being deleted and cannot accept new messages')
-    this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
+    const turnContext = this.turnClients.capture(this.rpcServer, rpcContext)
     if (managed.executionPolicy) {
       this.setSessionPermissionMode(sessionId, 'allow-all')
       setSessionExecutionPolicy(sessionId, managed.executionPolicy)
@@ -6915,7 +6936,7 @@ export class SessionManager implements ISessionManager {
         // for both queue-direct (current turn still running) and
         // queue-after-abort (backend already aborted) — the replay path in
         // processNextQueuedMessage is identical.
-        managed.messageQueue.push({ message, attachments, storedAttachments, options, messageId: userMessage.id, optimisticMessageId: options?.optimisticMessageId })
+        managed.messageQueue.push({ message, attachments, storedAttachments, options, rpcContext: turnContext, messageId: userMessage.id, optimisticMessageId: options?.optimisticMessageId })
         // Only claim interruption when a steer attempt actually aborted the
         // in-flight turn. In 'queue' mode the current turn runs to natural
         // completion, so the replayed turn must NOT inject the "previous response
@@ -6932,6 +6953,9 @@ export class SessionManager implements ISessionManager {
       onAck?.(userMessage.id)
       return
     }
+
+    this.turnClients.bind(sessionId, turnContext)
+    this.setLastMessageClientId(sessionId, turnContext?.callerClientId)
 
     // Add user message with stored attachments for persistence
     // Skip if existingMessageId is provided (message was already created when queued)
@@ -7243,6 +7267,7 @@ export class SessionManager implements ISessionManager {
       }
 
       sendSpan.mark('chat.starting')
+      effectiveMessage += this.turnClients.reminder(this.rpcServer, sessionId)
       const chatIterator = agent.chat(effectiveMessage, modelInputAttachments.attachments)
       sessionLog.info('Got chat iterator, starting iteration...')
 
@@ -7894,7 +7919,10 @@ export class SessionManager implements ISessionManager {
         next.attachments,
         next.storedAttachments,
         next.options,
-        next.messageId
+        next.messageId,
+        undefined,
+        undefined,
+        next.rpcContext
       ).catch(err => {
         sessionLog.error('replay failed', {
           sessionId,
@@ -10425,6 +10453,7 @@ export class SessionManager implements ISessionManager {
     this.sessionEventListeners.clear()
     this.remoteBpms.clear()
     this.browserHostByCanvas.clear()
+    this.turnClients.clear()
     this.automationBinder = undefined
     this.messagingToolBridge = null
     this.browserPaneManager = null

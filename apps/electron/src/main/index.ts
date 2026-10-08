@@ -1090,9 +1090,28 @@ app.whenReady().then(async () => {
       return exportChatTranscript(win, request)
     })
 
-    // `localbash` bridge — the remote server asks THIS machine to run a shell
-    // command on behalf of the agent. Cwd defaults to the local process cwd;
-    // the caller (SessionManager) passes the session's working directory.
+    // Only user-selected files are sent to the requesting remote session.
+    ipcMain.handle('__client:request-files', async (event, input: import('@craft-agent/core/types').ClientFileRequest) => {
+      const assertCurrent = pinNativeApp(event)
+      const { validateClientFileRequest } = await import('@craft-agent/core/types')
+      const { readSelectedClientFiles } = await import('./client-files')
+      const request = validateClientFileRequest(input)
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) throw new Error('Requesting window is no longer available')
+      assertCurrent()
+      const result = await dialog.showOpenDialog(win, {
+        title: `${i18n.t('remoteFiles.title')}: ${request.reason}`,
+        message: request.reason,
+        buttonLabel: i18n.t('remoteFiles.choose'),
+        properties: request.allowMultiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        ...(request.extensions?.length ? { filters: [{ name: i18n.t('remoteFiles.files'), extensions: request.extensions }] } : {}),
+      })
+      assertCurrent()
+      if (result.canceled) return { canceled: true, files: [] }
+      return await readSelectedClientFiles(result.filePaths, assertCurrent)
+    })
+
+    // `localbash` executes on this client machine.
     ipcMain.handle('__shell:run', async (_event, req: { command: string; cwd?: string; timeoutMs?: number }) => {
       const { executeShell } = await import('@craft-agent/session-tools-core')
       return await executeShell({
