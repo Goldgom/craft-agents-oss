@@ -1,4 +1,4 @@
-import { TILE_SIZE, captureTile, rasterizeRegion, tileKey, type CanvasLayer, type Rect, type TileSnapshot } from './canvas-engine'
+import { TILE_SIZE, rawLayer, captureTile, rasterizeRegion, tileKey, type CanvasLayer, type Rect, type TileSnapshot } from './canvas-engine'
 import { blendSelectionPixels, selectionMask, type PixelSelection } from './canvas-retouch'
 
 export type AdjustmentStyle = 'none' | 'grayscale' | 'sepia' | 'vintage' | 'noir'
@@ -89,7 +89,7 @@ export function applyAdjustments(layers: CanvasLayer[], selection: Rect | null, 
   const pending: Array<{ layer: CanvasLayer; tiles: Map<string, HTMLCanvasElement> }> = []
   const padding = Math.ceil(settings.blur * 3)
   for (const layer of layers) {
-    if (!layer.visible || layer.tiles.size === 0) continue
+    if (!layer.visible || layer.locked || layer.textSource || layer.tiles.size === 0) continue
     const candidates = new Set<string>()
     for (const key of layer.tiles.keys()) {
       const [sourceX, sourceY] = key.split(',').map(Number)
@@ -104,7 +104,7 @@ export function applyAdjustments(layers: CanvasLayer[], selection: Rect | null, 
       const [tx, ty] = key.split(',').map(Number)
       const area = adjustmentEditArea(tx, ty, selection, layer.offset)
       if (!area.width || !area.height) continue
-      const source = rasterizeRegion([{ ...layer, visible: true, opacity: 1 }], {
+      const source = rasterizeRegion([rawLayer(layer)], {
         x: tx * TILE_SIZE + layer.offset.x - padding, y: ty * TILE_SIZE + layer.offset.y - padding,
         width: TILE_SIZE + padding * 2, height: TILE_SIZE + padding * 2,
       }, TILE_SIZE + padding * 2, TILE_SIZE + padding * 2)

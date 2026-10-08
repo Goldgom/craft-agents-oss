@@ -1,9 +1,13 @@
 import { captureTile, createLayer, drawImageOnLayer, rasterizeRegion, restoreTiles, type CanvasLayer, type Rect, type TileSnapshot } from './canvas-engine'
 import { applyAdjustments, defaultAdjustments } from './studio-adjustments'
 import { clearMaskedSelection, cloneSegment, combineSelections, drawMaskedImage, invertSelection, paintMaskedSegment, rectangularSelection, sampleColor, selectionMask, shapeSelection, snapshotLayer, wandSelection } from './canvas-retouch'
+import { runDrawingChecks } from './canvas-drawing.browser'
+import { runEditingChecks } from './canvas-editing.browser'
+import { runPhotoshopChecks } from './canvas-photoshop.browser'
+import { runWorkbenchUiChecks } from './canvas-workbench-ui.browser'
 
 /** Run in real Chromium: Canvas compositing, tile seams and alpha cannot be verified with DOM stubs. */
-export function runRetouchChecks(): string[] {
+export async function runRetouchChecks(): Promise<string[]> {
   const checks: string[] = []
   const assert = (condition: unknown, message: string) => { if (!condition) throw new Error(message) }
   const solid = (color: string, width = 64, height = 64) => {
@@ -92,7 +96,7 @@ export function runRetouchChecks(): string[] {
   drawMaskedImage(transparent, solid('rgba(0, 0, 255, .5)', 8, 8), { x: 0, y: 0, width: 8, height: 8 }, rectangularSelection({ x: 0, y: 0, width: 8, height: 8 }), new Map(), true)
   assert(pixel(transparent, 4, 4)[3] === 128, 'Replacement doubled semitransparent alpha')
   checks.push('replacement preserves semitransparent alpha')
-  return checks
+  return [...checks, ...runDrawingChecks(), ...runEditingChecks(), ...await runPhotoshopChecks(), ...await runWorkbenchUiChecks()]
 }
 
 Object.assign(window, { runRetouchChecks })

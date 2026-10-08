@@ -52,7 +52,7 @@ final class LocalAgentServer {
     private final Context context;
     private final SecureRandom random = new SecureRandom();
     private final Object lock = new Object();
-    private Process process;
+    private volatile Process process;
     private File serverRoot;
     private String token;
     private int port;

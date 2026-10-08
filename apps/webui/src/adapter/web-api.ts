@@ -10,6 +10,7 @@
 
 import i18n from 'i18next'
 import webuiPackage from '../../package.json'
+import { canvasExportInfo } from '../../../electron/src/shared/canvas-export'
 import { toast } from 'sonner'
 import { openExternalUrl } from '@craft-agent/ui'
 import { WsRpcClient } from '../../../electron/src/transport/client'
@@ -190,11 +191,11 @@ export function createWebApi(options: WebApiOptions): {
     }
     if (input.action === 'open_project' && typeof input.projectPath === 'string') input.projectText = await baseApi.readFile(input.projectPath)
     const result = await canvasHandler(input) as Record<string, unknown>
-    if (['export_png', 'export_selection_mask', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
-      const project = input.action === 'save_project'
-      const name = typeof input.outputPath === 'string' ? input.outputPath.split(/[\\/]/).pop()! : `TokenBird-canvas.${project ? 'tbcanvas' : 'png'}`
+    if (['export_image', 'export_png', 'export_selection_mask', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
+      const info = canvasExportInfo(input)
+      const name = typeof input.outputPath === 'string' ? input.outputPath.split(/[\\/]/).pop()! : `TokenBird-canvas.${info.extension}`
       const bytes = Uint8Array.from(atob(result.base64), char => char.charCodeAt(0))
-      const saved = await saveBlob(new Blob([bytes], { type: project ? 'application/json' : 'image/png' }), name)
+      const saved = await saveBlob(new Blob([bytes], { type: info.mime }), name)
       return { saved: !saved.canceled, canceled: Boolean(saved.canceled), outputPath: saved.path, bytes: bytes.length }
     }
     return result
@@ -268,7 +269,10 @@ export function createWebApi(options: WebApiOptions): {
       if (file.size > 50 * 1024 * 1024) throw new Error('备份超过 50 MB，请在服务器端导入')
       return client.invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD, { bundleBase64: await blobBase64(file), fileName: 'backup.zip' })
     },
-    changeLanguage: async language => { await i18n.changeLanguage(language) },
+    changeLanguage: async language => {
+      await i18n.changeLanguage(language)
+      window.CraftAgentAndroid?.setLanguage?.(language)
+    },
 
     // System info
     getClientVersion: () => Promise.resolve(webuiPackage.version),

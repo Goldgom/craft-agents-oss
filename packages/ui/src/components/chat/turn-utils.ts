@@ -483,6 +483,7 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
 
     // Info messages with compaction_complete update the matching status activity
     if (message.role === 'info' && message.statusType === 'compaction_complete') {
+      let updatedStatus = false
       if (currentTurn) {
         const statusIdx = currentTurn.activities.findIndex(
           a => a.type === 'status' && a.statusType === 'compacting'
@@ -494,9 +495,17 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
             status: 'completed',
             content: message.content,
           }
+          updatedStatus = true
         }
       }
-      continue  // Don't create a separate system turn
+      // Transient progress messages are omitted from persisted history. Keep
+      // the completion visible when there is no live progress activity to update.
+      if (!updatedStatus) {
+        if (currentTurn) currentTurn.isComplete = true
+        flushCurrentTurn()
+        turns.push({ type: 'system', message, timestamp: message.timestamp })
+      }
+      continue
     }
 
     // Error/info/warning messages are standalone

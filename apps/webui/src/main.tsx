@@ -19,7 +19,9 @@ if (new URLSearchParams(window.location.search).get('embedded') === 'android') {
 }
 
 // Initialize i18n before any React rendering
-setupI18n([LanguageDetector, initReactI18next])
+const appI18n = setupI18n([LanguageDetector, initReactI18next])
+const savedLanguage = window.CraftAgentAndroid?.getLanguage?.()
+if (savedLanguage) void appI18n.changeLanguage(savedLanguage)
 
 function CrashFallback() {
   const { t } = useTranslation()

@@ -5,15 +5,15 @@ import { spawn } from 'node:child_process'
 
 const root = resolve(import.meta.dir, '..')
 const directory = await mkdtemp(join(tmpdir(), 'tokenbird-retouch-'))
-const build = await Bun.build({ entrypoints: [join(root, 'apps/electron/src/renderer/pages/studio/canvas-retouch.browser.ts')], outdir: directory, target: 'browser' })
+const build = await Bun.build({ entrypoints: [join(root, 'apps/electron/src/renderer/pages/studio/canvas-retouch.browser.ts')], outdir: directory, target: 'browser', tsconfig: join(root,'apps/electron/tsconfig.json') })
 if (!build.success) throw new AggregateError(build.logs, 'Failed to bundle canvas smoke test')
 await writeFile(join(directory, 'index.html'), '<!doctype html><html><body><script type="module" src="canvas-retouch.browser.js"></script></body></html>')
 await writeFile(join(directory, 'main.cjs'), `
 const { app, BrowserWindow } = require('electron');
 app.setPath('userData', ${JSON.stringify(join(directory, 'profile'))});
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true } });
-  win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message); });
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false } });
+  win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message); else if (event.level === 'info') console.log(event.message); });
   await win.loadFile(${JSON.stringify(join(directory, 'index.html'))});
   const result = await win.webContents.executeJavaScript('Promise.resolve().then(() => window.runRetouchChecks()).then(checks => ({ checks }), error => ({ error: error.stack || String(error) }))');
   if (result.error) throw new Error(result.error);

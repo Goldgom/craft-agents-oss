@@ -693,7 +693,7 @@ export class PiAgent extends BaseAgent {
     });
 
     // Wait for subprocess to report ready
-    await this.subprocessReady;
+    await this.waitForSubprocessReady();
     this.debug('Pi subprocess is ready');
 
     // Ensure auto-compaction is explicitly enabled for embedded sessions.
@@ -737,6 +737,22 @@ export class PiAgent extends BaseAgent {
 
     // If pool has source tools, register them with the subprocess.
     await this.registerPoolToolsWithSubprocess();
+  }
+
+  private async waitForSubprocessReady(timeoutMs = 45_000): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.subprocessReady,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(
+            `Pi runtime did not start within ${Math.ceil(timeoutMs / 1000)} seconds. Please retry or use server mode.`,
+          )), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**

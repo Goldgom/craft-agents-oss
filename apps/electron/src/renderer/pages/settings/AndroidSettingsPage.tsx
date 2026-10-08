@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { LANGUAGES } from '@craft-agent/shared/i18n'
 import {
   Bell,
   CalendarDays,
@@ -50,6 +52,7 @@ const DEFAULT_ADB_CONFIG: NetworkAdbConfig = {
  * friendly page instead of relying on the desktop settings navigator.
  */
 export default function AndroidSettingsPage() {
+  const { t, i18n } = useTranslation()
   const [serverConfig, setServerConfig] = useState<string>('本地服务器')
   const [thinkingLevel, setThinkingLevel] = useState<string>('加载中…')
   const [permissionSnapshot, setPermissionSnapshot] = useState<AndroidPermissionSnapshot>({ permissions: [] })
@@ -59,6 +62,16 @@ export default function AndroidSettingsPage() {
   const [backupBusy, setBackupBusy] = useState(false)
   const [backupMessage, setBackupMessage] = useState('')
   const [keepAwake, setKeepAwake] = useState(() => androidBridge()?.getKeepAwake?.() ?? false)
+  const [backgroundAllowed, setBackgroundAllowed] = useState(() => androidBridge()?.isBackgroundAllowed?.() ?? false)
+  useEffect(() => {
+    const refresh = () => setBackgroundAllowed(androidBridge()?.isBackgroundAllowed?.() ?? false)
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [])
   const backup = async (restore: boolean) => {
     if (backupBusy) return
     if (restore && !window.confirm('导入备份会合并或替换同名工作区和设置。是否选择备份文件继续？')) return
@@ -186,7 +199,7 @@ export default function AndroidSettingsPage() {
           <ChevronLeft className="size-5" />
         </Button>
         <div>
-          <h1 className="text-lg font-semibold leading-tight">设置</h1>
+          <h1 className="text-lg font-semibold leading-tight">{t('sidebar.settings')}</h1>
           <p className="text-[11px] text-muted-foreground">移动端控制中心</p>
         </div>
       </header>
@@ -203,6 +216,25 @@ export default function AndroidSettingsPage() {
             </div>
           </div>
         </div>
+
+        <section className="mb-5">
+          <div className="rounded-2xl border border-border/60 bg-card px-4 py-3">
+            <label className="flex min-h-11 items-center justify-between gap-3">
+              <span className="text-[15px]">{t('settings.app.displayLanguage')}</span>
+              <select
+                data-android-language
+                aria-label={t('settings.app.displayLanguage')}
+                className="h-10 min-w-0 max-w-[55%] rounded-lg border border-border bg-background px-2 text-sm"
+                value={i18n.resolvedLanguage ?? i18n.language}
+                onChange={event => { void window.electronAPI.changeLanguage(event.target.value) }}
+              >
+                {Object.entries(LANGUAGES).map(([code, language]) => (
+                  <option key={code} value={code}>{language.nativeName}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
 
         <section className="mb-5">
           <h2 className="mb-2 px-1 text-xs font-medium tracking-wide text-muted-foreground">连接</h2>
@@ -347,6 +379,10 @@ export default function AndroidSettingsPage() {
             <button disabled={backupBusy} className="flex min-h-[60px] w-full items-center gap-3 border-t border-border/50 px-4 text-left disabled:opacity-50" onClick={() => void backup(true)}><Upload className="size-5" /><span>导入 ZIP 备份</span></button>
             {backupMessage && <p role="status" className="px-4 pb-3 text-xs text-muted-foreground">{backupMessage}</p>}
             <label className="flex min-h-[60px] items-center gap-3 border-t border-border/50 px-4"><span className="flex-1">任务运行时保持屏幕亮起</span><input type="checkbox" className="size-5" checked={keepAwake} onChange={event => { const enabled = event.target.checked; setKeepAwake(enabled); void window.electronAPI.setKeepAwakeWhileRunning(enabled) }} /></label>
+            <button data-android-background className="flex min-h-[60px] w-full items-center justify-between gap-3 border-t border-border/50 px-4 text-left" onClick={() => androidBridge()?.requestBackgroundExecution?.()}>
+              <span>允许后台运行</span><span className="text-xs text-muted-foreground">{backgroundAllowed ? '已解除电池优化' : '去授权'}</span>
+            </button>
+            <p className="px-4 pb-4 text-xs leading-relaxed text-muted-foreground">任务会通过前台服务继续处理。若手机仍暂停任务，请在系统电池设置中允许后台高耗电，并关闭此应用的后台限制。</p>
           </div>
         </section>
         <section>

@@ -217,6 +217,7 @@ export function CompactModelSelector({
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
         <button
+          data-mobile-composer-pill="model"
           type="button"
           aria-label={connectionUnavailable
             ? t('common.unavailable')

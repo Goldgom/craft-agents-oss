@@ -47,6 +47,7 @@ import type { RpcClient } from '@craft-agent/server-core/transport'
 import type { RemoteServerConfig } from '@craft-agent/core/types'
 import type { ElectronAPI } from '../shared/types'
 import { TOKENNEST_RECHARGE_IPC } from '../shared/tokennest-recharge'
+import { canvasExportInfo } from '../shared/canvas-export'
 import { NATIVE_CREDENTIAL_IPC } from '@craft-agent/shared/credentials/native-types'
 
 // ---------------------------------------------------------------------------
@@ -264,13 +265,13 @@ client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unk
     input.projectText = bytes.toString('utf8')
   }
   const result = await canvasRequestHandler(input) as Record<string, unknown>
-  if ((input.action === 'export_png' || input.action === 'export_selection_mask' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
+  if ((input.action === 'export_image' || input.action === 'export_png' || input.action === 'export_selection_mask' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
     if (!isAbsolute(input.outputPath)) throw new Error('outputPath must be absolute')
     const extension = extname(input.outputPath).toLowerCase()
-    if (extension !== (input.action === 'save_project' ? '.tbcanvas' : '.png')) throw new Error('Output path has the wrong file extension')
+    if (!canvasExportInfo(input).extensions.includes(extension)) throw new Error('Output path has the wrong file extension')
     const bytes = Buffer.from(result.base64, 'base64')
     await writeFile(input.outputPath, bytes, { flag: 'wx' })
-    return { saved: true, outputPath: input.outputPath, bytes: bytes.length }
+    return { saved: true, outputPath: input.outputPath, bytes: bytes.length, mime: canvasExportInfo(input).mime, width: result.width, height: result.height }
   }
   return result
 })

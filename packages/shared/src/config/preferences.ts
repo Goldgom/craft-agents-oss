@@ -231,10 +231,22 @@ export function formatPreferencesForPrompt(): string {
   const prefs = loadPreferences();
   const preferredProxy = typeof prefs.preferredProxy === 'string' ? prefs.preferredProxy.trim() : '';
   const uiLanguage = getPersistedUiLanguage();
-  const locale = uiLanguage ?? Intl.DateTimeFormat().resolvedOptions().locale;
-  const languageName = uiLanguage
-    ? LOCALE_REGISTRY[uiLanguage].nativeName
-    : new Intl.DisplayNames([locale], { type: 'language' }).of(locale) ?? locale;
+  let locale: string = uiLanguage ?? 'en';
+  if (!uiLanguage) {
+    try { locale = Intl.DateTimeFormat().resolvedOptions().locale || 'en'; } catch { /* limited ICU runtime */ }
+  }
+  let languageName = uiLanguage ? LOCALE_REGISTRY[uiLanguage].nativeName : locale;
+  if (!uiLanguage) {
+    // Android Bun reports en-US-u-va-posix. DisplayNames.of accepts a
+    // language identifier, not a locale containing Unicode/private extensions.
+    const languageId = locale.split(/-[a-z0-9]-/i)[0]!;
+    try {
+      languageName = new Intl.DisplayNames([languageId], { type: 'language' }).of(languageId) ?? languageId;
+    } catch {
+      // Optional locale formatting must never prevent an agent turn.
+      languageName = languageId;
+    }
+  }
   const source = uiLanguage ? 'application language setting' : 'system locale';
 
   const lines: string[] = [

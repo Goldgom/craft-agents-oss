@@ -1,4 +1,4 @@
-import { MAX_RASTER_SIDE, TILE_SIZE, captureTile, createLayer, drawImageOnLayer, getTile, normalizeRect, paintSegment, rasterizeRegion, tileKey, tileRange, unionRects, type CanvasLayer, type Point, type Rect, type TileSnapshot } from './canvas-engine'
+import { MAX_RASTER_SIDE, TILE_SIZE, assertPixelEditable, rawLayer, captureTile, createLayer, drawImageOnLayer, getTile, normalizeRect, paintSegment, rasterizeRegion, tileKey, tileRange, unionRects, type CanvasLayer, type Point, type Rect, type TileSnapshot } from './canvas-engine'
 
 /** White alpha is selected. Bounds and paths always use canvas world coordinates. */
 export type PixelSelection = { bounds: Rect; mask: HTMLCanvasElement; kind: 'ellipse' | 'lasso' | 'brush' | 'wand' | 'mixed' }
@@ -100,7 +100,7 @@ export function invertSelection(selection: PixelSelection): PixelSelection {
 }
 
 /** Connected flood fill includes alpha distance so transparent pixels do not select opaque black. */
-export function contiguousColorMask(image: ImageData, seed: Point, tolerance: number): Uint8ClampedArray {
+export function contiguousColorMask(image: ImageData, seed: Point, tolerance: number, allowedRgba?: Uint8ClampedArray): Uint8ClampedArray {
   const { width, height, data } = image, result = new Uint8ClampedArray(width * height)
   const x = Math.floor(seed.x), y = Math.floor(seed.y)
   if (x < 0 || y < 0 || x >= width || y >= height) return result
@@ -111,6 +111,7 @@ export function contiguousColorMask(image: ImageData, seed: Point, tolerance: nu
     if (seen[index]) return
     seen[index] = 1
     const offset = index * 4
+    if (allowedRgba && !allowedRgba[offset + 3]) return
     for (let channel = 0; channel < 4; channel++) if (Math.abs(data[offset + channel] - data[start + channel]) > tolerance) return
     queue[tail++] = index; result[index] = 255
   }
@@ -128,7 +129,7 @@ export function contiguousColorMask(image: ImageData, seed: Point, tolerance: nu
 export function wandSelection(layer: CanvasLayer, seed: Point, tolerance: number, bounds: Rect): PixelSelection {
   if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance > 100) throw new Error('容差需要在 0–100 内')
   bounds = checkedSelectionBounds(bounds)
-  const source = rasterizeRegion([{ ...layer, visible: true, opacity: 1 }], bounds, bounds.width, bounds.height)
+  const source = rasterizeRegion([rawLayer(layer)], bounds, bounds.width, bounds.height)
   const ctx = source.getContext('2d')!, image = ctx.getImageData(0, 0, source.width, source.height)
   const alpha = contiguousColorMask(image, { x: seed.x - bounds.x, y: seed.y - bounds.y }, tolerance)
   for (let i = 0; i < alpha.length; i++) { image.data.fill(255, i * 4, i * 4 + 3); image.data[i * 4 + 3] = alpha[i] }
@@ -150,6 +151,8 @@ export function blendSelectionPixels(result: ImageData, original: ImageData, mas
 }
 
 export function clearMaskedSelection(layer: CanvasLayer, selection: PixelSelection, before: TileSnapshot): void {
+  assertPixelEditable(layer)
+  if (layer.alphaLocked) throw new Error('请先关闭透明像素锁定再删除像素')
   for (const [key, tile] of layer.tiles) {
     const [tx, ty] = key.split(',').map(Number)
     const rect = { x: tx * TILE_SIZE + layer.offset.x, y: ty * TILE_SIZE + layer.offset.y, width: TILE_SIZE, height: TILE_SIZE }
@@ -162,7 +165,8 @@ export function clearMaskedSelection(layer: CanvasLayer, selection: PixelSelecti
 }
 
 export function drawMaskedImage(layer: CanvasLayer, image: CanvasImageSource, rect: Rect, selection: PixelSelection | null, before?: TileSnapshot, replace = false): void {
-  if (!selection && !replace) { drawImageOnLayer(layer, image, rect, before); return }
+  assertPixelEditable(layer)
+  if (!selection && !replace && !layer.alphaLocked) { drawImageOnLayer(layer, image, rect, before); return }
   const range = tileRange({ ...rect, x: rect.x - layer.offset.x, y: rect.y - layer.offset.y })
   for (let ty = range.top; ty <= range.bottom; ty++) for (let tx = range.left; tx <= range.right; tx++) {
     const key = tileKey(tx, ty), world = { x: tx * TILE_SIZE + layer.offset.x, y: ty * TILE_SIZE + layer.offset.y, width: TILE_SIZE, height: TILE_SIZE }
@@ -180,12 +184,18 @@ export function drawMaskedImage(layer: CanvasLayer, image: CanvasImageSource, re
     if (!hasPixels) continue
     if (!before?.has(key)) before?.set(key, captureTile(layer, key))
     const destination = getTile(layer, tx, ty).getContext('2d')!
+    const originalAlpha = layer.alphaLocked ? destination.getImageData(0, 0, TILE_SIZE, TILE_SIZE) : null
     if (replace) {
       const pixels = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE)
       blendSelectionPixels(pixels, destination.getImageData(0, 0, TILE_SIZE, TILE_SIZE), maskPixels)
       destination.putImageData(pixels, 0, 0)
     } else {
       ctx.globalCompositeOperation = 'destination-in'; ctx.drawImage(mask, 0, 0); destination.drawImage(overlay, 0, 0)
+    }
+    if (originalAlpha) {
+      const pixels = destination.getImageData(0, 0, TILE_SIZE, TILE_SIZE)
+      for (let i = 3; i < pixels.data.length; i += 4) pixels.data[i] = originalAlpha.data[i]
+      destination.putImageData(pixels, 0, 0)
     }
   }
 }
@@ -210,7 +220,7 @@ export function paintMaskedSegment(layer: CanvasLayer, from: Point, to: Point, w
 }
 
 export function snapshotLayer(layer: CanvasLayer): CanvasLayer {
-  const result = { ...layer, visible: true, opacity: 1, offset: { ...layer.offset }, tiles: new Map<string, HTMLCanvasElement>() }
+  const result = { ...rawLayer(layer), offset: { ...layer.offset }, tiles: new Map<string, HTMLCanvasElement>() }
   for (const [key, tile] of layer.tiles) { const copy = canvas(TILE_SIZE, TILE_SIZE); copy.getContext('2d')!.drawImage(tile, 0, 0); result.tiles.set(key, copy) }
   return result
 }

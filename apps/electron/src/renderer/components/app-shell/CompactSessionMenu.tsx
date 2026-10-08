@@ -235,7 +235,7 @@ export function CompactSessionMenu({
           <button
             type="button"
             className={cn(
-              'flex items-center gap-1 px-2 py-1 rounded-md titlebar-no-drag min-w-0',
+              'flex items-center gap-1 px-2 py-1 rounded-md titlebar-no-drag min-w-0 max-w-full',
               'hover:bg-foreground/[0.03] transition-colors',
               'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
               'data-[state=open]:bg-foreground/[0.03]',

@@ -1568,6 +1568,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
             {/* Mask wrapper - fades content at top and bottom over transparent/image backgrounds */}
             <div
               className="h-full"
+              data-chat-scroll-mask
               style={{
                 maskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)',
                 WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 32px, black calc(100% - 32px), transparent 100%)'
@@ -2463,10 +2464,10 @@ function MessageBubble({
     // This persists after reload to show where context was compacted
     if (message.statusType === 'compaction_complete') {
       return (
-        <div className="flex items-center gap-3 my-12 px-3">
+        <div data-compaction-complete className="flex items-center gap-3 my-12 px-3">
           <div className="flex-1 h-px bg-border" />
           <span className="text-sm text-muted-foreground/70 select-none">
-            Conversation Compacted
+            {t('chat.compacted')}
           </span>
           <div className="flex-1 h-px bg-border" />
         </div>

@@ -98,6 +98,7 @@ export function CompactPermissionModeSelector({
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
         <button
+          data-mobile-composer-pill="permission"
           type="button"
           aria-label={`${t('mode.permissionMode')}: ${t(MODE_LABEL_KEYS[optimisticMode].name)}`}
           className={cn(

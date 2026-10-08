@@ -20,6 +20,7 @@ import { Markdown } from '../markdown'
 import { FileTypeIcon, getFileTypeLabel } from './attachment-helpers'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '../tooltip'
 import { useTranslation } from 'react-i18next'
+import { usePlatform } from '../../context/PlatformContext'
 
 // Fallback text icons for badges without iconDataUrl
 // Using simple characters since SVG rendering may not work in all contexts
@@ -55,7 +56,7 @@ function EditRequestBadge({ badge }: { badge: ContentBadge }) {
 function InlineBadge({ badge }: { badge: ContentBadge }) {
   return (
     <span
-      className="inline-flex items-center gap-1 h-[22px] px-1.5 mx-0.5 rounded-[5px] bg-background shadow-minimal text-[12px] align-middle"
+      className="inline-flex items-center gap-1 h-[22px] px-1.5 mx-0.5 rounded-[5px] bg-background text-foreground shadow-minimal text-[12px] align-middle"
       style={{ verticalAlign: 'middle', transform: 'translateY(-1px)' }}
     >
       {badge.iconDataUrl ? (
@@ -81,7 +82,8 @@ function InlineBadge({ badge }: { badge: ContentBadge }) {
 function CommandBadge({ badge }: { badge: ContentBadge }) {
   return (
     <span
-      className="inline-flex items-center gap-1 h-[22px] px-1.5 mx-0.5 rounded-[5px] bg-background shadow-minimal text-[12px] align-middle"
+      data-message-command
+      className="inline-flex items-center gap-1 h-[22px] px-1.5 mx-0.5 rounded-[5px] bg-background text-foreground shadow-minimal text-[12px] align-middle"
       style={{ verticalAlign: 'middle', transform: 'translateY(-1px)' }}
     >
       <span className="h-[12px] w-[12px] rounded-[2px] bg-foreground/5 flex items-center justify-center text-foreground/50 shrink-0 text-[10px] font-medium">
@@ -329,6 +331,37 @@ export interface UserMessageBubbleProps {
  * actually read it. */
 const QUEUED_MIN_VISIBLE_MS = 2500
 
+/** Android can store originals even when native thumbnail generation is unavailable. */
+function ImageAttachmentPreview({ attachment }: { attachment: StoredAttachment }) {
+  const { onReadFileDataUrl } = usePlatform()
+  const thumbnail = attachment.thumbnailBase64
+    ? `data:image/png;base64,${attachment.thumbnailBase64}` : undefined
+  const [original, setOriginal] = useState<{ path: string; url: string }>()
+  const [failedSources, setFailedSources] = useState<Set<string>>(() => new Set())
+  const thumbnailFailed = !!thumbnail && failedSources.has(thumbnail)
+  const path = attachment.storedPath
+  useEffect(() => {
+    if ((thumbnail && !thumbnailFailed) || !path || !onReadFileDataUrl) return
+    let disposed = false
+    void onReadFileDataUrl(path).then(url => {
+      if (!disposed && url.startsWith('data:image/')) setOriginal({ path, url })
+    }).catch(() => { /* Keep the file icon for unavailable originals. */ })
+    return () => { disposed = true }
+  }, [thumbnail, thumbnailFailed, path, onReadFileDataUrl])
+  const source = thumbnail && !thumbnailFailed ? thumbnail : (original?.path === path ? original.url : undefined)
+  return (
+    <div data-message-image className="h-14 w-14 rounded-[8px] overflow-hidden bg-background shadow-minimal">
+      {source && !failedSources.has(source) ? (
+        <img src={source} alt={attachment.name} className="h-full w-full object-cover" onError={() => setFailedSources(previous => new Set(previous).add(source))} />
+      ) : (
+        <div className="h-full w-full flex items-center justify-center">
+          <FileTypeIcon type={attachment.type} mimeType={attachment.mimeType} className="h-5 w-5" />
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function UserMessageBubble({
   content,
   className,
@@ -409,6 +442,8 @@ export function UserMessageBubble({
     displayContent = displayContent.trim()
   }
 
+  if (!displayContent.trim() && !hasAttachments && !hasEditRequestBadges && !hasInlineBadges && !showQueued) return null
+
   return (
     <div className={cn("flex flex-col items-end gap-3 w-full", className)}>
       {/* Attachment preview row - stored attachments with thumbnails */}
@@ -427,19 +462,7 @@ export function UserMessageBubble({
               >
                 {isImage ? (
                   /* IMAGE: Square thumbnail only */
-                  <div className="h-14 w-14 rounded-[8px] overflow-hidden bg-background shadow-minimal">
-                    {hasThumbnail ? (
-                      <img
-                        src={`data:image/png;base64,${att.thumbnailBase64}`}
-                        alt={att.name}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="h-full w-full flex items-center justify-center">
-                        <FileTypeIcon type={att.type} mimeType={att.mimeType} className="h-5 w-5" />
-                      </div>
-                    )}
-                  </div>
+                  <ImageAttachmentPreview attachment={att} />
                 ) : (
                   /* DOCUMENT: Bubble with thumbnail/icon + 2-line text */
                   <div className="flex items-center gap-2.5 rounded-[8px] bg-user-message-bubble pl-1.5 pr-3 py-1.5">
@@ -484,7 +507,7 @@ export function UserMessageBubble({
           separate pill below — keeps the chat to one bubble per message
           while the chip and pulsing icon make the waiting state obvious
           (#616 follow-up). */}
-      <div
+      {(displayContent.trim() || hasInlineBadges || showQueued) && <div
         data-theme-bubble="user"
         className={cn(
           "theme-message-user-bubble max-w-[80%] bg-user-message-bubble rounded-[16px] break-words min-w-0 select-text [&_p]:m-0",
@@ -514,7 +537,7 @@ export function UserMessageBubble({
             </Markdown>
           )
         }
-      </div>
+      </div>}
     </div>
   )
 }

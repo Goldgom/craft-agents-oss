@@ -11,6 +11,7 @@ import {
   ChevronUp,
   AlertCircle,
   Image as ImageIcon,
+  Minimize2,
 } from 'lucide-react'
 import { Icon_Home, Spinner } from '@craft-agent/ui'
 
@@ -1611,6 +1612,7 @@ export function FreeFormInput({
   // compact surface. EditPopover also uses compactMode, but keeps the original
   // single-row toolbar because its model picker is intentionally disabled.
   const mobileToolbarLayout = compactMode && enableCompactModelPicker
+  const android = typeof document !== 'undefined' && document.documentElement.dataset.mobileApp === 'android'
 
   return (
     <form onSubmit={handleSubmit}>
@@ -1832,7 +1834,7 @@ export function FreeFormInput({
             sessionId={sessionId}
           />
 
-          <div className={cn(
+          <div data-mobile-composer-toolbar={mobileToolbarLayout || undefined} className={cn(
             mobileToolbarLayout
               ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 px-2 py-2"
               : "flex items-center gap-1 px-2 py-2",
@@ -2505,13 +2507,16 @@ export function FreeFormInput({
                     type="button"
                     onClick={handleCompactClick}
                     disabled={isProcessing}
+                    data-composer-action="compact"
+                    aria-label={contextStatus?.isCompacting ? t('chat.compacting') : t('chat.compact')}
                     className="inline-flex items-center h-6 px-2 text-[12px] font-medium bg-info/10 rounded-[6px] shadow-tinted select-none cursor-pointer hover:bg-info/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{
                       '--shadow-color': 'var(--info-rgb)',
                       color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
                     } as React.CSSProperties}
                   >
-                    {contextStatus?.isCompacting ? t('chat.compacting') : t('chat.compact')}{usagePercent !== null ? ` · ${usagePercent}%` : ''}
+                    {android && <Minimize2 className="android-compact-icon" aria-hidden="true" />}
+                    <span className="composer-compact-label">{contextStatus?.isCompacting ? t('chat.compacting') : t('chat.compact')}{usagePercent !== null ? ` · ${usagePercent}%` : ''}</span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">

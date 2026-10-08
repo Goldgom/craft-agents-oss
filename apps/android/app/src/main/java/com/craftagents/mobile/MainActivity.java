@@ -27,6 +27,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
 import android.provider.Settings;
+import android.os.PowerManager;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -169,7 +170,7 @@ public final class MainActivity extends Activity {
         notificationSession = getIntent().getStringExtra("notification_session");
         preferences = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         applyThemePalette(preferences.getBoolean(DARK_THEME_KEY, false));
-        localAgentServer = new LocalAgentServer(this);
+        localAgentServer = LocalAgentService.server(this);
         adbClient = new AdbClient(this);
         migrateLegacyServerProfile();
         buildUi();
@@ -678,9 +679,6 @@ public final class MainActivity extends Activity {
         }
 
         connectionAttempt.incrementAndGet();
-        if (localAgentServer != null && localAgentServer.isRunning()) {
-            serverExecutor.execute(localAgentServer::stop);
-        }
         ServerProfile profile = getSavedProfile(mode);
         String url = normalizeUrl(profile.url, mode);
         if (url == null) {
@@ -717,6 +715,7 @@ public final class MainActivity extends Activity {
 
         int attempt = connectionAttempt.incrementAndGet();
         showConnectionProgress();
+        LocalAgentService.start(this);
 
         serverExecutor.execute(() -> {
             try {
@@ -1211,8 +1210,8 @@ public final class MainActivity extends Activity {
             pendingFileChooser.onReceiveValue(null);
             pendingFileChooser = null;
         }
-        serverExecutor.shutdownNow();
-        if (localAgentServer != null) localAgentServer.stop();
+        // Let a pending startup finish; the service owns the backend lifetime.
+        serverExecutor.shutdown();
         if (webView != null) {
             webView.stopLoading();
             webView.destroy();
@@ -1396,6 +1395,41 @@ public final class MainActivity extends Activity {
         @JavascriptInterface
         public String getThemeMode() {
             return preferences.getString("theme_mode", "");
+        }
+
+        @JavascriptInterface
+        public String getLanguage() { return preferences.getString("ui_language", ""); }
+
+        @JavascriptInterface
+        public void setLanguage(String language) {
+            if (language == null || !language.matches("[a-zA-Z]{2,3}(-[a-zA-Z]{2,8})*")) return;
+            preferences.edit().putString("ui_language", language).apply();
+        }
+
+        @JavascriptInterface
+        public boolean isBackgroundAllowed() {
+            return getSystemService(PowerManager.class).isIgnoringBatteryOptimizations(getPackageName());
+        }
+
+        @JavascriptInterface
+        public void requestBackgroundExecution() {
+            runOnUiThread(() -> {
+                try {
+                    if (!isBackgroundAllowed()) {
+                        startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:" + getPackageName())));
+                    } else if ("vivo".equalsIgnoreCase(Build.MANUFACTURER) || "iqoo".equalsIgnoreCase(Build.MANUFACTURER)) {
+                        // Vivo has a separate background-power policy beyond Android Doze.
+                        // Its individual high-power activity is protected; use the public battery page.
+                        startActivity(new Intent("com.iqoo.powersaving.PowerSavingManagerActivity.search"));
+                    } else {
+                        startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:" + getPackageName())));
+                    }
+                } catch (RuntimeException error) {
+                    startActivity(new Intent(Settings.ACTION_SETTINGS));
+                }
+            });
         }
 
         @JavascriptInterface

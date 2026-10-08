@@ -40,6 +40,10 @@ export interface AndroidBridge {
   setDarkTheme?: (dark: boolean) => void
   getThemeMode?: () => string
   setThemeMode?: (mode: 'light' | 'dark' | 'system') => void
+  getLanguage?: () => string
+  setLanguage?: (language: string) => void
+  isBackgroundAllowed?: () => boolean
+  requestBackgroundExecution?: () => void
   saveFile?: (requestId: string, name: string, mimeType: string, base64: string) => void
   printHtml?: (name: string, html: string) => void
   renderHtmlImage?: (requestId: string, name: string, html: string) => void

@@ -164,6 +164,34 @@ describe('preferences.uiLanguage', () => {
   });
 
   describe('formatPreferencesForPrompt', () => {
+    it('accepts the Android POSIX locale with Unicode extensions', () => {
+      const { configDir } = setupDir();
+      try {
+        const r = runScript(configDir, `
+          import { formatPreferencesForPrompt } from '${PREFS_MODULE}';
+          Intl.DateTimeFormat = function () { return { resolvedOptions() { return { locale: 'en-US-u-va-posix' }; } }; };
+          console.log(formatPreferencesForPrompt());
+        `);
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout).toContain('en-US-u-va-posix; system locale');
+        expect(r.stdout).toContain('American English');
+      } finally { rmSync(configDir, { recursive: true, force: true }); }
+    });
+
+    it('keeps chat available when DisplayNames is missing or fails', () => {
+      const { configDir } = setupDir();
+      try {
+        const r = runScript(configDir, `
+          import { formatPreferencesForPrompt } from '${PREFS_MODULE}';
+          Intl.DateTimeFormat = function () { return { resolvedOptions() { return { locale: 'zh-CN-u-ca-chinese' }; } }; };
+          Intl.DisplayNames = undefined;
+          console.log(formatPreferencesForPrompt());
+        `);
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout).toContain('Preferred language: zh-CN (zh-CN-u-ca-chinese; system locale)');
+      } finally { rmSync(configDir, { recursive: true, force: true }); }
+    });
+
     it('includes the persisted application language without other preferences', () => {
       const { configDir, prefsFile } = setupDir();
       try {

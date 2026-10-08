@@ -58,13 +58,6 @@ try {
     # runs as JavaScript under Bun's Android runtime. Build the two subprocess
     # entrypoints before bundling the main server so local sessions can spawn
     # them from the app-private server directory.
-    Push-Location (Join-Path $projectRoot "packages\pi-agent-server")
-    try {
-        & bun run build
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    } finally {
-        Pop-Location
-    }
     Push-Location (Join-Path $projectRoot "packages\session-mcp-server")
     try {
         & bun run build
@@ -120,7 +113,10 @@ try {
     $piDest = Join-Path $resourceRoot "pi-agent-server"
     $sessionDest = Join-Path $resourceRoot "session-mcp-server"
     New-Item -ItemType Directory -Force $piDest, $sessionDest | Out-Null
-    Copy-Item (Join-Path $projectRoot "packages\pi-agent-server\dist\index.js") (Join-Path $piDest "index.js") -Force
+    # Android needs a Pi bundle without the desktop clipboard native loader.
+    # Preserve all split chunks, including lazy provider/tool modules.
+    & bun (Join-Path $androidRoot "tools\build-pi-runtime.ts") $piDest
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Copy-Item (Join-Path $projectRoot "packages\session-mcp-server\dist\index.js") (Join-Path $sessionDest "index.js") -Force
 
     $bridgeSource = Join-Path $electronResourceRoot "bridge-mcp-server\index.js"
