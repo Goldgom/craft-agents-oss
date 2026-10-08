@@ -3,7 +3,7 @@ import { getGitCodeUpdateFeed } from './gitcode-release'
 
 const repository = 'Goldgom/craft-agents-oss'
 const assetUrl = (name: string) =>
-  `https://gitcode.com/${repository}/releases/download/26.10.4/${name}`
+  `https://gitcode.com/${repository}/releases/download/26.10.7/${name}`
 
 function mockRelease(tag_name: string, assets: Array<{ name: string; browser_download_url: string }>) {
   return async () => Response.json({ tag_name, prerelease: false, assets })
@@ -20,15 +20,15 @@ describe('GitCode update feed', () => {
       { name: 'latest.yml', browser_download_url: assetUrl('latest.yml') },
       { name: 'TokenBird-x64.exe', browser_download_url: assetUrl('TokenBird-x64.exe') },
     ]
-    const feed = await getGitCodeUpdateFeed('26.10.3', repository, mockRelease('26.10.4', assets))
+    const feed = await getGitCodeUpdateFeed('26.10.3', repository, mockRelease('26.10.7', assets))
     expect(feed.feedUrl).toBe(assetUrl(''))
   })
 
   test('rejects incomplete releases and foreign download URLs', async () => {
     const manifest = { name: 'latest.yml', browser_download_url: assetUrl('latest.yml') }
-    await expect(getGitCodeUpdateFeed('26.10.3', repository, mockRelease('26.10.4', [manifest])))
+    await expect(getGitCodeUpdateFeed('26.10.3', repository, mockRelease('26.10.7', [manifest])))
       .rejects.toThrow('must contain latest.yml and TokenBird-x64.exe')
-    await expect(getGitCodeUpdateFeed('26.10.3', repository, mockRelease('26.10.4', [
+    await expect(getGitCodeUpdateFeed('26.10.3', repository, mockRelease('26.10.7', [
       manifest,
       { name: 'TokenBird-x64.exe', browser_download_url: 'https://example.com/TokenBird-x64.exe' },
     ]))).rejects.toThrow('Unexpected GitCode release asset URL')
