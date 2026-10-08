@@ -55,7 +55,7 @@ describe('Super Agent permission ceiling', () => {
   });
 
   test('full control bypasses folder, capability, source and mode approvals while retaining model serialization', async () => {
-    const ceilings = { ...policy, role: 'coordinator' as const, readFiles: false, writeFiles: false, runPrograms: false, browser: false, fullControl: true };
+    const ceilings = { ...policy, readFiles: false, writeFiles: false, runPrograms: false, browser: false, fullControl: true };
     setSessionExecutionPolicy(sessionId, ceilings);
     setPermissionMode(sessionId, 'safe');
     let requests = 0;
@@ -152,7 +152,7 @@ describe('Super Agent permission ceiling', () => {
     expect(isSessionPolicyShellAutoAllowed(sessionId, 'Bash', { command: 'df -h' })).toBe(false);
   });
 
-  test('full control lets both node roles use built-in tools without requesting approval', async () => {
+  test('full control leaves the main agent in interaction while workers use tools without approval', async () => {
     let requests = 0;
     for (const role of ['coordinator', 'worker'] as const) {
       setSessionExecutionPolicy(sessionId, { ...policy, role, fullControl: true, readFiles: false, writeFiles: false, runPrograms: false, browser: false });
@@ -165,13 +165,15 @@ describe('Super Agent permission ceiling', () => {
         ['mcp__session__runshell', { command: 'echo test' }],
         ['mcp__session__browser_tool', { command: ['navigate', 'https://example.com'] }],
         ['mcp__session__canvas', { action: 'inspect' }],
-      ] as const) expect((await authorizeSessionPolicyTool(sessionId, tool, input)).allowed).toBe(true);
+        ['mcp__assigned__query', { query: 'Research data' }],
+      ] as const) expect((await authorizeSessionPolicyTool(sessionId, tool, input)).allowed).toBe(role === 'worker');
+      expect((await authorizeSessionPolicyTool(sessionId, 'mcp__session__send_agent_message', { sessionId: 'worker-session', message: 'User requirements' })).allowed).toBe(true);
       const manager = new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root });
       const result = await runPreToolUseChecksWithPermissions({ toolName: 'Bash', input: { command: 'echo test' }, sessionId,
         permissionMode: 'allow-all', workingDirectory: root, workspaceRootPath: root, workspaceId: 'workspace',
         activeSourceSlugs: [], allSourceSlugs: [], hasSourceActivation: false, permissionManager: manager });
-      expect(result.type).toBe('modify');
-      expect(manager.evaluateToolCall('Write', { file_path: join(outside, 'new.txt'), content: 'test' }).allowed).toBe(true);
+      expect(result.type).toBe(role === 'worker' ? 'modify' : 'block');
+      expect(manager.evaluateToolCall('Write', { file_path: join(outside, 'new.txt'), content: 'test' }).allowed).toBe(role === 'worker');
     }
     expect(requests).toBe(0);
     expect(getSessionExecutionPolicy(sessionId)?.fullControl).toBe(true);
@@ -248,6 +250,8 @@ describe('Super Agent permission ceiling', () => {
       ['mcp__session__call_llm', { prompt: 'delegate' }],
       ['mcp__session__spawn_session', {}],
       ['mcp__session__sftp_transfer', { direction: 'download' }],
+      ['mcp__session__computer_use', { action: 'screenshot' }],
+      ['mcp__session__computer_use', { action: 'click', x: 100, y: 100 }],
       ['mcp__session__browser_tool', { command: ['navigate', 'file:///etc/passwd'] }],
       ['Read', { file_path: `${root}/../outside/secret.txt` }],
       ['Bash', { command: 'echo x', run_in_background: true }],

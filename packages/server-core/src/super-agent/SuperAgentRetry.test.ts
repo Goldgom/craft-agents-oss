@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { loadSuperAgentDocument, saveSuperAgentDocument } from '@craft-agent/shared/super-agent'
 import { SuperAgentService } from './SuperAgentService'
-import { canRecoverSuperAgentTurn, superAgentRetryDelay } from './SuperAgentRetry'
+import { canRecoverSuperAgentTurn, SUPER_AGENT_RECOVERY_WINDOW_MS, superAgentRetryDelay } from './SuperAgentRetry'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
 const connectionError = 'Connection Error: Could not reach the AI service. Check your internet connection or VPN settings.'
@@ -92,24 +92,32 @@ describe('Super Agent durable network recovery', () => {
     expect(finished.state.messages.filter(message => message.kind === 'result' && message.taskId === task.id)).toHaveLength(1)
   })
 
-  test('survives repeated failures beyond the chain limit without failing the task', async () => {
+  test('bounds repeated failures to ten minutes without consuming the chain budget', async () => {
     const context = await superAgentFixture()
     const task = await startTask(context)
     const before = await loadSuperAgentDocument(join(context.root, 'alpha'))
-    for (let attempt = 1; attempt <= 35; attempt++) {
+    const deadline = context.now() + SUPER_AGENT_RECOVERY_WINDOW_MS
+    for (let attempt = 1; attempt <= 14; attempt++) {
       context.host.complete(task.sessionId!, connectionError, 'error')
       const waiting = await until(() => context.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'worker')?.retryAttempt === attempt
         && value.state.nodes.find(node => node.nodeId === 'worker')?.status === 'recovering')
       expect(waiting.state.tasks[0]!.status).toBe('running')
+      expect((await loadSuperAgentDocument(join(context.root, 'alpha'))).chainCounts).toEqual(before.chainCounts)
       expect(waiting.state.nodes.find(node => node.nodeId === 'worker')!.retryAttempt).toBe(attempt)
-      context.advance(superAgentRetryDelay(attempt))
+      expect(waiting.state.nodes.find(node => node.nodeId === 'worker')!.retryDeadline).toBe(deadline)
+      context.advance(Math.min(superAgentRetryDelay(attempt), deadline - context.now()))
       await context.service.tick()
+      if (context.now() === deadline) break
       await until(() => context.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'worker')?.status === 'working' && context.host.sends.length === attempt + 1)
     }
     const durable = await loadSuperAgentDocument(join(context.root, 'alpha'))
-    expect(durable.chainCounts).toEqual(before.chainCounts)
-    expect(durable.pendingTurns).toHaveLength(1)
-    expect(durable.state.tasks[0]!.status).toBe('running')
+    expect(durable.chainCounts[before.pendingTurns[0]!.chainId]).toBe(2)
+    expect(durable.pendingTurns.some(turn => turn.taskId === task.id)).toBe(false)
+    expect(durable.failedTurns?.[0]).toMatchObject({ taskId: task.id, retryDeadline: deadline })
+    expect(durable.state.tasks[0]!.status).toBe('failed')
+    expect(durable.state.plans[0]!.status).toBe('blocked')
+    expect(durable.state.nodes.find(node => node.nodeId === 'worker')!.error).toContain('10 minutes')
+    expect(context.host.sends.filter(send => send.sessionId === task.sessionId)).toHaveLength(14)
   })
 
   test('cancel during backoff retires the recovery and prevents future sends', async () => {
@@ -142,6 +150,7 @@ describe('Super Agent durable network recovery', () => {
     context.host.complete(task.sessionId!, connectionError, 'error')
     await recovering(context)
     const durable = await loadSuperAgentDocument(join(context.root, 'alpha'))
+    context.advance(500)
     await context.service.cleanup()
     // Restore the last durable checkpoint to simulate an abrupt process exit;
     // orderly cleanup explicitly cancels work as part of shutdown.
@@ -149,8 +158,8 @@ describe('Super Agent durable network recovery', () => {
     const restarted = new SuperAgentService({ host: context.host, rootForWorkspace: id => join(context.root, id), now: context.now, autoTick: false })
     try {
       const snapshot = await restarted.get('alpha')
-      expect(snapshot.state.nodes.find(node => node.nodeId === 'worker')).toMatchObject({ status: 'recovering', sessionId: task.sessionId, retryAt: context.now() + 2000 })
-      context.advance(1999)
+      expect(snapshot.state.nodes.find(node => node.nodeId === 'worker')).toMatchObject({ status: 'recovering', sessionId: task.sessionId, retryAt: context.now() + 1500, retryDeadline: durable.pendingTurns[0]!.retryDeadline })
+      context.advance(1499)
       await restarted.tick()
       expect(context.host.sends).toHaveLength(1)
       context.advance(1)

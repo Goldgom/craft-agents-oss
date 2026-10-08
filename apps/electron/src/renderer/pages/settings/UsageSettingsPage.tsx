@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUpRight, BarChart3, CalendarDays, CircleDollarSign, Coins, ExternalLink, Inbox, RefreshCw, ServerCog, Sparkles, WalletCards } from 'lucide-react'
+import { ArrowUpRight, BarChart3, CalendarDays, Coins, ExternalLink, Inbox, RefreshCw, ServerCog, Sparkles, WalletCards, JapaneseYen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import tokenNestLogo from '@/assets/provider-icons/tokennest.png'
@@ -10,6 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { SettingsCard, SettingsSection } from '@/components/settings'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
+import { formatCreditAmount as formatMoney, formatCreditBalance as balanceText } from '@/lib/format-credit'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { TokenNestUsagePoint, TokenNestUsageSnapshot } from '@craft-agent/shared/protocol'
 import type { Session } from '../../../shared/types'
@@ -18,11 +19,6 @@ export const meta: DetailsPageMeta = { navigator: 'settings', slug: 'usage' }
 type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
 
 const formatTokens = (value: number) => new Intl.NumberFormat(undefined, { notation: value >= 1_000_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value)
-const formatMoney = (value: number, currency = 'USD') => {
-  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 4 }).format(value) }
-  catch { return `${currency} ${value.toFixed(4)}` }
-}
-const balanceText = (balance?: Pick<ApiBalance, 'display' | 'remaining' | 'currency'>) => balance?.display ?? (balance?.remaining === undefined ? '—' : formatMoney(balance.remaining, balance.currency))
 const isMissingUsageHandler = (message: string) => message.includes('No handler for: tokennest:getUsage') || message.includes('CHANNEL_NOT_FOUND')
 const isUsageTimeout = (message: string) => /timeout|timed out/i.test(message)
 
@@ -155,16 +151,16 @@ export default function UsageSettingsPage() {
               </div>
             </div>
           })}</div>}
-          {tokenNestConnections.length > 0 && <div className="flex flex-wrap gap-2"><PortalButton icon={BarChart3} onClick={() => openTokenNest('/usage-logs')}>{t('settings.usage.onlineRecords')}</PortalButton><PortalButton icon={WalletCards} onClick={() => openTokenNest('/wallet')}>{t('settings.usage.onlineBalance')}</PortalButton><PortalButton icon={CircleDollarSign} onClick={() => openTokenNest('/wallet')}>{t('settings.usage.invoiceInfo')}</PortalButton></div>}
+          {tokenNestConnections.length > 0 && <div className="flex flex-wrap gap-2"><PortalButton icon={BarChart3} onClick={() => openTokenNest('/usage-logs')}>{t('settings.usage.onlineRecords')}</PortalButton><PortalButton icon={WalletCards} onClick={() => openTokenNest('/wallet')}>{t('settings.usage.onlineBalance')}</PortalButton><PortalButton icon={JapaneseYen} onClick={() => openTokenNest('/wallet')}>{t('settings.usage.invoiceInfo')}</PortalButton></div>}
         </div>
       </section>
 
       {activeError && <div className={cn('flex items-start gap-3 rounded-xl border px-4 py-3 text-sm', activeUsage || isUsageTimeout(activeError) || isMissingUsageHandler(activeError) ? 'border-amber-500/20 bg-amber-500/[0.07] text-amber-700 dark:text-amber-300' : 'border-destructive/20 bg-destructive/[0.06] text-destructive')}><ServerCog className="mt-0.5 size-4 shrink-0" /><div><div className="font-medium">{t('settings.usage.syncUnavailable')}</div><div className="mt-0.5 text-xs opacity-80">{isMissingUsageHandler(activeError) ? t('settings.usage.syncUnavailableDescription') : isUsageTimeout(activeError) ? t('settings.usage.syncTimeoutDescription') : activeError}</div>{activeUsage && <div className="mt-1 text-xs opacity-80">{t('settings.usage.cachedDescription', { time: new Date(activeUsage.updatedAt).toLocaleString() })}</div>}</div></div>}
 
-      <UsageDashboard title={activeUsage ? t('settings.usage.providerTitle') : t('settings.usage.localTitle')} description={activeUsage ? `${t('settings.usage.providerDescription')}${activeUsage.truncated ? ` ${t('settings.usage.chartTruncated')}` : ''}` : t('settings.usage.localDescription')} totals={shownTotals} currency={activeUsage?.currency ?? 'USD'} daily={activeUsage?.daily ?? local.daily} byModel={activeUsage?.byModel ?? local.byModel} t={t} />
+      <UsageDashboard title={activeUsage ? t('settings.usage.providerTitle') : t('settings.usage.localTitle')} description={activeUsage ? `${t('settings.usage.providerDescription')}${activeUsage.truncated ? ` ${t('settings.usage.chartTruncated')}` : ''}` : t('settings.usage.localDescription')} totals={shownTotals} daily={activeUsage?.daily ?? local.daily} byModel={activeUsage?.byModel ?? local.byModel} t={t} />
 
       <SettingsSection title={t('settings.usage.recordsTitle')} description={activeUsage ? t('settings.usage.providerRecordsDescription') : t('settings.usage.recordsDescription')}><SettingsCard divided={false} className="border border-border/60 shadow-xs">
-        {activeUsage ? activeUsage.recentRecords.length === 0 ? <EmptyRecords text={t('settings.usage.noRecords')} /> : <div className="divide-y divide-border/50">{activeUsage.recentRecords.map(record => <UsageRecord key={`${record.timestamp}-${record.requestId}`} title={record.model || '—'} subtitle={`${record.group || '—'} · ${new Date(record.timestamp * 1000).toLocaleString()}`} tokens={record.totalTokens} cost={formatMoney(record.costUsd, activeUsage.currency)} />)}</div>
+        {activeUsage ? activeUsage.recentRecords.length === 0 ? <EmptyRecords text={t('settings.usage.noRecords')} /> : <div className="divide-y divide-border/50">{activeUsage.recentRecords.map(record => <UsageRecord key={`${record.timestamp}-${record.requestId}`} title={record.model || '—'} subtitle={`${record.group || '—'} · ${new Date(record.timestamp * 1000).toLocaleString()}`} tokens={record.totalTokens} cost={formatMoney(record.costUsd)} />)}</div>
           : localRecords.length === 0 ? <EmptyRecords text={t('settings.usage.noRecords')} /> : <div className="divide-y divide-border/50">{localRecords.map(session => <UsageRecord key={session.id} title={session.name || session.preview || t('settings.usage.untitledSession')} subtitle={`${session.model || '—'} · ${new Date(session.lastMessageAt).toLocaleString()}`} tokens={session.tokenUsage?.totalTokens ?? 0} cost={formatMoney(session.tokenUsage?.costUsd ?? 0)} />)}</div>}
       </SettingsCard></SettingsSection>
     </div></ScrollArea></div>
@@ -173,8 +169,8 @@ export default function UsageSettingsPage() {
 
 function PortalButton({ icon: Icon, children, onClick }: { icon: typeof BarChart3; children: React.ReactNode; onClick: () => void }) { return <Button variant="outline" size="sm" className="bg-background/75" onClick={onClick}><Icon className="mr-1.5 size-3.5 text-muted-foreground" />{children}<ExternalLink className="ml-1.5 size-3 text-muted-foreground" /></Button> }
 
-function UsageDashboard({ title, description, totals, currency, daily, byModel, t }: { title: string; description: string; totals: { input: number; output: number; total: number; cost: number }; currency: string; daily: TokenNestUsagePoint[]; byModel: TokenNestUsagePoint[]; t: ReturnType<typeof useTranslation>['t'] }) {
-  return <div className="space-y-8"><SettingsSection title={title} description={description}><div className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric icon={Coins} label={t('settings.usage.totalTokens')} value={formatTokens(totals.total)} tone="primary" /><Metric icon={ArrowUpRight} label={t('settings.usage.inputTokens')} value={formatTokens(totals.input)} tone="blue" /><Metric icon={Sparkles} label={t('settings.usage.outputTokens')} value={formatTokens(totals.output)} tone="violet" /><Metric icon={CircleDollarSign} label={t('settings.usage.estimatedCost')} value={formatMoney(totals.cost, currency)} tone="emerald" /></div></SettingsSection><div className="grid gap-7 lg:grid-cols-[1.15fr_0.85fr]"><SettingsSection title={t('settings.usage.dailyTitle')} description={t('settings.usage.last30Days')}><SettingsCard divided={false} className="border border-border/60 shadow-xs"><DailyChart points={daily} empty={t('settings.usage.noRecords')} /></SettingsCard></SettingsSection><SettingsSection title={t('settings.usage.byModelTitle')} description={t('settings.usage.byModelDescription')}><SettingsCard divided={false} className="border border-border/60 shadow-xs"><UsageBars points={byModel.slice(0, 8)} empty={t('settings.usage.noRecords')} /></SettingsCard></SettingsSection></div></div>
+function UsageDashboard({ title, description, totals, daily, byModel, t }: { title: string; description: string; totals: { input: number; output: number; total: number; cost: number }; daily: TokenNestUsagePoint[]; byModel: TokenNestUsagePoint[]; t: ReturnType<typeof useTranslation>['t'] }) {
+  return <div className="space-y-8"><SettingsSection title={title} description={description}><div className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric icon={Coins} label={t('settings.usage.totalTokens')} value={formatTokens(totals.total)} tone="primary" /><Metric icon={ArrowUpRight} label={t('settings.usage.inputTokens')} value={formatTokens(totals.input)} tone="blue" /><Metric icon={Sparkles} label={t('settings.usage.outputTokens')} value={formatTokens(totals.output)} tone="violet" /><Metric icon={JapaneseYen} label={t('settings.usage.estimatedCost')} value={formatMoney(totals.cost)} tone="emerald" /></div></SettingsSection><div className="grid gap-7 lg:grid-cols-[1.15fr_0.85fr]"><SettingsSection title={t('settings.usage.dailyTitle')} description={t('settings.usage.last30Days')}><SettingsCard divided={false} className="border border-border/60 shadow-xs"><DailyChart points={daily} empty={t('settings.usage.noRecords')} /></SettingsCard></SettingsSection><SettingsSection title={t('settings.usage.byModelTitle')} description={t('settings.usage.byModelDescription')}><SettingsCard divided={false} className="border border-border/60 shadow-xs"><UsageBars points={byModel.slice(0, 8)} empty={t('settings.usage.noRecords')} /></SettingsCard></SettingsSection></div></div>
 }
 function DailyChart({ points, empty }: { points: TokenNestUsagePoint[]; empty: string }) {
   if (!points.length) return <EmptyChart text={empty} />

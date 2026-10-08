@@ -1,3 +1,4 @@
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useEffect, useState } from 'react'
 import { BookOpen, Check, Code2, Database, FileCode2, LoaderCircle, Pencil, Play, Plus, Square, Trash2 } from 'lucide-react'
 import type { SuperAgentAbilityProfile, SuperAgentCommand, SuperAgentConfig, SuperAgentScript, SuperAgentSnapshot } from '@craft-agent/shared/super-agent'
@@ -5,7 +6,7 @@ import type { LoadedSkill, LoadedSource } from '../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ChoiceList, FormField, FormSection, selectClass, textareaClass } from './SuperAgentForms'
+import { ChoiceList, FormField, FormSection, textareaClass } from './SuperAgentForms'
 import { formatTimestamp, scriptAccessGranted, useSuperAgentText } from './super-agent-ui'
 
 export function SuperAgentResources({ config, sources, skills, onSave }: {
@@ -147,9 +148,7 @@ export function SuperAgentScripts({ snapshot, onSave, onCommand }: {
           <FormField label={text('scriptPath')} hint={text(config.environment.fullControl && config.environment.kind !== 'sandbox' ? 'scriptPathFullControlHint' : 'scriptPathHint')}><Input value={script.path} onChange={event => setScript({ ...script, path: event.target.value })} placeholder="scripts/analyze.py" /></FormField>
           <FormField label={text('scriptArgs')}><textarea rows={3} className={textareaClass} value={argsText} onChange={event => setArgsText(event.target.value)} /></FormField>
           <div className="grid gap-4 sm:grid-cols-2"><FormField label={text('timeout')}><Input type="number" min={1} max={3600} value={script.timeoutSeconds} onChange={event => setScript({ ...script, timeoutSeconds: Number(event.target.value) })} /></FormField>
-            <FormField label={text('syncNode')}><select className={selectClass} value={script.nodeId ?? ''} onChange={event => setScript({ ...script, nodeId: event.target.value || undefined })}>
-              <option value="">{text('broadcast')}</option>{config.nodes.map(node => <option key={node.id} value={node.id}>{node.name}</option>)}
-            </select></FormField></div>
+            <FormField label={text('syncNode')}><WorkbenchSelect value={script.nodeId ?? ''} onValueChange={value => setScript({ ...script, nodeId: value || undefined })} options={[{ value: "", label: text('broadcast') }, ...config.nodes.map(node => ({ value: node.id, label: node.name }))]} /></FormField></div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
           <DialogFooter><Button type="button" variant="outline" onClick={() => setScript(null)}>{text('cancel')}</Button><Button type="button"
             disabled={!script.name.trim() || !script.path.trim() || !Number.isInteger(script.timeoutSeconds) || script.timeoutSeconds < 1 || script.timeoutSeconds > 3600}

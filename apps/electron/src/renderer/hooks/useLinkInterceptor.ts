@@ -115,6 +115,7 @@ interface LinkInterceptorResult {
 
 export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterceptorResult {
   const [previewState, setPreviewState] = useState<FilePreviewState | null>(null)
+  const previewRequestRef = useRef(0)
 
   // Use refs for options so callbacks remain referentially stable.
   // Without this, every render creates a new options object → new callbacks → cascading
@@ -138,6 +139,7 @@ export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterce
    * (e.g., @uiw/react-json-view crashes on null value).
    */
   const handleOpenFile = useCallback(async (path: string) => {
+    const request = ++previewRequestRef.current
     const classification = classifyFile(path)
 
     if (!classification.canPreview || !classification.type) {
@@ -156,15 +158,8 @@ export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterce
 
     // For text-based files: read content first, then show overlay with content ready.
     // Local filesystem reads are near-instant — no loading state needed.
-    try {
-      const content = await optionsRef.current.readFile(path)
-      const state = buildInitialTextState(type, path)
-      setPreviewState({ ...state, content } as FilePreviewState)
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to read file'
-      const state = buildInitialTextState(type, path)
-      setPreviewState({ ...state, content: '', error: errorMsg } as FilePreviewState)
-    }
+    const state = await readTextFilePreview(type, path, optionsRef.current.readFile)
+    if (request === previewRequestRef.current) setPreviewState(state)
   }, []) // Stable: uses optionsRef
 
   /** Open file directly in external app, bypassing classification/preview.
@@ -179,6 +174,7 @@ export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterce
   }, []) // Stable: uses optionsRef
 
   const closePreview = useCallback(() => {
+    ++previewRequestRef.current
     setPreviewState(null)
   }, [])
 
@@ -222,6 +218,21 @@ export function useLinkInterceptor(options: LinkInterceptorOptions): LinkInterce
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Keep read failures as explicit preview errors, distinct from empty files. */
+export async function readTextFilePreview(
+  type: FilePreviewType,
+  path: string,
+  readFile: (path: string) => Promise<string>,
+): Promise<FilePreviewState> {
+  const state = buildInitialTextState(type, path)
+  try {
+    return { ...state, content: await readFile(path) } as FilePreviewState
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'Failed to read file'
+    return { ...state, content: '', error } as FilePreviewState
+  }
+}
 
 /**
  * Build the initial preview state for text-based file types.

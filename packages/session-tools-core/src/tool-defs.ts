@@ -59,6 +59,8 @@ import { handleListMessagingChannels, handleUnbindMessagingChannel, handleSendMe
 import { handleExportResources } from './handlers/export-resources.ts';
 import { handleImportResources } from './handlers/import-resources.ts';
 import { handleCanvasTool } from './handlers/canvas-tool.ts';
+import { handleComputerUse } from './handlers/computer-use.ts';
+import { ComputerUseSchema } from './computer-use.ts';
 
 // ============================================================
 // Canonical Zod Schemas
@@ -84,6 +86,8 @@ export const CanvasToolSchema = z.object({
     'import_image', 'open_project', 'export_png', 'save_project', 'set_selection', 'clear_selection',
     'add_layer', 'duplicate_layer', 'remove_layer', 'move_layer', 'set_layer', 'transform_layer', 'merge_down',
     'paint', 'erase', 'extract_selection', 'clear_selection_pixels', 'cutout', 'adjust', 'set_parameters',
+    'list_tools', 'select_lasso', 'select_brush', 'select_ellipse', 'select_wand', 'invert_selection', 'export_selection_mask',
+    'delete_pixels', 'clone_stamp', 'sample_color',
     'generate', 'choose_candidate', 'download_candidate', 'dismiss_candidates',
     'list_image_connections', 'generate_image',
     'list_history', 'add_history', 'delete_history', 'download_history', 'reuse_prompt',
@@ -104,6 +108,9 @@ export const CanvasToolSchema = z.object({
   transform: z.enum(['flip-x', 'flip-y', 'rotate']).optional(),
   x: z.number().optional(), y: z.number().optional(), width: z.number().optional(), height: z.number().optional(),
   toX: z.number().optional(), toY: z.number().optional(),
+  sourceX: z.number().finite().optional().describe('Clone stamp source X in canvas coordinates; source is sampled at stroke start'),
+  sourceY: z.number().finite().optional().describe('Clone stamp source Y in canvas coordinates'),
+  selectionMode: z.enum(['replace', 'add', 'subtract', 'intersect']).optional().describe('Combine a new selection with the existing mask; default replace'),
   points: z.array(z.object({ x: z.number(), y: z.number() })).min(1).max(2000).optional().describe('Optional freehand stroke path in canvas coordinates'),
   color: z.string().optional(), brush: z.number().min(1).max(160).optional(),
   tolerance: z.number().min(0).max(100).optional(),
@@ -188,6 +195,7 @@ export const CallLlmSchema = z.object({
 export const UpdatePreferencesSchema = z.object({
   name: z.string().optional().describe("The user's preferred name or how they'd like to be addressed"),
   timezone: z.string().optional().describe("The user's timezone in IANA format (e.g., 'America/New_York', 'Europe/London')"),
+  preferredProxy: z.string().optional().describe('The network proxy URL the user explicitly prefers for network tools (HTTP or SOCKS). This does not configure application or model API networking. Use an empty string to clear the preference.'),
   city: z.string().optional().describe("The user's city"),
   region: z.string().optional().describe("The user's state/region/province"),
   country: z.string().optional().describe("The user's country"),
@@ -455,7 +463,7 @@ export const ImportResourcesSchema = z.object({
 // ============================================================
 
 export const TOOL_DESCRIPTIONS = {
-  canvas_tool: `Operate TokenBird drawing sessions through the connected desktop client. Start with list_sessions or get_state. Use sessionId to target a specific drawing session; select_session switches the editor to it. Supports session CRUD, importing images/projects, PNG/project export, selections, layers, painting/erasing, cutout, color/style/blur adjustments, AI image generation, GPT canvas questions, undo/redo and view controls. Image/project/output paths refer to the connected desktop machine. Destructive delete_session requires confirm=true. For canvas AI generation, set image connection/model first with set_parameters; inpaint/outpaint require a selection. To generate a standalone GPT Image without opening the canvas, call list_image_connections then generate_image with a prompt; this requires a configured image connection or TokenNest image access and saves PNG files in the agent session.`,
+  canvas_tool: `Operate TokenBird drawing sessions through the connected desktop client. Start with list_sessions, get_state or list_tools (tools grouped by purpose). Use sessionId to target a specific drawing session; select_session switches the editor to it. Supports session CRUD, image/project import, PNG/project export, layers, painting/erasing, cutout, color/style/blur adjustments, AI generation, GPT questions, undo/redo and view controls. Retouch selections: select_lasso uses at least 3 points; select_brush uses points and brush; select_ellipse uses x/y/width/height; select_wand uses x/y/tolerance on the active layer. selectionMode is replace (default), add, subtract or intersect. invert_selection inverts within the current bounds; export_selection_mask writes a PNG with opaque selected pixels. delete_pixels deletes the selection, or erases a points/brush path if none. clone_stamp uses sourceX/sourceY and a destination points path, sampling a snapshot of the active layer at stroke start. sample_color returns merged visible color/alpha. Paint, erase, clone, extract, delete, adjust, export and AI edits respect the actual selection mask, including holes. Precision masks are limited to 4096 pixels per side; all coordinates are canvas world pixels. Image/project/output paths refer to the connected desktop machine. Destructive delete_session requires confirm=true. For canvas AI, set image connection/model with set_parameters; inpaint/outpaint require a selection; generate with mode=cutout creates a transparent subject on a new layer. To generate a standalone image without opening the canvas, use list_image_connections then generate_image; this requires a configured image connection or TokenNest image access and saves PNG files in the agent session.`,
   SubmitPlan: `Submit a plan for user review.
 
 Call this after you have written your plan to a markdown file using the Write tool.
@@ -893,6 +901,7 @@ export type SessionToolDef = RegistrySessionToolDef | BackendSessionToolDef;
 // ============================================================
 
 export const SESSION_TOOL_DEFS: SessionToolDef[] = [
+  { name: 'computer_use', description: 'Operate the visible Windows host desktop using the bundled component: status, screenshot, position, windows, snapshot (UI Automation), focus, move, click, drag, scroll, type, key and wait. Read the windows-desktop-control skill before first use. Screenshots return an actual image with left/top/scale metadata: physical x = left + imageX / scale, y = top + imageY / scale. Inspect before acting and verify afterwards. windowId comes from windows. Input affects the current foreground app. Explore allows observation only; Ask requires approval for input. This controls the host running the session, not a remote client, and cannot operate a locked desktop or bypass UAC.', inputSchema: ComputerUseSchema, executionMode: 'registry', safeMode: 'block', handler: handleComputerUse },
   { name: 'canvas_tool', description: TOOL_DESCRIPTIONS.canvas_tool, inputSchema: CanvasToolSchema, executionMode: 'registry', safeMode: 'allow', handler: handleCanvasTool },
   { name: 'SubmitPlan', description: TOOL_DESCRIPTIONS.SubmitPlan, inputSchema: SubmitPlanSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSubmitPlan },
   { name: 'config_validate', description: TOOL_DESCRIPTIONS.config_validate, inputSchema: ConfigValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleConfigValidate },
@@ -964,6 +973,7 @@ export function getSessionToolDefs(options?: SessionToolFilterOptions): SessionT
   const includeDeveloperFeedback = options?.includeDeveloperFeedback ?? true;
 
   return SESSION_TOOL_DEFS.filter(def => {
+    if (def.name === 'computer_use' && process.platform !== 'win32') return false;
     if (!includeDeveloperFeedback && def.name === 'send_developer_feedback') {
       return false;
     }

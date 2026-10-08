@@ -46,7 +46,7 @@ type ApiToChannelMapKeys = Exclude<
   | 'changeLanguage' // direct IPC to main process — syncs i18n language
   | 'getFilePath' // renderer-local — webUtils.getPathForFile, no IPC round-trip
   | 'getStartupContext' // direct IPC to main — server context / relaunch flow
-  | 'switchServer' // direct IPC to main — restart-based service switching
+  | 'switchServer' // direct IPC to main — frontend service switching
   | 'selectStartupServer' // direct IPC to main — startup picker selection
   | 'getStartupLocation' // direct IPC to main — local startup preference
   | 'setStartupLocation' // direct IPC to main — local startup preference

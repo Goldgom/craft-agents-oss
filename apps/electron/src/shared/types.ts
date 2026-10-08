@@ -467,7 +467,7 @@ export interface ElectronAPI {
   startupMode?: 'picker' | 'normal'
   /** Current server context: local embedded server, thin-client remote server, or picker. */
   getStartupContext(): Promise<StartupServerContext>
-  /** Switch the running service (restart-based): 'local', 'none', or a remote profile id. */
+  /** Switch the frontend service while retaining running local agents: 'local', 'none', or a remote profile id. */
   switchServer(target: string): Promise<{ success: boolean }>
   /** Alias for switchServer — used by the startup server picker page. */
   selectStartupServer(target: string): Promise<{ success: boolean }>

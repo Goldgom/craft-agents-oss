@@ -3,7 +3,7 @@ export const MAX_RASTER_SIDE = 4096
 
 export type Point = { x: number; y: number }
 export type Rect = { x: number; y: number; width: number; height: number }
-export type CanvasTool = 'move' | 'hand' | 'select' | 'brush' | 'erase' | 'adjust' | 'ai' | 'assist'
+export type CanvasTool = 'move' | 'hand' | 'select' | 'ellipse' | 'lasso' | 'select-brush' | 'wand' | 'brush' | 'erase' | 'delete' | 'clone' | 'eyedropper' | 'cutout' | 'adjust' | 'ai' | 'assist'
 export type CanvasLayer = {
   id: string
   name: string

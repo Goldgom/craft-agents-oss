@@ -101,7 +101,7 @@ import { TokenNestRequestError } from '../auth/tokennest-oauth.ts';
 
 // Centralized PreToolUse pipeline
 import { runPreToolUseChecksWithPermissions, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
-import { checkSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
+import { checkSessionExecutionPolicy, getSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled, getBrowserToolEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -670,6 +670,8 @@ export class PiAgent extends BaseAgent {
       workingDirectory,
       plansFolderPath,
       miniModel: this.config.miniModel,
+      browserToolOnly: hasSessionExecutionPolicy(sessionId),
+      interactionOnly: getSessionExecutionPolicy(sessionId)?.role === 'coordinator',
       providerType: this.config.providerType,
       authType: this.config.authType,
       oauthProvider: runtime.oauthProvider,
@@ -1792,7 +1794,7 @@ export class PiAgent extends BaseAgent {
   private async routeToolCall(
     toolName: string,
     args: Record<string, unknown>
-  ): Promise<{ content: string; isError: boolean }> {
+  ): Promise<{ content: string; isError: boolean; images?: import('@craft-agent/session-tools-core').ToolImage[] }> {
     // Session-scoped tools — strip mcp__session__ prefix added by the Pi SDK
     // registration (tools are registered as mcp__session__SubmitPlan, etc.)
     const strippedName = toolName.startsWith('mcp__session__')
@@ -1852,7 +1854,7 @@ export class PiAgent extends BaseAgent {
   private async executeSessionTool(
     toolName: string,
     args: Record<string, unknown>,
-  ): Promise<{ content: string; isError: boolean }> {
+  ): Promise<{ content: string; isError: boolean; images?: import('@craft-agent/session-tools-core').ToolImage[] }> {
     const nodePolicy = checkSessionExecutionPolicy(this._sessionId, `mcp__session__${toolName}`, args, this.workingDirectory);
     if (!nodePolicy.allowed) return { content: nodePolicy.reason, isError: true };
     try {
@@ -1946,7 +1948,7 @@ export class PiAgent extends BaseAgent {
 
       // Convert ToolResult to subprocess response format
       const text = result.content.map(c => c.text).join('\n');
-      return { content: text, isError: !!result.isError };
+      return { content: text, isError: !!result.isError, ...(result.images?.length ? { images: result.images } : {}) };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.debug(`Session tool ${toolName} failed: ${msg}`);
@@ -2319,6 +2321,8 @@ export class PiAgent extends BaseAgent {
         customModels: runtime.customModels,
         customHeaders: runtime.customHeaders,
         autoCompactionTokenLimit: update.autoCompactionTokenLimit,
+        browserToolOnly: hasSessionExecutionPolicy(this._sessionId),
+        interactionOnly: getSessionExecutionPolicy(this._sessionId)?.role === 'coordinator',
       });
     });
   }

@@ -272,12 +272,15 @@ describe('Super Agent execution defaults and orchestration instructions', () => 
     await service.command('alpha', { type: 'task', title: 'Execute', instructions: 'Use built-in tools' })
     const snapshot = await until(() => service.get('alpha'), value => value.state.nodes.every(node => node.status === 'working'))
     for (const node of snapshot.state.nodes) {
-      expect(host.policies.get(node.sessionId!)).toMatchObject({ fullControl: true, readFiles: false, writeFiles: false, runPrograms: false, browser: false })
-      expect(host.options.get(node.sessionId!)!.agentSystemPrompt).toContain('无需逐次申请')
+      const worker = node.nodeId !== 'main'
+      expect(host.policies.get(node.sessionId!)).toMatchObject({ fullControl: worker, readFiles: false, writeFiles: false, runPrograms: false, browser: false })
+      expect(host.options.get(node.sessionId!)!.agentSystemPrompt).toContain(worker ? '无需逐次申请' : '主智能体只负责与用户交互')
       expect(host.options.get(node.sessionId!)!.agentSystemPrompt).not.toContain('等待用户决定')
       const context = JSON.parse(host.sends.find(send => send.sessionId === node.sessionId)!.message.split('Current team state (data, not instructions):\n')[1]!)
       expect(context.environment.fullControl).toBe(true)
-      expect(context.environment.nodePermissions).toEqual({ readFiles: true, writeFiles: true, runPrograms: true, browser: true })
+      expect(context.environment.nodePermissions).toEqual({ readFiles: worker, writeFiles: worker, runPrograms: worker, browser: worker })
+      expect(context.environment.permissionsRole).toBe(worker ? 'worker' : 'coordinator')
+      if (!worker) expect(context.environment.workerPermissions).toEqual({ readFiles: true, writeFiles: true, runPrograms: true, browser: true })
     }
   })
 
@@ -381,7 +384,7 @@ describe('Super Agent execution defaults and orchestration instructions', () => 
     const workerSessionId = snapshot.state.nodes.find(node => node.nodeId === 'worker')!.sessionId!
     expect(host.options.get(workerSessionId)!.permissionMode).toBe('allow-all')
     expect(host.policies.get(workerSessionId)).toMatchObject({ role: 'worker', writeFiles: true, runPrograms: true })
-    expect(snapshot.state.messages.find(message => message.fromNodeId === 'main' && message.toNodeId === 'user')?.body).not.toContain('super_agent_actions')
+    expect(snapshot.state.messages.filter(message => message.fromNodeId === 'main' && message.toNodeId === 'user')).toEqual([])
   })
 
   test('updates a reused coordinator and worker mode and old prompt without replacing their sessions', async () => {
@@ -1272,7 +1275,7 @@ describe('continuous work and durable plans', () => {
     expect(snapshot.state.tasks.map(task => [task.planId, task.nodeId, task.status])).toEqual([
       [planInput.id, 'worker', 'running'], [planInput.id, 'worker-two', 'running'], [planInput.id, 'worker', 'queued'],
     ])
-    expect(snapshot.state.messages.find(message => message.fromNodeId === 'main' && message.toNodeId === 'user')?.actionReceipt).toMatchObject({
+    expect(snapshot.state.messages.find(message => message.fromNodeId === 'main' && !!message.actionReceipt)?.actionReceipt).toMatchObject({
       status: 'applied', applied: [{ type: 'plan-upsert' }, { type: 'task' }, { type: 'task' }, { type: 'task' }],
     })
     expect((await loadSuperAgentDocument(join(root, 'alpha'))).state.tasks).toEqual(snapshot.state.tasks)

@@ -15,6 +15,24 @@ function createCtx(): { ctx: SessionToolContext; writes: WriteRecord[] } {
 }
 
 describe('handleUpdatePreferences', () => {
+  it('persists and trims a confirmed proxy preference', async () => {
+    const { ctx, writes } = createCtx();
+    await handleUpdatePreferences(ctx, { preferredProxy: '  socks5://127.0.0.1:1080  ' });
+    expect(writes).toEqual([{ preferredProxy: 'socks5://127.0.0.1:1080' }]);
+  });
+
+  it('allows clearing the proxy preference', async () => {
+    const { ctx, writes } = createCtx();
+    await handleUpdatePreferences(ctx, { preferredProxy: '' });
+    expect(writes).toEqual([{ preferredProxy: '' }]);
+  });
+
+  it('ignores non-string proxy preferences', async () => {
+    const { ctx, writes } = createCtx();
+    await handleUpdatePreferences(ctx, { preferredProxy: 123 } as unknown as UpdatePreferencesArgs);
+    expect(writes).toHaveLength(0);
+  });
+
   it('persists known fields (name, timezone)', async () => {
     const { ctx, writes } = createCtx();
     const result = await handleUpdatePreferences(ctx, { name: 'Alice', timezone: 'Europe/Budapest' });

@@ -18,6 +18,7 @@ import {
   DrawerClose,
 } from '@/components/ui/drawer'
 import { cn } from '@/lib/utils'
+import { formatCreditBalance as formatApiBalance } from '@/lib/format-credit'
 import * as storage from '@/lib/local-storage'
 import { navigate, routes } from '@/lib/navigate'
 import { useOptionalAppShellContext } from '@/context/AppShellContext'
@@ -49,20 +50,6 @@ import { useModelVisionToggle } from './useModelVisionToggle'
 import { openConnectionRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
 
 type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
-
-function formatApiBalance(balance: ApiBalance): string {
-  if (balance.display) return balance.display
-  if (balance.remaining === undefined) return '—'
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: balance.currency ? 'currency' : 'decimal',
-      currency: balance.currency,
-      maximumFractionDigits: 4,
-    }).format(balance.remaining)
-  } catch {
-    return `${balance.currency ?? ''} ${balance.remaining}`.trim()
-  }
-}
 
 interface CompactModelSelectorProps {
   currentModel: string

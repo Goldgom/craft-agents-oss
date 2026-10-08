@@ -190,7 +190,7 @@ export function createWebApi(options: WebApiOptions): {
     }
     if (input.action === 'open_project' && typeof input.projectPath === 'string') input.projectText = await baseApi.readFile(input.projectPath)
     const result = await canvasHandler(input) as Record<string, unknown>
-    if (['export_png', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
+    if (['export_png', 'export_selection_mask', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
       const project = input.action === 'save_project'
       const name = typeof input.outputPath === 'string' ? input.outputPath.split(/[\\/]/).pop()! : `TokenBird-canvas.${project ? 'tbcanvas' : 'png'}`
       const bytes = Uint8Array.from(atob(result.base64), char => char.charCodeAt(0))

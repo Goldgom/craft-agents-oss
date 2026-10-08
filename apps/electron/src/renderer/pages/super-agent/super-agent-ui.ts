@@ -44,7 +44,7 @@ const strings = {
   researcherName: ['研究助手', 'Research assistant'],
   coordinatorDescription: ['与用户交互、分配工作、定期检查节点状态并整理结果。', 'Talk with the user, assign work, inspect node status and assemble results.'],
   workerDescription: ['执行分配的工作，向主节点报告进展、发现和结果。', 'Complete assigned work and report progress, findings and results.'],
-  coordinatorRule: ['主节点负责沟通、分工与验收，可直接回答普通问答；主要工具操作交给工作节点，独立工作按需并行。每个节点同时只有一个模型轮次。', 'The coordinator communicates, assigns and verifies work, and can answer ordinary questions directly. Workers perform tool work; independent tasks run in parallel when useful. Each node runs one turn at a time.'],
+  coordinatorRule: ['主节点只负责用户交互、理解需求和转交结果；问答、分析、工具操作与验证均交工作节点。没有必要回复时保持静默，主节点思考和内部活动不在聊天中展示。', 'The main agent handles user interaction, understands needs and conveys results. Workers answer questions, analyze, use tools and verify. Remain silent unless a reply is useful; main-agent reasoning and internal activity stay out of chat.'],
   addWorker: ['添加工作节点', 'Add worker'],
   removeNode: ['移除节点', 'Remove node'],
   description: ['基本描述', 'Description'],
@@ -155,6 +155,11 @@ const strings = {
   preparing: ['准备环境', 'Preparing environment'],
   recovering: ['恢复中', 'Recovering'],
   recoveryNotice: ['请求暂时失败，将自动继续（第 {{attempt}} 次恢复）。', 'The request failed temporarily. Continuing automatically (recovery {{attempt}}).'],
+  recoveryNext: ['下次尝试：{{time}}（仍遵守节点调用频率限制）', 'Next attempt: {{time}} (node call-rate limits still apply)'],
+  recoveryDeadline: ['自动恢复截止：{{time}}', 'Automatic recovery deadline: {{time}}'],
+  refreshNode: ['刷新节点', 'Refresh node'],
+  retryNodeNow: ['立即重试', 'Retry now'],
+  nodeRefreshHint: ['暂时故障最多自动恢复 10 分钟。登录、余额或权限问题请先处理，再刷新以继续原任务；执行结果不明时仅重置节点，不自动重跑。', 'Transient failures recover automatically for up to 10 minutes. Resolve login, billing or permission issues before refreshing to continue the task. Unknown outcomes only reset the node and are not replayed.'],
   error: ['异常', 'Error'],
   queued: ['排队中', 'Queued'],
   running: ['运行中', 'Running'],
@@ -179,6 +184,19 @@ const strings = {
   waitingPermission: ['等待授权', 'Waiting for approval'],
   permissionInbox: ['需要你的授权', 'Your approval is needed'],
   permissionHistory: ['最近授权记录', 'Recent approval decisions'],
+  permissionManagement: ['权限管理', 'Permission management'],
+  permissionManagementHint: ['所有节点共用当前工作区的一份授权列表。可处理待审批申请，记住精确文件或程序操作，随时撤销共享授权。登录、管理员审批及未绑定稳定目标的浏览器操作仅支持本次授权；不会扩大到整个目录或全部工具。', 'All nodes share one approval list in this workspace. Review requests, remember exact file or program operations, and revoke shared approvals. Login, administrator approvals, and browser operations without stable targets remain one-time approvals; no entire directory or tool is granted.'],
+  sharedPermissions: ['全队共享授权', 'Shared team approvals'],
+  noSharedPermissions: ['暂无共享授权。审批时选择「全队记住此操作」后会显示在这里。', 'No shared approvals. Choose “Remember for all nodes” when reviewing a request.'],
+  noPendingPermissions: ['当前没有待审批的权限申请。', 'No approval requests are pending.'],
+  approveForTeam: ['全队记住此操作', 'Remember for all nodes'],
+  sharedApprovalHint: ['全队授权会保存到当前工作区，仅复用相同工具、操作、执行目标与工作环境。可在权限管理中撤销；普通授权仍只对本轮有效。', 'Team approvals persist in this workspace and reuse only the same tool, operation, execution target, and environment. Revoke them in Permission management. Ordinary approvals still last only for this turn.'],
+  revokeSharedPermission: ['撤销共享授权', 'Revoke shared approval'],
+  searchPermissions: ['搜索工具、目标或操作…', 'Search tools, targets, or operations…'],
+  noMatchingPermissions: ['没有匹配的权限。', 'No matching approvals.'],
+  sharedPermissionCreator: ['由 {{name}} 的申请建立 · {{time}}', 'Created from {{name}}’s request · {{time}}'],
+  permissionEnvironmentMismatch: ['属于其他工作环境，当前不会自动复用', 'Bound to another environment; not reused here'],
+  fullControlPermissionHint: ['完全控制已开启：工作节点按完全控制执行，撤销共享授权不会关闭完全控制。若需要逐项审批，请在工作环境中关闭完全控制。', 'Full control is enabled. Workers follow full control; revoking a shared approval does not disable it. Turn full control off in Environment settings to require individual approvals.'],
   approvalArchived: ['历史审批', 'Archived approval'],
   approvalDetails: ['查看审批详情', 'View approval details'],
   approvalReason: ['审批原因', 'Reason'],
@@ -282,11 +300,11 @@ const strings = {
 export type SuperAgentTextKey = keyof typeof strings
 export type SuperAgentText = (key: SuperAgentTextKey, values?: Record<string, string | number>) => string
 
-/** Page-local defaults keep new copy translatable without changing existing locale files. */
+/** Defaults also support standalone previews without the application's locale registry. */
 export function useSuperAgentText(): SuperAgentText {
   const { t, i18n } = useTranslation()
-  return (key, values) => t('superAgent.' + key, {
-    defaultValue: strings[key][i18n.language?.startsWith('zh') ? 0 : 1],
+  return (key, values) => t(`superAgent.${key}`, {
+    defaultValue: strings[key][(i18n.resolvedLanguage ?? i18n.language)?.startsWith('zh') ? 0 : 1],
     ...values,
   })
 }
@@ -366,7 +384,7 @@ export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, 
       ...createNode(index === 0 ? 'coordinator' : 'worker', [connection], text, connection.slug),
       ...(old ? { id: old.id, sourceSlugs: [...old.sourceSlugs], abilityProfileIds: [...old.abilityProfileIds] } : {}),
       name: text(`${item.profile}Name`), description: text(`${item.profile}Description`), workPreferences: text(`${item.profile}Preferences`),
-      model: choices[item.model], thinkingLevel: item.thinking,
+      model: choices[item.model], thinkingLevel: /luna/i.test(choices[item.model]) ? 'max' : item.thinking,
       maxCallsPerMinute: item.rate, intelligenceRating: item.rating,
     }
   })
@@ -392,7 +410,7 @@ export function configError(config: SuperAgentConfig, connections: LlmConnection
   return null
 }
 
-export function formatTimestamp(value?: number): string {
+export function formatTimestamp(value?: number, includeSeconds = false): string {
   if (!value) return '—'
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(value)
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', ...(includeSeconds ? { second: '2-digit' as const } : {}) }).format(value)
 }

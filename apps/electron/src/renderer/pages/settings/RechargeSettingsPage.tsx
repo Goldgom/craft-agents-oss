@@ -9,17 +9,11 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { navigate, routes } from '@/lib/navigate'
 import { openConnectionRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
+import { formatCreditBalance as balanceText } from '@/lib/format-credit'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 
 export const meta: DetailsPageMeta = { navigator: 'settings', slug: 'recharge' }
 type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
-
-function balanceText(balance: ApiBalance): string {
-  if (balance.display) return balance.display
-  if (balance.remaining === undefined) return '—'
-  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: balance.currency ?? 'USD', maximumFractionDigits: 4 }).format(balance.remaining) }
-  catch { return `${balance.currency ?? 'USD'} ${balance.remaining}` }
-}
 
 export default function RechargeSettingsPage() {
   const { t } = useTranslation()

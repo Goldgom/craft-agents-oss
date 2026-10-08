@@ -110,6 +110,7 @@ export interface SuperAgentNodeRuntime {
   status: 'idle' | 'preparing' | 'working' | 'recovering' | 'error'
   retryAt?: number
   retryAttempt?: number
+  retryDeadline?: number
   activeTaskId?: string
   lastStartedAt?: number
   lastCompletedAt?: number
@@ -124,6 +125,8 @@ export interface SuperAgentMessage {
   body: string
   taskId?: string
   createdAt: number
+  /** Explicitly selected for the user, including useful background replies. */
+  userFacing?: boolean
   /** Actual host outcome of model control actions, independent of prose claims. */
   actionReceipt?: SuperAgentActionReceipt
   /** Durable display record; never used to restore or grant an approval. */
@@ -194,6 +197,7 @@ export interface SuperAgentState {
   board: SuperAgentBoardItem[]
   plans: SuperAgentPlanItem[]
   scripts: SuperAgentScriptRuntime[]
+  permissionGrants?: SuperAgentPermissionGrant[]
   lastUserActivityAt: number
   lastInspectionAt?: number
   allIdleSince?: number
@@ -266,6 +270,15 @@ export interface SuperAgentPermissionRequest {
   resolvedAt?: number
 }
 
+export interface SuperAgentPermissionGrant {
+  id: string
+  nodeId: string
+  description: string
+  scope: Omit<SessionPolicyPermissionScope, 'expiresAt'>
+  environmentKey: string
+  createdAt: number
+}
+
 /** Model output uses the same bounded operations as the user-facing control API. */
 export type SuperAgentCommand =
   | { type: 'chat'; text: string }
@@ -275,10 +288,12 @@ export type SuperAgentCommand =
   | { type: 'plan-delete'; id: string; expectedRevision: number }
   | { type: 'cancel'; taskId?: string }
   | { type: 'inspect' }
+  | { type: 'node-refresh'; nodeId: string }
   | { type: 'history-cleanup'; before: number; keepRecentMessages: number; expectedRevision: number }
   | { type: 'history-compact'; nodeIds: string[]; expectedRevision: number }
   | { type: 'history-delete-sessions'; sessions: Array<{ id: string; lastMessageAt: number }>; before: number; expectedRevision: number }
-  | { type: 'permission-response'; requestId: string; allowed: boolean }
+  | { type: 'permission-response'; requestId: string; allowed: boolean; remember?: boolean }
+  | { type: 'permission-revoke'; grantId: string }
   | { type: 'message'; fromNodeId: string; toNodeId: string; body: string }
   | { type: 'board-upsert'; item: { id?: string; title: string; content: string }; expectedRevision?: number }
   | { type: 'board-delete'; id: string; expectedRevision?: number }

@@ -83,6 +83,7 @@ export interface ISessionManager {
   applySessionPolicy(sessionId: string, policy: import('@craft-agent/shared/super-agent').SuperAgentSessionPolicy): Promise<void>
   setSuperAgentSessionFullControl(sessionId: string, fullControl: boolean): Promise<void>
   setSuperAgentFullControl(workspaceId: string, fullControl: boolean): Promise<void>
+  clearSuperAgentPermissionGrants(workspaceId: string): void
   ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void>
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
   updateWorkingDirectory(sessionId: string, path: string): void

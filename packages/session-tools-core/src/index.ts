@@ -217,6 +217,9 @@ export type {
 
 // Shell execution (runshell / localbash)
 export { executeShell, type ShellExecArgs, type ShellExecResult } from './shell.ts';
+export { ComputerUseSchema, isComputerUseTool, isComputerUseReadOnly, withToolImages } from './computer-use.ts';
+export type { ComputerUseArgs, ToolImage } from './computer-use.ts';
+export { handleComputerUse } from './handlers/computer-use.ts';
 
 // Tool definitions — single source of truth
 export {

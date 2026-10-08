@@ -13,6 +13,7 @@ import {
 import { createSearchTool } from './tools/search/create-search-tool.ts';
 import { createWebFetchTool } from './tools/web-fetch.ts';
 import type { WebSearchProvider } from './tools/search/types.ts';
+import { filterInteractionTools, filterNativeWebTools } from '../../shared/src/agent/core/browser-tool-policy.ts';
 
 /**
  * Regression contract for Pi SDK 0.70.0 tool registration.
@@ -87,6 +88,19 @@ describe('Pi subprocess tool shape contract', () => {
 });
 
 describe('Pi SDK 0.70.0 CreateAgentSessionOptions contract', () => {
+  it('the interaction node exposes communication without execution or source tools', () => {
+    const tools = [{ name: 'read' }, { name: 'mcp__session__browser_tool' }, { name: 'mcp__assigned__query' }, { name: 'mcp__session__send_agent_message' }];
+    expect(filterInteractionTools(tools, true).map(tool => tool.name)).toEqual(['mcp__session__send_agent_message']);
+    expect(filterInteractionTools(tools)).toEqual(tools);
+  });
+  it('Super Agent web access keeps browser_tool and coding tools while hiding native fetch and search', () => {
+    const browser = { name: 'mcp__session__browser_tool' };
+    const source = { name: 'mcp__assigned__web_fetch' };
+    const tools = [createReadToolDefinition('/tmp'), createSearchTool(stubSearchProvider), createWebFetchTool(() => null), browser, source];
+    expect(filterNativeWebTools(tools, true).map(tool => tool.name)).toEqual(['read', browser.name, source.name]);
+    expect(filterNativeWebTools(tools).map(tool => tool.name)).toEqual(tools.map(tool => tool.name));
+  });
+
   it('`tools` field is typed as string[] (name allowlist, not objects)', () => {
     // Compile-time proof. If Pi SDK ever changes this back to accept tool
     // objects, the line below will become a type error and this test will

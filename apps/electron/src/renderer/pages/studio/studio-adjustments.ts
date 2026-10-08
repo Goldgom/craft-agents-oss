@@ -1,4 +1,5 @@
 import { TILE_SIZE, captureTile, rasterizeRegion, tileKey, type CanvasLayer, type Rect, type TileSnapshot } from './canvas-engine'
+import { blendSelectionPixels, selectionMask, type PixelSelection } from './canvas-retouch'
 
 export type AdjustmentStyle = 'none' | 'grayscale' | 'sepia' | 'vintage' | 'noir'
 export type AdjustmentSettings = {
@@ -82,7 +83,7 @@ export function adjustmentEditArea(tx: number, ty: number, selection: Rect | nul
 }
 
 /** Edits visible layers without flattening them. Each tile samples the original layer, so blur has no tile seams. */
-export function applyAdjustments(layers: CanvasLayer[], selection: Rect | null, settings: AdjustmentSettings): AdjustmentResult[] {
+export function applyAdjustments(layers: CanvasLayer[], selection: Rect | null, settings: AdjustmentSettings, pixelSelection: PixelSelection | null = null): AdjustmentResult[] {
   if (adjustmentsAreNeutral(settings)) return []
   const results: AdjustmentResult[] = []
   const pending: Array<{ layer: CanvasLayer; tiles: Map<string, HTMLCanvasElement> }> = []
@@ -123,6 +124,11 @@ export function applyAdjustments(layers: CanvasLayer[], selection: Rect | null, 
       }
       const pixels = processed.getContext('2d')!.getImageData(padding, padding, TILE_SIZE, TILE_SIZE)
       const original = captureTile(layer, key)
+      if (pixelSelection) {
+        const mask = selectionMask(pixelSelection, { x: tx * TILE_SIZE + layer.offset.x, y: ty * TILE_SIZE + layer.offset.y, width: TILE_SIZE, height: TILE_SIZE })
+        blendSelectionPixels(pixels, original ?? { width: TILE_SIZE, height: TILE_SIZE, data: new Uint8ClampedArray(TILE_SIZE * TILE_SIZE * 4) } as ImageData,
+          mask.getContext('2d')!.getImageData(0, 0, TILE_SIZE, TILE_SIZE))
+      }
       let changed = false
       for (let y = area.y; y < area.y + area.height && !changed; y++) for (let x = area.x; x < area.x + area.width; x++) {
         const index = (y * TILE_SIZE + x) * 4

@@ -86,3 +86,6 @@ credentials.enc
 
 # Local Electron installer builds and diagnostics
 /apps/electron/release-*/
+
+# Local verification screenshots and build logs
+/artifacts/

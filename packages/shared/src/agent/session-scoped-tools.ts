@@ -20,6 +20,8 @@ import { getSessionPlansPath, getSessionPath } from '../sessions/storage.ts';
 import { DOC_REFS } from '../docs/index.ts';
 import { createClaudeContext } from './claude-context.ts';
 import { basename } from 'node:path';
+import { getSessionExecutionPolicy } from './core/session-execution-policy.ts';
+import { filterInteractionTools } from './core/browser-tool-policy.ts';
 
 // Import from session-tools-core: registry + schemas + base descriptions
 import {
@@ -152,9 +154,9 @@ export function isPathInPlansDir(path: string, workspacePath: string, sessionId:
 /**
  * Convert shared ToolResult to SDK format
  */
-function convertResult(result: ToolResult): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } {
+function convertResult(result: ToolResult): { content: Array<{ type: 'text'; text: string } | import('@craft-agent/session-tools-core').ToolImage>; isError?: boolean } {
   return {
-    content: result.content.map(c => ({ type: 'text' as const, text: c.text })),
+    content: [...result.content, ...(result.images ?? [])],
     ...(result.isError ? { isError: true } : {}),
   };
 }
@@ -314,6 +316,6 @@ export function getSessionScopedTools(
   return createSdkMcpServer({
     name: 'session',
     version: '1.0.0',
-    tools,
+    tools: filterInteractionTools(tools, getSessionExecutionPolicy(sessionId)?.role === 'coordinator'),
   });
 }

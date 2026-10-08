@@ -15,10 +15,12 @@ interface MarkdownLinkProps {
 
 const menuItemClasses = 'relative flex cursor-default items-center gap-2 px-2 py-1.5 text-sm outline-hidden select-none rounded-[4px] data-[highlighted]:bg-foreground/[0.03] [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:shrink-0'
 
-/** File actions use the original target; DOM hrefs remain sanitized. */
+/** File actions resolve in the originating project; DOM hrefs stay sanitized. */
 export function MarkdownLink({ href, children, onUrlClick, onFileClick }: MarkdownLinkProps) {
   const { t } = useTranslation()
-  const { onRevealInFinder, onCopyToClipboard } = usePlatform()
+  const { onOpenFile, onOpenUrl, onRevealInFinder, onCopyToClipboard, resolveFilePath } = usePlatform()
+  const handleFileClick = onFileClick ?? onOpenFile
+  const handleUrlClick = onUrlClick ?? onOpenUrl
   const trimmedHref = href?.trim() ?? ''
   const safeHref = trimmedHref ? defaultUrlTransform(trimmedHref) || undefined : undefined
   // Raw HTML anchors can omit href and contain a path as their text instead.
@@ -27,7 +29,10 @@ export function MarkdownLink({ href, children, onUrlClick, onFileClick }: Markdo
     .join('')
     .trim()
   const target = trimmedHref || fallbackText
-  const resolvedTarget = target ? resolveMarkdownLinkTarget(target) : undefined
+  const linkTarget = target ? resolveMarkdownLinkTarget(target) : undefined
+  const resolvedTarget = linkTarget?.kind === 'file' && resolveFilePath
+    ? { kind: 'file' as const, path: resolveFilePath(linkTarget.path) }
+    : linkTarget
 
   const anchor = (
     <a
@@ -35,9 +40,9 @@ export function MarkdownLink({ href, children, onUrlClick, onFileClick }: Markdo
       onClick={event => {
         event.preventDefault()
         if (resolvedTarget?.kind === 'file') {
-          onFileClick?.(resolvedTarget.path)
+          handleFileClick?.(resolvedTarget.path)
         } else if (resolvedTarget?.kind === 'url') {
-          onUrlClick?.(resolvedTarget.url)
+          handleUrlClick?.(resolvedTarget.url)
         }
       }}
       className="text-accent hover:underline cursor-pointer"

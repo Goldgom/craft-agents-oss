@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, BrainCircuit, Check, ChevronDown, Circle, LoaderCircle, ShieldCheck, Sparkles, Square, Wrench, X } from 'lucide-react'
-import type { SuperAgentCommand, SuperAgentConfig, SuperAgentSnapshot } from '@craft-agent/shared/super-agent'
+import { ArrowUp, ChevronDown, Circle, LoaderCircle, ShieldCheck, Sparkles, Square } from 'lucide-react'
+import { canShareSuperAgentPermission, type SuperAgentCommand, type SuperAgentConfig, type SuperAgentSnapshot } from '@craft-agent/shared/super-agent'
 import type { PermissionRequest } from '../../../shared/types'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { AgentAvatar } from './SuperAgentForms'
 import { nodeLabel } from './SuperAgentCollaboration'
 import { formatTimestamp, useSuperAgentText } from './super-agent-ui'
-import { ordinaryPermissionHeads, recentPermissionResolutions, visibleActivityEntries, visibleActivityText, type SuperAgentActivity, type SuperAgentApproval } from './super-agent-activity'
+import { conversationMessages, ordinaryPermissionHeads, recentPermissionResolutions, visibleActivityText, type SuperAgentApproval } from './super-agent-activity'
 import { approvalNotice, permissionNotice } from './super-agent-permission-notice'
 import { PermissionResultCard } from './PermissionResultCard'
 
@@ -34,19 +34,16 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
   const scrollRef = useRef<HTMLDivElement>(null)
   const approvalRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
-  const messages = state.messages.filter(message => message.fromNodeId === 'user' || message.toNodeId === 'user')
-  const mainActivity = snapshot.activity?.find(activity => activity.nodeId === coordinator.id)
-  const entries = mainActivity ? visibleActivityEntries(mainActivity, messages) : []
+  const messages = conversationMessages(state.messages)
   const inbox = snapshot.permissionRequests ?? []
   const notices = new Map(messages.map(message => [message.id, permissionNotice(message, inbox, config)]))
   const approvals = inbox.filter(request => request.status === 'pending')
   const sessionIds = new Set(state.nodes.map(node => node.sessionId).filter((id): id is string => !!id))
   const ordinary = ordinaryPermissionHeads(sessionIds, pendingPermissions, inbox)
   const approvalCount = approvals.length + ordinary.length
-  const streamRevision = entries.map(entry => entry.id + ':' + entry.updatedAt + ':' + entry.text.length).join('|')
   useEffect(() => {
     if (active && followRef.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages.length, streamRevision, approvalCount, busy, active])
+  }, [messages.length, approvalCount, busy, active])
 
   async function send() {
     if (!input.trim() || requestPending || sending || !snapshot.environment.available) return
@@ -54,10 +51,10 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
     setSending(true)
     try { await onCommand({ type: 'chat', text: draft.trim() }); setInput(current => current === draft ? '' : current) } catch { /* The page keeps the draft and displays the actual backend error. */ } finally { setSending(false) }
   }
-  async function respond(request: SuperAgentApproval, allowed: boolean) {
+  async function respond(request: SuperAgentApproval, allowed: boolean, remember = false) {
     if (respondingTo) return
     setRespondingTo(request.id); setApprovalError('')
-    try { await onCommand({ type: 'permission-response', requestId: request.id, allowed }) }
+    try { await onCommand({ type: 'permission-response', requestId: request.id, allowed, ...(remember ? { remember: true } : {}) }) }
     catch (cause) { setApprovalError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setRespondingTo(null) }
   }
@@ -82,7 +79,7 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
       if (scroller) followRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 100
     }}>
       <div className="mx-auto max-w-3xl space-y-6">
-        {!messages.some(message => !notices.get(message.id)) && !entries.length && <div className="mx-auto flex max-w-sm flex-col items-center gap-4 py-12 text-center"><AgentAvatar avatar={config.avatar} name={config.name} className="size-16 rounded-3xl text-3xl" /><h1 className="text-lg font-semibold">{config.name}</h1><p className="text-sm leading-6 text-muted-foreground">{text('introMessage')}</p></div>}
+        {!messages.some(message => !notices.get(message.id)) && <div className="mx-auto flex max-w-sm flex-col items-center gap-4 py-12 text-center"><AgentAvatar avatar={config.avatar} name={config.name} className="size-16 rounded-3xl text-3xl" /><h1 className="text-lg font-semibold">{config.name}</h1><p className="text-sm leading-6 text-muted-foreground">{text('introMessage')}</p></div>}
         {messages.map(message => {
           if (notices.get(message.id)) return null
           const user = message.fromNodeId === 'user'
@@ -95,16 +92,15 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
             </div>
           </article>
         })}
-        {mainActivity && entries.length > 0 && <ActivityStream activity={mainActivity} entries={entries} />}
         {approvalCount > 0 && <div ref={approvalRef} className="space-y-3" aria-label={text('permissionInbox')}>
           <h2 className="flex items-center gap-2 text-xs font-semibold"><ShieldCheck className="size-3.5 text-amber-600 dark:text-amber-400" />{text('permissionInbox')}<span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{approvalCount}</span></h2>
           {approvals.map(request => <ApprovalCard key={request.sessionId + ':' + request.id} owner={nodeLabel(config, request.nodeId, text)} request={request}
-            pending={respondingTo !== null || requestPending} onRespond={allowed => { void respond(request, allowed) }} />)}
+            pending={respondingTo !== null || requestPending} onRespond={allowed => { void respond(request, allowed) }}
+            onRemember={canShareSuperAgentPermission(request.scope) && config.nodes.find(node => node.id === request.nodeId)?.role === 'worker' ? () => { void respond(request, true, true) } : undefined} />)}
           {ordinary.map(request => <ApprovalCard key={request.sessionId + ':' + request.requestId} owner={nodeLabel(config, state.nodes.find(node => node.sessionId === request.sessionId)?.nodeId ?? coordinator.id, text)} request={request}
             pending={respondingTo !== null || !onRespondToPermission} onRespond={allowed => { void respondOrdinary(request, allowed) }} />)}
         </div>}
         {approvalError && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-xs leading-5 text-destructive">{approvalError}</p>}
-        {busy && !entries.length && <div role="status" className="flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" />{text('working')}</div>}
       </div>
     </div>
     <div className="shrink-0 px-5 pb-5 pt-3">
@@ -144,36 +140,12 @@ export function SuperAgentPermissionHistory({ snapshot, className }: {
   </section>
 }
 
-function ActivityStream({ activity, entries }: { activity: SuperAgentActivity; entries: SuperAgentActivity['entries'] }) {
-  const text = useSuperAgentText()
-  return <div className="space-y-3" aria-label={text('liveActivity')}>
-    <div className="flex items-center gap-2 text-[11px] text-muted-foreground"><BrainCircuit className="size-3.5" /><span className="font-medium">{text('liveActivity')}</span>
-      {activity.status === 'working' && <LoaderCircle className="size-3 animate-spin" />}
-      {activity.status === 'waiting_permission' && <span className="text-amber-600 dark:text-amber-400">{text('waitingPermission')}</span>}
-    </div>
-    {entries.map(entry => {
-      const content = visibleActivityText(entry.text)
-      if (entry.kind === 'text') return <div key={entry.id} className="min-w-0 break-words text-sm leading-6"><Markdown>{content}</Markdown></div>
-      if (entry.kind === 'status' || entry.kind === 'error') return <p key={entry.id} className={cn('flex items-start gap-2 text-xs leading-5', entry.kind === 'error' ? 'text-destructive' : 'text-muted-foreground')}>
-        {entry.status === 'running' ? <LoaderCircle className="mt-0.5 size-3 shrink-0 animate-spin" /> : entry.kind === 'error' ? <X className="mt-0.5 size-3 shrink-0" /> : <Check className="mt-0.5 size-3 shrink-0" />}<span>{content}</span></p>
-      return <details key={entry.id} open={entry.kind === 'thinking' && activity.status === 'working'} className="group rounded-xl border border-border/60 bg-foreground/2 px-4 py-3">
-        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-muted-foreground">
-          {entry.kind === 'tool' ? <Wrench className="size-3.5" /> : <BrainCircuit className="size-3.5" />}
-          <span className="min-w-0 flex-1 truncate">{entry.kind === 'tool' ? entry.toolName ?? text('toolActivity') : text('thinkingSummary')}</span>
-          {entry.status === 'running' ? <LoaderCircle className="size-3 animate-spin" /> : entry.status === 'failed' ? <X className="size-3 text-destructive" /> : <Check className="size-3 text-emerald-500" />}
-          <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
-        </summary>
-        {content && <div className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-5 text-foreground/80">{content}</div>}
-      </details>
-    })}
-  </div>
-}
-
-function ApprovalCard({ owner, request, pending, onRespond }: {
+export function ApprovalCard({ owner, request, pending, onRespond, onRemember }: {
   owner: string
   request: SuperAgentApproval | PermissionRequest
   pending: boolean
   onRespond: (allowed: boolean) => void
+  onRemember?: () => void
 }) {
   const text = useSuperAgentText()
   const scope = 'scope' in request ? request.scope : 'policyScope' in request ? request.policyScope : undefined
@@ -188,6 +160,9 @@ function ApprovalCard({ owner, request, pending, onRespond }: {
     {request.reason && <p className="text-xs leading-5 text-muted-foreground">{request.reason}</p>}
     {request.command && <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-background/80 p-3 font-mono text-[11px] leading-5">{request.command}</pre>}
     {exactGrant && <p className="text-[11px] leading-5 text-muted-foreground">{text('exactApprovalHint')}</p>}
-    <div className="flex flex-wrap justify-end gap-2"><Button size="sm" variant="outline" disabled={pending} onClick={() => onRespond(false)}>{text('deny')}</Button><Button size="sm" disabled={pending} onClick={() => onRespond(true)}>{pending && <LoaderCircle className="size-3.5 animate-spin" />}{text(exactGrant ? 'approveThisTurn' : 'allowOnce')}</Button></div>
+    {onRemember && <p className="text-[11px] leading-5 text-muted-foreground">{text('sharedApprovalHint')}</p>}
+    <div className="flex flex-wrap justify-end gap-2"><Button size="sm" variant="outline" disabled={pending} onClick={() => onRespond(false)}>{text('deny')}</Button>
+      {onRemember && <Button size="sm" variant="outline" disabled={pending} onClick={onRemember}>{text('approveForTeam')}</Button>}
+      <Button size="sm" disabled={pending} onClick={() => onRespond(true)}>{pending && <LoaderCircle className="size-3.5 animate-spin" />}{text(exactGrant ? 'approveThisTurn' : 'allowOnce')}</Button></div>
   </article>
 }

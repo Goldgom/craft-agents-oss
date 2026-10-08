@@ -498,7 +498,8 @@ async function main() {
       // Check canonical session tool registry first (feature-filtered)
       const def = sessionToolRegistry.get(name);
       if (def?.handler) {
-        return await def.handler(ctx, toolArgs);
+        const result = await def.handler(ctx, toolArgs);
+        return { ...result, content: [...result.content, ...(result.images ?? [])] };
       }
 
       return errorResponse(`Unknown tool: ${name}`);

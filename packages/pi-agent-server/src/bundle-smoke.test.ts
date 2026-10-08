@@ -120,6 +120,41 @@ function driveBundle(
 }
 
 describe('pi-agent-server bundle', () => {
+  for (const [browserToolOnly, interactionOnly] of [[true, false], [false, false], [true, true]]) {
+    it(interactionOnly ? 'advertises only messaging for the interaction node' : `advertises browser_tool with native web tools ${browserToolOnly ? 'hidden for nodes' : 'retained for ordinary sessions'}`, async () => {
+      const output = await driveBundle([{
+        type: 'init', apiKey: '', model: 'browser-policy-test', cwd: scratchDir,
+        workspaceRootPath: scratchDir, sessionId: `bundle-browser-policy-${browserToolOnly}-${interactionOnly}`,
+        sessionPath: scratchDir, workingDirectory: scratchDir, plansFolderPath: join(scratchDir, 'plans'),
+        providerType: 'pi_compat', authType: 'api_key', browserToolOnly, interactionOnly,
+        baseUrl: 'https://browser-policy.invalid/v1', customEndpoint: { api: 'openai-completions' },
+        customModels: ['browser-policy-test'],
+        piAuth: { provider: 'openai', credential: { type: 'api_key', key: 'dummy-offline' } },
+      }], out => out.includes('"type":"test_browser_tool_policy"'), [
+        { type: 'register_tools', id: 'browser-tools', tools: [{
+          name: 'mcp__session__browser_tool', description: 'Read a page using the session browser.',
+          inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+        }, {
+          name: 'mcp__session__send_agent_message', description: 'Send requirements to an existing worker.',
+          inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, message: { type: 'string' } } },
+        }, {
+          name: 'mcp__assigned__query', description: 'Query external data.', inputSchema: { type: 'object' },
+        }] },
+        { type: 'prompt', id: 'browser-prompt', message: 'Read the assigned page.', systemPrompt: 'Use browser_tool.' },
+      ], { preload: join(import.meta.dir, 'test-fixtures', 'assert-browser-tool-policy.ts') });
+      const packet = output.split('\n').map(line => { try { return JSON.parse(line) } catch { return null } })
+        .find(message => message?.type === 'test_browser_tool_policy');
+      if (interactionOnly) {
+        expect(packet.tools).toEqual(['mcp__session__send_agent_message']);
+        return;
+      }
+      expect(packet.tools).toContain('mcp__session__browser_tool');
+      expect(packet.tools).toContain('read');
+      expect(packet.tools.includes('web_fetch')).toBe(!browserToolOnly);
+      expect(packet.tools.includes('web_search')).toBe(!browserToolOnly);
+    });
+  }
+
   it('awaits a TokenNest refresh ACK and sends the replacement token to a custom endpoint', async () => {
     let refreshId = '';
     let refreshed = false;

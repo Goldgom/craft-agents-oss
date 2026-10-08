@@ -1,11 +1,15 @@
 import { open, rename, unlink } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { dirname } from 'path'
 import type { StoredSession, SessionHeader } from './types.js'
 import { getSessionFilePath, ensureSessionsDir, ensureSessionDir } from './storage.js'
 import { toPortablePath } from '../utils/paths.js'
 import { createSessionHeader, makeSessionPathPortable, readSessionHeader } from './jsonl.js'
 import { debug } from '../utils/debug.js'
+
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
+const RENAME_RETRY_DELAYS_MS = [50, 100, 200, 400, 800]
 
 /** Narrow filesystem seam for failure-boundary tests; production uses Node fs. */
 export interface SessionPersistenceFileOperations {
@@ -96,6 +100,21 @@ class SessionPersistenceQueue {
     this.pending.set(session.id, entry)
   }
 
+  private async renameWithRetry(tmpFile: string, filePath: string, entry: PendingWrite): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      if (entry.cancelled) throw new Error('Session persistence was cancelled')
+      try {
+        await this.fileOperations.rename(tmpFile, filePath)
+        return
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+        const retryDelay = RENAME_RETRY_DELAYS_MS[attempt]
+        if (typeof code !== 'string' || !RENAME_RETRY_CODES.has(code) || retryDelay === undefined) throw error
+        await delay(retryDelay)
+      }
+    }
+  }
+
   /**
    * Write a session to disk immediately in JSONL format.
    * Uses atomic write (write-to-temp-then-rename) to prevent corruption on crash.
@@ -168,7 +187,7 @@ class SessionPersistenceQueue {
       // Set immediately before publication so fs.watch sees the new signature.
       this.lastWrittenHeaderSignature.set(sessionId, getHeaderMetadataSignature(header))
       signaturePublished = true
-      await this.fileOperations.rename(tmpFile, filePath)
+      await this.renameWithRetry(tmpFile, filePath, entry)
       tmpFile = undefined
       if (entry.cancelled) throw new Error('Session persistence was cancelled')
       debug(`[PersistenceQueue] Wrote session ${sessionId}`)

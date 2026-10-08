@@ -1,3 +1,4 @@
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useEffect, useState } from 'react'
 import { Archive, BrainCircuit, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { historySessionEligible, planSuperAgentHistoryCleanup, protectedHistorySessionIds } from '@craft-agent/shared/super-agent/history'
@@ -5,7 +6,7 @@ import type { SuperAgentCommand, SuperAgentHistoryCleanupResult, SuperAgentSnaps
 import type { Session } from '../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { FormField, selectClass } from './SuperAgentForms'
+import { FormField } from './SuperAgentForms'
 import { formatTimestamp, useSuperAgentText } from './super-agent-ui'
 
 type Mode = SuperAgentHistoryCleanupResult['mode']
@@ -92,10 +93,8 @@ export function SuperAgentHistory({ workspaceId, snapshot, busy, onCommand }: {
         <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" /><span><span className="text-sm font-medium">{text(title)}</span><span className="mt-1 block text-xs leading-5 text-muted-foreground">{text(hint)}</span></span>
       </label>)}
     </fieldset>
-    {mode !== 'compact' && <div className="grid gap-4 sm:grid-cols-2"><FormField label={text('historyPeriod')}><select className={selectClass} disabled={pending} value={days} onChange={event => setDays(Number(event.target.value))}>
-      {[30, 7, 90, 0].map(value => <option key={value} value={value}>{value ? text('historyOlder', { days: value }) : text('historyAll')}</option>)}</select></FormField>
-      {mode === 'runtime' && <FormField label={text('historyKeep')}><select className={selectClass} disabled={pending} value={keep} onChange={event => setKeep(Number(event.target.value))}>
-        {[20, 50, 0].map(value => <option key={value} value={value}>{text('historyKeepCount', { count: value })}</option>)}</select></FormField>}</div>}
+    {mode !== 'compact' && <div className="grid gap-4 sm:grid-cols-2"><FormField label={text('historyPeriod')}><WorkbenchSelect disabled={pending} value={days} onValueChange={value => setDays(Number(value))} options={[...[30, 7, 90, 0].map(value => ({ value: value, label: value ? text('historyOlder', { days: value }) : text('historyAll') }))]} /></FormField>
+      {mode === 'runtime' && <FormField label={text('historyKeep')}><WorkbenchSelect disabled={pending} value={keep} onValueChange={value => setKeep(Number(value))} options={[...[20, 50, 0].map(value => ({ value: value, label: text('historyKeepCount', { count: value }) }))]} /></FormField>}</div>}
     {mode === 'runtime' && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5" aria-live="polite">{preview}</p>}
     {mode === 'compact' && <div className="space-y-2">{!nodes.length && <p className="text-xs text-muted-foreground">{text('historyNoNodes')}</p>}
       {nodes.map(node => <label key={node.nodeId} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 text-xs"><input type="checkbox" checked={selectedNodes.includes(node.nodeId)} disabled={locked} onChange={() => toggle(node.nodeId, selectedNodes, setSelectedNodes)} className="accent-primary" />

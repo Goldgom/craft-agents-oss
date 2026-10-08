@@ -53,13 +53,13 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     nodeId: input.nodeId,
     role: input.role,
     rootPath,
-    fullControl: input.fullControl === true,
+    fullControl: input.role === 'worker' && input.fullControl === true,
     // Keep the configured ceilings so turning full control off restores them.
-    readFiles: input.readFiles,
+    readFiles: input.role === 'worker' && input.readFiles,
     writeFiles: input.role === 'worker' && input.writeFiles,
     runPrograms: input.role === 'worker' && input.runPrograms,
-    browser: input.browser,
-    allowSources: Object.freeze([...new Set(input.allowSources)]) as unknown as string[],
+    browser: input.role === 'worker' && input.browser,
+    allowSources: Object.freeze(input.role === 'worker' ? [...new Set(input.allowSources)] : []) as unknown as string[],
     allowSubagents: false,
   });
 }
@@ -250,7 +250,7 @@ export function hasSessionPolicyToolGrant(sessionId: string, toolName: string, i
 }
 
 function shellAutoAllowed(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
-  if (!registered.policy || !input || typeof input !== 'object' || Array.isArray(input)) return false;
+  if (!registered.policy || registered.policy.role === 'coordinator' || !input || typeof input !== 'object' || Array.isArray(input)) return false;
   const parts = toolName.split('__');
   const name = parts.at(-1)!.toLowerCase().replace(/_/g, '');
   if (!['bash', 'localbash', 'runshell'].includes(name) || (parts.length >= 3 && parts[1] !== 'session')
@@ -318,6 +318,7 @@ function permissionScope(registered: RegisteredPolicy, toolName: string, input: 
 /** Called by provider hooks before the synchronous pipeline, so the original call can wait and resume. */
 export async function authorizeSessionPolicyTool(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string, deniedReason?: string): Promise<SessionPolicyToolResult> {
   const checked = checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
+  if (getSessionExecutionPolicy(sessionId)?.role === 'coordinator') return checked;
   if (hasSessionFullControl(sessionId) || isSessionPolicyShellAutoAllowed(sessionId, toolName, input, cwd)) return checked;
   const result = deniedReason ? deny(deniedReason) : checked;
   if (result.allowed || hasSessionPolicyToolGrant(sessionId, toolName, input, cwd)) return { allowed: true };
@@ -361,6 +362,9 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   const name = parts[parts.length - 1]!.toLowerCase().replace(/_/g, '');
   const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
   const canonical = parts[parts.length - 1]!.toLowerCase();
+  if (canonical === 'computer_use') {
+    return deny('Computer use controls the host desktop outside the node environment; restricted nodes cannot access it');
+  }
   // The host routes existing team sessions through the durable node scheduler.
   // Messaging never creates a session or bypasses its serial turn queue.
   if (canonical === 'send_agent_message') {
@@ -372,6 +376,7 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
     }
     return { allowed: true };
   }
+  if (policy.role === 'coordinator') return deny('the main agent only understands user needs and communicates; assign reading, research, execution and verification to workers');
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return deny('each node uses one model process; spawning, delegation and additional model calls are disabled');
   if (name === 'webfetch' && !slug) return deny('WebFetch can call an additional summarization model; use browser_tool to fetch pages within the node model process');
   if (policy.fullControl === true) {

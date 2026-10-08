@@ -7,7 +7,7 @@
  *   the active workspace (local or remote). Workspace switches swap the
  *   workspace client transparently.
  *
- * Thin-client mode (CRAFT_SERVER_URL):
+ * Remote frontend mode (reported by main):
  *   Creates a single WsRpcClient connected to the remote server.
  *   All channels go to the remote server.
  *
@@ -65,10 +65,12 @@ interface TransportClient extends RpcClient {
 // ---------------------------------------------------------------------------
 
 // ── Picker mode (startup server location = 无服务) ───────────────────────────
-// Checked FIRST: in picker mode the local service was NOT bootstrapped, so the
-// main process has no __get-ws-port/__get-web-contents-id listeners. Expose
+// Checked FIRST: a picker-only launch has no local service or transport IPC. Expose
 // only the minimal API the server picker page needs; no WS clients are created.
-const startupContext: { mode?: 'picker' | 'normal' } = ipcRenderer.sendSync('__get-startup-context')
+const startupContext: {
+  mode?: 'picker' | 'normal'
+  remote?: { url: string; profileId?: string; token?: string; workspaceId?: string }
+} = ipcRenderer.sendSync('__get-startup-context')
 const isPickerMode = startupContext?.mode === 'picker'
 
 if (isPickerMode) {
@@ -116,7 +118,9 @@ if (isPickerMode) {
 } else {
 
 const webContentsId: number = ipcRenderer.sendSync('__get-web-contents-id')
-const isClientOnly = !!process.env.CRAFT_SERVER_URL
+// Main owns the current connection. A renderer reload may retain the process
+// environment from before a server switch, so never infer routing from it.
+const isClientOnly = !!startupContext.remote
 
 let client: TransportClient
 let routedClient: RoutedClient | null = null
@@ -127,13 +131,13 @@ if (isClientOnly) {
   // Single WsRpcClient connected directly to the remote server.
   // No local server, no routing — all channels go to remote.
 
-  if (process.env.CRAFT_SERVER_PROFILE_ID) {
+  if (startupContext.remote?.profileId) {
     nativeThinClient = new NativeRemoteClient(ipcRenderer)
     nativeThinClient.connect()
     client = nativeThinClient
   } else {
-  const wsUrl = process.env.CRAFT_SERVER_URL!
-  const wsToken = process.env.CRAFT_SERVER_TOKEN ?? ''
+  const wsUrl = startupContext.remote!.url
+  const wsToken = startupContext.remote!.token ?? ''
 
   // Block unencrypted ws:// to non-localhost servers — tokens would be sent in cleartext
   const parsed = new URL(wsUrl)
@@ -147,7 +151,7 @@ if (isClientOnly) {
   }
 
   // Workspace ID is optional — if missing, renderer shows a workspace picker
-  const workspaceId = process.env.CRAFT_WORKSPACE_ID || ipcRenderer.sendSync('__get-workspace-id') || undefined
+  const workspaceId = startupContext.remote?.workspaceId || ipcRenderer.sendSync('__get-workspace-id') || undefined
 
   const wsClient = new WsRpcClient(wsUrl, {
     token: wsToken,
@@ -260,7 +264,7 @@ client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unk
     input.projectText = bytes.toString('utf8')
   }
   const result = await canvasRequestHandler(input) as Record<string, unknown>
-  if ((input.action === 'export_png' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
+  if ((input.action === 'export_png' || input.action === 'export_selection_mask' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
     if (!isAbsolute(input.outputPath)) throw new Error('outputPath must be absolute')
     const extension = extname(input.outputPath).toLowerCase()
     if (extension !== (input.action === 'save_project' ? '.tbcanvas' : '.png')) throw new Error('Output path has the wrong file extension')

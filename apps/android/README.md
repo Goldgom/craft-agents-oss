@@ -37,6 +37,10 @@ The app starts a localhost-only HTTP server inside the APK and loads the bundled
 
 The Android interface starts with a light RGB palette compatible with older WebViews and retains a persistent light/dark switch in the drawer (Settings also supports following the system theme). The native configuration pages and system bars follow the selected theme. It has a persistent app bar, a left drawer with searchable recent and starred conversations, and a touch-sized composer. The app bar offers workspace selection and a new conversation action; additional tools and server configuration stay in the drawer.
 
+App dialogs, including canvas and mind-map connection prompts, open as fullscreen pages on Android. Their height follows the visible viewport when the keyboard opens; long forms remain scrollable, and closing controls stay visible. App-owned native permission and ADB confirmations also use fullscreen windows. Android's system permission prompts and file pickers remain system-managed.
+
+On the canvas, pinch with two fingers to zoom (10–400%) and drag both fingers to pan, regardless of the selected tool. Single-finger input keeps using the selected tool; choose the hand tool for single-finger panning. Starting a two-finger gesture cancels the unfinished edit, and lifting one finger does not resume painting. Zoom buttons and Fit to content remain available.
+
 Drawer entries for skills, sources, projects, sessions, automations, and settings open their lists first. Sources show existing integrations in the active workspace, with API/MCP/local filters; selecting a row opens its details. Compact Back returns to the same list and preserves its filter. Standalone agent, script-monitor, and tool management pages render their controls in the visible content panel.
 
 The drawer's recent and starred conversations include only sessions with message history. Empty sessions created when opening local chat or starting a new conversation stay out of the drawer until a message exists; titles and creation timestamps alone do not qualify. Existing sessions are not deleted by this display filter.

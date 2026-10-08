@@ -6,6 +6,13 @@ import { classifyMarkdownLinkTarget, resolveMarkdownLinkTarget } from '../link-t
 import { markdownUrlTransform } from '../url-transform'
 
 describe('resolveMarkdownLinkTarget', () => {
+  it('recognizes Windows absolute paths regardless of extension or preview support', () => {
+    for (const path of ['E:/AIProjects/sa/run-instruct-v2/heads.pt', 'E:\\Models\\weights.safetensors', '\\\\server\\share\\model.ckpt', 'E:/Models/LICENSE', 'E:/Models/']) {
+      expect(resolveMarkdownLinkTarget(path)).toEqual({ kind: 'file', path })
+      expect(resolveMarkdownLinkTarget(path.replace(/\\/g, '%5C'))).toEqual({ kind: 'file', path })
+    }
+  })
+
   it('preserves Windows drive and UNC paths, including encoded backslashes', () => {
     for (const path of ['E:/Projects/report.md', 'E:\\Projects\\report.md', '\\\\server\\share\\report.pdf', 'E:/My Documents/report.md']) {
       expect(resolveMarkdownLinkTarget(path)).toEqual({ kind: 'file', path })

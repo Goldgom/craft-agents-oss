@@ -19,7 +19,7 @@ const FILE_PATH_REGEX = new RegExp(FILE_PATH_REGEX_SOURCE, 'gi')
 const FILE_PATH_PRETEST_REGEX = new RegExp(FILE_PATH_REGEX_SOURCE, 'i')
 const WINDOWS_PATH_SOURCE = `(?:[A-Za-z]:[\\\\/]|\\\\\\\\)[^\\s<>"|?*]*\\.(?:${FILE_EXTENSIONS_PATTERN})`
 const WINDOWS_PATH_REGEX = new RegExp(`(?:^|[\\s([{<])(${WINDOWS_PATH_SOURCE})(?=[\\s)\\]}.,:;!?>]|$)`, 'gi')
-const WINDOWS_PATH_TARGET_REGEX = new RegExp(`^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)[^<>"|?*\\r\\n]*\\.(?:${FILE_EXTENSIONS_PATTERN})$`, 'i')
+const WINDOWS_PATH_TARGET_REGEX = /^(?:[A-Za-z]:[\\/]|\\\\)[^<>"|?*\r\n]*$/
 
 // File-path regex for markdown anchor targets (entire href/text value)
 // Used by Markdown.tsx click handler to route file links to onFileClick.

@@ -20,8 +20,8 @@ function render(href?: string, text = 'Download', reveal = true) {
 }
 
 describe('Markdown file link context menus', () => {
-  it('adds a context menu to ZIP, CSV, JSON and image file links', () => {
-    for (const extension of ['zip', 'csv', 'json', 'png']) {
+  it('adds a context menu to previewable and binary file links', () => {
+    for (const extension of ['zip', 'csv', 'json', 'png', 'pt', 'safetensors']) {
       expect(render(`C:/Downloads/catalog.${extension}`)).toContain('data-state="closed"')
     }
   })

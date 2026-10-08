@@ -688,6 +688,21 @@ export class WindowManager {
     return Array.from(this.windows.values()).filter(m => !m.window.isDestroyed())
   }
 
+  /** Reload only the frontend; sessions keep running in the main process. */
+  resetWindowsForServerSwitch(): void {
+    for (const { window, workspaceId } of this.getAllWindows()) {
+      this.updateWindowWorkspace(window.webContents.id, '')
+      // Revoke the old frame's authority before starting any new connection.
+      advanceNativeWindowBinding(window.webContents)
+      this.focusedModeWindows.delete(window.webContents.id)
+      windowLog.info(`Resetting window for server switch from workspace ${workspaceId}`)
+      const load = VITE_DEV_SERVER_URL
+        ? window.loadURL(`${VITE_DEV_SERVER_URL}?workspaceId=`)
+        : window.loadFile(join(__dirname, 'renderer/index.html'), { query: { workspaceId: '' } })
+      void load.catch(error => windowLog.error('Failed to reload window after server switch', error))
+    }
+  }
+
   /**
    * Focus existing window for workspace or create new one
    */

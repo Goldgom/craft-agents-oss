@@ -3666,6 +3666,12 @@ export class SessionManager implements ISessionManager {
     throw failed.reason
   }
 
+  clearSuperAgentPermissionGrants(workspaceId: string): void {
+    for (const managed of this.sessions.values()) {
+      if (managed.workspace.id === workspaceId && managed.executionPolicy) clearSessionPolicyGrants(managed.id)
+    }
+  }
+
   /** Reuse a node's conversation while updating the effective prompt and Execute mode. */
   async ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void> {
     if (settings?.permissionMode !== 'allow-all' || typeof settings.agentSystemPrompt !== 'string' || !settings.agentSystemPrompt.trim()) {

@@ -1009,7 +1009,7 @@ public final class MainActivity extends Activity {
         String safeReason = reason == null || reason.trim().isEmpty()
                 ? "AI needs this permission to complete the requested work."
                 : reason.trim().substring(0, Math.min(reason.trim().length(), 300));
-        runOnUiThread(() -> new AlertDialog.Builder(this)
+        runOnUiThread(() -> showFullscreenDialog(newFullscreenDialogBuilder()
                 .setTitle(R.string.permission_request_title)
                 .setMessage(safeReason + "\n\nPermission: " + permissionKey)
                 .setNegativeButton(R.string.permission_request_deny, (dialog, which) ->
@@ -1028,7 +1028,7 @@ public final class MainActivity extends Activity {
                 .setOnCancelListener(dialog -> dispatchNativeResult(
                         "craft-agent:android-permission-result", requestId,
                         false, "user_cancelled", "User cancelled the permission request", null))
-                .show());
+                .create()));
     }
 
     private boolean isValidAdbHost(String host) {
@@ -1109,7 +1109,7 @@ public final class MainActivity extends Activity {
         String message = getString(R.string.adb_command_warning)
                 + (safeReason.isEmpty() ? "" : "\n\n" + safeReason)
                 + "\n\n$ " + command;
-        runOnUiThread(() -> new AlertDialog.Builder(this)
+        runOnUiThread(() -> showFullscreenDialog(newFullscreenDialogBuilder()
                 .setTitle(R.string.adb_command_title)
                 .setMessage(message)
                 .setNegativeButton(R.string.permission_request_deny, (dialog, which) ->
@@ -1119,7 +1119,26 @@ public final class MainActivity extends Activity {
                 .setOnCancelListener(dialog -> dispatchNativeResult(
                         "craft-agent:android-adb-result", requestId,
                         false, "user_cancelled", "User cancelled the ADB command", null))
-                .show());
+                .create()));
+    }
+
+    /** App-owned confirmations use a page; Android's permission UI stays system-owned. */
+    private AlertDialog.Builder newFullscreenDialogBuilder() {
+        int theme = Color.luminance(COLOR_BACKGROUND) < 0.5
+                ? android.R.style.Theme_Material_NoActionBar
+                : android.R.style.Theme_Material_Light_NoActionBar;
+        return new AlertDialog.Builder(this, theme);
+    }
+
+    private void showFullscreenDialog(AlertDialog dialog) {
+        if (isFinishing()) return;
+        dialog.show();
+        Window dialogWindow = dialog.getWindow();
+        if (dialogWindow != null) {
+            dialogWindow.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            dialogWindow.setGravity(Gravity.FILL);
+            dialogWindow.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        }
     }
 
     private void dispatchNativeResult(

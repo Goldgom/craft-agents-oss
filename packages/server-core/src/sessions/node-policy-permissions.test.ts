@@ -42,6 +42,7 @@ type NodePermissionHarness = {
   autoRespondToNodeRuntimePermission(managed: ManagedTestSession, request: { requestId: string; toolName: string; command?: string; description: string; type?: 'admin_approval' | 'file_write' }): boolean
   clearPendingPermissionRequestsForSession(sessionId: string): void
   respondToPermission(sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean): boolean
+  clearSuperAgentPermissionGrants(workspaceId: string): void
   runSessionLocalShell(managed: ManagedTestSession, args: ShellExecArgs): Promise<ClientShellResult>
   deleteSession(sessionId: string): Promise<void>
 }
@@ -120,6 +121,26 @@ async function approveLocalShell(args: ShellExecArgs) {
 }
 
 describe('node permission lifecycle in SessionManager', () => {
+  test('shared permission revocation clears real operation grants only for the matching workspace', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    const first = beginPermission('Read', input)
+    expect(manager.respondToPermission(sessionId, first.request.requestId, true, false)).toBe(true)
+    expect((await first.result).allowed).toBe(true)
+    const other = manager.sessions.get(otherSessionId)!
+    other.executionPolicy = setSessionExecutionPolicy(otherSessionId, { ...managed.executionPolicy! })
+    other.workspace = { ...other.workspace, id: 'different-workspace' }
+    manager.attachNodePermissionHandler(other)
+    const result = authorizeSessionPolicyTool(otherSessionId, 'Read', input, root)
+    const event = events.findLast((item): item is PermissionEvent => item.type === 'permission_request' && item.sessionId === otherSessionId)!
+    expect(manager.respondToPermission(otherSessionId, event.request.requestId, true, false)).toBe(true)
+    expect((await result).allowed).toBe(true)
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(true)
+    expect(hasSessionPolicyToolGrant(otherSessionId, 'Read', input, root)).toBe(true)
+    manager.clearSuperAgentPermissionGrants('workspace')
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(false)
+    expect(hasSessionPolicyToolGrant(otherSessionId, 'Read', input, root)).toBe(true)
+  })
+
   test('full control runs localbash on the connected client without an approval record', async () => {
     managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: true });
     const args = { command: 'echo test', cwd: outside, timeoutMs: 1_000 };

@@ -18,6 +18,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { isComputerUseTool, isComputerUseReadOnly } from '@craft-agent/session-tools-core';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { expandPath } from '../../utils/paths.ts';
@@ -1066,6 +1067,14 @@ export function shouldPromptInAskMode(
   plansFolderPath?: string,
   onDebug?: (message: string) => void,
 ): PromptInfo | null {
+  if (isComputerUseTool(toolName)) {
+    if (isComputerUseReadOnly(input) || permissionManager.isCommandWhitelisted(toolName)) return null;
+    return {
+      promptType: 'mcp_mutation',
+      description: `Control Windows desktop: ${String(input.action)}${input.windowId ? ` (window ${input.windowId})` : ''}`,
+      command: toolName,
+    };
+  }
 
   // --- File writes ---
   if (FILE_WRITE_TOOLS.has(toolName)) {

@@ -15,7 +15,6 @@ import { toast } from 'sonner'
 
 function isAndroidApp() {
   return new URLSearchParams(window.location.search).get('embedded') === 'android'
-    && Boolean(window.CraftAgentAndroid)
 }
 
 /** Keep the shared renderer sized to the visible viewport, including the IME. */
@@ -40,7 +39,6 @@ export function useMobileAppViewport() {
     const updateViewport = () => {
       const height = Math.round(window.visualViewport?.height ?? window.innerHeight)
       root.style.setProperty('--app-viewport-height', `${height}px`)
-      root.style.setProperty('--app-viewport-top', `${window.visualViewport?.offsetTop ?? 0}px`)
       root.classList.toggle('keyboard-open', android && height < window.innerHeight - 120)
     }
     // Use Radix's Escape path so only its top layer closes and callers retain
@@ -48,7 +46,7 @@ export function useMobileAppViewport() {
     const dismissAndroidDialog = (event: Event) => {
       if (!android || event.defaultPrevented) return
       const dialogs = [...document.querySelectorAll<HTMLElement>(
-        '[data-slot="dialog-content"], [data-slot="drawer-content"], [data-fullscreen-overlay]'
+        '[data-slot="dialog-content"], [data-slot="drawer-content"], [data-fullscreen-overlay], [data-ca-island-dialog="true"], [role="alertdialog"]'
       )].filter(dialog => dialog.dataset.state !== 'closed' && dialog.getClientRects().length > 0)
       if (!dialogs.length) return
       event.preventDefault()
@@ -71,7 +69,6 @@ export function useMobileAppViewport() {
       window.visualViewport?.removeEventListener('resize', updateViewport)
       window.visualViewport?.removeEventListener('scroll', updateViewport)
       root.style.removeProperty('--app-viewport-height')
-      root.style.removeProperty('--app-viewport-top')
       root.classList.remove('keyboard-open')
       if (android) {
         delete root.dataset.mobileApp

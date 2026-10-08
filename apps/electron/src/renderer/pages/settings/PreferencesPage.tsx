@@ -24,62 +24,11 @@ import {
 } from '@/components/settings'
 import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopover'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
+import { emptyFormState, parsePreferences, serializePreferences, type PreferencesFormState } from './preferences-form'
 
 export const meta: DetailsPageMeta = {
   navigator: 'settings',
   slug: 'preferences',
-}
-
-interface PreferencesFormState {
-  name: string
-  timezone: string
-  city: string
-  country: string
-  notes: string
-}
-
-const emptyFormState: PreferencesFormState = {
-  name: '',
-  timezone: '',
-  city: '',
-  country: '',
-  notes: '',
-}
-
-// Parse JSON to form state
-function parsePreferences(json: string): PreferencesFormState {
-  try {
-    const prefs = JSON.parse(json)
-    return {
-      name: prefs.name || '',
-      timezone: prefs.timezone || '',
-      city: prefs.location?.city || '',
-      country: prefs.location?.country || '',
-      notes: prefs.notes || '',
-    }
-  } catch {
-    return emptyFormState
-  }
-}
-
-// Serialize form state to JSON
-function serializePreferences(state: PreferencesFormState): string {
-  const prefs: Record<string, unknown> = {}
-
-  if (state.name) prefs.name = state.name
-  if (state.timezone) prefs.timezone = state.timezone
-
-  if (state.city || state.country) {
-    const location: Record<string, string> = {}
-    if (state.city) location.city = state.city
-    if (state.country) location.country = state.country
-    prefs.location = location
-  }
-
-  if (state.notes) prefs.notes = state.notes
-  prefs.updatedAt = Date.now()
-
-  return JSON.stringify(prefs, null, 2)
 }
 
 export default function PreferencesPage() {
@@ -91,6 +40,13 @@ export default function PreferencesPage() {
   const isInitialLoadRef = useRef(true)
   const formStateRef = useRef(formState)
   const lastSavedRef = useRef<string | null>(null)
+
+  const saveForm = useCallback(async (state: PreferencesFormState) => {
+    const current = await window.electronAPI.readPreferences()
+    const result = await window.electronAPI.writePreferences(serializePreferences(state, current.content))
+    if (!result.success) throw new Error(result.error || 'Failed to save preferences')
+    lastSavedRef.current = JSON.stringify(state)
+  }, [])
 
   // Keep formStateRef in sync for use in cleanup
   useEffect(() => {
@@ -105,7 +61,7 @@ export default function PreferencesPage() {
         const parsed = parsePreferences(result.content)
         setFormState(parsed)
         setPreferencesPath(result.path)
-        lastSavedRef.current = serializePreferences(parsed)
+        lastSavedRef.current = JSON.stringify(parsed)
       } catch (err) {
         console.error('Failed to load stored user preferences:', err)
         setFormState(emptyFormState)
@@ -124,6 +80,7 @@ export default function PreferencesPage() {
   useEffect(() => {
     // Skip auto-save during initial load
     if (isInitialLoadRef.current || isLoading) return
+    if (lastSavedRef.current === JSON.stringify(formState)) return
 
     // Clear any pending save
     if (saveTimeoutRef.current) {
@@ -133,13 +90,7 @@ export default function PreferencesPage() {
     // Debounce save by 500ms
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        const json = serializePreferences(formState)
-        const result = await window.electronAPI.writePreferences(json)
-        if (result.success) {
-          lastSavedRef.current = json
-        } else {
-          console.error('Failed to save preferences:', result.error)
-        }
+        await saveForm(formState)
       } catch (err) {
         console.error('Failed to save preferences:', err)
       }
@@ -150,7 +101,7 @@ export default function PreferencesPage() {
         clearTimeout(saveTimeoutRef.current)
       }
     }
-  }, [formState, isLoading])
+  }, [formState, isLoading, saveForm])
 
   // Force save on unmount if there are unsaved changes
   useEffect(() => {
@@ -161,15 +112,15 @@ export default function PreferencesPage() {
       }
 
       // Check if there are unsaved changes and save immediately
-      const currentJson = serializePreferences(formStateRef.current)
+      const currentJson = JSON.stringify(formStateRef.current)
       if (lastSavedRef.current !== currentJson && !isInitialLoadRef.current) {
         // Fire and forget - we can't await in cleanup
-        window.electronAPI.writePreferences(currentJson).catch((err) => {
+        saveForm(formStateRef.current).catch((err) => {
           console.error('Failed to save preferences on unmount:', err)
         })
       }
     }
-  }, [])
+  }, [saveForm])
 
   const updateField = useCallback(<K extends keyof PreferencesFormState>(
     field: K,
@@ -237,6 +188,23 @@ export default function PreferencesPage() {
                 value={formState.country}
                 onChange={(v) => updateField('country', v)}
                 placeholder={t("settings.preferences.countryPlaceholder")}
+                inCard
+              />
+            </SettingsCard>
+          </SettingsSection>
+
+          <SettingsSection
+            title={t('settings.preferences.proxy')}
+            description={t('settings.preferences.proxyDesc')}
+          >
+            <SettingsCard divided={false}>
+              <SettingsInput
+                label={t('settings.preferences.proxyAddress')}
+                description={t('settings.preferences.proxyAddressDesc')}
+                value={formState.preferredProxy}
+                onChange={(value) => updateField('preferredProxy', value)}
+                placeholder="http://127.0.0.1:7890"
+                type="url"
                 inCard
               />
             </SettingsCard>

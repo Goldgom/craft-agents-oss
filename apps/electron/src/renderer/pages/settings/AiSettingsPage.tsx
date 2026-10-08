@@ -41,6 +41,7 @@ import {
   StyledDropdownMenuSubContent,
 } from '@/components/ui/styled-dropdown'
 import { cn } from '@/lib/utils'
+import { formatCreditBalance as formatApiBalance } from '@/lib/format-credit'
 import { ConnectionIcon } from '@/components/icons/ConnectionIcon'
 import tokenNestIcon from '@/assets/provider-icons/tokennest.png'
 import { openConnectionRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
@@ -201,20 +202,6 @@ const PI_AUTH_PROVIDER_LABELS: Record<string, string> = {
 type ValidationState = 'idle' | 'validating' | 'success' | 'error'
 
 type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
-
-function formatApiBalance(balance: ApiBalance): string {
-  if (balance.display) return balance.display
-  if (balance.remaining === undefined) return '—'
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: balance.currency ? 'currency' : 'decimal',
-      currency: balance.currency,
-      maximumFractionDigits: 4,
-    }).format(balance.remaining)
-  } catch {
-    return `${balance.currency ?? ''} ${balance.remaining}`.trim()
-  }
-}
 
 function AutoCompactionLimitInput({
   value,

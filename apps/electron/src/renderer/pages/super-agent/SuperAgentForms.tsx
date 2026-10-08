@@ -1,3 +1,4 @@
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useCallback, useId, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronDown, FolderOpen, ImagePlus, Trash2 } from 'lucide-react'
@@ -13,8 +14,7 @@ import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
 import { nodeModels, useSuperAgentText } from './super-agent-ui'
 
-export const selectClass = 'h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30 disabled:opacity-50'
-export const textareaClass = 'min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30'
+export const textareaClass = 'min-h-24 w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm leading-6 shadow-xs transition-colors outline-none placeholder:text-muted-foreground hover:border-primary/30 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50'
 
 export function FormField({ label, hint, children, className }: { label: string; hint?: string; children: ReactNode; className?: string }) {
   return <label className={cn('flex min-w-0 flex-col gap-2 text-sm', className)}>
@@ -25,7 +25,7 @@ export function FormField({ label, hint, children, className }: { label: string;
 }
 
 export function FormSection({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
-  return <section className="space-y-4 rounded-xl border border-border/70 bg-background p-5">
+  return <section className="space-y-4 rounded-2xl border border-border/70 bg-background p-4 shadow-xs sm:p-5">
     <div><h3 className="text-sm font-semibold">{title}</h3>{description && <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>}</div>
     {children}
   </section>
@@ -105,24 +105,14 @@ export function NodeEditor({ node, connections, onChange, onRemove, sources = []
     <AvatarEditor avatar={node.avatar} name={node.name} onChange={avatar => patch({ avatar })} />
     <div className="grid gap-4 sm:grid-cols-2">
       <FormField label={text('name')}><Input value={node.name} maxLength={80} onChange={event => patch({ name: event.target.value })} /></FormField>
-      <FormField label={text('connections')}><select className={selectClass} value={node.llmConnection} onChange={event => chooseConnection(event.target.value)}>
-        <option value="">{text('selectConnection')}</option>
-        {connections.map(item => <option key={item.slug} value={item.slug} disabled={!item.isAuthenticated}>{item.name}{item.isAuthenticated ? '' : ' · ' + text('unauthenticated')}</option>)}
-      </select></FormField>
+      <FormField label={text('connections')}><WorkbenchSelect value={node.llmConnection} onValueChange={value => chooseConnection(value)} options={[{ value: "", label: text('selectConnection') }, ...connections.map(item => ({ value: item.slug, label: <>{item.name}{item.isAuthenticated ? '' : ' · ' + text('unauthenticated')}</>, disabled: !item.isAuthenticated }))]} /></FormField>
       <FormField label={text('model')} hint={connection?.oauthProvider === 'tokennest' && connection.channelGroup
         ? text('inheritedGroup', { group: connection.channelGroups?.find(item => item.id === connection.channelGroup)?.name ?? connection.channelGroup }) : undefined}>
-        {models.length > 0 ? <select className={selectClass} value={node.model} onChange={event => patch({ model: event.target.value })}>
-          {!models.includes(node.model) && <option value={node.model}>{node.model || text('modelPlaceholder')}</option>}
-          {models.map(id => <option key={id} value={id}>{id}</option>)}
-        </select> : <Input value={node.model} placeholder={text('modelPlaceholder')} onChange={event => patch({ model: event.target.value })} />}
+        {models.length > 0 ? <WorkbenchSelect value={node.model} onValueChange={value => patch({ model: value })} options={[...(!models.includes(node.model) ? [{ value: node.model, label: node.model || text('modelPlaceholder') }] : []), ...models.map(id => ({ value: id, label: id }))]} /> : <Input value={node.model} placeholder={text('modelPlaceholder')} onChange={event => patch({ model: event.target.value })} />}
       </FormField>
-      <FormField label={text('thinking')}><select className={selectClass} value={node.thinkingLevel} onChange={event => patch({ thinkingLevel: event.target.value as ThinkingLevel })}>
-        {THINKING_LEVELS.map(level => <option key={level.id} value={level.id}>{t(level.nameKey)}</option>)}
-      </select></FormField>
+      <FormField label={text('thinking')}><WorkbenchSelect value={node.thinkingLevel} onValueChange={value => patch({ thinkingLevel: value as ThinkingLevel })} options={[...THINKING_LEVELS.map(level => ({ value: level.id, label: t(level.nameKey) }))]} /></FormField>
       <FormField label={text('speed')} hint={text('speedHint')}><Input type="number" min={0.1} max={60} step={0.1} value={node.maxCallsPerMinute} onChange={event => patch({ maxCallsPerMinute: Number(event.target.value) })} /></FormField>
-      <FormField label={text('rating')} hint={text('ratingHint')}><select className={selectClass} value={node.intelligenceRating} onChange={event => patch({ intelligenceRating: Number(event.target.value) })}>
-        {[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{'★'.repeat(value) + '☆'.repeat(5 - value)}</option>)}
-      </select></FormField>
+      <FormField label={text('rating')} hint={text('ratingHint')}><WorkbenchSelect value={node.intelligenceRating} onValueChange={value => patch({ intelligenceRating: Number(value) })} options={[...[1, 2, 3, 4, 5].map(value => ({ value: value, label: '★'.repeat(value) + '☆'.repeat(5 - value) }))]} /></FormField>
     </div>
     <FormField label={text('description')}><textarea className={textareaClass} rows={3} value={node.description} onChange={event => patch({ description: event.target.value })} /></FormField>
     <FormField label={text('preferences')}><textarea className={textareaClass} rows={3} value={node.workPreferences} placeholder={text('preferencesPlaceholder')} onChange={event => patch({ workPreferences: event.target.value })} /></FormField>
@@ -179,7 +169,7 @@ export function EnvironmentEditor({ environment, onChange, status }: {
         <Button type="button" variant="outline" onClick={picker.pickDirectory} title={text('pickDirectory')} aria-label={text('pickDirectory')}><FolderOpen className="size-4" /></Button></div>
     </FormField>
     {environment.kind === 'sandbox' && <div className="grid gap-4 sm:grid-cols-2">
-      <FormField label={text('containerRuntime')}><select className={selectClass} value={environment.sandbox?.runtime ?? 'docker'} onChange={event => onChange({ ...environment, sandbox: { runtime: event.target.value as 'docker' | 'podman', image: environment.sandbox?.image ?? 'node:22-bookworm' } })}><option value="docker">Docker</option><option value="podman">Podman</option></select></FormField>
+      <FormField label={text('containerRuntime')}><WorkbenchSelect value={environment.sandbox?.runtime ?? 'docker'} onValueChange={value => onChange({ ...environment, sandbox: { runtime: value as 'docker' | 'podman', image: environment.sandbox?.image ?? 'node:22-bookworm' } })} options={[{ value: "docker", label: "Docker" }, { value: "podman", label: "Podman" }]} /></FormField>
       <FormField label={text('containerImage')}><Input value={environment.sandbox?.image ?? ''} onChange={event => onChange({ ...environment, sandbox: { runtime: environment.sandbox?.runtime ?? 'docker', image: event.target.value } })} /></FormField>
     </div>}
     {environment.kind === 'vm' && <FormField label={text('vmWorkspace')}><Input value={environment.vm?.workspaceId ?? ''} onChange={event => onChange({ ...environment, vm: { workspaceId: event.target.value } })} /></FormField>}

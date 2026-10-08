@@ -180,6 +180,8 @@ export interface TextContent {
  */
 export interface ToolResult {
   content: TextContent[];
+  /** Image blocks preserved by the backend adapters. */
+  images?: import('./computer-use.ts').ToolImage[];
   /**
    * Optional structured payload for MCP clients.
    * Keep this as an object (not null) for compatibility with strict tool_result parsers.

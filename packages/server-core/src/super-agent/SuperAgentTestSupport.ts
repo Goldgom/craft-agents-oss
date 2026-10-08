@@ -21,6 +21,9 @@ export class SuperAgentTestHost implements SuperAgentSessionHost {
   eventListeners = new Set<(event: SessionEvent, workspaceId: string) => void>()
   pendingPermissions = new Map<string, { sessionId: string; resolve: (allowed: boolean) => void }>()
   permissionResponses: Array<{ sessionId: string; requestId: string; allowed: boolean; alwaysAllow: boolean }> = []
+  permissionGrantClears: string[] = []
+
+  clearSuperAgentPermissionGrants(workspaceId: string) { this.permissionGrantClears.push(workspaceId) }
 
   async createSession(workspaceId: string, options: CreateSessionOptions) {
     const id = `session-${this.options.size + 1}`

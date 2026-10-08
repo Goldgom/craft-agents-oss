@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { SuperAgentMessage, SuperAgentSnapshot, SuperAgentTask } from '@craft-agent/shared/super-agent'
 import type { PermissionRequest } from '../../../shared/types'
-import { ordinaryPermissionHeads, recentActivityEntries, recentPermissionResolutions, taskActivity, tasklessWorkerActivities, visibleActivityEntries, visibleActivityText, type SuperAgentActivity, type SuperAgentApproval } from './super-agent-activity'
+import { conversationMessages, ordinaryPermissionHeads, recentActivityEntries, recentPermissionResolutions, taskActivity, tasklessWorkerActivities, visibleActivityEntries, visibleActivityText, type SuperAgentActivity, type SuperAgentApproval } from './super-agent-activity'
 
 function workSnapshot(): SuperAgentSnapshot {
   const node = { name: 'Node', avatar: '', description: '', llmConnection: 'test', model: 'test', thinkingLevel: 'medium' as const, maxCallsPerMinute: 6, intelligenceRating: 3, workPreferences: '', sourceSlugs: [], abilityProfileIds: [] }
@@ -14,6 +14,17 @@ function workSnapshot(): SuperAgentSnapshot {
 }
 
 describe('Super Agent conversation activity', () => {
+  it('shows interaction and necessary background replies while hiding legacy inspections and empty control replies', () => {
+    const base: SuperAgentMessage = { id: 'user', fromNodeId: 'user', toNodeId: 'main', kind: 'chat', body: '需求', createdAt: 1 }
+    const messages: SuperAgentMessage[] = [base,
+      { ...base, id: 'internal', fromNodeId: 'main', body: 'Internal reasoning' },
+      { ...base, id: 'inspection', fromNodeId: 'main', toNodeId: 'user', kind: 'inspection', body: '自检完成，无新增工作。' },
+      { ...base, id: 'question', fromNodeId: 'main', toNodeId: 'user', kind: 'inspection', userFacing: true, body: '请提供目标版本。' },
+      { ...base, id: 'empty', fromNodeId: 'main', toNodeId: 'user', body: '<super_agent_actions>{}</super_agent_actions>' },
+      { ...base, id: 'error', fromNodeId: 'system', toNodeId: 'user', kind: 'error', body: 'Connection unavailable' },
+    ]
+    expect(conversationMessages(messages).map(message => message.id)).toEqual(['user', 'question', 'error'])
+  })
   it('hides protocol blocks while retaining user-facing text around them', () => {
     expect(visibleActivityText('计划已更新。<super_agent_actions>{"tasks":[]}</super_agent_actions>\n请继续。')).toBe('计划已更新。\n请继续。')
     expect(visibleActivityText('已分配。<super_agent_actions>{"tasks":[')).toBe('已分配。')

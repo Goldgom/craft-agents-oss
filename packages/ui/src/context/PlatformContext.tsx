@@ -17,6 +17,8 @@ import { createContext, useContext, type ReactNode } from 'react'
  * All actions are optional - platforms only implement what they support
  */
 export interface PlatformActions {
+  /** Resolve a file link against the project/environment that rendered it. */
+  resolveFilePath?: (path: string) => string
   /**
    * Open a file in the default application (Electron: shell.openPath)
    * Web: Could show file contents inline or provide download

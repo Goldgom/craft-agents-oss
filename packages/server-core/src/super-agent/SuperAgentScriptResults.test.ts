@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { loadSuperAgentDocument, saveSuperAgentDocument, type SuperAgentPlanItem } from '@craft-agent/shared/super-agent'
 import { superAgentFixture as fixture, until } from './SuperAgentTestSupport'
+import { SUPER_AGENT_RECOVERY_WINDOW_MS } from './SuperAgentRetry'
 
 class ScriptProcess extends EventEmitter {
   stdout = new PassThrough()
@@ -55,6 +56,39 @@ async function acknowledgeResult(f: Pick<Awaited<ReturnType<typeof scriptFixture
 }
 
 describe('required asynchronous script results', () => {
+  for (const errorCode of ['network_error', 'invalid_api_key']) {
+    test(`suspends ${errorCode} result delivery without resetting recovery and permits manual review`, async () => {
+      const context = await scriptFixture()
+      context.config.idleInspectionMinutes = 1440
+      await context.service.save('alpha', context.config)
+      const submitted = await context.assign()
+      const summary = await until(() => context.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'working')
+      const sessionId = summary.state.nodes.find(node => node.nodeId === 'main')!.sessionId!
+      context.host.complete(sessionId, 'Waiting for script result.')
+      await until(() => context.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'idle')
+      context.processes[0]!.close(0)
+      context.advance(1001); await context.service.tick()
+      await until(() => context.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'working'
+        && context.host.sends.findLast(send => send.sessionId === sessionId)?.message.includes('This asynchronous script result') === true)
+      context.host.complete(sessionId, errorCode === 'network_error' ? 'fetch failed' : 'Invalid API key', 'error', { errorCode })
+      await until(() => context.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === (errorCode === 'network_error' ? 'recovering' : 'error'))
+      context.advance(SUPER_AGENT_RECOVERY_WINDOW_MS); await context.service.tick()
+      const expired = await context.service.get('alpha')
+      expect(expired.state.nodes.find(node => node.nodeId === 'main')!.status).toBe('error')
+      expect(expired.state.scripts[0]).toMatchObject({ resultPending: true, resultDeliveryPaused: true, resultDeliveryAttempts: 1 })
+      const sends = context.host.sends.length
+      await context.service.tick()
+      expect(context.host.sends).toHaveLength(sends)
+      await context.service.command('alpha', { type: 'node-refresh', nodeId: 'main' })
+      await until(() => context.service.get('alpha'), () => context.host.sends.length === sends + 1)
+      expect(context.host.sends.at(-1)!.message).toContain('do not repeat completed operations or restart scripts')
+      context.host.complete(sessionId, 'Script evidence checked.')
+      const reviewed = await until(() => context.service.get('alpha'), value => value.state.scripts[0]!.resultReportedAt != null)
+      expect(reviewed.state.tasks[0]).toEqual(submitted.state.tasks[0])
+      expect(context.processes).toHaveLength(1)
+    })
+  }
+
   test('network recovery retains the same result review without acknowledging it or restarting its script', async () => {
     const f = await scriptFixture()
     const submitted = await f.assign()

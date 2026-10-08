@@ -294,11 +294,16 @@ html[data-mobile-app="android"] [data-studio-editor="canvas"] canvas { touch-act
    Navigation remains a sidebar, and native document pickers remain OS-owned. */
 html[data-mobile-app="android"]:root [data-slot="dialog-content"],
 html[data-mobile-app="android"]:root [data-slot="drawer-content"],
+html[data-mobile-app="android"]:root [data-ca-island-dialog="true"],
+html[data-mobile-app="android"]:root [role="dialog"][aria-modal="true"]:not(.mobile-drawer__panel),
+html[data-mobile-app="android"]:root [role="alertdialog"],
 html[data-mobile-app="android"]:root [data-fullscreen-overlay],
 html[data-mobile-app="android"]:root [data-getting-started-guide],
 html[data-mobile-app="android"]:root .mobile-workspace-picker__panel {
   position: fixed !important;
-  top: var(--app-viewport-top, 0px) !important;
+  /* Android's resized WebView already owns the visible viewport. Adding
+     visualViewport.offsetTop again moves dialogs off-screen on panning IMEs. */
+  top: 0 !important;
   left: 0 !important;
   right: 0 !important;
   bottom: auto !important;
@@ -311,8 +316,17 @@ html[data-mobile-app="android"]:root .mobile-workspace-picker__panel {
   box-sizing: border-box;
   margin: 0 !important;
   transform: none !important;
-  translate: none !important;
+  /* Keep these as initial. Lowering literal `none` for Chrome 67 folds it
+     into transform, leaving Tailwind's independent translate active in newer
+     WebViews and creating a half-screen offset and a fixed-child container. */
+  translate: initial !important;
+  scale: initial !important;
+  rotate: initial !important;
   animation: none !important;
+  transition: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   border: 0 !important;
   border-radius: 0 !important;
   box-shadow: none !important;
@@ -323,12 +337,21 @@ html[data-mobile-app="android"]:root [data-slot="dialog-content"] {
   display: flex !important;
   flex-direction: column;
   gap: 20px;
-  padding: 20px !important;
+  padding: calc(20px + env(safe-area-inset-top, 0px))
+    calc(20px + env(safe-area-inset-right, 0px))
+    calc(20px + env(safe-area-inset-bottom, 0px))
+    calc(20px + env(safe-area-inset-left, 0px)) !important;
   overflow-x: hidden !important;
   overflow-y: auto !important;
   overscroll-behavior: contain;
   scroll-padding-top: 80px;
   scroll-padding-bottom: 80px;
+}
+html[data-mobile-app="android"]:root [data-ca-island-dialog="true"],
+html[data-mobile-app="android"]:root [role="alertdialog"] {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
 }
 html[data-mobile-app="android"]:root [data-slot="dialog-content"] > * { flex-shrink: 0; }
 html[data-mobile-app="android"]:root [data-slot="dialog-content"] > .flex-1 {
@@ -337,10 +360,14 @@ html[data-mobile-app="android"]:root [data-slot="dialog-content"] > .flex-1 {
 }
 html[data-mobile-app="android"]:root [data-slot="dialog-header"] {
   position: sticky;
-  top: -20px;
+  top: 0;
   z-index: 2;
-  margin: -20px -20px 0;
-  padding: 24px 72px 20px 20px;
+  margin: calc(-20px - env(safe-area-inset-top, 0px))
+    calc(-20px - env(safe-area-inset-right, 0px)) 0
+    calc(-20px - env(safe-area-inset-left, 0px));
+  padding: calc(24px + env(safe-area-inset-top, 0px))
+    calc(72px + env(safe-area-inset-right, 0px)) 20px
+    calc(20px + env(safe-area-inset-left, 0px));
   background: var(--background);
   border-bottom: 1px solid var(--border);
   text-align: left;
@@ -349,10 +376,14 @@ html[data-mobile-app="android"]:root [data-slot="dialog-title"] { font-size: 20p
 html[data-mobile-app="android"]:root [data-slot="dialog-description"] { line-height: 1.6; }
 html[data-mobile-app="android"]:root [data-slot="dialog-footer"] {
   position: sticky;
-  bottom: -20px;
+  bottom: 0;
   z-index: 2;
-  margin: auto -20px -20px;
-  padding: 16px 20px;
+  margin: auto calc(-20px - env(safe-area-inset-right, 0px))
+    calc(-20px - env(safe-area-inset-bottom, 0px))
+    calc(-20px - env(safe-area-inset-left, 0px));
+  padding: 16px calc(20px + env(safe-area-inset-right, 0px))
+    calc(16px + env(safe-area-inset-bottom, 0px))
+    calc(20px + env(safe-area-inset-left, 0px));
   background: var(--background);
   border-top: 1px solid var(--border);
   flex-wrap: wrap;
@@ -362,8 +393,8 @@ html[data-mobile-app="android"]:root [data-slot="dialog-content"] > [data-slot="
 html[data-mobile-app="android"]:root [data-slot="drawer-dismiss"] {
   display: flex;
   position: fixed;
-  top: calc(var(--app-viewport-top, 0px) + 12px);
-  right: 12px;
+  top: calc(12px + env(safe-area-inset-top, 0px)) !important;
+  right: calc(12px + env(safe-area-inset-right, 0px)) !important;
   z-index: 3;
   align-items: center;
   justify-content: center;

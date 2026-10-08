@@ -1,10 +1,11 @@
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useState } from 'react'
 import { ClipboardList, LoaderCircle, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { SuperAgentCommand, SuperAgentPlanItem } from '@craft-agent/shared/super-agent'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { FormField, selectClass, textareaClass } from './SuperAgentForms'
+import { FormField, textareaClass } from './SuperAgentForms'
 import { formatTimestamp, useSuperAgentText } from './super-agent-ui'
 
 type PlanDraft = Extract<SuperAgentCommand, { type: 'plan-upsert' }>['item'] & { revision: number }
@@ -42,8 +43,8 @@ export function SuperAgentPlans({ items, onCommand }: {
       {editing && <fieldset disabled={pending} className="min-w-0 space-y-4">
         <FormField label={text('taskTitle')}><Input maxLength={120} value={editing.title} onChange={event => setEditing({ ...editing, title: event.target.value })} /></FormField>
         <FormField label={text('taskInstructions')}><textarea rows={5} maxLength={32000} className={textareaClass} value={editing.instructions} onChange={event => setEditing({ ...editing, instructions: event.target.value })} /></FormField>
-        <div className="grid grid-cols-2 gap-4"><FormField label={text('planStatus')}><select className={selectClass} value={editing.status} onChange={event => setEditing({ ...editing, status: event.target.value as PlanDraft['status'] })}>{statuses.map(status => <option key={status} value={status}>{text(status)}</option>)}</select></FormField>
-          <FormField label={text('priority')}><select className={selectClass} value={editing.priority} onChange={event => setEditing({ ...editing, priority: Number(event.target.value) })}>{[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value}</option>)}</select></FormField></div>
+        <div className="grid grid-cols-2 gap-4"><FormField label={text('planStatus')}><WorkbenchSelect value={editing.status} onValueChange={value => setEditing({ ...editing, status: value as PlanDraft['status'] })} options={[...statuses.map(status => ({ value: status, label: text(status) }))]} /></FormField>
+          <FormField label={text('priority')}><WorkbenchSelect value={editing.priority} onValueChange={value => setEditing({ ...editing, priority: Number(value) })} options={[...[1, 2, 3, 4, 5].map(value => ({ value: value, label: value }))]} /></FormField></div>
         <FormField label={text('planNote')}><textarea rows={3} maxLength={4000} className={textareaClass} value={editing.note} onChange={event => setEditing({ ...editing, note: event.target.value })} /></FormField>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter><Button variant="outline" onClick={() => setEditing(null)}>{text('cancel')}</Button><Button disabled={!editing.title.trim() || !editing.instructions.trim()} onClick={() => void run({ type: 'plan-upsert', item: { id: editing.id, title: editing.title.trim(), instructions: editing.instructions.trim(), status: editing.status, priority: editing.priority, note: editing.note }, expectedRevision: editing.revision }, true)}>{pending && <LoaderCircle className="size-3.5 animate-spin" />}{text('save')}</Button></DialogFooter>

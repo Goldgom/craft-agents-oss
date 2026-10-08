@@ -10,10 +10,10 @@ const tokenNest: LlmConnectionWithStatus = {
   oauthProvider: 'tokennest', isAuthenticated: true, createdAt: 1,
   channelGroup: 'text',
   defaultModel: 'available-model',
-  models: ['available-model', 'available-mini', 'private-opus', 'gpt-image-1'],
+  models: ['available-model', 'available-mini', 'private-opus', 'gpt-6-luna', 'gpt-image-1'],
   channelGroups: [
     { id: 'text', name: 'Text', models: ['available-model', 'available-mini', 'gpt-image-1'] },
-    { id: 'private', name: 'Private', models: ['private-opus'] },
+    { id: 'private', name: 'Private', models: ['private-opus', 'gpt-6-luna'] },
   ],
 }
 
@@ -85,12 +85,12 @@ describe('Super Agent model authorization and setup', () => {
 
   it('defaults to daily assistance and gives autonomous scenarios distinct roles and continuation settings', () => {
     const config = createConfig([tokenNest], text)
-    expect(config.nodes.map(node => node.name)).toEqual(['dailyLeadName', 'dailyWorkerName'])
+    expect(config.nodes.map(node => node.name)).toEqual(['dailyLeadName', 'dailyWorkerName', 'organizerName', 'collaborationAssistantName'])
     for (const preset of SUPER_AGENT_PRESETS) {
       const result = applyPreset(config, preset, tokenNest, text)
       result.environment.workingDirectory = 'C:\\work'
       expect(() => validateSuperAgentConfig(result)).not.toThrow()
-      expect(result.nodes).toHaveLength(preset === 'daily' ? 2 : 4)
+      expect(result.nodes).toHaveLength(preset === 'daily' ? 4 : 6)
       expect(result.continuousWork).toBe(true)
       expect(result.idleInspectionMinutes).toBe({ daily: 60, coding: 10, research: 30, work: 15 }[preset])
       expect(result.nodes.map(node => node.workPreferences)).toEqual(PRESET_RECIPES[preset].nodes.map(node => `${node.profile}Preferences`))
@@ -104,10 +104,10 @@ describe('Super Agent model authorization and setup', () => {
     config.nodes[1].sourceSlugs = ['repo']
     config.abilityProfiles = [{ id: 'review', name: 'Review', description: '', instructions: 'Review artifacts' }]
     config.nodes[2].abilityProfileIds = ['review']
-    config.scripts = [{ id: 'checks', name: 'Checks', path: 'checks.ts', args: [], timeoutSeconds: 60, nodeId: config.nodes[3].id }]
+    config.scripts = [{ id: 'checks', name: 'Checks', path: 'checks.ts', args: [], timeoutSeconds: 60, nodeId: config.nodes[5].id }]
     const original = structuredClone(config)
     const result = applyPreset(config, 'daily', tokenNest, text)
-    expect(result.nodes.map(node => node.id)).toEqual(config.nodes.map(node => node.id))
+    expect(result.nodes.map(node => node.id)).toEqual([...config.nodes.slice(0, 4), config.nodes[5]].map(node => node.id))
     expect(result.nodes[1].sourceSlugs).toEqual(['repo'])
     expect(result.nodes[2].abilityProfileIds).toEqual(['review'])
     expect(result.scripts).toEqual(config.scripts)
@@ -116,9 +116,28 @@ describe('Super Agent model authorization and setup', () => {
   })
 
   it('uses standard and expert models by role, works without TokenNest, and falls back to a single model', () => {
-    const provider = { ...tokenNest, oauthProvider: undefined, channelGroups: undefined, models: ['gpt-6-luna', 'gpt-6-astra', 'gpt-6.1-sol'], defaultModel: 'gpt-6-astra' }
+    const provider = { ...tokenNest, oauthProvider: undefined, channelGroups: undefined, models: ['available-mini', 'gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-astra', 'gpt-6.1-sol'], defaultModel: 'gpt-6-astra' }
     const coding = applyPreset(createConfig([provider], text), 'coding', provider, text)
-    expect(coding.nodes.map(node => node.model)).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-astra'])
+    expect(coding.nodes.map(node => node.model)).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-luna'])
+    for (const preset of SUPER_AGENT_PRESETS) {
+      const result = applyPreset(createConfig([provider], text), preset, provider, text)
+      const collaborators = result.nodes.slice(-2)
+      expect(collaborators).toHaveLength(2)
+      for (const node of collaborators) {
+        expect(node.model).toBe('gpt-6-luna')
+        expect(node.role).toBe('worker')
+        expect(node.thinkingLevel).toBe('max')
+        expect(node.intelligenceRating).toBe(2)
+      }
+      expect(result.nodes.filter(node => /luna/i.test(node.model)).every(node => node.thinkingLevel === 'max')).toBe(true)
+      if (preset === 'daily' || preset === 'work') {
+        expect(result.nodes.find(node => node.name === (preset === 'daily' ? 'dailyWorkerName' : 'producerName'))).toMatchObject({
+          model: 'gpt-6-luna', intelligenceRating: 3, maxCallsPerMinute: preset === 'daily' ? 8 : 10,
+        })
+      }
+      const legacyLuna = { ...provider, models: provider.models.filter(id => id !== 'gpt-6-luna') }
+      expect(applyPreset(createConfig([legacyLuna], text), preset, legacyLuna, text).nodes.some(node => node.model === 'gpt-5.6-luna')).toBe(true)
+    }
     const single = { ...provider, models: ['only-model'] }
     for (const preset of SUPER_AGENT_PRESETS) {
       expect(applyPreset(coding, preset, single, text).nodes.every(node => node.model === 'only-model')).toBe(true)

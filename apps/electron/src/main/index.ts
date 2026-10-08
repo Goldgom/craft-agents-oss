@@ -10,6 +10,7 @@ import { join, delimiter, basename } from 'path'
 import { pathToFileURL } from 'node:url'
 import { createNativeWindowAuthority, type NativeAuthorityEvent } from './native-window-authority'
 import { registerNativeWorkspaceSwitch } from './handlers/workspace-native'
+import { createServerSwitcher } from './server-switch'
 import { configureElectronCredentialVault } from './credential-vault'
 import { registerNativeCredentialIpcHandlers } from './handlers/credentials-native'
 import { configureRemoteCredentialProtection, hasPendingRemoteCredentialMigration, listManagedRemoteCredentialMetadata, migrateRemoteCredentials, prepareRemoteWorkspaceConfig, resolveRemoteProfile, resolveRemoteWorkspace, saveRemoteProfile, type ResolvedRemoteProfile } from './remote-credentials'
@@ -315,8 +316,8 @@ let pendingDeepLink: string | null = null
 //
 // Preference values: 'none' (picker only — no local service at startup),
 // 'local' (default: embedded local server), or a remote-server profile id.
-// Switching servers is restart-based: the choice is persisted and the app
-// relaunches with CRAFT_SERVER_URL/TOKEN set (thin-client mode) or unset.
+// Runtime switches reload the frontend while keeping the embedded agent host
+// alive. A restart is needed only when entering a local service not yet booted.
 // ---------------------------------------------------------------------------
 
 const STARTUP_LOCATION_NONE = 'none'
@@ -376,48 +377,51 @@ function getServerContext(): StartupServerContext {
   return { mode: 'local' }
 }
 
-async function relaunchWithServer(target: string, assertCurrent?: () => void): Promise<void> {
-  assertCurrent?.()
-  if (target === STARTUP_LOCATION_LOCAL || target === STARTUP_LOCATION_NONE) {
-    delete process.env.CRAFT_SERVER_URL
-    delete process.env.CRAFT_SERVER_TOKEN
-    delete process.env.CRAFT_SERVER_PROFILE_ID
-    delete process.env.CRAFT_SERVER_PROFILE_NAME
-    setStartupServerLocation(target)
-  } else {
-    const profile = await resolveRemoteProfile(target)
-    if (!profile) throw new Error('Remote server profile not found')
-    assertCurrent?.()
-    setStartupServerLocation(target)
-    process.env.CRAFT_SERVER_URL = profile.url
-    // Saved credentials stay in main, never inherited by a renderer/subprocess.
-    delete process.env.CRAFT_SERVER_TOKEN
-    process.env.CRAFT_SERVER_PROFILE_ID = profile.id
-    process.env.CRAFT_SERVER_PROFILE_NAME = profile.name
-  }
-
-  requestWorkspaceSelectionOnNextLaunch()
-  mainLog.info(`[server-switch] Relaunching with target=${target}`)
-
-  if (!app.isPackaged) {
-    // Dev: the electron-dev watcher owns Vite and respawns Electron when it
-    // exits with code 42 — a plain app.relaunch() would orphan the relaunched
-    // instance without the dev server. The persisted preference drives the
-    // next boot's server mode (resolveStartupRemoteProfile reads it).
-    mainLog.info('[server-switch] dev mode — exiting with restart code for the dev watcher')
-    app.exit(42)
-    return
-  }
-
-  app.relaunch()
-  app.exit(0)
-}
+const switchServer = createServerSwitcher({
+  env: process.env,
+  resolveProfile: resolveRemoteProfile,
+  persistLocation: setStartupServerLocation,
+  setContext: (target, profile) => {
+    if (!startupRemoteTarget) {
+      for (const { workspaceId } of windowManager?.getAllWindows() ?? []) {
+        if (workspaceId) sessionManager?.clearActiveViewingSession(workspaceId)
+      }
+    }
+    pickerMode = target === STARTUP_LOCATION_NONE
+    startupRemoteTarget = profile
+    mainLog.info(`[server-switch] Switching frontend to target=${target}`)
+  },
+  canReload: target => !!nativeRemoteTransport
+    && (target !== STARTUP_LOCATION_LOCAL || !!sessionManager),
+  reloadWindows: () => windowManager?.resetWindowsForServerSwitch(),
+  restart: () => {
+    // No embedded host exists in this path, so no local agents are interrupted.
+    requestWorkspaceSelectionOnNextLaunch()
+    if (!app.isPackaged) {
+      // The dev watcher respawns Electron with the persisted server selection.
+      mainLog.info('[server-switch] dev mode — exiting with restart code for the dev watcher')
+      app.exit(42)
+      return
+    }
+    app.relaunch()
+    app.exit(0)
+  },
+})
 
 // Client-local IPC used by both the startup picker and the menu-bar switcher.
 // Registered at module scope so they work even when the local service is not
 // bootstrapped (picker mode / thin-client remote mode).
 ipcMain.on('__get-startup-context', (e) => {
-  e.returnValue = { mode: pickerMode ? 'picker' : 'normal' }
+  e.returnValue = {
+    mode: pickerMode ? 'picker' : 'normal',
+    remote: process.env.CRAFT_SERVER_URL ? {
+      url: process.env.CRAFT_SERVER_URL,
+      profileId: process.env.CRAFT_SERVER_PROFILE_ID,
+      workspaceId: process.env.CRAFT_WORKSPACE_ID,
+      // Only legacy ad-hoc connections use a preload-owned bearer.
+      ...(!process.env.CRAFT_SERVER_PROFILE_ID && { token: process.env.CRAFT_SERVER_TOKEN ?? '' }),
+    } : undefined,
+  }
 })
 ipcMain.handle('__get-server-context', async () => {
   const ctx = getServerContext()
@@ -474,7 +478,7 @@ ipcMain.handle('__remote-servers:test', async (event, input: { id?: string; url?
 })
 ipcMain.handle('__select-startup-server', async (event, target: string) => {
   const assertCurrent = pinNativeApp(event)
-  await relaunchWithServer(target, assertCurrent)
+  await switchServer(target, assertCurrent)
   return { success: true }
 })
 ipcMain.handle('__get-startup-location', async () => getStartupServerLocation() ?? STARTUP_LOCATION_LOCAL)
@@ -932,7 +936,7 @@ app.whenReady().then(async () => {
     nativeRemoteTransport = registerNativeRemoteTransport(ipcMain, {
       assertSender: assertNativeAppWindow,
       resolveTarget: async authority => {
-        if (isClientOnly && startupRemoteTarget) {
+        if (process.env.CRAFT_SERVER_URL && startupRemoteTarget) {
           const current = await resolveRemoteProfile(startupRemoteTarget.profileId)
           // A stored edit invalidates this startup generation. Reopening the
           // saved server is explicit; never silently retarget an existing tab.
@@ -1377,18 +1381,6 @@ app.whenReady().then(async () => {
         oauthFlowStore: instance.oauthFlowStore,
         windowManager: windowManager ?? undefined,
       }, assertNativeWindow)
-      registerNativeWorkspaceSwitch(ipcMain, {
-        assertSender: assertNativeAppWindow,
-        getWorkspace: id => {
-          const workspace = getWorkspaceByNameOrId(id)
-          return workspace ? redactWorkspaceRemoteCredentials(workspace) : null
-        },
-        updateWindowWorkspace: (id, workspaceId) => windowManager?.updateWindowWorkspace(id, workspaceId) ?? false,
-        getAllWindowsForWorkspace: id => windowManager?.getAllWindowsForWorkspace(id) ?? [],
-        clearActiveViewingSession: id => instance.sessionManager.clearActiveViewingSession(id),
-        setupConfigWatcher: (rootPath, workspaceId) => instance.sessionManager.setupConfigWatcher(rootPath, workspaceId),
-      })
-
       // Capture module-level references for before-quit cleanup and deep-link handlers
       sessionManager = instance.sessionManager
       oauthFlowStore = instance.oauthFlowStore
@@ -1718,10 +1710,16 @@ app.whenReady().then(async () => {
       }
     }
 
-    if (isClientOnly && startupRemoteTarget) {
+    // Resolve against the current frontend server, including hot switches from
+    // an embedded local host to a saved remote profile and back.
+    if (!isClientOnly || startupRemoteTarget) {
       registerNativeWorkspaceSwitch(ipcMain, {
         assertSender: assertNativeAppWindow,
         getWorkspace: async id => {
+          if (!process.env.CRAFT_SERVER_URL) {
+            const workspace = getWorkspaceByNameOrId(id)
+            return workspace ? redactWorkspaceRemoteCredentials(workspace) : null
+          }
           const target = await freshStartupRemoteTarget()
           const connection = new WsRpcClient(validateNativeRemoteUrl(target.url), { token: target.token, autoReconnect: false,
             tlsRejectUnauthorized: true, useNodeWebSocket: true, requestTimeout: 10_000 })
@@ -1735,7 +1733,10 @@ app.whenReady().then(async () => {
         },
         updateWindowWorkspace: (id, workspaceId) => windowManager?.updateWindowWorkspace(id, workspaceId) ?? false,
         getAllWindowsForWorkspace: id => windowManager?.getAllWindowsForWorkspace(id) ?? [],
-        clearActiveViewingSession: () => {}, setupConfigWatcher: () => {},
+        clearActiveViewingSession: id => {
+          if (!process.env.CRAFT_SERVER_URL) sessionManager?.clearActiveViewingSession(id)
+        },
+        setupConfigWatcher: (rootPath, workspaceId) => sessionManager?.setupConfigWatcher(rootPath, workspaceId),
       })
     }
     // Multi-server relay is not registered in this release while its separate

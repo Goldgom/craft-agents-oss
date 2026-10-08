@@ -21,6 +21,7 @@ import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 // Pi SDK
+import { withToolImages, type ToolImage } from '@craft-agent/session-tools-core';
 import {
   createAgentSession,
   SessionManager as PiSessionManager,
@@ -92,6 +93,7 @@ import { getSessionPlansPath, getSessionPath } from '../../shared/src/sessions/s
 import { buildCallLlmRequest } from '../../shared/src/agent/llm-tool.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
+import { filterInteractionTools, filterNativeWebTools } from '../../shared/src/agent/core/browser-tool-policy.ts';
 import { installCraftPiRetryClassifier } from '../../shared/src/agent/backend/pi/retry-policy.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
 import { resolveBashShellPath } from './bash-shell-path.ts';
@@ -120,6 +122,9 @@ interface InitMessage {
   workingDirectory: string;
   plansFolderPath: string;
   miniModel?: string;
+  /** Super Agent sessions expose browser_tool for all web access. */
+  browserToolOnly?: boolean;
+  interactionOnly?: boolean;
   agentDir?: string;
   providerType?: string;
   authType?: string;
@@ -149,6 +154,8 @@ interface RuntimeConfigUpdateMessage {
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
   customHeaders?: Record<string, string>;
   autoCompactionTokenLimit?: number;
+  browserToolOnly?: boolean;
+  interactionOnly?: boolean;
 }
 
 /** Messages from main process (stdin) */
@@ -156,7 +163,7 @@ type InboundMessage =
   | InitMessage
   | { type: 'prompt'; id: string; message: string; systemPrompt: string; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
   | { type: 'register_tools'; id: string; tools: ProxyToolDef[] }
-  | { type: 'tool_execute_response'; requestId: string; result: { content: string; isError: boolean } }
+  | { type: 'tool_execute_response'; requestId: string; result: ProxyToolResult }
   | { type: 'pre_tool_use_response'; requestId: string; action: 'allow' | 'block' | 'modify'; input?: Record<string, unknown>; reason?: string }
   | { type: 'abort' }
   | { type: 'mini_completion'; id: string; prompt: string }
@@ -174,6 +181,12 @@ type InboundMessage =
   | { type: 'shutdown' };
 
 /** Proxy tool definition from main process */
+interface ProxyToolResult {
+  content: string;
+  isError: boolean;
+  images?: ToolImage[];
+}
+
 interface ProxyToolDef {
   name: string;
   description: string;
@@ -313,7 +326,7 @@ let currentUserMessage = '';
 
 // Pending promises for async handshakes
 const pendingPreToolUse = new Map<string, { resolve: (response: { action: string; input?: Record<string, unknown>; reason?: string }) => void }>();
-const pendingToolExecutions = new Map<string, { resolve: (result: { content: string; isError: boolean }) => void }>();
+const pendingToolExecutions = new Map<string, { resolve: (result: ProxyToolResult) => void }>();
 
 // Pending session MCP tool calls for completion detection
 const pendingSessionToolCalls = new Map<string, { toolName: string; arguments: Record<string, unknown> }>();
@@ -326,7 +339,7 @@ let proxyToolDefs: ProxyToolDef[] = [];
 // to the main process in parallel on message_end (before executeToolCalls iterates sequentially).
 // Each proxy tool's execute() then hits the cache instead of sending a new request.
 const PREFETCHABLE_TOOLS = new Set(['call_llm']);
-const prefetchCache = new Map<string, Promise<{ content: string; isError: boolean }>>();
+const prefetchCache = new Map<string, Promise<ProxyToolResult>>();
 
 function isPrefetchableTool(toolName: string): boolean {
   const stripped = toolName.replace(/^(mcp__session__|session__)/, '');
@@ -647,7 +660,7 @@ async function ensureSession(): Promise<AgentSession> {
   const webFetchTool = createWebFetchTool(() =>
     initConfig ? getSessionPath(initConfig.workspaceRootPath, initConfig.sessionId) : null
   );
-  const webTools = [searchTool, webFetchTool];
+  const webTools = filterNativeWebTools([searchTool, webFetchTool], initConfig?.browserToolOnly);
 
   // Pi SDK 0.70.0 registration contract:
   //   - `customTools` accepts ToolDefinition[] — our hook-wrapped objects go here
@@ -679,7 +692,7 @@ async function ensureSession(): Promise<AgentSession> {
     createLsToolDefinition(cwd),
   ];
   const proxyTools = buildProxyTools();
-  const wrappedAll = wrapToolsWithHooks([...builtinDefs, ...webTools, ...proxyTools]);
+  const wrappedAll = wrapToolsWithHooks(filterInteractionTools([...builtinDefs, ...webTools, ...proxyTools], initConfig.interactionOnly));
   const toolAllowlist = wrappedAll.map(t => t.name);
   debugLog(`Session tools: ${builtinDefs.length} builtin + ${webTools.length} web + ${proxyTools.length} proxy = ${wrappedAll.length} total`);
 
@@ -907,7 +920,9 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
             intent,
             userRequest: currentUserMessage,
           },
-          summarize: runMiniCompletion,
+          // Node tool results stay in the node's model process. Keep full text
+          // on disk with a preview instead of starting a second model query.
+          summarize: initConfig.browserToolOnly ? undefined : runMiniCompletion,
           contextWindow: modelContextWindow,
         });
 
@@ -968,7 +983,7 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
         debugLog(`Prefetch cache hit for ${def.name} (toolCallId: ${toolCallId})`);
         const result = await prefetched;
         return {
-          content: [{ type: 'text', text: result.content }],
+          content: withToolImages(result),
           details: result.isError ? { isError: true } : undefined,
         };
       }
@@ -988,12 +1003,12 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
         args: approvedInput,
       });
 
-      const result = await new Promise<{ content: string; isError: boolean }>((resolve) => {
+      const result = await new Promise<ProxyToolResult>((resolve) => {
         pendingToolExecutions.set(requestId, { resolve });
       });
 
       return {
-        content: [{ type: 'text', text: result.content }],
+        content: withToolImages(result),
         details: result.isError ? { isError: true } : undefined,
       };
     },
@@ -1323,7 +1338,7 @@ function handleSessionEvent(event: AgentSessionEvent): void {
           debugLog(`Prefetching ${prefetchableToolCalls.length} parallel ${prefetchableToolCalls[0].name} calls`);
           for (const tc of prefetchableToolCalls) {
             const requestId = `prefetch-${tc.id}`;
-            const promise = new Promise<{ content: string; isError: boolean }>((resolve) => {
+            const promise = new Promise<ProxyToolResult>((resolve) => {
               pendingToolExecutions.set(requestId, { resolve });
             });
             send({
@@ -1690,6 +1705,8 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       throw new Error('Runtime config update received before init');
     }
     if (initConfig.autoCompactionTokenLimit !== msg.autoCompactionTokenLimit
+      || (initConfig.browserToolOnly ?? false) !== (msg.browserToolOnly ?? initConfig.browserToolOnly ?? false)
+      || (initConfig.interactionOnly ?? false) !== (msg.interactionOnly ?? initConfig.interactionOnly ?? false)
       || (initConfig.model !== msg.model && (initConfig.autoCompactionTokenLimit || msg.autoCompactionTokenLimit))) {
       toolsChanged = true;
     }
@@ -1704,6 +1721,8 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       customModels: msg.customModels,
       customHeaders: msg.customHeaders,
       autoCompactionTokenLimit: msg.autoCompactionTokenLimit,
+      browserToolOnly: msg.browserToolOnly ?? initConfig.browserToolOnly,
+      interactionOnly: msg.interactionOnly ?? initConfig.interactionOnly,
     };
 
     if (piModelRegistry && initConfig.baseUrl?.trim() && initConfig.customEndpoint) {
