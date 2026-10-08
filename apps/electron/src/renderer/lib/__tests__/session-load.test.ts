@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { Session, TransportConnectionState } from '../../../shared/types'
-import { createSessionListRequestGuard, deriveSessionMessagesLoadState, formatSessionLoadFailure, retryExpiredSessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from '../session-load'
+import { createSessionListRequestGuard, deriveSessionMessagesLoadState, formatSessionLoadFailure, retrySessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from '../session-load'
 
 function createState(overrides?: Partial<TransportConnectionState>): TransportConnectionState {
   return {
@@ -144,6 +144,57 @@ describe('formatSessionLoadFailure', () => {
 })
 
 describe('session list request recovery', () => {
+  it('recovers a first remote timeout while the connection stays healthy', async () => {
+    let calls = 0
+    const sessions = ['remote-session']
+    const result = await retrySessionListRequest(async () => {
+      if (++calls === 1) throw Object.assign(new Error('Remote request timed out'), { code: 'TIMEOUT' })
+      return sessions
+    }, () => true, async () => createState())
+    expect(result).toBe(sessions)
+    expect(calls).toBe(2)
+  })
+
+  it('bounds retries when a connected remote keeps timing out', async () => {
+    let calls = 0
+    await expect(retrySessionListRequest(async () => {
+      calls++
+      throw Object.assign(new Error('Timed out'), { code: 'TIMEOUT' })
+    }, () => true, async () => createState())).rejects.toThrow('Timed out')
+    expect(calls).toBe(3)
+  })
+
+  it('leaves local, disconnected, auth, protocol and data failures visible', async () => {
+    for (const [code, state] of [
+      ['TIMEOUT', createState({ mode: 'local' })],
+      ['NETWORK', createState({ status: 'reconnecting' })],
+      ['AUTH', createState()],
+      ['PROTOCOL', createState()],
+      ['FAILED', createState()],
+    ] as const) {
+      let calls = 0
+      await expect(retrySessionListRequest(async () => {
+        calls++
+        throw Object.assign(new Error(code), { code })
+      }, () => true, async () => state)).rejects.toThrow(code)
+      expect(calls).toBe(1)
+    }
+  })
+
+  it('cancels a retry if the workspace changes during the retry delay', async () => {
+    const guard = createSessionListRequestGuard()
+    const isCurrent = guard.begin()
+    let calls = 0
+    await expect(retrySessionListRequest(async () => {
+      calls++
+      throw Object.assign(new Error('Old workspace timed out'), { code: 'TIMEOUT' })
+    }, isCurrent, async () => {
+      setTimeout(() => guard.invalidate(), 10)
+      return createState()
+    })).rejects.toThrow('Old workspace timed out')
+    expect(calls).toBe(1)
+  })
+
   it('rejects old request ownership when a newer refresh starts', () => {
     const guard = createSessionListRequestGuard()
     const oldRequest = guard.begin()
@@ -157,7 +208,7 @@ describe('session list request recovery', () => {
   it('retries an expired read on the current client', async () => {
     let calls = 0
     const sessions = ['session-1']
-    const result = await retryExpiredSessionListRequest(async () => {
+    const result = await retrySessionListRequest(async () => {
       if (++calls === 1) throw new Error('Remote client generation expired')
       return sessions
     }, () => true)
@@ -167,7 +218,7 @@ describe('session list request recovery', () => {
 
   it('does not retry a superseded read', async () => {
     let calls = 0
-    await expect(retryExpiredSessionListRequest(async () => {
+    await expect(retrySessionListRequest(async () => {
       calls++
       throw new Error('Remote client generation expired')
     }, () => false)).rejects.toThrow('Remote client generation expired')
@@ -176,7 +227,7 @@ describe('session list request recovery', () => {
 
   it('does not hide real server or data errors', async () => {
     let calls = 0
-    await expect(retryExpiredSessionListRequest(async () => {
+    await expect(retrySessionListRequest(async () => {
       calls++
       throw new Error('Invalid session data')
     }, () => true)).rejects.toThrow('Invalid session data')
@@ -185,7 +236,7 @@ describe('session list request recovery', () => {
 
   it('bounds retries if the current client keeps expiring', async () => {
     let calls = 0
-    await expect(retryExpiredSessionListRequest(async () => {
+    await expect(retrySessionListRequest(async () => {
       calls++
       throw new Error('Remote client generation expired')
     }, () => true)).rejects.toThrow('Remote client generation expired')

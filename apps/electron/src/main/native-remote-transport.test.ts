@@ -5,17 +5,18 @@ import { createNativeWindowAuthority, advanceNativeWindowBinding, type NativeAut
 import { registerNativeRemoteTransport, type MainRemoteTarget, type NativeRemoteTransportDependencies } from './native-remote-transport'
 import { NativeRemoteClient } from '../preload/native-remote-client'
 import { NATIVE_REMOTE_TRANSPORT as IPC, type NativeRemotePacket } from '../shared/native-remote-transport'
+import { retrySessionListRequest } from '../renderer/lib/session-load'
 
 const cleanup: Array<() => void> = []
 afterEach(() => { for (const fn of cleanup.splice(0).reverse()) fn() })
 const delay = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms))
 async function until(check: () => boolean) { const end = Date.now() + 3000; while (!check()) { if (Date.now() > end) throw new Error('Timed out'); await delay() } }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
-async function fixture(options: { auth?: boolean; thin?: boolean; maxHandles?: number; capabilityTimeoutMs?: number; token?: string; transferSftp?: NativeRemoteTransportDependencies['transferSftp'] } = {}) {
+async function fixture(options: { auth?: boolean; thin?: boolean; maxHandles?: number; capabilityTimeoutMs?: number; requestTimeout?: number; sessionsGet?: (workspaceId: string | null) => Promise<unknown>; token?: string; transferSftp?: NativeRemoteTransportDependencies['transferSftp'] } = {}) {
   const token = options.token ?? 'dummy-main-only-remote-bearer-secret'
   let authAttempts = 0
   const server = new WsRpcServer({ host: '127.0.0.1', port: 0, requireAuth: true, validateToken: async value => { authAttempts++; return options.auth !== false && value === token } })
-  server.handle(RPC_CHANNELS.sessions.GET, async ctx => ({ workspace: ctx.workspaceId, echo: token, bytes: new Uint8Array([1, 2, 3]) }))
+  server.handle(RPC_CHANNELS.sessions.GET, async ctx => options.sessionsGet ? options.sessionsGet(ctx.workspaceId) : ({ workspace: ctx.workspaceId, echo: token, bytes: new Uint8Array([1, 2, 3]) }))
   server.handle(RPC_CHANNELS.workspaces.GET, async () => [{ id: 'main', name: 'Dummy' }])
   await server.listen(); cleanup.push(() => server.close())
   const target: MainRemoteTarget = { mode: options.thin ? 'thin' : 'workspace', url: `ws://127.0.0.1:${server.port}`, token, revision: 'revision-one', ...(options.thin ? {} : { remoteWorkspaceId: 'remote-main' }) }
@@ -30,7 +31,7 @@ async function fixture(options: { auth?: boolean; thin?: boolean; maxHandles?: n
   const bridge = registerNativeRemoteTransport({ handle: (channel, handler) => { handlers.set(channel, handler) } }, {
     assertSender, resolveTarget: async () => { await resolveHook(); return { ...target } },
     createClient: (resolved, capabilities, authority) => {
-      const client = new WsRpcClient(resolved.url, { token: resolved.token, workspaceId: resolved.remoteWorkspaceId, webContentsId: authority.webContentsId, clientCapabilities: [...capabilities], autoReconnect: true, connectTimeout: 500, requestTimeout: 1000, maxReconnectDelay: 30, useNodeWebSocket: true })
+      const client = new WsRpcClient(resolved.url, { token: resolved.token, workspaceId: resolved.remoteWorkspaceId, webContentsId: authority.webContentsId, clientCapabilities: [...capabilities], autoReconnect: true, connectTimeout: 500, requestTimeout: options.requestTimeout ?? 1000, maxReconnectDelay: 30, useNodeWebSocket: true })
       clients.push(client); return client
     },
     sendToSender: (sender, packet) => { snapshots.push(structuredClone(packet)); for (const receive of receivers.get(sender) ?? []) receive({}, packet) },
@@ -52,12 +53,39 @@ async function fixture(options: { auth?: boolean; thin?: boolean; maxHandles?: n
     }
     const ipc = ipcFor(); const adapter = new NativeRemoteClient(ipc); cleanup.push(() => adapter.destroy())
     const navigate = (workspace = workspaces.get(id)!) => { for (const invalidate of [...invalidations.get(sender) ?? []]) invalidate(); advanceNativeWindowBinding(sender); sender.mainFrame = { ...sender.mainFrame, routingId: sender.mainFrame.routingId + 1 }; workspaces.set(id, workspace) }
-    return { sender, event, ipc, ipcFor, adapter, navigate }
+    const switchWorkspace = (workspace: string) => { workspaces.set(id, workspace); advanceNativeWindowBinding(sender) }
+    return { sender, event, ipc, ipcFor, adapter, navigate, switchWorkspace }
   }
   return { server, token, target, bridge, handlers, snapshots, clients, window, authAttempts: () => authAttempts, setResolveHook: (hook: () => Promise<void>) => { resolveHook = hook } }
 }
 
 describe('main-owned remote transport boundary with real WebSocket peers', () => {
+  test('recovers the first session-list timeout after switching remote workspace without refreshing', async () => {
+    let switched = false; let calls = 0
+    const release = deferred<void>(); cleanup.push(() => release.resolve())
+    const f = await fixture({ thin: true, requestTimeout: 80, sessionsGet: async workspaceId => {
+      if (!switched) return []
+      if (++calls === 1) await release.promise
+      return [{ id: 'session-after-switch', workspaceId }]
+    } }); const w = f.window(1)
+    await w.adapter.invoke(RPC_CHANNELS.sessions.GET)
+    f.target.remoteWorkspaceId = 'switched-remote'; f.target.revision = 'revision-two'
+    w.switchWorkspace('switched-remote')
+    await w.adapter.rebind()
+    switched = true
+    const errors: string[] = []
+    const result = await retrySessionListRequest(async () => {
+      try { return await w.adapter.invoke(RPC_CHANNELS.sessions.GET) }
+      catch (error) { errors.push((error as Error & { code: string }).code); throw error }
+    }, () => true, async () => w.adapter.getConnectionState())
+    expect(errors).toEqual(['TIMEOUT'])
+    expect(result).toEqual([{ id: 'session-after-switch', workspaceId: 'switched-remote' }])
+    expect(calls).toBe(2)
+    expect(f.bridge.getStats().handles).toBe(1)
+    expect(JSON.stringify(f.snapshots)).not.toContain(f.token)
+    release.resolve()
+  })
+
   test('preserves Studio recovery categories without exposing provider error text', async () => {
     for (const code of ['STUDIO_TOKENNEST_REAUTH_REQUIRED', 'STUDIO_TOKENNEST_CHANNEL_UNAVAILABLE'] as const) {
       const f = await fixture(); const w = f.window(1)

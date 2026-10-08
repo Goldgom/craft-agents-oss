@@ -38,7 +38,7 @@ import { attachmentFromContentRef, toDraftRef } from './lib/drafts'
 import { stripMarkdown } from './utils/text'
 import { coerceInputText } from './lib/input-text'
 import { getSessionsToRefreshAfterStaleReconnect } from './lib/reconnect-recovery'
-import { createSessionListRequestGuard, formatSessionLoadFailure, retryExpiredSessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
+import { createSessionListRequestGuard, formatSessionLoadFailure, retrySessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
 import { extractWorkspaceSlugFromPath } from '@craft-agent/shared/utils/workspace-slug'
 import { DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 import { initRendererPerf } from './lib/perf'
@@ -695,8 +695,9 @@ export default function App() {
     setSessionLoadError(null)
 
     try {
-      const loadedSessions = await retryExpiredSessionListRequest(
+      const loadedSessions = await retrySessionListRequest(
         () => window.electronAPI.getSessions(), isCurrent,
+        () => window.electronAPI.getTransportConnectionState(),
       )
       if (!isCurrent()) return
       sessionListRecoveryPendingRef.current = false
@@ -783,8 +784,9 @@ export default function App() {
 
     try {
       if (!isCurrent()) return null
-      const sessions = await retryExpiredSessionListRequest(
+      const sessions = await retrySessionListRequest(
         () => window.electronAPI.getSessions(), isCurrent,
+        () => window.electronAPI.getTransportConnectionState(),
       )
       if (!isCurrent()) return null
       const returnedIds = new Set(sessions.map(s => s.id))
