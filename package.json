@@ -1,6 +1,6 @@
 {
   "name": "tokenbird",
-  "version": "26.10.7",
+  "version": "26.10.9",
   "license": "Apache-2.0",
   "description": "TokenBird AI agent workspace, deeply integrated with TokenNest",
   "type": "module",
@@ -148,9 +148,9 @@
     "@anthropic-ai/sdk": "^0.100.0",
     "@dnd-kit/dom": "^0.4.0-beta-20260227032529",
     "@dnd-kit/helpers": "^0.4.0-beta-20260227032529",
-    "@github/copilot-sdk": "^0.1.23",
     "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-coding-agent": "0.85.1",
+    "@github/copilot-sdk": "^0.1.23",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@radix-ui/react-avatar": "^1.1.11",
     "@radix-ui/react-collapsible": "^1.1.12",

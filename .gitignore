@@ -89,3 +89,4 @@ credentials.enc
 
 # Local verification screenshots and build logs
 /artifacts/
+/.tmp/
