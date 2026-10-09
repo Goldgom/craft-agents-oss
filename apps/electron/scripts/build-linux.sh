@@ -239,9 +239,9 @@ if [ "$FORCE_DOWNLOAD" = false ] && [ -f "$ELECTRON_DIST/version" ] && {
     { [ "$ARCH" = "x64" ] && [ "$HOST_ARCH" = "x86_64" ]; } ||
     { [ "$ARCH" = "arm64" ] && [ "$HOST_ARCH" = "aarch64" ]; }
 }; then
-    npx electron-builder --linux --${ARCH} --config.electronDist="$ELECTRON_DIST"
+    npx electron-builder --linux --${ARCH} --publish never --config.electronDist="$ELECTRON_DIST"
 else
-    npx electron-builder --linux --${ARCH}
+    npx electron-builder --linux --${ARCH} --publish never
 fi
 
 # 8. Verify the AppImage was built
@@ -253,8 +253,14 @@ else
 fi
 
 # electron-builder outputs: TokenBird-x86_64.AppImage or TokenBird-aarch64.AppImage
-BUILT_APPIMAGE_NAME="TokenBird-${LINUX_ARCH}.AppImage"
+BUILT_APPIMAGE_NAME="TokenBird-${ARCH}.AppImage"
 BUILT_APPIMAGE_PATH="$ELECTRON_DIR/release/$BUILT_APPIMAGE_NAME"
+
+# Older builder versions use Linux architecture names in artifactName.
+if [ ! -f "$BUILT_APPIMAGE_PATH" ]; then
+    BUILT_APPIMAGE_NAME="TokenBird-${LINUX_ARCH}.AppImage"
+    BUILT_APPIMAGE_PATH="$ELECTRON_DIR/release/$BUILT_APPIMAGE_NAME"
+fi
 
 if [ ! -f "$BUILT_APPIMAGE_PATH" ]; then
     echo "ERROR: Expected AppImage not found at $BUILT_APPIMAGE_PATH"
@@ -266,8 +272,18 @@ fi
 # Rename to our standard naming convention: TokenBird-x64.AppImage, TokenBird-arm64.AppImage
 APPIMAGE_NAME="TokenBird-${ARCH}.AppImage"
 APPIMAGE_PATH="$ELECTRON_DIR/release/$APPIMAGE_NAME"
-mv "$BUILT_APPIMAGE_PATH" "$APPIMAGE_PATH"
-echo "Renamed $BUILT_APPIMAGE_NAME -> $APPIMAGE_NAME"
+if [ "$BUILT_APPIMAGE_NAME" != "$APPIMAGE_NAME" ]; then
+    mv "$BUILT_APPIMAGE_PATH" "$APPIMAGE_PATH"
+    if [ -f "${BUILT_APPIMAGE_PATH}.blockmap" ]; then
+        mv "${BUILT_APPIMAGE_PATH}.blockmap" "${APPIMAGE_PATH}.blockmap"
+    fi
+    # Keep electron-updater paths consistent with the renamed package.
+    if [ -f "$ELECTRON_DIR/release/latest-linux.yml" ]; then
+        sed "s/${BUILT_APPIMAGE_NAME}/${APPIMAGE_NAME}/g" "$ELECTRON_DIR/release/latest-linux.yml" > "$ELECTRON_DIR/release/latest-linux.yml.tmp"
+        mv "$ELECTRON_DIR/release/latest-linux.yml.tmp" "$ELECTRON_DIR/release/latest-linux.yml"
+    fi
+    echo "Renamed $BUILT_APPIMAGE_NAME -> $APPIMAGE_NAME"
+fi
 
 echo ""
 echo "=== Build Complete ==="

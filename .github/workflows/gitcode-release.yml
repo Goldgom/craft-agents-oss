@@ -1,0 +1,143 @@
+name: Publish binaries to GitCode
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build (must also exist on GitCode)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitcode-binary-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  HUSKY: '0'
+
+jobs:
+  preflight:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - run: bun install --frozen-lockfile
+      - name: Check tag and publication credentials
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+        run: |
+          test -n "$GITCODE_TOKEN" || { echo 'Configure the GITCODE_TOKEN repository secret first'; exit 1; }
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+          bun run scripts/gitcode-release.ts --check-version --tag "$RELEASE_TAG"
+      - name: Test publication and update feed
+        run: bun test scripts/gitcode-release.test.ts apps/electron/src/main/gitcode-release.test.ts
+
+  build:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win-x64
+            os: windows-2022
+            platform: win
+            arch: x64
+          - target: mac-x64
+            os: macos-15-intel
+            platform: mac
+            arch: x64
+          - target: mac-arm64
+            os: macos-15
+            platform: mac
+            arch: arm64
+          - target: linux-x64
+            os: ubuntu-22.04
+            platform: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - name: Install Linux packaging tools
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libfuse2 rpm
+      - name: Build Windows
+        if: matrix.platform == 'win'
+        shell: powershell
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File apps/electron/scripts/build-win.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Windows build failed ($LASTEXITCODE)" }
+      - name: Build macOS
+        if: matrix.platform == 'mac'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: bash apps/electron/scripts/build-dmg.sh '${{ matrix.arch }}'
+      - name: Build Linux
+        if: matrix.platform == 'linux'
+        run: bash apps/electron/scripts/build-linux.sh '${{ matrix.arch }}'
+      - name: Preserve installers and update manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            apps/electron/release/TokenBird-*.exe
+            apps/electron/release/TokenBird-*.msi
+            apps/electron/release/TokenBird-*.dmg
+            apps/electron/release/TokenBird-*.zip
+            apps/electron/release/TokenBird-*.AppImage
+            apps/electron/release/TokenBird-*.blockmap
+            apps/electron/release/latest*.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/release-input
+      - name: Validate, upload, verify and publish GitCode Release
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITCODE_REPOSITORY: ${{ vars.GITCODE_REPOSITORY || 'Goldgom/token-bird' }}
+        run: bun run scripts/gitcode-release.ts --tag "$RELEASE_TAG" --input dist/release-input
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitcode-release-checksums
+          path: dist/gitcode-release/SHA256SUMS.txt
+          if-no-files-found: ignore

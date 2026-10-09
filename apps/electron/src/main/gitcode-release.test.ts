@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { getGitCodeUpdateFeed } from './gitcode-release'
 
-const repository = 'Goldgom/craft-agents-oss'
+const repository = 'Goldgom/token-bird'
 const assetUrl = (name: string) =>
   `https://gitcode.com/${repository}/releases/download/26.10.9/${name}`
 

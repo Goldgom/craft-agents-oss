@@ -510,7 +510,7 @@ while (-not $builderSuccess -and $builderRetry -lt $maxBuilderRetries) {
 
     # Build NSIS first so an unavailable MSI/WiX toolchain cannot discard the
     # otherwise usable Windows installer.
-    & bunx electron-builder --win nsis --x64 @ElectronDistArgs 2>&1 | Tee-Object -Variable builderOutput
+    & bunx electron-builder --win nsis --x64 --publish never @ElectronDistArgs 2>&1 | Tee-Object -Variable builderOutput
 
     if ($LASTEXITCODE -eq 0) {
         $builderSuccess = $true
@@ -544,7 +544,7 @@ if (-not $builderSuccess) {
 Push-Location $ElectronDir
 try {
     Write-Host "  Building optional MSI installer..." -ForegroundColor Cyan
-    & bunx electron-builder --win msi --x64 @ElectronDistArgs 2>&1 | Tee-Object -Variable msiOutput
+    & bunx electron-builder --win msi --x64 --publish never @ElectronDistArgs 2>&1 | Tee-Object -Variable msiOutput
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  WARNING: MSI build skipped (WiX unavailable or download failed)." -ForegroundColor Yellow
     } else {
