@@ -97,7 +97,7 @@ describe('sendMessage durability', () => {
     managed.isProcessing = true
     const contexts = (sm as unknown as { turnClients: TurnClientContexts }).turnClients
     contexts.bind(sessionId, { callerClientId: 'active-device', remoteAccess: true })
-    sm.setRpcServer({ hasClientCapability: (_id, cap) => cap === CLIENT_REMOTE_ACCESS } as RpcServer)
+    sm.setRpcServer({ hasClientCapability: (_id: string, cap: string) => cap === CLIENT_REMOTE_ACCESS } as unknown as RpcServer)
 
     let ackedMessageId: string | null = null
     let onDiskAtAck = false
