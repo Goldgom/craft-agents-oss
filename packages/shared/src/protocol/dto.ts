@@ -104,6 +104,8 @@ export type BuiltInStatusId = 'todo' | 'in-progress' | 'needs-review' | 'done' |
  * Extends core Session with messages array and processing state.
  */
 export interface Session {
+  branchFromMessageId?: string
+  branchFromSessionId?: string
   id: string
   workspaceId: string
   workspaceName: string
@@ -177,6 +179,7 @@ export interface Session {
   taskDraft?: boolean
   /** Agent definition used to start this special session, when applicable. */
   agentId?: string
+  agentSystemPrompt?: string
   collaboration?: import('../sessions/types').SessionCollaboration
 }
 
@@ -217,6 +220,8 @@ export interface CreateSessionOptions {
   branchFromMessageId?: string
   /** Parent session ID used together with branchFromMessageId. */
   branchFromSessionId?: string
+  /** Replace the branch-point message in a fresh context, preserving the parent transcript. */
+  editedMessageContent?: string
   /** Bind the new session to a workspace project (inherits project's workingDirectory). */
   projectId?: string
   /** Mark the new session as a subtask of this parent session (undefined = top-level task). */

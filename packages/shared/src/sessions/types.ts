@@ -44,6 +44,7 @@ export const SESSION_PERSISTENT_FIELDS = [
   'isArchived', 'archivedAt',
   // Branching
   'branchFromMessageId',
+  'branchFromSessionId',
   'branchFromSdkSessionId',
   'branchFromSessionPath',
   'branchFromSdkCwd',
@@ -195,6 +196,8 @@ export interface SessionConfig {
    * Branching semantics are a hard cutoff: model context must not include parent messages after this message.
    */
   branchFromMessageId?: string;
+  /** Parent conversation retained for branch navigation. */
+  branchFromSessionId?: string;
   /**
    * Parent session's SDK session ID (optional, only for provider strategies that support strict SDK-level forking).
    */
@@ -424,6 +427,7 @@ export interface SessionMetadata {
   archivedAt?: number;
   /** Message ID that this session was branched from (hard context cutoff marker). */
   branchFromMessageId?: string;
+  branchFromSessionId?: string;
   /** Workspace-scoped project id this session belongs to (undefined = unbound). */
   projectId?: string;
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task). */

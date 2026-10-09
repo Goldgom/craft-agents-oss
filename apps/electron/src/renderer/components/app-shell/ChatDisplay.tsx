@@ -48,6 +48,7 @@ import type { ThinkingLevel } from "@craft-agent/shared/agent/thinking-levels"
 import {
   TurnCard,
   UserMessageBubble,
+  MessageHistoryActions,
   groupMessagesByTurn,
   formatTurnAsMarkdown,
   formatActivityAsMarkdown,
@@ -76,7 +77,7 @@ import { collectFileChangesFromActivities, getFirstFileChangeIdForActivity } fro
 import { resolveBranchNewPanelOption } from "./branching"
 import { handleErrorMessageAction } from "./error-message-actions"
 import { useAtomValue } from 'jotai'
-import { sessionMetaMapAtom } from '@/atoms/sessions'
+import { sessionMetaMapAtom, sessionBranchesAtom } from '@/atoms/sessions'
 import { getRechargeConnection, openConnectionRecharge } from '@/lib/tokennest-recharge'
 import { isInsufficientBalanceError } from '@craft-agent/shared/utils/billing'
 import tokenBirdIcon from '../../../../resources/icon.png'
@@ -611,6 +612,41 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
 
   // Navigation for session branching
   const { navigate } = useNavigation()
+  const branchSessionMetadata = useAtomValue(sessionBranchesAtom)
+  const branchesByMessage = useMemo(() => {
+    const result = new Map<string, Array<{ id: string; name?: string }>>()
+    for (const item of branchSessionMetadata.values()) {
+      if (item.workspaceId !== session?.workspaceId || !item.branchFromMessageId) continue
+      const branches = result.get(item.branchFromMessageId) ?? []
+      branches.push({ id: item.id, name: item.name })
+      result.set(item.branchFromMessageId, branches)
+    }
+    return result
+  }, [branchSessionMetadata, session?.workspaceId])
+  const editHistoryMessage = useCallback(async (messageId: string, content: string) => {
+    if (!session) return
+    try {
+      const child = await appShellContext.onCreateSession(session.workspaceId, {
+        branchFromMessageId: messageId,
+        branchFromSessionId: session.id,
+        editedMessageContent: content,
+        name: t('chat.history.branchName', { name: session.name || t('settings.usage.untitledSession') }),
+        llmConnection: session.llmConnection,
+        model: session.model,
+        permissionMode: session.permissionMode,
+        workingDirectory: session.workingDirectory,
+        enabledSourceSlugs: session.enabledSourceSlugs,
+        thinkingLevel: session.thinkingLevel,
+        projectId: session.projectId,
+        agentId: session.agentId,
+        agentSystemPrompt: session.agentSystemPrompt,
+      })
+      navigate(routes.view.allSessions(child.id))
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('MESSAGE_BRANCH_LIMIT')) throw new Error(t('chat.history.branchLimit'))
+      throw error
+    }
+  }, [session, appShellContext, navigate, t])
 
   // Get isDark from useTheme hook for overlay theme
   // This accounts for scenic themes (like Haze) that force dark mode
@@ -1563,6 +1599,14 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         <div className="flex flex-1 flex-col min-h-0 min-w-0 relative">
           {/* Content layer */}
           <div className="flex flex-1 flex-col min-h-0 min-w-0 relative z-10">
+          {session.branchFromSessionId && <div className="flex flex-wrap items-center gap-1 px-6 py-2 text-xs border-b border-border/30">
+            <button type="button" className="rounded px-2 py-1 hover:bg-foreground/5"
+              onClick={() => navigate(routes.view.allSessions(session.branchFromSessionId!))}>{t('chat.history.original')}</button>
+            {(branchesByMessage.get(session.branchFromMessageId ?? '') ?? []).map((branch, index) =>
+              <button type="button" key={branch.id} aria-current={branch.id === session.id ? 'page' : undefined}
+                title={branch.name} className={cn('rounded px-2 py-1 hover:bg-foreground/5', branch.id === session.id && 'bg-foreground/5 font-medium')}
+                onClick={() => navigate(routes.view.allSessions(branch.id))}>{t('chat.history.branchNumber', { number: index + 1 })}</button>)}
+          </div>}
           {/* === MESSAGES AREA: Scrollable list of message bubbles === */}
           <div className="relative flex-1 min-h-0">
             {/* Mask wrapper - fades content at top and bottom over transparent/image backgrounds */}
@@ -1710,6 +1754,12 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
                           )}
                         >
+                          <MessageHistoryActions content={turn.message.content}
+                            onEdit={value => editHistoryMessage(turn.message.id, value)}
+                            editDisabled={disabled || session.isProcessing || turn.message.isPending || turn.message.isQueued}
+                            branchCount={branchesByMessage.get(turn.message.id)?.length}
+                            branches={branchesByMessage.get(turn.message.id)}
+                            onSelectBranch={id => navigate(routes.view.allSessions(id))}>
                           <MemoizedMessageBubble
                             message={turn.message}
                             onOpenFile={onOpenFile}
@@ -1717,6 +1767,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             sessionId={session?.id}
                             compactMode={compactMode}
                           />
+                          </MessageHistoryActions>
                         </div>
                       )
                     }
@@ -1799,6 +1850,12 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                           isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
                         )}
                       >
+                      <MessageHistoryActions content={turn.response?.text ?? ''}
+                        onEdit={turn.response?.messageId && !turn.response.isPlan && !turn.isStreaming ? value => editHistoryMessage(turn.response!.messageId!, value) : undefined}
+                        editDisabled={disabled || session.isProcessing || !turn.isComplete}
+                        branchCount={turn.response?.messageId ? branchesByMessage.get(turn.response.messageId)?.length : 0}
+                        branches={turn.response?.messageId ? branchesByMessage.get(turn.response.messageId) : undefined}
+                        onSelectBranch={id => navigate(routes.view.allSessions(id))}>
                       <TurnCard
                         sessionId={session.id}
                         sessionFolderPath={session.sessionFolderPath}
@@ -1840,7 +1897,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             navigate(routes.view.allSessions(child.id), { newPanel: resolveBranchNewPanelOption(options) })
                           } catch (error) {
                             const rawMessage = error instanceof Error ? error.message : 'Failed to create branch'
-                            const message = rawMessage.includes('source and target providers must match')
+                            const message = rawMessage.includes('MESSAGE_BRANCH_LIMIT') ? t('chat.history.branchLimit')
+                              : rawMessage.includes('source and target providers must match')
                               || rawMessage.includes('same provider/backend')
                               ? 'Branching is only supported within the same provider/backend. Switch this panel connection and try again.'
                               : rawMessage
@@ -1978,6 +2036,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                           }
                         }}
                       />
+                      </MessageHistoryActions>
                       </div>
                     )
                   })}

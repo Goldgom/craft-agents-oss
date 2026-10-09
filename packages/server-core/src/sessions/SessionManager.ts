@@ -1,6 +1,7 @@
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
 import { TurnClientContexts, type TurnClientContext } from './turn-client-context'
 import { saveClientFiles } from './client-files'
+import { MessageBranchGate, editedBranchMessages, branchSeedMessages, copyBranchAttachmentFiles } from './message-branching'
 import { CLIENT_FILE_TIMEOUT_MS, validateClientFileRequest, type ClientFileSelection } from '@craft-agent/core/types'
 import { CLIENT_REQUEST_FILES, CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_CANVAS_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
 import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
@@ -913,6 +914,7 @@ interface ManagedSession {
   // Whether this session is hidden from session list (e.g., mini edit sessions)
   hidden?: boolean
   branchFromMessageId?: string
+  branchFromSessionId?: string
   // Branch context strategy:
   // - sdk-fork: provider-level fork from parent SDK session
   // - seeded-fresh-session: fresh backend session seeded with transcript up to branch cutoff
@@ -1219,6 +1221,7 @@ export class SessionManager implements ISessionManager {
   /** Serializes LRU eviction so concurrent turn completions cannot over-evict. */
   private warmRuntimeEviction: Promise<void> = Promise.resolve()
   private sessions: Map<string, ManagedSession> = new Map()
+  private messageBranchGate = new MessageBranchGate()
   /** One coordinator instance is shared by RPC handlers and agent tools so
    * every mutation participates in the same queue and file-lock discipline. */
   private readonly collaborationManager = new CollaborationManager(workspaceId => {
@@ -3047,11 +3050,41 @@ export class SessionManager implements ISessionManager {
   async createSession(
     workspaceId: string,
     options?: import('@craft-agent/shared/protocol').CreateSessionOptions,
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
+  ): Promise<Session> {
+    if (options?.editedMessageContent !== undefined && (!options.branchFromMessageId || !options.branchFromSessionId)) {
+      throw new Error('Editing a historical message requires a branch point.')
+    }
+    if (!options?.branchFromMessageId) return this.createSessionInternal(workspaceId, options, internal)
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error(`Workspace ${workspaceId} not found`)
+    if (options.editedMessageContent !== undefined && options.branchFromSessionId) {
+      const source = this.sessions.get(options.branchFromSessionId) ?? loadStoredSession(workspace.rootPath, options.branchFromSessionId)
+      if (source) options = {
+        llmConnection: source.llmConnection, model: source.model,
+        permissionMode: source.permissionMode, workingDirectory: source.workingDirectory,
+        enabledSourceSlugs: source.enabledSourceSlugs, thinkingLevel: source.thinkingLevel,
+        agentId: source.agentId, agentSystemPrompt: source.agentSystemPrompt, projectId: source.projectId,
+        ...options,
+      }
+    }
+    const branchOptions = options
+    return this.messageBranchGate.run(`${workspace.rootPath}:${branchOptions.branchFromMessageId}`, () =>
+      new Set([
+        ...listStoredSessions(workspace.rootPath).filter(s => s.branchFromMessageId === branchOptions.branchFromMessageId).map(s => s.id),
+        ...[...this.sessions.values()].filter(s => s.workspace.rootPath === workspace.rootPath && s.branchFromMessageId === branchOptions.branchFromMessageId).map(s => s.id),
+      ]).size,
+      () => this.createSessionInternal(workspaceId, branchOptions, internal))
+  }
+
+  private async createSessionInternal(
+    workspaceId: string,
+    options?: import('@craft-agent/shared/protocol').CreateSessionOptions,
     // Transport concern, deliberately NOT on the wire DTO: by default every created session is
     // announced to the renderer (see notifySessionCreated). Callers that register the session
     // themselves — the `sessions:create` RPC adds it from the return value — pass
     // `{ emitCreatedEvent: false }` to avoid a redundant hydrate.
-    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
   ): Promise<Session> {
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
@@ -3256,9 +3289,13 @@ export class SessionManager implements ISessionManager {
         throw new Error(`Invalid branch request: message ${options.branchFromMessageId} not found in source session`)
       }
 
-      // New branches always use strict provider-level SDK fork semantics.
-      // Seeded mode remains only for legacy sessions created before strict fork was enforced.
-      const branchContextStrategy: 'sdk-fork' | 'seeded-fresh-session' = 'sdk-fork'
+      // An edited transcript must start fresh: an SDK fork still contains the old text.
+      const branchContextStrategy: 'sdk-fork' | 'seeded-fresh-session' = options.editedMessageContent !== undefined
+        ? 'seeded-fresh-session' : 'sdk-fork'
+      if (options.editedMessageContent !== undefined) {
+        editedBranchMessages(sourceSession.messages, branchIdx, options.editedMessageContent, generateMessageId())
+        if (sourceManaged?.isProcessing) throw new Error('Wait for the current response to finish before editing history.')
+      }
 
       const branchFromSdkSessionId = branchContextStrategy === 'sdk-fork'
         ? (sourceManaged?.sdkSessionId || sourceSession.sdkSessionId)
@@ -3385,64 +3422,75 @@ export class SessionManager implements ISessionManager {
 
     // Branch: copy messages from source session up to and including the branch point
     if (validatedBranch) {
-      const branchedStored = loadStoredSession(workspaceRootPath, storedSession.id)
-      if (!branchedStored) {
-        throw new Error(`Failed to load newly created session ${storedSession.id} for branch copy`)
-      }
-
-      const sourceMessages = validatedBranch.sourceSession.messages.slice(0, validatedBranch.branchIdx + 1)
-
-      // Re-map embedded paths: source messages were loaded with expandSessionPath(sourceDir),
-      // so they contain absolute paths to the *source* session directory. When saved to the
-      // branch session, makeSessionPathPortable uses the *branch* dir — which won't match.
-      // Fix: replace source dir paths with branch dir paths so tokenization works on save.
-      const sourceDir = normalizePath(getSessionStoragePath(workspaceRootPath, validatedBranch.sourceSessionId))
-      const branchDir = normalizePath(getSessionStoragePath(workspaceRootPath, storedSession.id))
-      if (sourceDir !== branchDir) {
-        branchedStored.messages = sourceMessages.map(m => {
-          const json = JSON.stringify(m)
-          if (!json.includes(sourceDir)) return m
-          return JSON.parse(json.replaceAll(sourceDir, branchDir)) as StoredMessage
-        })
-      } else {
-        branchedStored.messages = sourceMessages
-      }
-
-      branchedStored.branchFromMessageId = validatedBranch.sourceMessageId
-      if (validatedBranch.branchContextStrategy === 'sdk-fork') {
-        branchedStored.branchFromSdkSessionId = validatedBranch.branchFromSdkSessionId
-        branchedStored.branchFromSessionPath = validatedBranch.branchFromSessionPath
-        branchedStored.branchFromSdkCwd = validatedBranch.branchFromSdkCwd
-        branchedStored.branchFromSdkTurnId = validatedBranch.branchFromSdkTurnId
-      } else {
-        delete branchedStored.branchFromSdkSessionId
-        delete branchedStored.branchFromSessionPath
-        delete branchedStored.branchFromSdkCwd
-        delete branchedStored.branchFromSdkTurnId
-      }
-      await saveStoredSession(branchedStored)
-
-      // Propagate the Pi turn-anchor sidecar into the branch so a downstream
-      // branch can still resolve anchors for messages copied here from the
-      // source. Without this step, branch-of-branch silently falls back to
-      // full-history fork — see craft-agents-oss#782.
-      if (
-        validatedBranch.branchContextStrategy === 'sdk-fork' &&
-        validatedBranch.sourceProvider === 'pi'
-      ) {
-        try {
-          await copyPiTurnAnchorsForBranch(
-            sourceDir,
-            branchDir,
-            branchedStored.messages.map((m) => m.id),
-          )
-        } catch (err) {
-          sessionLog.warn('Failed to copy Pi turn-anchors sidecar to branch', {
-            err,
-            sourceSessionId: validatedBranch.sourceSessionId,
-            branchSessionId: storedSession.id,
-          })
+      try {
+        const branchedStored = loadStoredSession(workspaceRootPath, storedSession.id)
+        if (!branchedStored) {
+          throw new Error(`Failed to load newly created session ${storedSession.id} for branch copy`)
         }
+
+        const sourceMessages = options?.editedMessageContent !== undefined
+          ? editedBranchMessages(validatedBranch.sourceSession.messages, validatedBranch.branchIdx, options.editedMessageContent, generateMessageId())
+          : validatedBranch.sourceSession.messages.slice(0, validatedBranch.branchIdx + 1)
+
+        // Re-map embedded paths: source messages were loaded with expandSessionPath(sourceDir),
+        // so they contain absolute paths to the *source* session directory. When saved to the
+        // branch session, makeSessionPathPortable uses the *branch* dir — which won't match.
+        // Fix: replace source dir paths with branch dir paths so tokenization works on save.
+        const sourceDir = normalizePath(getSessionStoragePath(workspaceRootPath, validatedBranch.sourceSessionId))
+        const branchDir = normalizePath(getSessionStoragePath(workspaceRootPath, storedSession.id))
+        // Retain attached files independently of the parent session's lifetime.
+        await copyBranchAttachmentFiles(sourceMessages, sourceDir, branchDir)
+        if (sourceDir !== branchDir) {
+          branchedStored.messages = sourceMessages.map(m => {
+            const json = JSON.stringify(m)
+            if (!json.includes(sourceDir)) return m
+            return JSON.parse(json.replaceAll(sourceDir, branchDir)) as StoredMessage
+          })
+        } else {
+          branchedStored.messages = sourceMessages
+        }
+
+        branchedStored.branchFromMessageId = validatedBranch.sourceMessageId
+        branchedStored.branchFromSessionId = validatedBranch.sourceSessionId
+        if (validatedBranch.branchContextStrategy === 'sdk-fork') {
+          branchedStored.branchFromSdkSessionId = validatedBranch.branchFromSdkSessionId
+          branchedStored.branchFromSessionPath = validatedBranch.branchFromSessionPath
+          branchedStored.branchFromSdkCwd = validatedBranch.branchFromSdkCwd
+          branchedStored.branchFromSdkTurnId = validatedBranch.branchFromSdkTurnId
+        } else {
+          delete branchedStored.branchFromSdkSessionId
+          delete branchedStored.branchFromSessionPath
+          delete branchedStored.branchFromSdkCwd
+          delete branchedStored.branchFromSdkTurnId
+        }
+        await saveStoredSession(branchedStored)
+
+        // Propagate the Pi turn-anchor sidecar into the branch so a downstream
+        // branch can still resolve anchors for messages copied here from the
+        // source. Without this step, branch-of-branch silently falls back to
+        // full-history fork — see craft-agents-oss#782.
+        if (
+          validatedBranch.branchContextStrategy === 'sdk-fork' &&
+          validatedBranch.sourceProvider === 'pi'
+        ) {
+          try {
+            await copyPiTurnAnchorsForBranch(
+              sourceDir,
+              branchDir,
+              branchedStored.messages.map((m) => m.id),
+            )
+          } catch (err) {
+            sessionLog.warn('Failed to copy Pi turn-anchors sidecar to branch', {
+              err,
+              sourceSessionId: validatedBranch.sourceSessionId,
+              branchSessionId: storedSession.id,
+            })
+          }
+        }
+      } catch (error) {
+        // Failed copies must not leave an empty child session or consume a branch slot.
+        deleteStoredSession(workspaceRootPath, storedSession.id)
+        throw error
       }
     }
 
@@ -3470,6 +3518,7 @@ export class SessionManager implements ISessionManager {
       agentSessionSettings: agentSettings,
       enabledSourceSlugs: defaultEnabledSourceSlugs,
       branchFromMessageId: validatedBranch?.sourceMessageId,
+      branchFromSessionId: validatedBranch?.sourceSessionId,
       branchContextStrategy: validatedBranch?.branchContextStrategy,
       branchFromSdkSessionId: validatedBranch?.branchFromSdkSessionId,
       branchFromSessionPath: validatedBranch?.branchFromSessionPath,
@@ -3483,6 +3532,9 @@ export class SessionManager implements ISessionManager {
     // conversation immediately (needed for scroll-to-bottom on panel open)
     if (isBranch) {
       await this.ensureMessagesLoaded(managed)
+      if (options?.editedMessageContent !== undefined && internal?.callerClientId) {
+        for (const queued of managed.messageQueue) queued.rpcContext = { callerClientId: internal.callerClientId }
+      }
 
       const requiresBranchPreflight = managed.branchContextStrategy === 'sdk-fork'
       if (requiresBranchPreflight) {
@@ -4258,14 +4310,7 @@ export class SessionManager implements ISessionManager {
         if (managed.branchContextStrategy !== 'seeded-fresh-session') return []
         if (managed.branchSeedApplied) return []
 
-        const seedMessages = managed.messages
-          .filter(m => m.role === 'user' || m.role === 'assistant')
-          .filter(m => !m.isIntermediate)
-
-        return seedMessages.map(m => ({
-          type: m.role as 'user' | 'assistant',
-          content: m.content,
-        }))
+        return branchSeedMessages(managed.messages)
       }
 
       const markBranchSeedApplied = () => {
@@ -7913,17 +7958,25 @@ export class SessionManager implements ISessionManager {
 
     // Process message (use setImmediate to allow current stack to clear)
     setImmediate(() => {
-      this.sendMessage(
-        sessionId,
-        next.message,
-        next.attachments,
-        next.storedAttachments,
-        next.options,
-        next.messageId,
-        undefined,
-        undefined,
-        next.rpcContext
-      ).catch(err => {
+      void (async () => {
+        const replayAttachments = next.attachments ?? (next.storedAttachments?.length ? await Promise.all(next.storedAttachments.map(async stored => {
+          const safePath = await validateFilePath(stored.storedPath, [...getWorkspaceAllowedDirs(managed.workspace.id), managed.workingDirectory].filter((path): path is string => !!path))
+          const attachment = readFileAttachment(safePath)
+          if (!attachment) throw new Error(`Attachment is unavailable: ${stored.name}`)
+          return { ...attachment, name: stored.name, storedPath: safePath, markdownPath: stored.markdownPath }
+        })) : undefined)
+        await this.sendMessage(
+          sessionId,
+          next.message,
+          replayAttachments,
+          next.storedAttachments,
+          next.options,
+          next.messageId,
+          undefined,
+          undefined,
+          next.rpcContext
+        )
+      })().catch(err => {
         sessionLog.error('replay failed', {
           sessionId,
           messageId: next.messageId,
