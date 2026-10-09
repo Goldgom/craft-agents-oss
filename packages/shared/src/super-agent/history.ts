@@ -26,14 +26,31 @@ function protectedHistoryEvidence(state: SuperAgentState) {
     scripts.add(script.scriptId)
     if (script.taskId) tasks.add(script.taskId)
   }
+  for (const task of state.tasks) if (['queued', 'running'].includes(task.status) || (task.planId && plans.has(task.planId))) tasks.add(task.id)
+  retainTaskReferences(taskById, tasks)
   return { plans, tasks, scripts }
+}
+
+function retainTaskReferences(taskById: Map<string, SuperAgentState['tasks'][number]>, retained: Set<string>): void {
+  const queue = [...retained]
+  for (let index = 0; index < queue.length; index++) {
+    const task = taskById.get(queue[index]!)
+    for (const id of [...(task?.dependsOn ?? []), ...(task?.acceptance ? [task.acceptance.evidenceTaskId] : [])]) {
+      if (retained.has(id)) continue
+      retained.add(id); queue.push(id)
+    }
+  }
 }
 
 export function planSuperAgentHistoryCleanup(state: SuperAgentState, before: number, keepRecentMessages: number) {
   const protectedEvidence = protectedHistoryEvidence(state)
-  const tasks = state.tasks.filter(task => !['queued', 'running'].includes(task.status)
+  const candidates = state.tasks.filter(task => !['queued', 'running'].includes(task.status)
     && !protectedEvidence.tasks.has(task.id)
     && (!task.planId || !protectedEvidence.plans.has(task.planId)) && (task.completedAt ?? task.createdAt) < before)
+  const candidateIds = new Set(candidates.map(task => task.id))
+  const referenced = new Set(state.tasks.filter(task => !candidateIds.has(task.id)).map(task => task.id))
+  retainTaskReferences(new Map(state.tasks.map(task => [task.id, task])), referenced)
+  const tasks = candidates.filter(task => !referenced.has(task.id))
   const removedTasks = new Set(tasks.map(task => task.id))
   const retainedTasks = state.tasks.filter(task => !removedTasks.has(task.id))
   const retainedTaskIds = new Set(retainedTasks.map(task => task.id))

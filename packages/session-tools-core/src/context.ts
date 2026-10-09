@@ -452,7 +452,7 @@ export interface SessionToolContext {
    * a truthful ack (delivered immediately vs. queued behind a busy turn) instead
    * of an unconditional "message sent".
    */
-  sendAgentMessage?(sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>): Promise<SendAgentMessageResult>;
+  sendAgentMessage?(sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>, originalMessage?: string): Promise<SendAgentMessageResult>;
 
   sendCollaborationMessage?(targetMemberId: string, message: string): Promise<SendAgentMessageResult>;
 

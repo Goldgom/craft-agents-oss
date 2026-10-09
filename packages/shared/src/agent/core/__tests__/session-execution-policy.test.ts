@@ -31,6 +31,16 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('Super Agent permission ceiling', () => {
+  test('allows full shared board reads for either role and rejects direct writes', async () => {
+    for (const role of ['coordinator', 'orchestrator', 'worker'] as const) {
+      for (const fullControl of [false, true]) {
+        setSessionExecutionPolicy(sessionId, { ...policy, role, fullControl });
+        expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__collaboration_board', { action: 'get' }).allowed).toBe(true);
+        expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__collaboration_board', { action: 'set', itemId: 'x', value: 'y' }).allowed).toBe(false);
+        expect(checkSessionExecutionPolicy(sessionId, 'mcp__unbound__collaboration_board', { action: 'get' }).allowed).toBe(false);
+      }
+    }
+  });
   test('allows team messaging in both control modes without allowing extra model processes', async () => {
     for (const fullControl of [false, true]) {
       setSessionExecutionPolicy(sessionId, { ...policy, fullControl });
@@ -154,7 +164,7 @@ describe('Super Agent permission ceiling', () => {
 
   test('full control leaves the main agent in interaction while workers use tools without approval', async () => {
     let requests = 0;
-    for (const role of ['coordinator', 'worker'] as const) {
+    for (const role of ['coordinator', 'orchestrator', 'worker'] as const) {
       setSessionExecutionPolicy(sessionId, { ...policy, role, fullControl: true, readFiles: false, writeFiles: false, runPrograms: false, browser: false });
       setSessionPolicyPermissionHandler(sessionId, async () => { requests++; return false; });
       for (const [tool, input] of [

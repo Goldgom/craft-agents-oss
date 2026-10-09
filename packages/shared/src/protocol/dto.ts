@@ -615,6 +615,9 @@ export interface SendMessageOptions {
   /** Internal delivery marker. Collaboration-to-collaboration messages must not
    * be mistaken for a new user requirement on the receiving primary session. */
   collaborationDispatch?: boolean
+  /** Internal Super Agent turn context. Appended only to model input after the
+   * visible message is persisted; accepted only for host-managed node sessions. */
+  superAgentContext?: string
 }
 
 // ---------------------------------------------------------------------------

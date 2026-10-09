@@ -52,11 +52,18 @@ const ActionReceiptSchema = z.object({
   notAttempted: z.array(z.object({ id: string, type: string, targetId: string.optional() }).strict()).max(8).optional(),
   createdAt: number,
 }).strict()
+const TaskContractSchema = {
+  dependsOn: z.array(string).max(32).optional(), resources: z.array(string).max(32).optional(),
+  acceptanceCriteria: z.array(string).max(16).optional(), requiresIndependentReview: z.boolean().optional(),
+  reviewOf: string.optional(),
+  acceptance: z.object({ status: z.enum(['accepted', 'rejected']), evidenceTaskId: string, note: string, reviewedBy: string, reviewedAt: number }).strict().optional(),
+}
 const StateSchema = z.object({
   version: z.literal(1), revision: number.int(),
   permissionGrants: z.array(SuperAgentPermissionGrantSchema).max(256).default([]),
   nodes: z.array(z.object({ nodeId: string, sessionId: string.optional(), status: z.enum(['idle', 'preparing', 'working', 'recovering', 'error']), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), activeTaskId: string.optional(), lastStartedAt: number.optional(), lastCompletedAt: number.optional(), error: string.optional() }).strict()).max(32),
-  tasks: z.array(z.object({ id: string, title: string, instructions: string, nodeId: string, planId: string.optional(), sessionId: string.optional(), status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']), createdAt: number, startedAt: number.optional(), completedAt: number.optional(), output: string.optional(), error: string.optional(), actionReceipt: ActionReceiptSchema.optional() }).strict()).max(500),
+  tasks: z.array(z.object({ ...TaskContractSchema, id: string, title: string, instructions: string, nodeId: string, planId: string.optional(), sessionId: string.optional(), status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']), createdAt: number, startedAt: number.optional(), completedAt: number.optional(), output: string.optional(), error: string.optional(), actionReceipt: ActionReceiptSchema.optional() }).strict()).max(500),
+  intents: z.array(z.object({ id: string, goal: string, constraints: z.array(string).max(16), deliverables: z.array(string).max(16), acceptanceCriteria: z.array(string).max(16), createdAt: number, sourceTurnId: string }).strict()).max(100).default([]),
   messages: z.array(z.object({ id: string, fromNodeId: string, toNodeId: string, kind: z.enum(['chat', 'message', 'task', 'result', 'inspection', 'script', 'error']), body: string, taskId: string.optional(), createdAt: number, userFacing: z.boolean().optional(), actionReceipt: ActionReceiptSchema.optional(), permission: PermissionRecordSchema.optional() }).strict()).max(500),
   board: z.array(z.object({ id: string, title: string, content: string, revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256),
   scripts: z.array(z.object({ scriptId: string, runId: string.optional(), taskId: string.optional(), planId: string.optional(), resultPending: z.boolean().optional(), resultQueuedAt: number.optional(), resultReportedAt: number.optional(), resultDeliveryAttempts: number.int().max(3).optional(), resultDeliveryPaused: z.boolean().optional(), resultDeliveryError: z.string().max(2_000).optional(), status: z.enum(['idle', 'running', 'completed', 'failed', 'stopped', 'missing', 'untracked']), changedAt: number.optional(), lastModifiedAt: number.optional(), sha256: string.optional(), startedAt: number.optional(), completedAt: number.optional(), exitCode: z.number().int().nullable().optional(), exitSignal: z.string().max(64).optional(), output: string.optional(), error: string.optional() }).strict()).max(100),

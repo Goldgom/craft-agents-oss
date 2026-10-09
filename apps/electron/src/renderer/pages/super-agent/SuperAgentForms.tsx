@@ -99,7 +99,7 @@ export function NodeEditor({ node, connections, onChange, onRemove, sources = []
   }
   return <div className="space-y-5">
     <div className="flex items-center justify-between gap-3">
-      <div className="flex flex-wrap items-center gap-2"><span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', node.role === 'coordinator' ? 'bg-primary/10 text-primary' : 'bg-foreground/5 text-muted-foreground')}>{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span><span className="text-xs text-muted-foreground">{text('allowAll')}</span></div>
+      <div className="flex flex-wrap items-center gap-2"><span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', node.role === 'coordinator' ? 'bg-primary/10 text-primary' : 'bg-foreground/5 text-muted-foreground')}>{text(node.role)}</span><span className="text-xs text-muted-foreground">{text('allowAll')}</span></div>
       {onRemove && <Button variant="ghost" size="sm" className="text-destructive" onClick={onRemove}><Trash2 className="size-3.5" />{text('removeNode')}</Button>}
     </div>
     <AvatarEditor avatar={node.avatar} name={node.name} onChange={avatar => patch({ avatar })} />
@@ -193,6 +193,22 @@ export function EnvironmentEditor({ environment, onChange, status }: {
             </div>
           </div>
         </details>}
+    </FormSection>
+    <FormSection title={text('actionGates')}>
+      <p className="text-xs leading-5 text-muted-foreground">{text('actionGatesHint')}</p>
+      <label className="flex cursor-pointer items-start justify-between gap-4 text-sm"><span>{text('autoReview')}<span className="mt-1 block text-xs leading-5 text-muted-foreground">{text('autoReviewHint')}</span></span>
+        <input type="checkbox" className="mt-1 size-4 accent-primary" disabled={environment.fullControl === true} checked={environment.safety?.autoReview === true}
+          onChange={event => onChange({ ...environment, safety: { customRules: environment.safety?.customRules ?? [], autoReview: event.target.checked } })} />
+      </label>
+      <p className="text-xs leading-5 text-muted-foreground">{text('customRulesHint')}</p>
+      {(environment.safety?.customRules ?? []).map((rule, index) => <div key={index} className="grid gap-2 rounded-lg border border-border/60 p-3">
+        <Input aria-label={text('ruleTool')} placeholder="mcp__source__tool" value={rule.toolName} onChange={event => onChange({ ...environment, safety: { autoReview: environment.safety?.autoReview ?? false, customRules: environment.safety!.customRules.map((item, i) => i === index ? { ...item, toolName: event.target.value } : item) } })} />
+        <WorkbenchSelect value={rule.effect} options={[{ value: 'deny', label: text('ruleDeny') }, { value: 'require-human', label: text('ruleHuman') }]}
+          onValueChange={value => onChange({ ...environment, safety: { autoReview: environment.safety?.autoReview ?? false, customRules: environment.safety!.customRules.map((item, i) => i === index ? { ...item, effect: value as 'deny' | 'require-human' } : item) } })} />
+        <Input aria-label={text('ruleReason')} placeholder={text('ruleReason')} value={rule.reason} onChange={event => onChange({ ...environment, safety: { autoReview: environment.safety?.autoReview ?? false, customRules: environment.safety!.customRules.map((item, i) => i === index ? { ...item, reason: event.target.value } : item) } })} />
+        <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ ...environment, safety: { autoReview: environment.safety?.autoReview ?? false, customRules: environment.safety!.customRules.filter((_, i) => i !== index) } })}>{text('delete')}</Button>
+      </div>)}
+      <Button type="button" size="sm" variant="outline" disabled={(environment.safety?.customRules.length ?? 0) >= 100} onClick={() => onChange({ ...environment, safety: { autoReview: environment.safety?.autoReview ?? false, customRules: [...(environment.safety?.customRules ?? []), { toolName: '', effect: 'deny', reason: '' }] } })}>{text('addCustomRule')}</Button>
     </FormSection>
     <ServerDirectoryBrowser open={picker.showServerBrowser} mode={picker.serverBrowserMode} initialPath={environment.workingDirectory}
       onSelect={picker.confirmServerBrowser} onCancel={picker.cancelServerBrowser} />

@@ -155,6 +155,9 @@ describe('Super Agent shared permission management', () => {
   test('a storage failure does not approve the request or leave a reusable in-memory permission', async () => {
     const team = await permissionTeam()
     const request = await requestOperation(team, 'save-failure')
+    // The request schedules a coordinator notice. Let that dispatch persist
+    // before replacing its storage path to inject a controlled write failure.
+    await until(() => team.service.get('alpha'), state => team.host.sends.some(send => send.sessionId === state.state.nodes.find(node => node.nodeId === 'main')?.sessionId))
     const statePath = join(team.root, 'alpha', 'super-agent', 'state.json')
     const backup = `${statePath}.backup`
     await rename(statePath, backup)

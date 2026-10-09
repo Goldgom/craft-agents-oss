@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy,
-  getSessionPolicyGrantTarget, hasSessionPolicyToolGrant, setSessionExecutionPolicy,
+  getSessionPolicyGrantTarget, hasSessionPolicyToolGrant, setSessionExecutionPolicy, setSessionProgramExecutor,
   type SessionExecutionPolicy, type SessionPolicyPermissionRequest,
 } from '@craft-agent/shared/agent'
 import type { SessionEvent } from '@craft-agent/shared/protocol'
@@ -374,5 +374,34 @@ describe('localbash approval binds the real execution destination', () => {
     expect((await manager.runSessionLocalShell(ordinary, args)).stdout).toBe('client-a')
     expect(invocations).toHaveLength(1)
     expect(events).toHaveLength(0)
+  })
+
+  test('full control bypasses gates and backend approval; disabling it restores one-time gates', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, actionGates: true, fullControl: true })
+    manager.attachNodePermissionHandler(managed)
+    const input = { file_path: join(root, 'approved.txt'), content: 'approved' }
+    expect((await authorizeSessionPolicyTool(sessionId, 'Write', input, root)).allowed).toBe(true)
+    expect(events).toHaveLength(0)
+    const responses: boolean[] = []
+    managed.agent = { forceAbort: () => {}, respondToPermission: (_id, allowed) => { responses.push(allowed) } }
+    const runtime = join(temp, 'docker.exe'); writeFileSync(runtime, 'test runtime')
+    setSessionProgramExecutor(sessionId, { runtimePath: runtime, containerId: 'test-container', workingDirectory: '/workspace' })
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'backend', toolName: 'Bash', command: 'echo direct', description: 'program' })).toBe(true)
+    expect(responses).toEqual([true])
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: false })
+    manager.attachNodePermissionHandler(managed)
+    const pending = authorizeSessionPolicyTool(sessionId, 'Write', input, root, undefined, 'write-once')
+    const event = events.find((event): event is PermissionEvent => event.type === 'permission_request')!
+    expect(event).toBeDefined()
+    expect(event.request.policyScope?.actionGate?.invocationId).toBe('write-once')
+    expect(manager.respondToPermission(sessionId, event.request.requestId, true, true)).toBe(true)
+    expect((await pending).allowed).toBe(true)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'backend', toolName: 'Write', description: 'write' })).toBe(false)
+    const second = authorizeSessionPolicyTool(sessionId, 'Write', input, root, undefined, 'write-again')
+    const secondEvent = events.filter((event): event is PermissionEvent => event.type === 'permission_request').at(-1)!
+    expect(secondEvent.request.requestId).not.toBe(event.request.requestId)
+    manager.respondToPermission(sessionId, secondEvent.request.requestId, false, false)
+    expect((await second).allowed).toBe(false)
   })
 })

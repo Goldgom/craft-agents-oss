@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { storedToMessage } from '@craft-agent/core/types'
-import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, getSessionProgramExecutor, hasSessionPolicyToolGrant, setSessionProgramExecutor } from '@craft-agent/shared/agent'
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, getSessionProgramExecutor, hasSessionPolicyToolGrant, setSessionExecutionPolicy, setSessionProgramExecutor } from '@craft-agent/shared/agent'
 import { getPermissionModeDiagnostics, setPermissionMode, type PermissionMode } from '@craft-agent/shared/agent/mode-manager'
 import { createSession, loadSession, saveSession, sessionPersistenceQueue } from '@craft-agent/shared/sessions'
 import { getSourcesBySlugs, isSourceUsable } from '@craft-agent/shared/sources'
@@ -20,9 +20,10 @@ function deferred() {
 
 async function fixture(options: { cold?: boolean; role?: 'coordinator' | 'worker'; fullControl?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'super-agent-session-settings-'))
+  const workingDirectory = await mkdtemp(join(tmpdir(), 'super-agent-session-work-'))
   const created = await createSession(root, { name: 'Existing node', permissionMode: 'safe', agentSystemPrompt: 'Legacy node prompt' })
   const stored = loadSession(root, created.id)!
-  const policy = { nodeId: options.role === 'worker' ? 'worker' : 'main', role: options.role ?? 'coordinator', rootPath: root,
+  const policy = { nodeId: options.role === 'worker' ? 'worker' : 'main', role: options.role ?? 'coordinator', rootPath: workingDirectory,
     readFiles: true, writeFiles: false, runPrograms: false, browser: false, allowSources: [], allowSubagents: false as const,
     ...(options.fullControl !== undefined ? { fullControl: options.fullControl } : {}) }
   stored.executionPolicy = policy
@@ -58,8 +59,9 @@ async function fixture(options: { cold?: boolean; role?: 'coordinator' | 'worker
     clearSessionExecutionPolicy(managed.id)
     expect(resolve(root).startsWith(`${resolve(tmpdir())}${sep}`)).toBe(true)
     await rm(root, { recursive: true, force: true })
+    await rm(workingDirectory, { recursive: true, force: true })
   })
-  return { root, stored, header, policy, manager, internals, managed, agent, modeCalls, permissionResponses, getDisposals: () => disposals }
+  return { root, workingDirectory, stored, header, policy, manager, internals, managed, agent, modeCalls, permissionResponses, getDisposals: () => disposals }
 }
 
 describe('Super Agent session settings reconciliation', () => {
@@ -68,7 +70,7 @@ describe('Super Agent session settings reconciliation', () => {
     f.managed.isProcessing = true
     const input = { file_path: resolve(f.root, '..', 'outside-node.txt'), content: 'outside' }
     const enabling = f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
-    expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(true)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(false)
     expect(f.managed.isProcessing).toBe(true)
     await enabling
     expect(f.getDisposals()).toBe(0)
@@ -80,7 +82,8 @@ describe('Super Agent session settings reconciliation', () => {
     const { messages: savedMessages, ...savedHeader } = saved
     const restored = createManagedSession({ ...savedHeader, id: 'restored-full-control' }, f.managed.workspace)
     expect(restored.executionPolicy?.fullControl).toBe(true)
-    expect(checkSessionExecutionPolicy(restored.id, 'Write', input, f.root).allowed).toBe(true)
+    expect(restored.executionPolicy?.actionGates).toBe(true)
+    expect(checkSessionExecutionPolicy(restored.id, 'Write', input, f.root).allowed).toBe(false)
     clearSessionExecutionPolicy(restored.id)
     const disabling = f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
     expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(false)
@@ -91,17 +94,17 @@ describe('Super Agent session settings reconciliation', () => {
     f.managed.isProcessing = false
   })
 
-  test('enabling resumes the original pending operation and provider approval rather than cancelling either', async () => {
-    const f = await fixture({ role: 'worker' })
-    const outside = await mkdtemp(join(tmpdir(), 'super-agent-pending-outside-'))
-    cleanups.push(() => rm(outside, { recursive: true, force: true }))
-    const input = { file_path: join(outside, 'requested.txt') }
-    await writeFile(input.file_path, 'Original pending read')
+  test('enabling full control resumes a pending Action Gate and resolves backend approvals', async () => {
+    const f = await fixture({ role: 'worker', fullControl: false })
+    f.managed.executionPolicy = setSessionExecutionPolicy(f.managed.id, { ...f.managed.executionPolicy!, writeFiles: true })
+    const input = { file_path: join(f.workingDirectory, 'requested.txt'), content: 'Approved content' }
     f.managed.isProcessing = true
     f.internals.attachNodePermissionHandler(f.managed)
+    const runtime = join(f.workingDirectory, 'docker.exe'); await writeFile(runtime, 'test runtime')
+    setSessionProgramExecutor(f.managed.id, { runtimePath: runtime, containerId: 'test-container', workingDirectory: '/workspace' })
     const events: any[] = []
     f.manager.onSessionEvent(event => events.push(event))
-    const original = authorizeSessionPolicyTool(f.managed.id, 'Read', input, f.root)
+    const original = authorizeSessionPolicyTool(f.managed.id, 'Write', input, f.workingDirectory, undefined, 'pending-write')
     expect(f.internals.pendingNodePermissions.size).toBe(1)
     f.internals.pendingPermissionRequests.set('native-admin', { sessionId: f.managed.id, type: 'admin_approval', toolName: 'Bash', command: 'sudo arbitrary-command' })
     await f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
@@ -113,7 +116,8 @@ describe('Super Agent session settings reconciliation', () => {
     expect(events.filter(event => event.type === 'permission_resolved' && event.allowed)).toHaveLength(2)
     expect(hasSessionPolicyToolGrant(f.managed.id, 'Read', input, f.root)).toBe(false)
     await f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
-    expect(checkSessionExecutionPolicy(f.managed.id, 'Read', input, f.root).allowed).toBe(false)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Read', input, f.root).allowed).toBe(true)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(false)
     f.managed.isProcessing = false
   })
 
@@ -162,7 +166,7 @@ describe('Super Agent session settings reconciliation', () => {
     expect(loadSession(f.root, f.managed.id)!.executionPolicy).not.toHaveProperty('containerExecutor')
   })
 
-  test('full control permits queueing an outside attachment and real directory/source selection, then restores the direct gates', async () => {
+  test('all capabilities preserve attachment, directory and source boundaries', async () => {
     const f = await fixture({ role: 'worker' })
     const outside = await mkdtemp(join(tmpdir(), 'super-agent-direct-outside-'))
     cleanups.push(() => rm(outside, { recursive: true, force: true }))
@@ -170,20 +174,18 @@ describe('Super Agent session settings reconciliation', () => {
     await writeFile(attachment.path, 'Existing outside attachment')
     await f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
     f.managed.isProcessing = true
-    await f.manager.sendMessage(f.managed.id, 'Read the outside attachment', [attachment])
-    expect(f.managed.messageQueue.at(-1)?.attachments).toEqual([attachment])
+    await expect(f.manager.sendMessage(f.managed.id, 'Read the outside attachment', [attachment])).rejects.toThrow('attachment is outside')
+    expect(f.managed.messageQueue).toHaveLength(0)
     f.managed.messageQueue = []
     f.managed.isProcessing = false
     f.managed.agent = null
-    f.manager.updateWorkingDirectory(f.managed.id, outside)
-    expect(f.managed.workingDirectory).toBe(outside)
+    expect(() => f.manager.updateWorkingDirectory(f.managed.id, outside)).toThrow('working directory is outside')
     const sourceFolder = join(f.root, 'sources', 'selected-real-source')
     await mkdir(sourceFolder, { recursive: true })
     await writeFile(join(sourceFolder, 'config.json'), JSON.stringify({ id: 'selected-real-source', name: 'Real Source', slug: 'selected-real-source',
       enabled: true, provider: 'test', type: 'api', api: { baseUrl: 'https://example.invalid', authType: 'none' } }))
     expect(getSourcesBySlugs(f.root, ['selected-real-source']).filter(isSourceUsable)).toHaveLength(1)
-    await f.manager.setSessionSources(f.managed.id, ['selected-real-source'])
-    expect(f.managed.enabledSourceSlugs).toEqual(['selected-real-source'])
+    await expect(f.manager.setSessionSources(f.managed.id, ['selected-real-source'])).rejects.toThrow('data source is not assigned')
     await f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
     expect(() => f.manager.updateWorkingDirectory(f.managed.id, outside)).toThrow('working directory is outside')
     await expect(f.manager.setSessionSources(f.managed.id, ['selected-real-source'])).rejects.toThrow('data source is not assigned')

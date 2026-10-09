@@ -159,10 +159,10 @@ export function ApprovalCard({ owner, request, pending, onRespond, onRemember }:
     </dl>
     {request.reason && <p className="text-xs leading-5 text-muted-foreground">{request.reason}</p>}
     {request.command && <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-background/80 p-3 font-mono text-[11px] leading-5">{request.command}</pre>}
-    {exactGrant && <p className="text-[11px] leading-5 text-muted-foreground">{text('exactApprovalHint')}</p>}
+    {exactGrant && <p className="text-[11px] leading-5 text-muted-foreground">{text(scope?.actionGate ? 'actionGateApprovalHint' : 'exactApprovalHint')}</p>}
     {onRemember && <p className="text-[11px] leading-5 text-muted-foreground">{text('sharedApprovalHint')}</p>}
     <div className="flex flex-wrap justify-end gap-2"><Button size="sm" variant="outline" disabled={pending} onClick={() => onRespond(false)}>{text('deny')}</Button>
       {onRemember && <Button size="sm" variant="outline" disabled={pending} onClick={onRemember}>{text('approveForTeam')}</Button>}
-      <Button size="sm" disabled={pending} onClick={() => onRespond(true)}>{pending && <LoaderCircle className="size-3.5 animate-spin" />}{text(exactGrant ? 'approveThisTurn' : 'allowOnce')}</Button></div>
+      <Button size="sm" disabled={pending} onClick={() => onRespond(true)}>{pending && <LoaderCircle className="size-3.5 animate-spin" />}{text(scope?.actionGate ? 'approveInvocation' : exactGrant ? 'approveThisTurn' : 'allowOnce')}</Button></div>
   </article>
 }

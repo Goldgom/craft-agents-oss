@@ -5,6 +5,32 @@ import type { Session } from '../protocol/dto'
 import type { SuperAgentScriptRuntime } from './types'
 
 describe('history cleanup selection', () => {
+  test('cleans completed acceptance cycles together and retains evidence referenced by newer work', () => {
+    const state = emptySuperAgentState()
+    const base = { title: 'Artifact', instructions: 'Evidence', nodeId: 'worker', status: 'completed' as const, createdAt: 1, completedAt: 2 }
+    state.tasks = [
+      { ...base, id: 'build', acceptance: { status: 'accepted', evidenceTaskId: 'review', note: 'Verified', reviewedBy: 'orchestrator', reviewedAt: 3 } },
+      { ...base, id: 'review', dependsOn: ['build'], reviewOf: 'build' },
+      { ...base, id: 'self', acceptance: { status: 'accepted', evidenceTaskId: 'self', note: 'Self-check', reviewedBy: 'orchestrator', reviewedAt: 3 } },
+    ]
+    expect(planSuperAgentHistoryCleanup(state, 100, 0).removed.tasks.map(task => task.id)).toEqual(['build', 'review', 'self'])
+    state.tasks.push({ ...base, id: 'newer', createdAt: 200, completedAt: 201, dependsOn: ['build'] })
+    const cleanup = planSuperAgentHistoryCleanup(state, 100, 0)
+    expect(cleanup.removed.tasks.map(task => task.id)).toEqual(['self'])
+    expect(cleanup.state.tasks.map(task => task.id)).toEqual(['build', 'review', 'newer'])
+  })
+
+  test('protects cross-plan dependency and review sessions of active work', () => {
+    const state = emptySuperAgentState()
+    const base = { title: 'Evidence', instructions: 'Evidence', nodeId: 'worker', createdAt: 1 }
+    state.tasks = [
+      { ...base, id: 'evidence', status: 'completed', sessionId: 'evidence-session' },
+      { ...base, id: 'build', status: 'completed', sessionId: 'build-session', acceptance: { status: 'accepted', evidenceTaskId: 'evidence', note: 'Checked', reviewedBy: 'orchestrator', reviewedAt: 3 } },
+      { ...base, id: 'next', status: 'queued', dependsOn: ['build'] },
+    ]
+    expect(planSuperAgentHistoryCleanup(state, 100, 0).removed.tasks).toHaveLength(0)
+    expect(protectedHistorySessionIds(state)).toEqual(new Set(['build-session', 'evidence-session']))
+  })
   test('preserves unfinished goals, linked evidence, current work and shared artifacts', () => {
     const state = emptySuperAgentState()
     state.plans = [

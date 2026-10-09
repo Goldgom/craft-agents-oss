@@ -83,7 +83,7 @@ describe('Super Agent durable network recovery', () => {
     await service.tick()
     await until(() => service.get('alpha'), () => host.sends.length === 2)
     expect(host.sends[1]!.sessionId).toBe(task.sessionId!)
-    expect(host.sends[1]!.message).toContain('do not repeat completed operations or restart scripts')
+    expect(host.sends[1]!.context).toContain('do not repeat completed operations or restart scripts')
     expect(host.options.size).toBe(1)
     host.complete(task.sessionId!, 'Verified remaining artifacts.')
     const finished = await until(() => service.get('alpha'), value => value.state.tasks[0]!.status === 'completed')

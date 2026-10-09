@@ -15,7 +15,9 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
-import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, checkSessionExecutionPolicy, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
+import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, setSessionActionReviewer, checkSessionExecutionPolicy, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
+import { reviewActionGate, type ActionReviewRequest } from '@craft-agent/shared/agent'
+import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import type { SuperAgentSessionPolicy } from '@craft-agent/shared/super-agent'
 import { cleanupSuperAgents, getSuperAgentService } from '../super-agent/registry'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@craft-agent/shared/agent'
@@ -402,7 +404,7 @@ async function buildServersFromSources(
 /** Apply an Agent's independent MCP/API source switches. Ordinary sessions
  * have no policy and retain the workspace behaviour unchanged. */
 function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'agentSessionSettings' | 'executionPolicy'>): LoadedSource[] {
-  if (managed?.executionPolicy && !managed.executionPolicy.fullControl) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
+  if (managed?.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
   const settings = managed?.agentSessionSettings
   if (!settings) return sources
   const mcp = settings.mcpSourceSlugs ? new Set(settings.mcpSourceSlugs) : null
@@ -1081,6 +1083,7 @@ export function createManagedSession(
   if (managed.executionPolicy) {
     managed.permissionMode = 'allow-all'
     setPermissionMode(managed.id, 'allow-all', { changedBy: 'restore' })
+    managed.executionPolicy = { ...managed.executionPolicy, actionGates: true, protectedRoots: [CONFIG_DIR, managed.workspace.rootPath] }
     try { managed.executionPolicy = setSessionExecutionPolicy(managed.id, managed.executionPolicy) }
     catch (error) { sessionLog.error(`Invalid restored node policy for session ${managed.id}:`, error) }
   }
@@ -1796,6 +1799,32 @@ export class SessionManager implements ISessionManager {
   private attachNodePermissionHandler(managed: ManagedSession): void {
     if (!managed.executionPolicy) return
     setSessionPolicyPermissionHandler(managed.id, request => this.requestNodePermission(managed, request))
+    setSessionActionReviewer(managed.id, request => this.reviewNodeAction(managed, request))
+  }
+
+  private async reviewNodeAction(managed: ManagedSession, request: ActionReviewRequest) {
+    // A separate runtime, no chat transcript, tools, inherited grants or worker instructions.
+    const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+    const resolvedContext = resolveBackendContext({ sessionConnectionSlug: managed.llmConnection,
+      workspaceDefaultConnectionSlug: wsConfig?.defaults?.defaultLlmConnection, managedModel: managed.model })
+    // Native Codex utility sessions retain built-in tools. Use its existing Pi transport for review.
+    const context = resolvedContext.agentRuntime === 'codex' ? { ...resolvedContext, agentRuntime: 'pi' as const } : resolvedContext
+    const miniModel = context.connection ? resolveMiniModel(context.connection, wsConfig?.defaults?.miniModel) : undefined
+    const reviewerId = `${managed.id}-guardian-${randomUUID()}`
+    setSessionExecutionPolicy(reviewerId, { nodeId: 'guardian', role: 'coordinator', rootPath: managed.workingDirectory || managed.workspace.rootPath,
+      actionGates: true, readFiles: false, writeFiles: false, runPrograms: false, browser: false, allowSources: [], allowSubagents: false })
+    try {
+      const reviewer = createBackendFromResolvedContext({ context, hostRuntime: buildBackendHostRuntimeContext(), coreConfig: {
+        workspace: managed.workspace, miniModel, isHeadless: true,
+        session: { id: reviewerId, workspaceRootPath: managed.workspace.rootPath,
+          createdAt: Date.now(), lastUsedAt: Date.now(), workingDirectory: managed.workingDirectory,
+          model: managed.model, llmConnection: managed.llmConnection, permissionMode: 'safe' },
+      }, providerOptions: { piAuthProvider: context.connection?.piAuthProvider } })
+      try {
+        if (!reviewer.queryLlm) return { verdict: 'unavailable' as const, reason: 'This runtime has no tool-free independent review interface; human review is required.' }
+        return await reviewActionGate(request, reviewer.queryLlm.bind(reviewer))
+      } finally { reviewer.destroy() }
+    } finally { clearSessionExecutionPolicy(reviewerId) }
   }
 
   private requestNodePermission(managed: ManagedSession, request: SessionPolicyPermissionRequest): Promise<boolean> {
@@ -1827,10 +1856,10 @@ export class SessionManager implements ISessionManager {
       this.sendEvent({ type: 'permission_request', sessionId: managed.id, request: {
         requestId, sessionId: managed.id, toolName: request.toolName,
         type: request.scope.kind === 'program' ? 'bash' : request.scope.kind === 'file_write' ? 'file_write' : 'mcp_mutation',
-        description: `Node ${managed.executionPolicy!.nodeId} requests ${request.scope.kind}: ${request.scope.target}`,
+        description: `${request.scope.actionGate ? 'Action Gate · ' : ''}Node ${managed.executionPolicy!.nodeId} requests ${request.scope.kind}: ${request.scope.target}`,
         command: typeof request.input.command === 'string' ? request.input.command : undefined,
         reason: request.reason,
-        impact: request.scope.kind === 'program' && request.scope.boundary !== 'environment'
+        impact: request.scope.actionGate ? 'Approve this invocation once. It cannot be remembered, shared with other nodes, or expand filesystem, source, network or sandbox permissions.' : request.scope.kind === 'program' && request.scope.boundary !== 'environment'
           ? `Runs this complete command on the ${request.scope.boundary} machine with cwd ${request.input.cwd}. A working folder does not isolate shell access. The exception is limited to this exact operation in the current turn.`
           : 'Temporarily permits this exact operation in the current node turn. Other operations remain subject to the node policy.',
         policyScope: { ...request.scope },
@@ -3647,7 +3676,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) throw new Error(`Session ${sessionId} not found`)
     if (managed.isProcessing) throw new Error('Stop the node before changing its execution policy')
     const previous = JSON.stringify(managed.executionPolicy)
-    const policy = setSessionExecutionPolicy(sessionId, input)
+    const policy = setSessionExecutionPolicy(sessionId, input.actionGates ? { ...input, protectedRoots: [CONFIG_DIR, managed.workspace.rootPath] } : input)
     setSessionProgramExecutor(sessionId, input.containerExecutor)
     managed.executionPolicy = policy
     managed.workingDirectory = policy.rootPath
@@ -5104,7 +5133,7 @@ export class SessionManager implements ISessionManager {
         runLocalShellFn: (args: ShellExecArgs): Promise<ClientShellResult> => this.runSessionLocalShell(managed, args),
         requestClientFilesFn: async (input) => {
           // Restricted nodes cannot acquire files outside their assigned environment.
-          if (managed.executionPolicy && !managed.executionPolicy.fullControl) throw new Error('This node policy does not permit requesting client files')
+          if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) throw new Error('This node policy does not permit requesting client files')
           const request = validateClientFileRequest(input)
           const clientId = this.turnClients.requireClient(this.rpcServer, managed.id, managed.workspace.id, CLIENT_REQUEST_FILES)
           const requestContext = this.turnClients.get(managed.id)
@@ -5347,6 +5376,7 @@ export class SessionManager implements ISessionManager {
           return { resolved: null, available }
         },
         getCollaborationFn: async () => {
+          if (managed.executionPolicy) return getSuperAgentService(this).getNodeSharedData(managed.workspace.id, managed.id)
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
           if (collaboration.relay) return this.getCollaborationRelayManager().readForSession(managed.id)
@@ -5361,6 +5391,7 @@ export class SessionManager implements ISessionManager {
           return group
         },
         updateCollaborationBoardFn: async (itemId: string, value: unknown) => {
+          if (managed.executionPolicy) throw new Error('Super Agent board writes use the final super_agent_actions board array with expectedRevision')
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
           if (collaboration.relay) return this.getCollaborationRelayManager().perform(managed.id, { kind: 'board', itemId, value })
@@ -5445,10 +5476,10 @@ export class SessionManager implements ISessionManager {
           const result = await this.getCollaborationRelayManager().perform(managed.id, { kind: 'message', targetMemberId, message }) as { delivery: 'queued-for-relay'; operationId: string }
           return { ...result, targetBusy: false }
         },
-        sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => {
+        sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>, originalMessage?: string) => {
           if (managed.executionPolicy) {
             if (attachments?.length) throw new Error('Super Agent messages must reference shared files instead of attachments')
-            return getSuperAgentService(this).sendNodeMessage(managed.workspace.id, managed.id, sessionId, message)
+            return getSuperAgentService(this).sendNodeMessage(managed.workspace.id, managed.id, sessionId, originalMessage ?? message)
           }
           if (managed.collaboration?.relay) throw new Error('Use targetMemberId for multi-server collaboration; bare session IDs are ambiguous')
           // Collaboration request/report events are the durable outbox. They
@@ -6005,7 +6036,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session not found: ${sessionId}`)
     }
-    if (managed.executionPolicy && !managed.executionPolicy.fullControl && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
+    if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates) && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
       throw new Error('Super Agent policy: data source is not assigned to this node')
     }
 
@@ -6876,7 +6907,7 @@ export class SessionManager implements ISessionManager {
       setSessionExecutionPolicy(sessionId, managed.executionPolicy)
       for (const attachment of attachments ?? []) {
         const path = attachment.path
-        if (!managed.executionPolicy.fullControl && (!managed.executionPolicy.readFiles || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory)))) {
+        if ((!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates) && ((!managed.executionPolicy.readFiles && !managed.executionPolicy.fullControl) || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory)))) {
           throw new Error('Super Agent policy: attachment is outside the node environment or file reading is disabled')
         }
       }
@@ -7285,8 +7316,13 @@ export class SessionManager implements ISessionManager {
       // rather than part of the user's message content. The original message is stored
       // in session JSONL (line ~3952); this only affects the SDK's in-process context.
       let effectiveMessage = message
+      if (options?.superAgentContext && managed.executionPolicy) {
+        // Persisted messages and user_message events contain only the upstream input.
+        // Runtime state is transient model context, never a transcript bubble.
+        effectiveMessage += `\n\n<super_agent_context>\n${options.superAgentContext}\n</super_agent_context>`
+      }
       if (managed.wasInterrupted) {
-        effectiveMessage = `${message}\n\n<system-reminder>The previous assistant response was interrupted by the user and may be incomplete. Do not repeat or continue the interrupted response unless asked. Focus on the new message above.</system-reminder>`
+        effectiveMessage += '\n\n<system-reminder>The previous assistant response was interrupted by the user and may be incomplete. Do not repeat or continue the interrupted response unless asked. Focus on the new message above.</system-reminder>'
         managed.wasInterrupted = false
       }
 

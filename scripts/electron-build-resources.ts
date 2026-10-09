@@ -4,6 +4,7 @@
 
 import { existsSync, cpSync } from "fs";
 import { join } from "path";
+import { installWindowsAgentFramework } from './build/agent-framework';
 import {
   copyPiAgentServer,
   copySessionServer,
@@ -60,6 +61,7 @@ async function main(): Promise<void> {
   // work on a clean machine without a separate system installation.
   await downloadGitBash(buildConfig);
   await downloadWindowsToolchains(buildConfig);
+  await installWindowsAgentFramework(buildConfig);
 
   if (existsSync(srcDir)) {
     cpSync(srcDir, destDir, { recursive: true, force: true });

@@ -40,7 +40,7 @@ describe('Super Agent message-result liveness', () => {
     const saved = await until(() => loadSuperAgentDocument(join(context.root, 'alpha')), value => value.pendingTurns.some(turn => turn.nodeId === 'main'))
     expect(saved.pendingTurns.filter(turn => turn.nodeId === 'main')).toHaveLength(1)
     await until(() => context.service.get('alpha'), () => context.host.sends.length === 2)
-    expect(context.host.sends[1]!.message).toContain('The artifact passed independent verification.')
+    expect(context.host.sends[1]!.context).toContain('The artifact passed independent verification.')
   })
 
   test('reports terminal message errors without replaying failed actions', async () => {

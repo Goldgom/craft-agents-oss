@@ -38,7 +38,7 @@ describe('Super Agent manual node recovery', () => {
     await context.service.tick()
     await until(() => context.service.get('alpha'), () => context.host.sends.length === 2)
     expect(context.host.sends[1]!.sessionId).toBe(task.sessionId!)
-    expect(context.host.sends[1]!.message).toContain('do not repeat completed operations or restart scripts')
+    expect(context.host.sends[1]!.context).toContain('do not repeat completed operations or restart scripts')
     expect((await context.service.get('alpha')).state.tasks).toHaveLength(1)
   })
 

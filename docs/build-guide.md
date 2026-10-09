@@ -412,6 +412,9 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 
 ## 六、产物与版本速查
 
+GitHub Actions 构建并自动发布 Windows、macOS、Linux 安装包到 GitCode 的配置步骤见
+[GitCode 自动二进制发布](gitcode-release.md)。
+
 | 目标             | 命令                                                                               | 产物                                                               |
 | ---------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Windows 客户端   | `cd apps/electron && bun run dist:win`                                           | `apps/electron/release/TokenBird-x64.exe`                          |

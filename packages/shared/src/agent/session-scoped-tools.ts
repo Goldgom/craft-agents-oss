@@ -316,6 +316,6 @@ export function getSessionScopedTools(
   return createSdkMcpServer({
     name: 'session',
     version: '1.0.0',
-    tools: filterInteractionTools(tools, getSessionExecutionPolicy(sessionId)?.role === 'coordinator'),
+    tools: filterInteractionTools(tools, ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(sessionId)?.role ?? '')),
   });
 }

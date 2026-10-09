@@ -81,7 +81,7 @@ describe('required asynchronous script results', () => {
       expect(context.host.sends).toHaveLength(sends)
       await context.service.command('alpha', { type: 'node-refresh', nodeId: 'main' })
       await until(() => context.service.get('alpha'), () => context.host.sends.length === sends + 1)
-      expect(context.host.sends.at(-1)!.message).toContain('do not repeat completed operations or restart scripts')
+      expect(context.host.sends.at(-1)!.context).toContain('do not repeat completed operations or restart scripts')
       context.host.complete(sessionId, 'Script evidence checked.')
       const reviewed = await until(() => context.service.get('alpha'), value => value.state.scripts[0]!.resultReportedAt != null)
       expect(reviewed.state.tasks[0]).toEqual(submitted.state.tasks[0])
@@ -113,7 +113,7 @@ describe('required asynchronous script results', () => {
     f.advance(2000)
     await f.service.tick()
     await until(() => f.service.get('alpha'), value => value.state.nodes.find(node => node.nodeId === 'main')?.status === 'working'
-      && f.host.sends.findLast(send => send.sessionId === sessionId)?.message.includes('Continue this same authorized turn') === true)
+      && f.host.sends.findLast(send => send.sessionId === sessionId)?.context.includes('Continue this same authorized turn') === true)
     f.host.complete(sessionId, 'Recorded script result verified.')
     const delivered = await until(() => f.service.get('alpha'), value => value.state.scripts[0]?.resultReportedAt != null)
     expect(delivered.state.tasks[0]).toEqual(submitted.state.tasks[0])

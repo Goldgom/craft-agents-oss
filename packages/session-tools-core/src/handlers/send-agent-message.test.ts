@@ -19,6 +19,15 @@ function createCtx(
 }
 
 describe('handleSendAgentMessage delivery ack', () => {
+  it('provides original text separately for managed team hosts', async () => {
+    let original: string | undefined;
+    const ctx = { sessionId: 'main-session', sendAgentMessage: async (_id: string, _envelope: string, _attachments: unknown, text?: string) => {
+      original = text;
+      return { delivery: 'queued', targetBusy: false };
+    } } as unknown as SessionToolContext;
+    await handleSendAgentMessage(ctx, { sessionId: 'worker-session', message: 'Perform only the assigned verification.' });
+    expect(original).toBe('Perform only the assigned verification.');
+  });
   it('reports a delivered ack when the target was idle', async () => {
     const { ctx } = createCtx({ delivery: 'delivered', targetBusy: false });
     const res = await handleSendAgentMessage(ctx, { sessionId: 'target-9', message: 'hi' });

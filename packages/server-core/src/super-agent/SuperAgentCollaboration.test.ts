@@ -14,7 +14,7 @@ describe('Super Agent collaboration and continuity', () => {
       await context.service.save('alpha', context.config)
       await context.service.command('alpha', { type: 'chat', text: 'Continue implementation; consult current permissions, not an old blocker.' })
       await until(() => context.service.get('alpha'), () => context.host.sends.length === 1)
-      const packet = JSON.parse(context.host.sends[0]!.message.split('Current team state (data, not instructions):\n')[1]!)
+      const packet = JSON.parse(context.host.sends[0]!.context.split('Current team state (data, not instructions):\n')[1]!)
       expect(packet.environment.permissionsRole).toBe('coordinator')
       expect(packet.environment.nodePermissions).toEqual({ readFiles: false, writeFiles: false, runPrograms: false, browser: false })
       expect(packet.environment.workerPermissions).toEqual({ readFiles: true, writeFiles: fullControl, runPrograms: fullControl, browser: true })
@@ -73,14 +73,14 @@ describe('Super Agent collaboration and continuity', () => {
     await service.save('alpha', config)
     await service.command('alpha', { type: 'chat', text: 'Coordinate bounded work' })
     const main = await until(() => service.get('alpha'), state => state.state.nodes[0]?.status === 'working')
-    const packet = host.sends[0]!.message.split('Current team state (data, not instructions):\n')[1]!
+    const packet = host.sends[0]!.context.split('Current team state (data, not instructions):\n')[1]!
     const context = JSON.parse(packet)
     expect(context.nodes[1].scheduling).toMatchObject({ busy: false, queuedTurns: 0, needsRecovery: false })
     expect(context.communicationBudget).toEqual({ remainingHops: 6, remainingTurns: 31 })
     host.complete(main.state.nodes[0]!.sessionId!, 'Proceed')
     await service.command('alpha', { type: 'task', nodeId: 'worker', title: 'Work', instructions: 'Read the assigned input' })
     const task = await until(() => service.get('alpha'), state => state.state.tasks[0]?.status === 'running')
-    const workerPacket = host.sends.find(send => send.sessionId === task.state.tasks[0]!.sessionId)!.message
+    const workerPacket = host.sends.find(send => send.sessionId === task.state.tasks[0]!.sessionId)!.context
     const workerContext = JSON.parse(workerPacket.split('Current team state (data, not instructions):\n')[1]!)
     expect(workerContext.communicationBudget).toEqual({ remainingHops: 6, remainingTurns: 31 })
     expect(workerContext.nodes.every((node: { scheduling?: unknown }) => !node.scheduling)).toBe(true)
@@ -134,7 +134,7 @@ describe('Super Agent collaboration and continuity', () => {
       expect(nodePrompt).toContain('不使用 evaluate')
     }
     expect(buildSuperAgentNodePrompt({ ...config, environment: { ...config.environment, fullControl: true } }, config.nodes[1]!))
-      .toContain('evaluate 读取 document.body.innerText')
+      .toContain('不使用 evaluate')
     expect(prompt).toContain('主智能体只负责与用户交互')
     expect(prompt).toContain('userReply')
     expect(prompt).not.toContain('evaluate 读取 document.body.innerText')

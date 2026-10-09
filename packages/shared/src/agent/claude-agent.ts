@@ -1194,7 +1194,7 @@ export class ClaudeAgent extends BaseAgent {
       // Get centralized mini agent configuration (from BaseAgent)
       // This ensures Claude and Codex agents use the same detection and constants
       const miniConfig = this.getMiniAgentConfig();
-      const interactionOnly = getSessionExecutionPolicy(sessionId)?.role === 'coordinator';
+      const interactionOnly = ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(sessionId)?.role ?? '');
 
       // Block SDK tools that require UI we don't have:
       // - EnterPlanMode/ExitPlanMode: We use safe mode instead (user-controlled via UI)
@@ -1442,7 +1442,7 @@ export class ClaudeAgent extends BaseAgent {
               const input = _hookInput as Required<Pick<typeof _hookInput, 'tool_name' | 'tool_use_id'>> & typeof _hookInput;
 
               // The image-resize fast path below reads host files before the usual pipeline.
-              const nodePolicy = await authorizeSessionPolicyTool(sessionId, input.tool_name, input.tool_input as Record<string, unknown>, this.config.session?.workingDirectory);
+              const nodePolicy = await authorizeSessionPolicyTool(sessionId, input.tool_name, input.tool_input as Record<string, unknown>, this.config.session?.workingDirectory, undefined, input.tool_use_id);
               if (!nodePolicy.allowed) return blockWithReason(nodePolicy.reason);
 
               // Track Read tool calls for prerequisite checking
@@ -1508,6 +1508,7 @@ export class ClaudeAgent extends BaseAgent {
 
               // Run centralized PreToolUse checks
               const checkResult = await runPreToolUseChecksWithPermissions({
+                invocationId: input.tool_use_id,
                 toolName: input.tool_name,
                 input: toolInput,
                 sessionId,
@@ -3343,6 +3344,9 @@ This is a branched conversation. All prior messages in this conversation are par
       // Reasoning-model outputs (Opus extended thinking) can span multiple SDK-counted
       // turns even with no tools exposed. Tool surface here is empty, so no tool-use loop risk.
       maxTurns: 10,
+      tools: [],
+      mcpServers: {},
+      settingSources: [],
       systemPrompt: request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.',
       ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),

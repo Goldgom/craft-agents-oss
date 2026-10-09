@@ -37,14 +37,21 @@ const strings = {
   model: ['模型', 'Model'],
   modelPlaceholder: ['选择或输入模型 ID', 'Choose or enter a model ID'],
   inheritedGroup: ['使用 AI 设置中的分组：{{group}}', 'Uses the group from AI settings: {{group}}'],
-  coordinator: ['主智能体', 'Coordinator'],
+  coordinator: ['意图主节点', 'Intent node'],
+  orchestrator: ['编排节点', 'Orchestrator'],
+  orchestratorName: ['任务编排', 'Task orchestrator'],
+  orchestratorDescription: ['拆解意图、协调依赖与资源，依据工作节点报告验收。', 'Plan intent, coordinate dependencies and resources, and accept worker evidence.'],
   worker: ['工作节点', 'Worker'],
+  taskSubmitted: ['已提交，待验收', 'Submitted, awaiting acceptance'],
+  taskAccepted: ['已验收', 'Accepted'],
+  taskRejected: ['验收未通过', 'Acceptance rejected'],
+  taskDependencies: ['前置任务', 'Prerequisites'],
   coordinatorName: ['主智能体', 'Coordinator'],
   workerName: ['执行助手', 'Execution assistant'],
   researcherName: ['研究助手', 'Research assistant'],
-  coordinatorDescription: ['与用户交互、分配工作、定期检查节点状态并整理结果。', 'Talk with the user, assign work, inspect node status and assemble results.'],
+  coordinatorDescription: ['理解用户目标、约束与验收条件，交给编排节点，转交结果。', 'Understand goals, constraints and acceptance; hand off to the orchestrator and relay results.'],
   workerDescription: ['执行分配的工作，向主节点报告进展、发现和结果。', 'Complete assigned work and report progress, findings and results.'],
-  coordinatorRule: ['主节点只负责用户交互、理解需求和转交结果；问答、分析、工具操作与验证均交工作节点。没有必要回复时保持静默，主节点思考和内部活动不在聊天中展示。', 'The main agent handles user interaction, understands needs and conveys results. Workers answer questions, analyze, use tools and verify. Remain silent unless a reply is useful; main-agent reasoning and internal activity stay out of chat.'],
+  coordinatorRule: ['主节点理解意图与用户交互；编排节点拆解计划、协调依赖和验收；工作节点执行与核验。内部指令隐藏，对话只保留上游交接内容。', 'The main node handles intent and interaction; the orchestrator plans dependencies and acceptance; workers execute and verify. Internal instructions stay hidden.'],
   addWorker: ['添加工作节点', 'Add worker'],
   removeNode: ['移除节点', 'Remove node'],
   description: ['基本描述', 'Description'],
@@ -65,7 +72,7 @@ const strings = {
   vmDescription: ['连接虚拟机内的 TokenBird 服务工作区；服务端需设置 TOKENBIRD_EXECUTION_HOST=vm。', 'Connect a TokenBird server workspace inside your VM. The server must set TOKENBIRD_EXECUTION_HOST=vm.'],
   unavailableEnvironment: ['当前服务端尚未连接此执行环境。配置后不能启动工作。', 'This execution environment is not connected to the server yet. Work cannot start in it.'],
   folderIsolation: ['文件夹权限控制不提供操作系统级隔离。需要强隔离时请连接沙箱或虚拟机执行端。', 'Folder permissions do not provide operating system isolation. Connect a sandbox or VM executor for stronger isolation.'],
-  folderPrograms: ['文件夹模式中的宿主程序操作可能需要单独授权。容器沙箱可隔离程序执行。', 'Host program operations in folder mode may need scoped approval. A container sandbox isolates program execution.'],
+  folderPrograms: ['所有壳命令与脚本需要已验证的容器沙箱。文件夹模式可使用受控文件与浏览器工具。', 'All shell commands and scripts require a verified container sandbox. Folder mode supports mediated file and browser tools.'],
   workingDirectory: ['工作目录', 'Working directory'],
   pickDirectory: ['选择文件夹', 'Choose folder'],
   containerImage: ['容器镜像', 'Container image'],
@@ -73,9 +80,19 @@ const strings = {
   vmWorkspace: ['虚拟机工作区 ID', 'VM workspace ID'],
   permissions: ['权限控制', 'Permissions'],
   fullControl: ['完全控制', 'Full control'],
-  fullControlDescription: ['开启后，所有节点无需工具审批即可读写文件、运行程序、操作浏览器，并访问工作目录之外的位置。', 'When enabled, all nodes can read and write files, run programs, use the browser and access locations outside the work folder without tool approvals.'],
-  fullControlBoundary: ['操作使用已连接宿主机、客户端或虚拟机的账号权限；所选沙箱与虚拟机的隔离仍然生效。', 'Operations use the connected host, client or VM account. The selected sandbox and VM isolation still apply.'],
-  fullControlEnabled: ['完全控制（无需工具审批）', 'Full control (no tool approvals)'],
+  fullControlDescription: ['开启全部工作能力，跳过所有人工审批、行动门和自动审查。工作目录、数据源、禁止规则与容器边界仍生效；程序和脚本仍需容器。', 'Enable all worker capabilities and skip all human approvals, Action Gates and Auto-review. Folder, source, deny rules and container boundaries still apply; programs and scripts still require a container.'],
+  fullControlBoundary: ['完全控制已开启：范围内操作直接执行，正在等待的范围内审批会自动恢复。关闭后恢复审批规则。', 'Full control is on: operations within the execution boundary run directly, and pending approvals within that boundary resume automatically. Turn it off to restore approval rules.'],
+  fullControlEnabled: ['完全控制（跳过所有审批）', 'Full control (skip all approvals)'],
+  actionGates: ['行动门与独立审查', 'Action Gates and independent review'],
+  actionGatesHint: ['关闭完全控制时，已验证的只读工具自主执行，写入、外部通信、消费、基础设施变更和未知操作需要人工批准。开启完全控制会跳过所有审批和自动审查。', 'With full control off, verified read-only tools run autonomously; writes, external communication, spending, infrastructure changes and unknown operations require human approval. Full control skips all approvals and Auto-review.'],
+  autoReview: ['独立自动审查', 'Independent auto-review'],
+  autoReviewHint: ['关闭完全控制时，使用当前连接另开无工具的审查请求，会消耗模型额度。审查可能出错，失败交人工决定，通过仍需审批。完全控制开启时不调用审查器，设置保留供关闭后使用。', 'With full control off, a separate tool-free review uses the current connection and model credits. Review can be wrong; failure requires human review and a consistent verdict still requires approval. Full control skips the reviewer and retains this setting for later.'],
+  customRulesHint: ['按完整工具名称匹配，可禁止操作或增加人工审批。禁止规则始终生效；完全控制会跳过人工审批规则。脚本启动使用 script-run。', 'Match exact tool names to deny actions or require human approval. Deny rules always apply; full control skips human approval rules. Use script-run for registered scripts.'],
+  ruleTool: ['完整工具名称', 'Exact tool name'],
+  ruleReason: ['限制原因', 'Restriction reason'],
+  ruleDeny: ['禁止执行', 'Deny'],
+  ruleHuman: ['需要人工审批', 'Require human approval'],
+  addCustomRule: ['添加限制规则', 'Add restriction rule'],
   advancedPermissions: ['高级权限', 'Advanced permissions'],
   limitedControl: ['按高级权限执行', 'Use advanced permissions'],
   readFiles: ['读取文件', 'Read files'],
@@ -85,7 +102,7 @@ const strings = {
   permissionMode: ['执行模式', 'Execution mode'],
   allowAll: ['执行（Execute）', 'Execute'],
   executionModeHint: ['主节点与所有工作节点统一使用执行模式；具体操作仍受能力开关、工作环境和单次授权约束。', 'The coordinator and all workers use Execute. Capability switches, the work environment and scoped approvals still control access.'],
-  permissionHint: ['已开启的能力在授权范围内直接执行，需要额外授权的操作会显示在主聊天中。', 'Enabled capabilities execute within their authorized scope. Operations needing additional approval appear in the main chat.'],
+  permissionHint: ['能力开关决定可执行范围；只读操作自主执行，有副作用的操作由主聊天中的行动门逐次审批。范围外操作无法靠审批放行。', 'Capabilities define the execution boundary. Reads run autonomously; side effects require Action Gate approval in the main chat. Approval cannot allow an operation outside the boundary.'],
   next: ['下一步', 'Continue'],
   back: ['上一步', 'Back'],
   create: ['创建超级智能体', 'Create Super Agent'],
@@ -185,9 +202,9 @@ const strings = {
   permissionInbox: ['需要你的授权', 'Your approval is needed'],
   permissionHistory: ['最近授权记录', 'Recent approval decisions'],
   permissionManagement: ['权限管理', 'Permission management'],
-  permissionManagementHint: ['所有节点共用当前工作区的一份授权列表。可处理待审批申请，记住精确文件或程序操作，随时撤销共享授权。登录、管理员审批及未绑定稳定目标的浏览器操作仅支持本次授权；不会扩大到整个目录或全部工具。', 'All nodes share one approval list in this workspace. Review requests, remember exact file or program operations, and revoke shared approvals. Login, administrator approvals, and browser operations without stable targets remain one-time approvals; no entire directory or tool is granted.'],
+  permissionManagementHint: ['所有节点共用当前工作区的审批列表。行动门逐次批准，不能共享；历史共享授权可查看与撤销。', 'All nodes use this workspace approval inbox. Action Gates require approval for each invocation and cannot be shared. Historic shared grants can be viewed and revoked.'],
   sharedPermissions: ['全队共享授权', 'Shared team approvals'],
-  noSharedPermissions: ['暂无共享授权。审批时选择「全队记住此操作」后会显示在这里。', 'No shared approvals. Choose “Remember for all nodes” when reviewing a request.'],
+  noSharedPermissions: ['暂无历史共享授权。新的行动门只能逐次批准。', 'No historic shared grants. New Action Gates require approval for each invocation.'],
   noPendingPermissions: ['当前没有待审批的权限申请。', 'No approval requests are pending.'],
   approveForTeam: ['全队记住此操作', 'Remember for all nodes'],
   sharedApprovalHint: ['全队授权会保存到当前工作区，仅复用相同工具、操作、执行目标与工作环境。可在权限管理中撤销；普通授权仍只对本轮有效。', 'Team approvals persist in this workspace and reuse only the same tool, operation, execution target, and environment. Revoke them in Permission management. Ordinary approvals still last only for this turn.'],
@@ -196,7 +213,7 @@ const strings = {
   noMatchingPermissions: ['没有匹配的权限。', 'No matching approvals.'],
   sharedPermissionCreator: ['由 {{name}} 的申请建立 · {{time}}', 'Created from {{name}}’s request · {{time}}'],
   permissionEnvironmentMismatch: ['属于其他工作环境，当前不会自动复用', 'Bound to another environment; not reused here'],
-  fullControlPermissionHint: ['完全控制已开启：工作节点按完全控制执行，撤销共享授权不会关闭完全控制。若需要逐项审批，请在工作环境中关闭完全控制。', 'Full control is enabled. Workers follow full control; revoking a shared approval does not disable it. Turn full control off in Environment settings to require individual approvals.'],
+  fullControlPermissionHint: ['完全控制已开启：跳过所有人工审批、行动门和自动审查，范围内的等待操作自动恢复。关闭后恢复审批规则。', 'Full control is on: all human approvals, Action Gates and Auto-review are skipped, and pending operations within the boundary resume automatically. Turn it off to restore approval rules.'],
   approvalArchived: ['历史审批', 'Archived approval'],
   approvalDetails: ['查看审批详情', 'View approval details'],
   approvalReason: ['审批原因', 'Reason'],
@@ -214,6 +231,8 @@ const strings = {
   sourceOperation: ['指定数据源', 'Specified source'],
   environmentOperation: ['当前工作环境', 'Current work environment'],
   exactApprovalHint: ['只授权当前节点执行所示操作，本轮结束或授权过期后失效。', 'Authorize only this node and operation. The grant ends with the current turn or its expiry.'],
+  actionGateApprovalHint: ['只批准当前节点的这一次调用，完整参数和环境必须匹配；不能记住、共享或扩大权限。', 'Approve this node and invocation once. The complete parameters and environment must match. Approval cannot be remembered, shared or expand permissions.'],
+  approveInvocation: ['批准此次调用', 'Approve this invocation'],
   approveThisTurn: ['授权此操作（本轮）', 'Approve operation for this turn'],
   allowOnce: ['允许一次', 'Allow once'],
   deny: ['拒绝', 'Deny'],
@@ -265,7 +284,8 @@ const strings = {
   scriptArgs: ['参数（每行一个）', 'Arguments (one per line)'],
   timeout: ['运行超时（秒）', 'Timeout (seconds)'],
   syncNode: ['同步给节点', 'Notify node'],
-  runScript: ['运行脚本', 'Run script'],
+  runScript: ['批准并运行', 'Approve and run'],
+  runScriptDirect: ['运行', 'Run'],
   changedAt: ['文件变更', 'File changed'],
   exitCode: ['退出码', 'Exit code'],
   loading: ['正在加载超级智能体…', 'Loading Super Agent…'],
@@ -276,7 +296,7 @@ const strings = {
   saveFailed: ['保存失败', 'Save failed'],
   commandFailed: ['操作失败', 'Action failed'],
   nameRequired: ['请填写助手名字。', 'Enter an assistant name.'],
-  nodesRequired: ['必须配置且仅配置一个主节点，以及至少一个工作节点。', 'Configure exactly one coordinator and at least one worker.'],
+  nodesRequired: ['需要一个意图主节点、一个编排节点和至少一个工作节点。', 'Configure one intent node, one orchestrator and at least one worker.'],
   nodeRequired: ['请为每个节点填写名字，并选择已登录的 AI 连接与模型。', 'Each node needs a name, an authenticated AI connection and a model.'],
   invalidSpeed: ['工作速度必须为每分钟 0.1 至 60 轮。', 'Work rate must be between 0.1 and 60 turns per minute.'],
   pathRequired: ['请指定工作目录。', 'Choose a working directory.'],
@@ -333,9 +353,9 @@ export function createNode(
   const models = nodeModels(connection)
   return {
     id: crypto.randomUUID(), role,
-    name: text(role === 'coordinator' ? 'coordinatorName' : 'workerName'),
+    name: text(role === 'coordinator' ? 'coordinatorName' : role === 'orchestrator' ? 'orchestratorName' : 'workerName'),
     avatar: role === 'coordinator' ? '✦' : '◈',
-    description: text(role === 'coordinator' ? 'coordinatorDescription' : 'workerDescription'),
+    description: text(role === 'coordinator' ? 'coordinatorDescription' : role === 'orchestrator' ? 'orchestratorDescription' : 'workerDescription'),
     llmConnection: connection?.slug ?? '',
     model: connection?.defaultModel && models.includes(connection.defaultModel) ? connection.defaultModel : models[0] ?? '',
     thinkingLevel: role === 'coordinator' ? 'high' : 'medium',
@@ -347,7 +367,7 @@ export function createNode(
 export function createConfig(connections: LlmConnectionWithStatus[], text: SuperAgentText, preferredSlug?: string): SuperAgentConfig {
   const config: SuperAgentConfig = {
     version: 1, name: text('defaultName'), avatar: '✦',
-    nodes: [createNode('coordinator', connections, text, preferredSlug), createNode('worker', connections, text, preferredSlug)],
+    nodes: [createNode('coordinator', connections, text, preferredSlug), createNode('orchestrator', connections, text, preferredSlug), createNode('worker', connections, text, preferredSlug)],
     idleInspectionMinutes: 60,
     continuousWork: true,
     environment: {
@@ -366,8 +386,7 @@ export function withExecuteMode(config: SuperAgentConfig): SuperAgentConfig {
 }
 
 export function scriptAccessGranted(environment: SuperAgentEnvironment): boolean {
-  return environment.fullControl === true || (environment.permissions.runPrograms
-    && (environment.kind !== 'folder' || Object.values(environment.permissions).every(Boolean)))
+  return environment.kind === 'sandbox' && (environment.fullControl === true || environment.permissions.runPrograms)
 }
 
 export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, connection: LlmConnectionWithStatus, text: SuperAgentText): SuperAgentConfig {
@@ -377,11 +396,11 @@ export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, 
   if (!connection.isAuthenticated || !models.length) return executionConfig
   const choices = presetModels(models, connection.defaultModel)
   const recipe = PRESET_RECIPES[preset]
-  const existing = [config.nodes.find(node => node.role === 'coordinator'), ...config.nodes.filter(node => node.role === 'worker')]
-  const nodes = recipe.nodes.map((item, index) => {
-    const old = existing[index]
+  const existing = new Map<SuperAgentNode['role'], SuperAgentNode[]>(['coordinator', 'orchestrator', 'worker'].map(role => [role as SuperAgentNode['role'], config.nodes.filter(node => node.role === role)]))
+  const nodes = recipe.nodes.map(item => {
+    const old = existing.get(item.role)?.shift()
     return {
-      ...createNode(index === 0 ? 'coordinator' : 'worker', [connection], text, connection.slug),
+      ...createNode(item.role, [connection], text, connection.slug),
       ...(old ? { id: old.id, sourceSlugs: [...old.sourceSlugs], abilityProfileIds: [...old.abilityProfileIds] } : {}),
       name: text(`${item.profile}Name`), description: text(`${item.profile}Description`), workPreferences: text(`${item.profile}Preferences`),
       model: choices[item.model], thinkingLevel: /luna/i.test(choices[item.model]) ? 'max' : item.thinking,
@@ -391,12 +410,13 @@ export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, 
   // Keep extra resource-bound nodes so choosing a smaller team never orphans scripts or bindings.
   nodes.push(...config.nodes.filter(node => !nodes.some(item => item.id === node.id)
     && (node.sourceSlugs.length || node.abilityProfileIds.length || config.scripts.some(script => script.nodeId === node.id))))
-  return { ...executionConfig, nodes, continuousWork: recipe.continuousWork, idleInspectionMinutes: recipe.idleInspectionMinutes }
+  return { ...executionConfig, nodes, workflow: { ...recipe.workflow }, continuousWork: recipe.continuousWork, idleInspectionMinutes: recipe.idleInspectionMinutes }
 }
 
 export function configError(config: SuperAgentConfig, connections: LlmConnectionWithStatus[], text: SuperAgentText): string | null {
   if (!config.name.trim()) return text('nameRequired')
-  if (config.nodes.filter(node => node.role === 'coordinator').length !== 1 || !config.nodes.some(node => node.role === 'worker')) return text('nodesRequired')
+  // Loaded legacy teams can still change permissions/intervals while migration waits for idle.
+  if (config.nodes.filter(node => node.role === 'coordinator').length !== 1 || config.nodes.filter(node => node.role === 'orchestrator').length > 1 || !config.nodes.some(node => node.role === 'worker')) return text('nodesRequired')
   for (const node of config.nodes) {
     const connection = connections.find(item => item.slug === node.llmConnection)
     const models = nodeModels(connection)

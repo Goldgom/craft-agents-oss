@@ -39,17 +39,18 @@ describe('Super Agent model authorization and setup', () => {
     }
   })
 
-  it('allows scripts with full control while preserving limited-mode capability requirements', () => {
+  it('requires a container for scripts even when all worker capabilities are enabled', () => {
     const environment = createConfig([tokenNest], text).environment
     environment.fullControl = false
     environment.permissions = { readFiles: false, writeFiles: false, runPrograms: false, browser: false }
     expect(scriptAccessGranted(environment)).toBe(false)
-    expect(scriptAccessGranted({ ...environment, fullControl: true })).toBe(true)
+    expect(scriptAccessGranted({ ...environment, fullControl: true })).toBe(false)
+    expect(scriptAccessGranted({ ...environment, kind: 'sandbox', fullControl: true })).toBe(true)
     environment.permissions.runPrograms = true
     expect(scriptAccessGranted(environment)).toBe(false)
     expect(scriptAccessGranted({ ...environment, kind: 'sandbox' })).toBe(true)
     environment.permissions = { readFiles: true, writeFiles: true, runPrograms: true, browser: true }
-    expect(scriptAccessGranted(environment)).toBe(true)
+    expect(scriptAccessGranted(environment)).toBe(false)
   })
 
   it('keeps legacy environment boundaries and capabilities when editing or choosing any preset', () => {
@@ -80,19 +81,21 @@ describe('Super Agent model authorization and setup', () => {
         expect(node.llmConnection).toBe(tokenNest.slug)
       }
     }
-    expect(applyPreset(config, 'daily', tokenNest, text).nodes[1].model).toBe('available-mini')
+    expect(applyPreset(config, 'daily', tokenNest, text).nodes[2].model).toBe('available-mini')
   })
 
   it('defaults to daily assistance and gives autonomous scenarios distinct roles and continuation settings', () => {
     const config = createConfig([tokenNest], text)
-    expect(config.nodes.map(node => node.name)).toEqual(['dailyLeadName', 'dailyWorkerName', 'organizerName', 'collaborationAssistantName'])
+    expect(config.nodes.map(node => node.name)).toEqual(['intentLeadName', 'dailyLeadName', 'dailyWorkerName', 'organizerName', 'collaborationAssistantName'])
     for (const preset of SUPER_AGENT_PRESETS) {
       const result = applyPreset(config, preset, tokenNest, text)
       result.environment.workingDirectory = 'C:\\work'
       expect(() => validateSuperAgentConfig(result)).not.toThrow()
-      expect(result.nodes).toHaveLength(preset === 'daily' ? 4 : 6)
-      expect(result.continuousWork).toBe(true)
-      expect(result.idleInspectionMinutes).toBe({ daily: 60, coding: 10, research: 30, work: 15 }[preset])
+      expect(result.nodes).toHaveLength(preset === 'daily' ? 5 : 7)
+      expect(result.continuousWork).toBe(preset !== 'operations')
+      expect(result.nodes.filter(node => node.role === 'orchestrator')).toHaveLength(1)
+      expect(result.workflow).toEqual(PRESET_RECIPES[preset].workflow)
+      expect(result.idleInspectionMinutes).toBe({ daily: 60, coding: 10, research: 30, work: 15, operations: 10 }[preset])
       expect(result.nodes.map(node => node.workPreferences)).toEqual(PRESET_RECIPES[preset].nodes.map(node => `${node.profile}Preferences`))
     }
   })
@@ -104,10 +107,10 @@ describe('Super Agent model authorization and setup', () => {
     config.nodes[1].sourceSlugs = ['repo']
     config.abilityProfiles = [{ id: 'review', name: 'Review', description: '', instructions: 'Review artifacts' }]
     config.nodes[2].abilityProfileIds = ['review']
-    config.scripts = [{ id: 'checks', name: 'Checks', path: 'checks.ts', args: [], timeoutSeconds: 60, nodeId: config.nodes[5].id }]
+    config.scripts = [{ id: 'checks', name: 'Checks', path: 'checks.ts', args: [], timeoutSeconds: 60, nodeId: config.nodes[6].id }]
     const original = structuredClone(config)
     const result = applyPreset(config, 'daily', tokenNest, text)
-    expect(result.nodes.map(node => node.id)).toEqual([...config.nodes.slice(0, 4), config.nodes[5]].map(node => node.id))
+    expect(result.nodes.map(node => node.id)).toEqual([...config.nodes.slice(0, 5), config.nodes[6]].map(node => node.id))
     expect(result.nodes[1].sourceSlugs).toEqual(['repo'])
     expect(result.nodes[2].abilityProfileIds).toEqual(['review'])
     expect(result.scripts).toEqual(config.scripts)
@@ -118,7 +121,7 @@ describe('Super Agent model authorization and setup', () => {
   it('uses standard and expert models by role, works without TokenNest, and falls back to a single model', () => {
     const provider = { ...tokenNest, oauthProvider: undefined, channelGroups: undefined, models: ['available-mini', 'gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-astra', 'gpt-6.1-sol'], defaultModel: 'gpt-6-astra' }
     const coding = applyPreset(createConfig([provider], text), 'coding', provider, text)
-    expect(coding.nodes.map(node => node.model)).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-luna'])
+    expect(coding.nodes.map(node => node.model)).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-luna'])
     for (const preset of SUPER_AGENT_PRESETS) {
       const result = applyPreset(createConfig([provider], text), preset, provider, text)
       const collaborators = result.nodes.slice(-2)
@@ -158,6 +161,8 @@ describe('Super Agent model authorization and setup', () => {
   it('requires exactly one coordinator and at least one worker before activation', () => {
     const config = createConfig([tokenNest], text)
     config.environment.workingDirectory = 'C:\\work'
+    expect(configError({ ...config, nodes: config.nodes.filter(node => node.role !== 'orchestrator') }, [tokenNest], text)).toBeNull()
+    expect(configError({ ...config, nodes: [...config.nodes, { ...config.nodes[1], id: 'extra-orchestrator' }] }, [tokenNest], text)).toBe('nodesRequired')
     expect(configError({ ...config, nodes: [config.nodes[0]] }, [tokenNest], text)).toBe('nodesRequired')
     expect(configError({ ...config, nodes: [...config.nodes, { ...config.nodes[0], id: 'extra-coordinator' }] }, [tokenNest], text)).toBe('nodesRequired')
   })

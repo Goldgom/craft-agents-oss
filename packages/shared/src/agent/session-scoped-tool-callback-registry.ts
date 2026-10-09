@@ -135,7 +135,7 @@ export interface SessionScopedToolCallbacks {
   /** Resolve a status display name to its ID. */
   resolveStatusFn?: (status: string) => import('@craft-agent/session-tools-core').ResolvedStatusResult;
   /** Send a message to another session (inter-session messaging). Resolves with delivery status. */
-  sendAgentMessageFn?: (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => Promise<import('@craft-agent/session-tools-core').SendAgentMessageResult>;
+  sendAgentMessageFn?: (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>, originalMessage?: string) => Promise<import('@craft-agent/session-tools-core').SendAgentMessageResult>;
   sendCollaborationMessageFn?: (targetMemberId: string, message: string) => Promise<import('@craft-agent/session-tools-core').SendAgentMessageResult>;
   /** Read the invoking session's collaboration snapshot. */
   getCollaborationFn?: () => Promise<unknown>;

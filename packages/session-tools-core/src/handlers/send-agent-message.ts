@@ -51,7 +51,9 @@ export async function handleSendAgentMessage(
       args.message,
     ].join('\n');
 
-    const result = await ctx.sendAgentMessage(args.sessionId, wrappedMessage, args.attachments);
+    // Managed team hosts keep sender metadata in hidden context and display only
+    // the original input. Ordinary session hosts continue using the envelope.
+    const result = await ctx.sendAgentMessage(args.sessionId, wrappedMessage, args.attachments, args.message);
 
     // Report the real delivery status instead of an unconditional "sent". A busy
     // target queues the message behind its current turn; an idle target starts

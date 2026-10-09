@@ -12,7 +12,7 @@ export class SuperAgentTestHost implements SuperAgentSessionHost {
   sessions = new Map<string, { id: string; workspaceId: string; isProcessing: boolean } & Partial<Session>>()
   options = new Map<string, CreateSessionOptions>()
   policies = new Map<string, SuperAgentSessionPolicy>()
-  sends: Array<{ sessionId: string; message: string }> = []
+  sends: Array<{ sessionId: string; message: string; context: string; hidden?: boolean }> = []
   sessionQueries: string[] = []
   finalTextReads = 0
   finalText: string | undefined
@@ -37,9 +37,9 @@ export class SuperAgentTestHost implements SuperAgentSessionHost {
     return this.sessions.get(id) ?? null
   }
 
-  async sendMessage(sessionId: string, message: string) {
+  async sendMessage(sessionId: string, message: string, context = '', hidden?: boolean) {
     this.sessions.get(sessionId)!.isProcessing = true
-    this.sends.push({ sessionId, message })
+    this.sends.push({ sessionId, message, context, hidden })
   }
 
   async applySessionPolicy(sessionId: string, policy: SuperAgentSessionPolicy) { this.policies.set(sessionId, policy) }
@@ -119,7 +119,7 @@ afterEach(async () => {
 })
 
 export async function superAgentFixture(options: Partial<Pick<SuperAgentServiceDeps,
-  'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged'>> = {}) {
+  'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged' | 'workflow' | 'upgradeArchitecture' | 'actionGates'>> = {}) {
   const root = await mkdtemp(join(tmpdir(), fixturePrefix))
   const workingDirectory = join(root, 'work')
   await mkdir(workingDirectory)

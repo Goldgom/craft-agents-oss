@@ -356,6 +356,8 @@ export interface Message {
  */
 export interface StoredMessage {
   relayDelivery?: RelayMessageIdentity;
+  /** System generated input retained for model context and excluded from the visible chat. */
+  hidden?: boolean;
   id: string;
   type: MessageRole;
   content: string;
@@ -530,6 +532,8 @@ export interface SessionPolicyPermissionScope {
   operation: string;
   boundary: 'environment' | 'outside-environment' | 'client' | 'host' | 'source';
   expiresAt: number;
+  /** Mandatory approval for this invocation; cannot be remembered or shared. */
+  actionGate?: { invocationId: string; category: 'state-change' | 'external-communication' | 'financial' | 'infrastructure' | 'unknown'; review?: { verdict: 'consistent' | 'needs-human' | 'deny' | 'unavailable'; reason: string } };
 }
 
 /**

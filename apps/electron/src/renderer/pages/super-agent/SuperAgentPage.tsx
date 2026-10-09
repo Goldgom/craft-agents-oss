@@ -259,7 +259,8 @@ function WorkProgress({ snapshot, compact, busy, onCreateTask, onOpenPlans, onCo
 }) {
   const text = useSuperAgentText()
   const tasks = snapshot.state.tasks
-  const completed = tasks.filter(task => task.status === 'completed').length
+  const completed = tasks.filter(task => task.status === 'completed'
+    && (!snapshot.config.nodes.some(node => node.role === 'orchestrator') || task.acceptance?.status === 'accepted')).length
   const working = tasks.filter(task => task.status === 'running').length
   const queued = tasks.filter(task => task.status === 'queued').length
   const summary = <span className="text-[11px] text-muted-foreground">{text('progressSummary', { working, queued, completed })}</span>
@@ -322,7 +323,7 @@ function NodeTeam({ snapshot, pendingPermissions, onEdit, onOpenSession, onTask,
         <div className="flex items-start gap-3"><AgentAvatar avatar={node.avatar} name={node.name} className="size-12 rounded-2xl text-2xl" /><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold">{node.name}</h3><p className="mt-1 truncate text-xs text-muted-foreground">{node.model}</p></div>
           <span className={cn('rounded-full px-2 py-1 text-[10px]', runtime && ['working', 'preparing', 'recovering'].includes(runtime.status) ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : runtime?.status === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400')}>{text(runtime?.status ?? 'idle')}</span></div>
         <p className="text-xs leading-5 text-muted-foreground">{node.description}</p>
-        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground"><span className="rounded bg-foreground/5 px-2 py-1">{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span><span className="text-amber-500">{'★'.repeat(node.intelligenceRating)}</span><span>{node.maxCallsPerMinute}/min</span><span>{t(`thinking.${node.thinkingLevel}`)}</span></div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground"><span className="rounded bg-foreground/5 px-2 py-1">{text(node.role)}</span><span className="text-amber-500">{'★'.repeat(node.intelligenceRating)}</span><span>{node.maxCallsPerMinute}/min</span><span>{t(`thinking.${node.thinkingLevel}`)}</span></div>
         {activeTask && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5"><span className="font-medium">{text('tasks')}: </span>{activeTask.title}</p>}
         {runtime?.error && <p className="text-xs leading-5 text-destructive">{runtime.error}</p>}
         {runtime && <SuperAgentNodeRecovery runtime={runtime} busy={busy} onCommand={onCommand} />}
@@ -350,11 +351,15 @@ function TaskList({ snapshot, busy, onCommand, onOpenSession }: {
     const node = config.nodes.find(item => item.id === task.nodeId)
     const sessionId = task.sessionId ?? state.nodes.find(item => item.nodeId === task.nodeId)?.sessionId
     const running = task.status === 'running' || task.status === 'queued'
+    const submitted = config.nodes.some(node => node.role === 'orchestrator') && task.status === 'completed'
+    const statusLabel = submitted ? task.acceptance?.status === 'accepted' ? 'taskAccepted' : task.acceptance?.status === 'rejected' ? 'taskRejected' : 'taskSubmitted' : task.status
     const activity = taskActivity(snapshot, task)
     return <article key={task.id} className="space-y-3 rounded-xl border border-border/60 p-3">
-      <div className="flex items-start gap-2"><h3 className="min-w-0 flex-1 break-words text-xs font-medium leading-5">{task.title}</h3><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', task.status === 'completed' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : task.status === 'failed' ? 'bg-destructive/10 text-destructive' : 'bg-foreground/5 text-muted-foreground')}>{text(task.status)}</span></div>
+      <div className="flex items-start gap-2"><h3 className="min-w-0 flex-1 break-words text-xs font-medium leading-5">{task.title}</h3><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', task.acceptance?.status === 'accepted' || (!submitted && task.status === 'completed') ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : task.status === 'failed' || task.acceptance?.status === 'rejected' ? 'bg-destructive/10 text-destructive' : 'bg-foreground/5 text-muted-foreground')}>{text(statusLabel)}</span></div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">{node && <AgentAvatar avatar={node.avatar} name={node.name} className="size-5 rounded text-[10px]" />}<span className="min-w-0 flex-1 truncate">{node?.name ?? task.nodeId}</span><span>{formatTimestamp(task.createdAt)}</span></div>
       {task.error && <p className="text-[11px] leading-5 text-destructive">{task.error}</p>}
+      {!!task.dependsOn?.length && <p className="text-[10px] leading-5 text-muted-foreground">{text('taskDependencies')}: {task.dependsOn.map(id => state.tasks.find(item => item.id === id)?.title ?? id).join(' · ')}</p>}
+      {task.acceptance && <p className="text-[11px] leading-5 text-muted-foreground">{task.acceptance.note}</p>}
       {activity && <WorkerActivity activity={activity} />}
       {task.output && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">{text('result')}</summary><div className="mt-2 max-h-80 overflow-y-auto text-xs leading-5"><Markdown>{task.output}</Markdown></div></details>}
       {(running || (sessionId && onOpenSession)) && <div className="flex flex-wrap gap-1.5">{sessionId && onOpenSession && <button type="button" className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => onOpenSession(sessionId)}><ExternalLink className="size-3" />{text('openSession')}</button>}

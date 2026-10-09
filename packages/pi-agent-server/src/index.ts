@@ -15,6 +15,7 @@
  */
 
 import http from 'node:http';
+import { restrictedResources } from './restricted-resources.ts';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -216,7 +217,7 @@ interface OutboundPreToolUseReq {
   toolCallId?: string;
   input: Record<string, unknown>;
 }
-interface OutboundToolExecReq { type: 'tool_execute_request'; requestId: string; toolName: string; args: Record<string, unknown> }
+interface OutboundToolExecReq { type: 'tool_execute_request'; requestId: string; toolCallId?: string; toolName: string; args: Record<string, unknown> }
 interface OutboundToolsRegistered {
   type: 'tools_registered';
   id: string;
@@ -794,6 +795,8 @@ async function ensureSession(): Promise<AgentSession> {
     tokenLimit: initConfig.autoCompactionTokenLimit,
     contextWindow: sessionOptions.model?.contextWindow,
   });
+  if (initConfig.browserToolOnly) sessionOptions.resourceLoader = await restrictedResources(cwd,
+    sessionOptions.agentDir || join(initConfig.sessionPath || cwd, '.pi-agent'), sessionOptions.settingsManager);
   const { session } = await createAgentSession(sessionOptions);
   installCraftPiRetryClassifier(session);
   piSession = session;
@@ -999,6 +1002,7 @@ function buildProxyTools(): ToolDefinition<any, any>[] {
       send({
         type: 'tool_execute_request',
         requestId,
+        toolCallId,
         toolName: def.name,
         args: approvedInput,
       });
@@ -1087,8 +1091,12 @@ async function queryLlm(
       settingsManager: createCraftSettingsManager('ephemeral'),
       model: piModel,
     };
+    ephemeralOptions.resourceLoader = await restrictedResources(resolvedCwd(),
+      initConfig!.agentDir || join(initConfig!.sessionPath || resolvedCwd(), '.pi-agent'), ephemeralOptions.settingsManager!);
 
     const { session: ephemeralSession } = await createAgentSession(ephemeralOptions);
+    // The SDK may ignore options.tools during construction; close the tool surface explicitly.
+    ephemeralSession.setActiveToolsByName([]);
     installCraftPiRetryClassifier(ephemeralSession);
     const resource: EphemeralQueryResource = {
       abort: () => ephemeralSession.abort(),
