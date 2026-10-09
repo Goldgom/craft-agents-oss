@@ -344,6 +344,8 @@ export interface Message {
   authDescription?: string;       // Description/instructions
   authHint?: string;              // Hint about where to find credentials
   authSourceUrl?: string;         // Source URL for password manager domain matching (1Password)
+  authSavedCredentialName?: string;
+  authSavedCredentialKind?: 'password' | 'api-key' | 'secret';
   authPasswordRequired?: boolean; // For basic auth: whether password is required (default true)
   authError?: string;             // Error message if auth failed
   authEmail?: string;             // Authenticated email (for OAuth)
@@ -428,6 +430,8 @@ export interface StoredMessage {
   authDescription?: string;
   authHint?: string;
   authSourceUrl?: string;
+  authSavedCredentialName?: string;
+  authSavedCredentialKind?: 'password' | 'api-key' | 'secret';
   authPasswordRequired?: boolean;
   authError?: string;
   authEmail?: string;

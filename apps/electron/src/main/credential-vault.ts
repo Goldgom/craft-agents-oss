@@ -124,6 +124,11 @@ export class ElectronCredentialVault {
       if (!credential) continue;
       entries.push({
         id,
+        ...(id.type === 'saved_credential' ? {
+          username: credential.username,
+          credentialKind: credential.credentialKind,
+          credentialUrl: credential.credentialUrl,
+        } : {}),
         ...(typeof credential.expiresAt === 'number' && Number.isFinite(credential.expiresAt) ? { expiresAt: credential.expiresAt } : {}),
         hasValue: !!credential.value,
         presentFields: NATIVE_CREDENTIAL_FIELDS.filter(field => credential[field] !== undefined),

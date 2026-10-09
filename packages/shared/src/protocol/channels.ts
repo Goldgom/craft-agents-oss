@@ -288,6 +288,7 @@ export const RPC_CHANNELS = {
     CANCEL_OAUTH: 'tokennest:cancelOAuth',
     CHECK_AUTH: 'tokennest:checkAuth',
     GET_USAGE: 'tokennest:getUsage',
+    GET_PRICING: 'tokennest:getPricing',
     GET_RECHARGE_URL: 'tokennest:getRechargeUrl',
   },
   copilot: {

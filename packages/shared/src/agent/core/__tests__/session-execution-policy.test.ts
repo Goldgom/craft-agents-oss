@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { parse } from 'shell-quote';
 import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, clearSessionPolicyGrants, getSessionExecutionPolicy, getSessionPolicyGrantTarget, getSessionProgramExecutor, hasSessionFullControl, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, setSessionExecutionPolicy, setSessionPolicyPermissionHandler, setSessionProgramExecutor, setSessionReferenceFiles, wrapSessionProgramInput, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '../session-execution-policy.ts';
 import { PermissionManager } from '../permission-manager.ts';
+import { setSessionOperationRecorder } from '../session-execution-policy.ts';
 import { runPreToolUseChecks, runPreToolUseChecksWithPermissions } from '../pre-tool-use.ts';
 import { setPermissionMode, cleanupModeState } from '../../mode-manager.ts';
 import { writeSessionJsonl, readSessionJsonl } from '../../../sessions/jsonl.ts';
@@ -29,6 +30,49 @@ beforeEach(() => {
 });
 
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
+
+describe('durable operation dispatch', () => {
+  const context = () => ({ toolName: 'Write', input: { file_path: 'report.txt', content: 'report', _intent: 'Save report' },
+    sessionId, invocationId: 'write-1', permissionMode: 'allow-all' as const, workspaceRootPath: root,
+    workspaceId: 'workspace', workingDirectory: root, activeSourceSlugs: [], allSourceSlugs: [], hasSourceActivation: false,
+    permissionManager: new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root }) });
+
+  test('full control awaits normalized persistence without approvals, and synchronous dispatch cannot skip it', async () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true, actionGates: true });
+    let approvals = 0;
+    setSessionPolicyPermissionHandler(sessionId, async () => { approvals++; return false; });
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    let saved: Record<string, unknown> | undefined;
+    setSessionOperationRecorder(sessionId, async request => { saved = request.input; await barrier; });
+    expect(runPreToolUseChecks(context()).type).toBe('block');
+    let finished = false;
+    const dispatch = runPreToolUseChecksWithPermissions(context()).then(result => { finished = true; return result; });
+    for (let attempt = 0; attempt < 100 && !saved; attempt++) await new Promise(resolve => setTimeout(resolve, 1));
+    expect(saved?.file_path).toBe(join(root, 'report.txt'));
+    expect(saved?._intent).toBeUndefined();
+    expect(finished).toBe(false);
+    release();
+    expect((await dispatch).type).toBe('modify');
+    expect(approvals).toBe(0);
+  });
+
+  test('failed persistence blocks mutation while read-only tools remain independent', async () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true });
+    let writes = 0;
+    setSessionOperationRecorder(sessionId, async () => { writes++; throw new Error('Disk unavailable'); });
+    const result = await runPreToolUseChecksWithPermissions(context());
+    expect(result).toMatchObject({ type: 'block', reason: 'Super Agent operation: Disk unavailable' });
+    expect((await runPreToolUseChecksWithPermissions({ ...context(), toolName: 'Read', input: { file_path: 'allowed.txt' } })).type).toBe('modify');
+    expect(writes).toBe(1);
+  });
+
+  test('rechecks the current permission boundary after persistence completes', async () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true });
+    setSessionOperationRecorder(sessionId, async () => { setSessionExecutionPolicy(sessionId, { ...policy, writeFiles: false }); });
+    expect((await runPreToolUseChecksWithPermissions(context())).type).toBe('block');
+  });
+});
 
 describe('Super Agent permission ceiling', () => {
   test('allows full shared board reads for either role and rejects direct writes', async () => {

@@ -11,6 +11,10 @@ electronVersion: "39.2.7"
 # time.
 npmRebuild: false
 
+# Keep a single Windows copy of each runtime after all resource collectors run.
+afterPack: scripts/prune-windows-resources.cjs
+artifactBuildCompleted: scripts/windows-installer-blockmap.cjs
+
 directories:
   output: release
   buildResources: resources
@@ -87,7 +91,7 @@ publish:
   provider: generic
   url: https://openai.goldgom.top/tokenbird/electron/latest
 
-# Disable ASAR to avoid decompression overhead and click delays
+# External runtimes and subprocess scripts require real filesystem paths.
 asar: false
 
 mac:
@@ -190,6 +194,8 @@ win:
     # See: https://github.com/electron-userland/electron-builder/issues/8250
     - "!vendor/bun/**/*"
     - "!**/resources/bin/win32-x64/**"
+    - "!dist/resources/bin{,/**/*}"
+    - "!dist/resources/{bridge-mcp-server,session-mcp-server,pi-agent-server}{,/**/*}"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
     - from: node_modules/@anthropic-ai/claude-agent-sdk
@@ -221,6 +227,12 @@ win:
       to: messaging-qqbot-worker/worker.cjs
 
 nsis:
+  # ZIP extracts directly into the installation directory; the default 7z
+  # flow writes a full temporary tree and then copies it a second time.
+  # useZip requires differentialPackage:false so the embedded format matches.
+  # The artifact hook builds a sidecar blockmap for installer download updates.
+  useZip: true
+  differentialPackage: false
   # Follow the operating-system language for installer chrome. The installed
   # product/shortcut name comes from the localized productName above.
   installerLanguages:

@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
 import { fetchApiBalance, supportsApiBalance, type LlmConnectionBalance } from '@craft-agent/server-core/domain'
 import { fetchTokenNestUsage } from './tokennest-usage'
+import { TOKENNEST_RECHARGE_URL } from '@craft-agent/shared/utils/billing'
 
 // Local OAuth state
 let copilotOAuthAbort: AbortController | null = null
@@ -158,6 +159,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
   RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
+  RPC_CHANNELS.tokennest.GET_PRICING,
   RPC_CHANNELS.tokennest.GET_RECHARGE_URL,
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
@@ -870,6 +872,15 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // Refresh available models for a connection (dynamic model discovery)
   server.handle(RPC_CHANNELS.llmConnections.REFRESH_MODELS, async (_ctx, slug: string): Promise<{ success: boolean; error?: string }> => {
     return refreshConnectionModels(slug, deps)
+  })
+
+  // Fetch public pricing on the server: the catalog does not allow browser CORS.
+  server.handle(RPC_CHANNELS.tokennest.GET_PRICING, async (): Promise<unknown> => {
+    const response = await fetch(new URL('/api/pricing', TOKENNEST_RECHARGE_URL), {
+      credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(10_000),
+    })
+    if (!response.ok) throw new Error(`TokenNest pricing unavailable: HTTP ${response.status}`)
+    return response.json()
   })
 
   server.handle(RPC_CHANNELS.tokennest.GET_RECHARGE_URL, async (_ctx, connectionSlug: string) => {

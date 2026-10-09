@@ -16,6 +16,9 @@ type ApiToChannelMapKeys = Exclude<
   FunctionKeys<ElectronAPI>,
   | 'performOAuth'
   | 'openTokenNestRecharge' // direct native IPC; opens a window on the user's device
+  | 'getBirdCompanionPreferences' // desktop companion is client-local native IPC
+  | 'setBirdCompanionPreferences'
+  | 'observeBirdCompanionProgress'
   | 'getTransportConnectionState'
   | 'getRuntimeEnvironment'
   | 'onTransportConnectionStateChanged'

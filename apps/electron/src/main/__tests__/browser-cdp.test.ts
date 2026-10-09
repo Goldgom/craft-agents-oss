@@ -53,6 +53,53 @@ function createMockWebContents(sendCommandImpl?: (method: string, params?: any) 
 // Tests
 // ============================================================================
 
+describe('credential browser protection', () => {
+  it('hides protected password values in accessibility snapshots', async () => {
+    const wc = createMockWebContents(async () => ({ nodes: [{ backendDOMNodeId: 1, role: { value: 'textbox' }, name: { value: 'Password' }, value: { value: 'dummy-password' }, properties: [{ name: 'protected', value: { value: true } }] }] }));
+    const cdp = new BrowserCDP(wc as any);
+    const snapshot = await cdp.getAccessibilitySnapshot();
+    expect(snapshot.nodes[0]?.value).toBe('[hidden]');
+    expect(JSON.stringify(snapshot)).not.toContain('dummy-password');
+    cdp.detach();
+  });
+
+  it('fills and masks the input, and rejects a frame from another origin before setting its value', async () => {
+    class Input {
+      currentValue = '';
+      set value(next: string) { this.currentValue = next; }
+      get value() { return this.currentValue; }
+      style = { setProperty: mock(() => {}) };
+      dispatchEvent = mock(() => {});
+      ownerDocument: any;
+    }
+    const element = new Input();
+    const win: any = { location: { origin: 'https://example.com' }, HTMLInputElement: Input, HTMLTextAreaElement: class {}, Event: class {} };
+    win.top = win;
+    element.ownerDocument = { defaultView: win };
+    const wc = createMockWebContents(async (method, params) => {
+      if (method === 'Accessibility.getFullAXTree') return { nodes: [{ backendDOMNodeId: 1, role: { value: 'textbox' }, name: { value: 'Key' }, value: { value: element.value } }] };
+      if (method === 'DOM.resolveNode') return { object: { objectId: 'input' } };
+      if (method === 'Runtime.callFunctionOn') {
+        try { new Function(`return (${params.functionDeclaration})`)().apply(element, params.arguments.map((arg: any) => arg.value)); return {}; }
+        catch { return { exceptionDetails: { text: 'Website mismatch' } }; }
+      }
+      return {};
+    });
+    const cdp = new BrowserCDP(wc as any);
+    cdp.getElementGeometry = mock(async () => ({ ref: '@e1', box: { x: 0, y: 0, width: 1, height: 1 }, clickPoint: { x: 0, y: 0 } }));
+    const ref = (await cdp.getAccessibilitySnapshot()).nodes[0]!.ref;
+    await cdp.fillElement(ref, 'dummy-key', { expectedOrigin: 'https://example.com', sensitive: true });
+    expect(element.value).toBe('dummy-key');
+    expect(element.style.setProperty).toHaveBeenCalledWith('-webkit-text-security', 'disc', 'important');
+    expect(JSON.stringify(await cdp.getAccessibilitySnapshot())).not.toContain('dummy-key');
+    element.value = '';
+    win.location.origin = 'https://evil.example';
+    await expect(cdp.fillElement(ref, 'dummy-secret', { expectedOrigin: 'https://example.com', sensitive: true })).rejects.toThrow('Secure credential fill failed');
+    expect(element.value).toBe('');
+    cdp.detach();
+  });
+});
+
 describe('BrowserCDP', () => {
   describe('ensureAttached', () => {
     it('attaches debugger on first call', async () => {

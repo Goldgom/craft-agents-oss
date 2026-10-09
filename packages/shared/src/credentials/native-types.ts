@@ -16,6 +16,7 @@ export const NATIVE_CREDENTIAL_LIMITS = {
 } as const;
 
 export const NATIVE_CREDENTIAL_TYPES = [
+  'saved_credential',
   'anthropic_api_key', 'claude_oauth', 'llm_api_key', 'llm_oauth',
   'llm_iam', 'llm_service_account', 'workspace_oauth', 'source_oauth',
   'source_bearer', 'source_apikey', 'source_basic', 'messaging_bearer',
@@ -23,6 +24,7 @@ export const NATIVE_CREDENTIAL_TYPES = [
 ] as const satisfies readonly CredentialType[];
 
 export const NATIVE_CREDENTIAL_FIELDS = [
+  'username', 'credentialKind', 'credentialUrl',
   'value', 'refreshToken', 'expiresAt', 'scope', 'clientId', 'clientSecret',
   'tokenType', 'source', 'idToken', 'awsAccessKeyId', 'awsRegion',
   'awsSessionToken', 'gcpProjectId', 'gcpRegion', 'serviceAccountEmail',
@@ -80,6 +82,9 @@ export interface NativeCredentialStatusResponse {
 
 /** No secret values, fragments, suffixes, exported records or key material. */
 export interface NativeCredentialMetadata {
+  username?: string;
+  credentialKind?: StoredCredential['credentialKind'];
+  credentialUrl?: string;
   id: CredentialId;
   expiresAt?: number;
   hasValue: boolean;

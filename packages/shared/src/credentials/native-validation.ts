@@ -15,7 +15,7 @@ export function validateNativeCredentialId(value: unknown): CredentialId {
   const keys = type.startsWith('llm_') ? ['type', 'connectionSlug']
     : type.startsWith('source_') ? ['type', 'workspaceId', 'sourceId']
     : type === 'workspace_oauth' ? ['type', 'workspaceId']
-    : type === 'messaging_bearer' || type === 'page_publish_token' ? ['type', 'workspaceId', 'name']
+    : type === 'messaging_bearer' || type === 'page_publish_token' || type === 'saved_credential' ? ['type', 'workspaceId', 'name']
     : ['type'];
   if (Object.keys(value).length !== keys.length || keys.some(key => !(key in value))) return invalid();
   for (const key of keys) {
@@ -52,6 +52,13 @@ export function validateNativeCredentialChanges(value: unknown): NativeCredentia
         if (typeof fieldValue !== 'string' || bytes(fieldValue) > NATIVE_CREDENTIAL_LIMITS.maxFieldBytes) return invalid();
         if (field === 'value' && !fieldValue.trim()) return invalid();
         if (field === 'source' && fieldValue !== 'native' && fieldValue !== 'cli') return invalid();
+        if (field === 'credentialKind' && !['password', 'api-key', 'secret'].includes(fieldValue)) return invalid();
+        if (field === 'credentialUrl' && fieldValue) {
+          try {
+            const url = new URL(fieldValue);
+            if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return invalid();
+          } catch { return invalid(); }
+        }
       }
       patch[field] = fieldValue;
     }

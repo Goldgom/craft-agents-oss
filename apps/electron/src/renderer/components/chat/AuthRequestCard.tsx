@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Key, User, Lock, Eye, EyeOff, CheckCircle2, XCircle, type LucideIcon } from 'lucide-react'
 import { Spinner } from '@craft-agent/ui'
 import { Button } from '@/components/ui/button'
@@ -163,11 +164,16 @@ interface AuthRequestCardProps {
  * - failed: Show error state
  */
 export function AuthRequestCard({ message, onRespondToCredential, sessionId, isInteractive = true }: AuthRequestCardProps) {
+  const { t } = useTranslation()
+  const [submitError, setSubmitError] = useState(false)
   const [value, setValue] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const submittingRef = useRef(false)
+  const activeRequest = useRef(message.authRequestId)
+  activeRequest.current = message.authRequestId
 
   const {
     authRequestId,
@@ -187,6 +193,14 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
     authEmail,
     authWorkspace,
   } = message
+
+  useEffect(() => {
+    submittingRef.current = false
+    setIsSubmitting(false)
+    setSubmitError(false)
+    setValue(''); setUsername(''); setPassword(''); setShowPassword(false)
+    setHeaderValues({})
+  }, [authRequestId, authStatus])
 
   // Multi-header state: { "DD-API-KEY": "", "DD-APPLICATION-KEY": "" }
   const [headerValues, setHeaderValues] = useState<Record<string, string>>(() => {
@@ -210,37 +224,33 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
     ? authHeaderNames?.every(name => headerValues[name]?.trim().length > 0) ?? false
     : value.trim().length > 0
 
-  const handleSubmit = useCallback(() => {
-    if (!isValid || !authRequestId || !onRespondToCredential) return
+  const handleSubmit = useCallback(async () => {
+    if (!isValid || !authRequestId || !onRespondToCredential || submittingRef.current) return
 
+    submittingRef.current = true
     setIsSubmitting(true)
-
-    if (isBasicAuth) {
-      onRespondToCredential(sessionId, authRequestId, {
-        type: 'credential',
-        username: username.trim(),
-        password: getPasswordValue(password, passwordRequired),
-        cancelled: false
-      })
-    } else if (isMultiHeader) {
-      // Trim all header values
-      const trimmedHeaders: Record<string, string> = {}
-      for (const [key, val] of Object.entries(headerValues)) {
-        trimmedHeaders[key] = val.trim()
+    setSubmitError(false)
+    try {
+      if (isBasicAuth) {
+        await onRespondToCredential(sessionId, authRequestId, {
+          type: 'credential',
+          username: username.trim(),
+          password: message.authSavedCredentialName ? password : getPasswordValue(password, passwordRequired),
+          cancelled: false
+        })
+      } else if (isMultiHeader) {
+        const trimmedHeaders: Record<string, string> = {}
+        for (const [key, val] of Object.entries(headerValues)) trimmedHeaders[key] = val.trim()
+        await onRespondToCredential(sessionId, authRequestId, { type: 'credential', headers: trimmedHeaders, cancelled: false })
+      } else {
+        await onRespondToCredential(sessionId, authRequestId, {
+          type: 'credential', value: message.authSavedCredentialName ? value : value.trim(), cancelled: false
+        })
       }
-      onRespondToCredential(sessionId, authRequestId, {
-        type: 'credential',
-        headers: trimmedHeaders,
-        cancelled: false
-      })
-    } else {
-      onRespondToCredential(sessionId, authRequestId, {
-        type: 'credential',
-        value: value.trim(),
-        cancelled: false
-      })
-    }
-  }, [isBasicAuth, isMultiHeader, username, password, value, headerValues, isValid, onRespondToCredential, sessionId, authRequestId, passwordRequired])
+      if (activeRequest.current === authRequestId) { setValue(''); setPassword(''); setHeaderValues({}) }
+    } catch { if (activeRequest.current === authRequestId) setSubmitError(true) }
+    finally { if (activeRequest.current === authRequestId) { submittingRef.current = false; setIsSubmitting(false) } }
+  }, [isBasicAuth, isMultiHeader, username, password, value, headerValues, isValid, onRespondToCredential, sessionId, authRequestId, passwordRequired, message.authSavedCredentialName])
 
   const handleCancel = useCallback(() => {
     if (!authRequestId || !onRespondToCredential) return
@@ -569,9 +579,10 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
         )}
 
         {/* Hint */}
+        {submitError && <p role="alert" className="text-xs text-destructive">{t('settings.credentials.saveFailedRetry')}</p>}
         {authHint && (
           <p className="text-[11px] text-muted-foreground">
-            {authHint}
+            {message.authSavedCredentialName ? t(`settings.credentials.${authHint}`) : authHint}
           </p>
         )}
       </div>
@@ -613,7 +624,7 @@ export function AuthRequestCard({ message, onRespondToCredential, sessionId, isI
           onClick: handleCancel,
           disabled: isSubmitting,
         }}
-        hint="Credentials are encrypted at rest"
+        hint={message.authSavedCredentialName ? t('settings.credentials.localUseHint') : 'Credentials are encrypted at rest'}
       />
     )
   }

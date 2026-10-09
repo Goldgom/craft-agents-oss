@@ -8,6 +8,7 @@
  */
 
 // Types
+export type { SavedCredentialArgs } from './handlers/saved-credentials.ts';
 export type {
   // Credential types
   CredentialInputMode,

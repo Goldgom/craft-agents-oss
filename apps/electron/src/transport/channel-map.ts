@@ -463,6 +463,7 @@ export const CHANNEL_MAP = {
   getShowApiBalances: invoke(RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES),
   setShowApiBalances: invoke(RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES),
   getTokenNestUsage: invoke(RPC_CHANNELS.tokennest.GET_USAGE),
+  getTokenNestPricing: invoke(RPC_CHANNELS.tokennest.GET_PRICING),
   getTokenNestRechargeUrl: invoke(RPC_CHANNELS.tokennest.GET_RECHARGE_URL),
 
   // Projects

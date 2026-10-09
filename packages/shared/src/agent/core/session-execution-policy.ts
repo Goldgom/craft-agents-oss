@@ -32,6 +32,7 @@ type RegisteredPolicy = {
   generation?: number;
   reviewAction?: (request: ActionReviewRequest) => Promise<ActionReview>;
   gates?: Map<string, { key: string; pathIdentity: string; generation: number | undefined; expiresAt: number; dispatched: boolean; executed?: boolean }>;
+  recordOperation?: (request: { toolName: string; input: Record<string, unknown>; invocationId: string }) => Promise<void>;
 };
 const policies = new Map<string, RegisteredPolicy>();
 
@@ -100,6 +101,7 @@ export function setSessionExecutionPolicy(sessionId: string, input: SessionExecu
     referenceFiles: unchanged ? existing?.referenceFiles : undefined,
     requestPermission: existing?.requestPermission,
     reviewAction: existing?.reviewAction,
+    recordOperation: existing?.recordOperation,
     generation: (existing?.generation ?? 0) + 1,
   });
   return policy;
@@ -138,6 +140,21 @@ export function setSessionActionReviewer(sessionId: string, reviewer: (request: 
   const registered = policies.get(sessionId);
   if (!registered?.policy) throw new Error('Apply a valid policy before attaching the independent reviewer');
   registered.reviewAction = reviewer;
+}
+export function setSessionOperationRecorder(sessionId: string, recorder: NonNullable<RegisteredPolicy['recordOperation']>): void {
+  const registered = policies.get(sessionId);
+  if (!registered?.policy) throw new Error('Apply a valid policy before attaching operation persistence');
+  registered.recordOperation = recorder;
+}
+export async function recordSessionPolicyOperation(sessionId: string, toolName: string, input: Record<string, unknown>, invocationId?: string): Promise<void> {
+  const registered = policies.get(sessionId);
+  if (!registered?.recordOperation || classifyActionGate(toolName, input) === undefined) return;
+  if (!invocationId) throw new Error('A durable operation requires a provider invocation ID');
+  await registered.recordOperation({ toolName, input, invocationId });
+}
+
+export function requiresSessionOperationRecording(sessionId: string, toolName: string, input: Record<string, unknown>): boolean {
+  return !!policies.get(sessionId)?.recordOperation && classifyActionGate(toolName, input) !== undefined;
 }
 
 /** Exceptions never survive a model turn, cancellation, policy change or restart. */
@@ -511,6 +528,10 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   if (canonical === 'collaboration_board') {
     if (slug && slug !== 'session') return deny('use the session collaboration board for shared team data');
     return input.action === 'get' ? { allowed: true } : deny('Super Agent board writes require a final board action with expectedRevision');
+  }
+  if (canonical === 'super_agent_task') {
+    if (slug !== 'session') return deny('use the session continuity tool');
+    return policy.role === 'worker' || input.action === 'get' ? { allowed: true } : deny('only workers may update task checkpoints or artifacts');
   }
   if (policy.role !== 'worker') return deny('the main agent only understands user needs and communicates; assign reading, research, execution and verification to workers');
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return deny('each node uses one model process; spawning, delegation and additional model calls are disabled');

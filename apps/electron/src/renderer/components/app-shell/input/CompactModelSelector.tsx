@@ -47,6 +47,7 @@ import {
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
+import { ModelPeakValleyBadge } from './ModelPeakValleyBadge'
 import { openConnectionRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
 
 type ApiBalance = Awaited<ReturnType<typeof window.electronAPI.getLlmConnectionBalances>>[number]
@@ -241,6 +242,7 @@ export function CompactModelSelector({
                 <ConnectionIcon connection={effectiveConnectionDetails} size={14} />
               )}
               <span className="truncate min-w-0">{currentModelDisplayName}</span>
+              <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={connectionDefaultModel ?? currentModel} />
               {pickerMode !== 'locked-single' && (
                 <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
               )}
@@ -367,7 +369,10 @@ export function CompactModelSelector({
                                       : 'hover:bg-foreground/5',
                                   )}
                                 >
-                                  <span className="text-sm font-medium truncate">{modelName}</span>
+                                  <span className="flex items-center gap-1.5 min-w-0">
+                                    <span className="text-sm font-medium truncate">{modelName}</span>
+                                    <ModelPeakValleyBadge connection={conn} modelId={modelId} />
+                                  </span>
                                   <div className="flex items-center gap-1 ml-3 shrink-0">
                                     {showVision && (
                                       <VisionToggle
@@ -427,7 +432,10 @@ export function CompactModelSelector({
                     )}
                   >
                     <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{modelName}</div>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-sm font-medium truncate">{modelName}</span>
+                        <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={modelId} />
+                      </div>
                       {description && (
                         <div className="text-xs text-foreground/50 truncate">
                           {description}
@@ -563,7 +571,10 @@ function LockedSingleRow({
   return (
     <div className="flex items-center justify-between px-3 py-2 rounded-lg opacity-80 select-none">
       <div className="min-w-0">
-        <div className="text-sm font-medium truncate">{stripPiPrefixForDisplay(modelId)}</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-sm font-medium truncate">{stripPiPrefixForDisplay(modelId)}</span>
+          <ModelPeakValleyBadge connection={connection} modelId={modelId} />
+        </div>
         <div className="text-xs text-foreground/50">{t('chat.connectionDefault')}</div>
       </div>
       <div className="flex items-center gap-1 ml-3 shrink-0">

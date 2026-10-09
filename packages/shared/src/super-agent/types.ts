@@ -1,6 +1,7 @@
 import type { ThinkingLevel } from '../agent/thinking-levels'
 import type { PermissionMode } from '../agent/mode-types'
 import type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
+import type { SuperAgentCheckpoint, SuperAgentWaitCondition, SuperAgentArtifact, SuperAgentOperation, SuperAgentMetrics } from './continuity'
 
 export type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
 
@@ -21,6 +22,7 @@ export interface SuperAgentNode {
   /** Explicit subset of the team's authorized source pool; empty grants none. */
   sourceSlugs: string[]
   abilityProfileIds: string[]
+  capabilities?: string[]
 }
 
 export interface SuperAgentEnvironment {
@@ -78,6 +80,12 @@ export interface SuperAgentConfig {
   idleInspectionMinutes: number
   /** Wake after idleInspectionMinutes of complete team inactivity. Defaults to true. */
   continuousWork?: boolean
+  execution?: {
+    connectionConcurrency: number
+    connectionCallsPerMinute: number
+    stallMinutes: number
+    maxResumeAttempts: number
+  }
   environment: SuperAgentEnvironment
   /** Sources available for assignment; individual nodes need their own binding. */
   sourceSlugs: string[]
@@ -106,7 +114,20 @@ export interface SuperAgentTask {
   requiresIndependentReview?: boolean
   /** An independent verifier may read a submitted result before acceptance. */
   reviewOf?: string
-  acceptance?: { status: 'accepted' | 'rejected'; evidenceTaskId: string; note: string; reviewedBy: string; reviewedAt: number }
+  acceptance?: { status: 'accepted' | 'rejected' | 'stale'; evidenceTaskId: string; note: string; reviewedBy: string; reviewedAt: number; artifactHashes?: Array<{ id: string; sha256: string }> }
+  goalId?: string
+  goalRevision?: number
+  requiredCapabilities?: string[]
+  goalCriteria?: number[]
+  phase?: 'executing' | 'waiting' | 'outcome-unknown' | 'submitted'
+  checkpoint?: SuperAgentCheckpoint
+  waiting?: { reason: string; condition: SuperAgentWaitCondition; since: number; resumeAttempts: number }
+  lastProgressAt?: number
+  lastResultHash?: string
+  stallNotifiedAt?: number
+  attempt?: number
+  artifactIds?: string[]
+  inputArtifacts?: Array<{ id: string; sha256: string }>
   planId?: string
   title: string
   instructions: string
@@ -169,6 +190,8 @@ export interface SuperAgentBoardItem {
 
 export interface SuperAgentPlanItem {
   id: string
+  goalId?: string
+  goalRevision?: number
   title: string
   instructions: string
   status: 'planned' | 'active' | 'blocked' | 'completed' | 'cancelled'
@@ -218,6 +241,10 @@ export interface SuperAgentState {
   board: SuperAgentBoardItem[]
   plans: SuperAgentPlanItem[]
   intents?: SuperAgentIntent[]
+  artifacts?: SuperAgentArtifact[]
+  operations?: SuperAgentOperation[]
+  metrics?: SuperAgentMetrics
+  connectionStarts?: Array<{ connection: string; at: number }>
   scripts: SuperAgentScriptRuntime[]
   permissionGrants?: SuperAgentPermissionGrant[]
   lastUserActivityAt: number
@@ -228,6 +255,8 @@ export interface SuperAgentState {
 /** User-facing intent is handed to planning without granting new authority. */
 export interface SuperAgentIntent {
   id: string
+  revision?: number
+  status?: 'active' | 'delivered' | 'cancelled'
   goal: string
   constraints: string[]
   deliverables: string[]
@@ -238,6 +267,9 @@ export interface SuperAgentIntent {
 
 export interface SuperAgentTaskContract {
   id?: string
+  goalId?: string
+  requiredCapabilities?: string[]
+  goalCriteria?: number[]
   title: string
   instructions: string
   nodeId?: string
@@ -330,7 +362,8 @@ export type SuperAgentCommand =
   | { type: 'chat'; text: string }
   | ({ type: 'task' } & SuperAgentTaskContract)
   | { type: 'continuous-work'; enabled: boolean }
-  | { type: 'plan-upsert'; item: Pick<SuperAgentPlanItem, 'title' | 'instructions' | 'status' | 'priority' | 'note'> & { id?: string }; expectedRevision: number }
+  | { type: 'plan-upsert'; item: Pick<SuperAgentPlanItem, 'title' | 'instructions' | 'status' | 'priority' | 'note' | 'goalId'> & { id?: string }; expectedRevision: number }
+  | { type: 'task-resume'; taskId: string }
   | { type: 'plan-delete'; id: string; expectedRevision: number }
   | { type: 'cancel'; taskId?: string }
   | { type: 'inspect' }

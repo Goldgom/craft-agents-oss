@@ -95,6 +95,7 @@ import {
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
+import { ModelPeakValleyBadge } from './ModelPeakValleyBadge'
 
 function formatFollowUpChipText(text: string, fallback: string, maxLength = 50): string {
   const normalized = text.replace(/\s+/g, ' ').trim()
@@ -2141,6 +2142,7 @@ export function FreeFormInput({
                       <>
                         {effectiveConnectionDetails && llmConnections.length > 1 && storage.get(storage.KEYS.showConnectionIcons, true) && <ConnectionIcon connection={effectiveConnectionDetails} size={14} showTooltip />}
                         {currentModelDisplayName}
+                        <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={connectionDefaultModel ?? currentModel} />
                         {pickerMode !== 'locked-single' && <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />}
                       </>
                     )}
@@ -2176,7 +2178,10 @@ export function FreeFormInput({
                       className="flex items-center justify-between px-2 py-2 rounded-lg"
                     >
                       <div className="text-left">
-                        <div className="font-medium text-sm">{stripPiPrefixForDisplay(connectionDefaultModel)}</div>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-medium text-sm truncate">{stripPiPrefixForDisplay(connectionDefaultModel)}</span>
+                          <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={connectionDefaultModel} />
+                        </div>
                         <div className="text-xs text-muted-foreground">{t('chat.connectionDefault')}</div>
                       </div>
                       <div className="flex items-center gap-1 ml-3 shrink-0">
@@ -2276,7 +2281,10 @@ export function FreeFormInput({
                                     }}
                                     className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
                                   >
-                                    <div className="font-medium text-sm">{modelName}</div>
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="font-medium text-sm truncate">{modelName}</span>
+                                      <ModelPeakValleyBadge connection={conn} modelId={modelId} />
+                                    </div>
                                     <div className="flex items-center gap-1 ml-3 shrink-0">
                                       {showVisionToggle && (
                                         <Tooltip>
@@ -2362,7 +2370,10 @@ export function FreeFormInput({
                         className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
                       >
                         <div className="text-left">
-                          <div className="font-medium text-sm">{modelName}</div>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-medium text-sm truncate">{modelName}</span>
+                            <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={modelId} />
+                          </div>
                           {description && (
                             <div className="text-xs text-muted-foreground">{description}</div>
                           )}

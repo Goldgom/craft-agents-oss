@@ -102,6 +102,7 @@ export class BrowserCDP {
   // Stable mapping for backend DOM nodes across snapshots.
   private backendNodeRefMap: Map<number, string> = new Map()
   private nextRefCounter = 0
+  private sensitiveNodes = new Set<number>()
 
   constructor(webContents: WebContents) {
     this.webContents = webContents
@@ -256,7 +257,9 @@ export class BrowserCDP {
       const name = normalizeAxText(node.name?.value)
       const rawValue = node.value?.value
       const hasValue = rawValue !== undefined && rawValue !== ''
-      const value = hasValue ? String(rawValue) : undefined
+      const protectedValue = node.properties?.some((prop: any) => prop.name === 'protected' && prop.value?.value === true)
+        || this.sensitiveNodes.has(node.backendDOMNodeId)
+      const value = hasValue ? (protectedValue ? '[hidden]' : String(rawValue)) : undefined
       const description = normalizeAxText(node.description?.value) || undefined
       const backendDOMNodeId = typeof node.backendDOMNodeId === 'number' ? node.backendDOMNodeId : undefined
 
@@ -805,13 +808,35 @@ export class BrowserCDP {
     }
   }
 
-  async fillElement(ref: string, value: string): Promise<ElementGeometry> {
+  async fillElement(ref: string, value: string, protection?: { expectedOrigin: string; sensitive: boolean }): Promise<ElementGeometry> {
     const backendNodeId = this.refMap.get(ref)
     if (!backendNodeId) {
       throw new Error(`Element ${ref} not found. Run browser_snapshot first to get current element refs.`)
     }
 
     try {
+      if (protection) {
+        // Check the top page and the field's own frame inside the same DOM call
+        // that fills it. Redirects and cross-origin iframes cannot receive secrets.
+        const { object } = await this.send('DOM.resolveNode', { backendNodeId })
+        if (protection.sensitive) this.sensitiveNodes.add(backendNodeId)
+        const result = await this.send('Runtime.callFunctionOn', {
+          objectId: object.objectId,
+          functionDeclaration: `function(expectedOrigin, secret, sensitive) {
+            const win = this.ownerDocument.defaultView;
+            if (win.location.origin !== expectedOrigin || win.top.location.origin !== expectedOrigin) throw new Error('Website mismatch');
+            if (!(this instanceof win.HTMLInputElement) && !(this instanceof win.HTMLTextAreaElement)) throw new Error('Input required');
+            if (sensitive) this.style.setProperty('-webkit-text-security', 'disc', 'important');
+            const proto = this instanceof win.HTMLInputElement ? win.HTMLInputElement.prototype : win.HTMLTextAreaElement.prototype;
+            Object.getOwnPropertyDescriptor(proto, 'value').set.call(this, secret);
+            this.dispatchEvent(new win.Event('input', { bubbles: true }));
+            this.dispatchEvent(new win.Event('change', { bubbles: true }));
+          }`,
+          arguments: [{ value: protection.expectedOrigin }, { value }, { value: protection.sensitive }],
+        })
+        if (result.exceptionDetails) throw new Error('Secure credential fill failed')
+        return await this.getElementGeometry(ref)
+      }
       // Focus the element first
       await this.send('DOM.focus', { backendNodeId })
 
@@ -847,6 +872,7 @@ export class BrowserCDP {
 
       return await this.getElementGeometry(ref)
     } catch (err) {
+      if (protection) throw new Error('Secure credential fill failed')
       mainLog.error(`[browser-cdp] Fill failed for ${ref}:`, err)
       throw new Error(`Failed to fill ${ref}: ${err}`)
     }

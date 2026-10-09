@@ -53,6 +53,8 @@ export function getSystemPromptSettings(): Required<Pick<SystemPromptSettings, '
 }
 
 export interface UserPreferences {
+  /** Desktop bird companion, stored on the client even when using a remote server. */
+  birdCompanion?: { alwaysVisible?: boolean; autoShowComputerUse?: boolean };
   systemPrompt?: SystemPromptSettings;
   performance?: {
     maxWarmRuntimes?: number

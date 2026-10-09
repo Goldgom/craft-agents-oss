@@ -14,6 +14,7 @@
 | [Microsoft Agent Framework](./microsoft-agent-framework.md) | 工作流、隐藏上下文、共享查询、安装与验证 |
 | [分层编排与场景团队](./research-orchestration.md) | 文献核实、意图/编排/执行分离、依赖与资源、验收和五套预设 |
 | [行动门与独立审查](./action-gates.md) | 确定性工具拦截、一次性审批、限制规则、独立 Auto-review 与隔离边界 |
+| [任务持续性与执行效率](./continuity.md) | 目标版本、检查点续做、条件等待、操作去重、产物版本、连接预算与持久化 |
 | [使用说明](../super-agent.md) | 首次配置、页面操作、工作环境、脚本和授权流程 |
 
 ## 核心设计

@@ -17,6 +17,7 @@
 
 /** Types of credentials we store */
 export type CredentialType =
+  | 'saved_credential'   // User-named account/password/key, scoped to workspace UUID
   // Global credentials (legacy, kept for backwards compatibility)
   | 'anthropic_api_key'  // Anthropic API key for Claude
   | 'claude_oauth'       // Claude OAuth token (Max subscription)
@@ -44,6 +45,7 @@ export type CredentialType =
 
 /** Valid credential types for validation */
 const VALID_CREDENTIAL_TYPES: readonly CredentialType[] = [
+  'saved_credential',
   'anthropic_api_key',
   'claude_oauth',
   'llm_api_key',
@@ -96,6 +98,10 @@ export interface CredentialId {
  * which don't have a clientId.
  */
 export interface StoredCredential {
+  /** Editable metadata for user-named credentials. Secrets remain in value. */
+  username?: string;
+  credentialKind?: 'password' | 'api-key' | 'secret';
+  credentialUrl?: string;
   /** The secret value (API key, access token, or primary credential) */
   value: string;
   /** OAuth refresh token */
@@ -163,9 +169,9 @@ function isMessagingCredential(type: CredentialType): boolean {
   return (MESSAGING_CREDENTIAL_TYPES as readonly string[]).includes(type);
 }
 
-/** Check if type is a page publication credential (workspaceId + pageId via `name`) */
-function isPageCredential(type: CredentialType): boolean {
-  return type === 'page_publish_token';
+/** Workspace records addressed by a name (saved account or page publication). */
+function isNamedWorkspaceCredential(type: CredentialType): boolean {
+  return type === 'page_publish_token' || type === 'saved_credential';
 }
 
 /** LLM connection credential types */
@@ -235,7 +241,7 @@ export function credentialIdToAccount(id: CredentialId): string {
 
   // Page-scoped format:
   // page_publish_token::{workspaceId}::{pageId}
-  if (isPageCredential(id.type) && id.workspaceId && id.name) {
+  if (isNamedWorkspaceCredential(id.type) && id.workspaceId && id.name) {
     parts.push(id.workspaceId);
     parts.push(id.name);
     return parts.join(CREDENTIAL_DELIMITER);
@@ -315,7 +321,7 @@ export function accountToCredentialId(account: string): CredentialId | null {
 
   // Page-scoped format:
   // page_publish_token::{workspaceId}::{pageId}
-  if (isPageCredential(type) && parts.length === 3) {
+  if (isNamedWorkspaceCredential(type) && parts.length === 3) {
     return { type, workspaceId: parts[1], name: parts[2] };
   }
 
@@ -368,7 +374,7 @@ export function validateCredentialWrites(entries: CredentialWrite[]): void {
       || (isLlmCredential(id.type) && !validPart(id.connectionSlug))
       || (id.type === 'workspace_oauth' && !validPart(id.workspaceId))
       || (isRemoteCredential(id.type) && (!validPart(id.name) || id.workspaceId !== undefined || id.sourceId !== undefined || id.connectionSlug !== undefined))
-      || ((isMessagingCredential(id.type) || isPageCredential(id.type)) && (!validPart(id.workspaceId) || !validPart(id.name)))) {
+      || ((isMessagingCredential(id.type) || isNamedWorkspaceCredential(id.type)) && (!validPart(id.workspaceId) || !validPart(id.name)))) {
       throw new Error('Credential scope is missing or invalid');
     }
     const key = credentialIdToAccount(id);

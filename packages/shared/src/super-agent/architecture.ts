@@ -16,7 +16,7 @@ export function withSuperAgentOrchestrator(config: SuperAgentConfig): SuperAgent
 
 export function superAgentDependencySatisfied(task: SuperAgentTask): boolean {
   return task.status === 'completed' && (!task.actionReceipt || task.actionReceipt.status === 'applied')
-    && task.acceptance?.status !== 'rejected'
+    && task.acceptance?.status !== 'rejected' && task.acceptance?.status !== 'stale'
     && (!(task.acceptanceCriteria?.length || task.requiresIndependentReview) || task.acceptance?.status === 'accepted')
 }
 

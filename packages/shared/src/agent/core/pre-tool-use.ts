@@ -49,7 +49,7 @@ import { evaluateApiEndpointPolicy, evaluateMcpToolPolicy } from '../source-poli
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
-import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, consumeSessionActionGate, getSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionFullControl, hasSessionPolicyToolGrant, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, consumeSessionActionGate, recordSessionPolicyOperation, requiresSessionOperationRecording, getSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionFullControl, hasSessionPolicyToolGrant, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
 
 // ============================================================
 // TYPES
@@ -716,10 +716,16 @@ export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): 
       if (!grant.allowed) return { type: 'block', reason: grant.reason };
     }
   }
-  return runPreToolUseChecks(ctx);
+  let dispatchInput: Record<string, unknown> | undefined;
+  const result = runPreToolUseChecks(ctx, input => { dispatchInput = input; });
+  if (!dispatchInput || !['allow', 'modify'].includes(result.type)) return result;
+  try { await recordSessionPolicyOperation(ctx.sessionId, ctx.toolName, dispatchInput, ctx.invocationId); }
+  catch (error) { return { type: 'block', reason: `Super Agent operation: ${error instanceof Error ? error.message : String(error)}` }; }
+  const dispatched = consumeSessionActionGate(ctx.sessionId, ctx.toolName, dispatchInput, ctx.workingDirectory, ctx.invocationId);
+  return dispatched.allowed ? result : { type: 'block', reason: dispatched.reason };
 }
 
-export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult {
+export function runPreToolUseChecks(ctx: PreToolUseInput, deferDispatch?: (input: Record<string, unknown>) => void): PreToolUseCheckResult {
   const {
     toolName,
     input,
@@ -911,7 +917,9 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     currentInput = pinnedInput;
     wasModified = true;
   }
-  const dispatched = consumeSessionActionGate(sessionId, toolName, currentInput, workingDirectory, ctx.invocationId);
+  if (!deferDispatch && requiresSessionOperationRecording(sessionId, toolName, currentInput)) return { type: 'block', reason: 'Durable Super Agent operations require the asynchronous pre-tool pipeline' };
+  if (deferDispatch) deferDispatch(currentInput);
+  const dispatched = deferDispatch ? finalPolicy : consumeSessionActionGate(sessionId, toolName, currentInput, workingDirectory, ctx.invocationId);
   if (!dispatched.allowed) return { type: 'block', reason: dispatched.reason };
   const isolatedInput = wrapSessionProgramInput(sessionId, toolName, currentInput);
   if (isolatedInput) {

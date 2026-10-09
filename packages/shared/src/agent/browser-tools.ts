@@ -127,7 +127,7 @@ export interface BrowserPaneFns {
   click: (ref: string, options?: { waitFor?: 'none' | 'navigation' | 'network-idle'; timeoutMs?: number }) => Promise<void>;
   clickAt: (x: number, y: number) => Promise<void>;
   drag: (x1: number, y1: number, x2: number, y2: number) => Promise<void>;
-  fill: (ref: string, value: string) => Promise<void>;
+  fill: (ref: string, value: string, protection?: { expectedOrigin: string; sensitive: boolean }) => Promise<void>;
   type: (text: string) => Promise<void>;
   select: (ref: string, value: string) => Promise<void>;
   setClipboard: (text: string) => Promise<void>;

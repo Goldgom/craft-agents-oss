@@ -16,6 +16,11 @@ const DIST_DIR = join(ROOT_DIR, "apps/electron/dist");
 
 const OUTPUTS = [
   {
+    entry: "apps/electron/src/preload/bird-companion.ts",
+    outfile: "apps/electron/dist/bird-companion-preload.cjs",
+    label: "bird-companion-preload.cjs",
+  },
+  {
     entry: "apps/electron/src/preload/bootstrap.ts",
     outfile: "apps/electron/dist/bootstrap-preload.cjs",
     label: "bootstrap-preload.cjs",

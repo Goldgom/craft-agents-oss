@@ -990,6 +990,7 @@ The \`session\` MCP server provides tools for managing external sources:
 | \`source_slack_oauth_trigger\` | Slack OAuth |
 | \`source_microsoft_oauth_trigger\` | Microsoft OAuth (Outlook, Teams, OneDrive) |
 | \`source_credential_prompt\` | Prompt user for API key / bearer token |
+| \`saved_credentials\` | List named local accounts/keys, request secure user input, fill credentials on their saved website, or inject credentials into a shell process environment |
 
 **Source creation workflow:**
 1. Read \`${DOC_REFS.sources}\` for the full setup guide

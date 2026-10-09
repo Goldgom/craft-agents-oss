@@ -62,6 +62,8 @@ export interface BaseAuthRequest {
  * Credential auth request - prompts for API key, bearer token, etc.
  */
 export interface CredentialAuthRequest extends BaseAuthRequest {
+  savedCredentialName?: string;
+  savedCredentialKind?: 'password' | 'api-key' | 'secret';
   type: 'credential';
   mode: CredentialInputMode;
   labels?: {

@@ -458,8 +458,12 @@ describe('Super Agent live activity and approvals', () => {
     ])
     expect(JSON.stringify(activity)).not.toContain('Raw secret value')
     expect((await service.get('beta')).activity).toEqual([])
-    expect(snapshot.state.revision).toBe(initial.state.revision)
-    expect(await readFile(join(root, 'alpha', 'super-agent', 'state.json'), 'utf8')).toBe(persisted)
+    expect(snapshot.state.revision).toBeGreaterThan(initial.state.revision)
+    expect(snapshot.state.metrics?.toolCalls).toBe(1)
+    const controlState = await readFile(join(root, 'alpha', 'super-agent', 'state.json'), 'utf8')
+    expect(controlState).not.toContain('Raw secret value')
+    expect(controlState).not.toContain('Checking the files')
+    expect(controlState).not.toContain('Read result')
     host.emit({ type: 'text_delta', sessionId, turnId: 'pi-turn-1__thinking0', delta: 'Provider reasoning summary' })
     expect((await service.get('alpha')).activity![0]!.entries.at(-1)).toMatchObject({ kind: 'thinking', text: 'Provider reasoning summary', status: 'running', turnId: 'pi-turn-1__thinking0' })
     for (let index = 0; index < 100; index++) host.emit({ type: 'status', sessionId, message: `${index}: ${'x'.repeat(9_000)}` })
@@ -950,6 +954,7 @@ describe('continuous work and durable plans', () => {
 
   test('changes the interval during active work without replacing sessions, cancelling work or relaxing other edit guards', async () => {
     const { service, host, config, advance } = await fixture()
+    config.execution = { connectionConcurrency: 30, connectionCallsPerMinute: 600, stallMinutes: 1440, maxResumeAttempts: 3 }
     await service.save('alpha', { ...config, continuousWork: true, idleInspectionMinutes: 60 })
     await service.command('alpha', { type: 'task', title: 'Build', instructions: 'Implement and verify' })
     const running = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')

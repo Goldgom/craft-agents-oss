@@ -58,6 +58,7 @@ export interface MessagingToolBridge {
  * Callbacks that can be registered per-session
  */
 export interface SessionScopedToolCallbacks {
+  savedCredentialsFn?: import('@craft-agent/session-tools-core').SessionToolContext['savedCredentialsFn'];
   /**
    * Called when a plan is submitted via SubmitPlan tool.
    * Receives the path to the plan markdown file.
@@ -138,7 +139,8 @@ export interface SessionScopedToolCallbacks {
   sendAgentMessageFn?: (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>, originalMessage?: string) => Promise<import('@craft-agent/session-tools-core').SendAgentMessageResult>;
   sendCollaborationMessageFn?: (targetMemberId: string, message: string) => Promise<import('@craft-agent/session-tools-core').SendAgentMessageResult>;
   /** Read the invoking session's collaboration snapshot. */
-  getCollaborationFn?: () => Promise<unknown>;
+  getCollaborationFn?: (query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }) => Promise<unknown>;
+  superAgentTaskFn?: (args: Record<string, unknown>) => Promise<unknown>;
   /** Update one shared-board item as the invoking collaboration member. */
   updateCollaborationBoardFn?: (itemId: string, value: unknown) => Promise<unknown>;
   /** Publish a local file into the invoking session's collaboration. */

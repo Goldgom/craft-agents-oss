@@ -116,6 +116,8 @@ export function NodeEditor({ node, connections, onChange, onRemove, sources = []
     </div>
     <FormField label={text('description')}><textarea className={textareaClass} rows={3} value={node.description} onChange={event => patch({ description: event.target.value })} /></FormField>
     <FormField label={text('preferences')}><textarea className={textareaClass} rows={3} value={node.workPreferences} placeholder={text('preferencesPlaceholder')} onChange={event => patch({ workPreferences: event.target.value })} /></FormField>
+    <FormField label={text('capabilities')} hint={text('capabilitiesHint')}><Input value={(node.capabilities ?? []).join(', ')}
+      onChange={event => patch({ capabilities: [...new Set(event.target.value.split(',').map(value => value.trim()).filter(Boolean))] })} /></FormField>
     {sources.length > 0 && <FormSection title={text('sources')}>
       <ChoiceList items={sources.map(source => ({ id: source.config.slug, name: source.config.name, description: source.config.tagline }))}
         selected={node.sourceSlugs} onChange={sourceSlugs => patch({ sourceSlugs })} />

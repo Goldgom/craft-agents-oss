@@ -23,6 +23,7 @@ import type { TokenNestAuthorizationIssue } from '@craft-agent/shared/auth'
 import { UpdatePrompt } from '@/components/UpdatePrompt'
 import { SplashScreen } from '@/components/SplashScreen'
 import { GettingStartedGuide } from '@/components/GettingStartedGuide'
+import { BirdCompanionBridge } from '@/components/BirdCompanionBridge'
 import { TooltipProvider } from '@craft-agent/ui'
 import { FocusProvider } from '@/context/FocusContext'
 import { ModalProvider } from '@/context/ModalContext'
@@ -2362,6 +2363,7 @@ export default function App() {
         >
           {/* Handle window close requests (X button, Cmd+W) - close modal first if open */}
           <WindowCloseHandler />
+          <BirdCompanionBridge />
 
           {/* Splash screen overlay - fades out when fully ready */}
           {showSplash && (

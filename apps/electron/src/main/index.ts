@@ -27,6 +27,7 @@ import { getLocalizedProductName } from '@craft-agent/shared/branding'
 import { applyRuntimeToolEnvironment } from './runtime-toolchains'
 import { exportChatTranscript } from './chat-export'
 import { openTokenNestRechargeWindow } from './tokennest-recharge'
+import { BirdCompanionManager } from './bird-companion'
 import { TOKENNEST_RECHARGE_IPC } from '../shared/tokennest-recharge'
 import { deleteMindMapSession, mindMapWorkspaceContext, readMindMapSession, writeMindMapSession } from './studio-mindmap-files'
 
@@ -198,7 +199,10 @@ if (isDebugMode) {
   process.env.CRAFT_UV = bundledUvExists ? uvBinary : (fallbackUv ?? uvBinary)
 
   // Bun runtime (packaged builds should prefer bundled runtime over PATH)
-  const bunBinary = join(resourcesBase, 'vendor', 'bun', process.platform === 'win32' ? 'bun.exe' : 'bun')
+  const bunBase = app.isPackaged && process.platform === 'win32'
+    ? process.resourcesPath
+    : resourcesBase
+  const bunBinary = join(bunBase, 'vendor', 'bun', process.platform === 'win32' ? 'bun.exe' : 'bun')
   if (existsSync(bunBinary)) {
     process.env.CRAFT_BUN = bunBinary
   }
@@ -300,6 +304,7 @@ let nativeRemoteTransport: ReturnType<typeof registerNativeRemoteTransport> | nu
 let browserPaneManager: BrowserPaneManager | null = null
 let oauthFlowStore: OAuthFlowStore | null = null
 let moduleSink: EventSink | null = null
+let birdCompanionManager: BirdCompanionManager | null = null
 let moduleClientResolver: ((webContentsId: number) => string | undefined) | null = null
 
 // Messaging gateway: the bootstrap handle is created once sessionManager is
@@ -804,6 +809,10 @@ async function createInitialWindows(restoreSavedWindows = true): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // app.quit() is asynchronous: readiness can still fire in a second process.
+  // Only the single-instance lock owner may initialize the UI and local server.
+  if (!gotTheLock) return
+
   // Native protection is optional for existing vaults. This adapter preserves
   // full legacy read/write/refresh behavior until an explicit Settings upgrade.
   const credentialVault = configureElectronCredentialVault({ safeStorage, remoteMigration: {
@@ -914,6 +923,7 @@ app.whenReady().then(async () => {
       ...(process.env.VITE_DEV_SERVER_URL ? [process.env.VITE_DEV_SERVER_URL] : []),
     ], { allowUnboundWorkspace: true })
     nativeAppAuthority = assertNativeAppWindow
+    if (!process.env.CRAFT_HEADLESS) birdCompanionManager = new BirdCompanionManager(assertNativeAppWindow)
     registerNativeCredentialIpcHandlers(ipcMain, {
       vault: credentialVault,
       assertSender: assertNativeWindow,
@@ -1311,6 +1321,7 @@ app.whenReady().then(async () => {
         },
         createSessionManager: () => {
           const sm = new SessionManager()
+          sm.setLocalCredentialAccessEnabled(true)
           sm.setBrowserPaneManager(browserPaneManager!)
           // Page preview posters: offscreen capture is Electron-main-only. On
           // capture, nudge the watcher so the pages:changed push carries the
@@ -1419,6 +1430,7 @@ app.whenReady().then(async () => {
       }, assertNativeWindow)
       // Capture module-level references for before-quit cleanup and deep-link handlers
       sessionManager = instance.sessionManager
+      instance.sessionManager.onSessionEvent((event, workspaceId) => birdCompanionManager?.observeSessionEvent(event, workspaceId))
       oauthFlowStore = instance.oauthFlowStore
       moduleSink = instance.wsServer.push.bind(instance.wsServer)
       moduleClientResolver = resolveClientId
@@ -1958,6 +1970,8 @@ async function performQuitCleanup(): Promise<void> {
     return
   }
   quitCleanupRan = true
+  birdCompanionManager?.dispose()
+  birdCompanionManager = null
   systemTray?.destroy()
   systemTray = null
   nativeRemoteTransport?.dispose()

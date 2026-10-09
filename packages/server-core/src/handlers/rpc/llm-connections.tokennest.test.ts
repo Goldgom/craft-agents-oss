@@ -113,6 +113,21 @@ async function startAndComplete(harness: ReturnType<typeof createHarness>, conne
 }
 
 describe('TokenNest OAuth RPC handlers', () => {
+  it('fetches current public pricing without credentials and propagates HTTP failures', async () => {
+    const catalog = { success: true, data: [{ model_name: 'deepseek-flash', peak_valley_pricing: {
+      timezone: 'Asia/Shanghai', start: '00:30', end: '08:30', multiplier: 0.5,
+    } }] }
+    const request = spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(catalog))
+    const harness = createHarness()
+    const getPricing = harness.getHandler(RPC_CHANNELS.tokennest.GET_PRICING)
+    await expect(getPricing(harness.context)).resolves.toEqual(catalog)
+    expect(String(request.mock.calls[0]?.[0])).toBe('https://openai.goldgom.top/api/pricing')
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit', cache: 'no-store' })
+    expect(new Headers(request.mock.calls[0]?.[1]?.headers).get('authorization')).toBeNull()
+    request.mockResolvedValue(new Response(null, { status: 503 }))
+    await expect(getPricing(harness.context)).rejects.toThrow('HTTP 503')
+  })
+
   it('bypasses the balance cache after recharge while normal queries reuse it', async () => {
     const connection: config.LlmConnection = { slug: 'recharge-balance-test', name: 'TokenNest', providerType: 'pi_compat', authType: 'oauth', oauthProvider: 'tokennest', createdAt: 1 }
     stubStorage(connection)

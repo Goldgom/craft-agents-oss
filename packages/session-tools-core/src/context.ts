@@ -191,6 +191,7 @@ export interface ValidatorInterface {
  * - Codex: createCodexContext() with callback IPC and limited capabilities
  */
 export interface SessionToolContext {
+  savedCredentialsFn?: (args: import('./handlers/saved-credentials.ts').SavedCredentialArgs) => Promise<unknown>;
   // ============================================================
   // Session Info
   // ============================================================
@@ -457,7 +458,8 @@ export interface SessionToolContext {
   sendCollaborationMessage?(targetMemberId: string, message: string): Promise<SendAgentMessageResult>;
 
   /** Read the collaboration shared board and durable activity history for this session. */
-  getCollaboration?(): Promise<unknown>;
+  getCollaboration?(query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }): Promise<unknown>;
+  superAgentTask?(args: Record<string, unknown>): Promise<unknown>;
 
   /** Write one item to the collaboration shared board. */
   updateCollaborationBoard?(itemId: string, value: unknown): Promise<unknown>;

@@ -98,6 +98,8 @@ import { toolMetadataStore, getLastApiError } from '@craft-agent/shared/intercep
 import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
+import { runSavedCredentialOperation, saveRequestedCredential } from './saved-credentials'
+import { getSessionScopedToolCallbacks } from '@craft-agent/shared/agent'
 import { CraftMcpClient, McpClientPool, McpPoolServer, getProcessRssBytes, mcpRuntimeLimiter, resolveMcpRuntimeLimits, type McpRuntimeLimits } from '@craft-agent/shared/mcp'
 import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type PerformanceSnapshot, type MemoryLeakCheckResult, type MemoryLeakCheckSample, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
@@ -1247,6 +1249,9 @@ export class SessionManager implements ISessionManager {
   private automationSystems: Map<string, AutomationSystem> = new Map()
   // Pending credential request resolvers (keyed by requestId)
   private pendingCredentialResolvers: Map<string, (response: import('@craft-agent/shared/protocol').CredentialResponse) => void> = new Map()
+  private localCredentialAccessEnabled = false
+  /** Enabled only by the embedded desktop host after configuring its local vault. */
+  setLocalCredentialAccessEnabled(enabled: boolean): void { this.localCredentialAccessEnabled = enabled }
   // Permission request metadata tracking (keyed by requestId)
   private pendingPermissionRequests: Map<string, {
     sessionId: string
@@ -2676,6 +2681,7 @@ export class SessionManager implements ISessionManager {
       return
     }
 
+    const isSavedCredential = managed.pendingAuthRequest?.type === 'credential' && !!managed.pendingAuthRequest.savedCredentialName
     // Find and update the pending auth-request message
     const authMessage = managed.messages.find(m =>
       m.role === 'auth-request' &&
@@ -2709,7 +2715,7 @@ export class SessionManager implements ISessionManager {
     managed.pendingAuthRequest = undefined
 
     // Auto-enable the source in the session after successful auth
-    if (result.success && result.sourceSlug) {
+    if (result.success && result.sourceSlug && !isSavedCredential) {
       const slugSet = new Set(managed.enabledSourceSlugs || [])
       if (!slugSet.has(result.sourceSlug)) {
         slugSet.add(result.sourceSlug)
@@ -2725,7 +2731,7 @@ export class SessionManager implements ISessionManager {
     this.persistSession(managed)
 
     // Update bridge-mcp-server config/credentials for backends that need it
-    if (result.success && result.sourceSlug && managed.agent) {
+    if (result.success && result.sourceSlug && managed.agent && !isSavedCredential) {
       const workspaceRootPath = managed.workspace.rootPath
       const sessionPath = getSessionStoragePath(workspaceRootPath, managed.id)
       const enabledSlugs = managed.enabledSourceSlugs || []
@@ -2764,6 +2770,23 @@ export class SessionManager implements ISessionManager {
     const request = managed.pendingAuthRequest as CredentialAuthRequest
     if (request.requestId !== requestId) {
       sessionLog.warn(`Credential request ID mismatch: expected ${request.requestId}, got ${requestId}`)
+      return
+    }
+
+    if (request.type !== 'credential') return
+    if (request.savedCredentialName) {
+      if (!this.localCredentialAccessEnabled) throw new Error('Local desktop credentials are unavailable')
+      if (response.cancelled) {
+        await this.completeAuthRequest(sessionId, { requestId, sourceSlug: request.savedCredentialName, success: false, cancelled: true })
+        return
+      }
+      try {
+        await saveRequestedCredential(managed.workspace.id, request, response)
+      } catch {
+        // Keep the request pending so the user can correct/retry without losing it.
+        throw new Error('Could not save credential. Check the account, password/key and local storage, then retry.')
+      }
+      await this.completeAuthRequest(sessionId, { requestId, sourceSlug: request.savedCredentialName, success: true })
       return
     }
 
@@ -4601,9 +4624,9 @@ export class SessionManager implements ISessionManager {
               const instanceId = await resolveSessionBrowserInstance('browser_drag')
               return bpm.drag(instanceId, x1, y1, x2, y2)
             },
-            fill: async (ref, value) => {
+            fill: async (ref, value, protection) => {
               const instanceId = await resolveSessionBrowserInstance('browser_fill')
-              return bpm.fillElement(instanceId, ref, value)
+              return bpm.fillElement(instanceId, ref, value, protection)
             },
             type: async (text) => {
               const instanceId = await resolveSessionBrowserInstance('browser_type')
@@ -5015,6 +5038,8 @@ export class SessionManager implements ISessionManager {
             authHeaderNames: request.headerNames,
             authSourceUrl: request.sourceUrl,
             authPasswordRequired: request.passwordRequired,
+            authSavedCredentialName: request.savedCredentialName,
+            authSavedCredentialKind: request.savedCredentialKind,
           }),
         }
 
@@ -5117,6 +5142,14 @@ export class SessionManager implements ISessionManager {
 
       // Wire up session self-management tools (set_session_labels, set_session_status, etc.)
       mergeSessionScopedToolCallbacks(managed.id, {
+        savedCredentialsFn: async (args) => {
+          if (!this.localCredentialAccessEnabled) throw new Error('Local desktop credentials are unavailable')
+          if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) throw new Error('Node policy does not permit credential access')
+          return runSavedCredentialOperation(managed.workspace.id, args, {
+            browser: args.action === 'fill' ? getSessionScopedToolCallbacks(managed.id)?.browserPaneFns : undefined,
+            workingDirectory: managed.workingDirectory ?? managed.workspace.rootPath,
+          })
+        },
         canvasToolFn: async (args: Record<string, unknown>): Promise<unknown> => {
           if (args.action === 'list_image_connections' || args.action === 'generate_image') {
             return runStudioImageToolAction(managed.workspace.rootPath, managed.id, args)
@@ -5375,8 +5408,12 @@ export class SessionManager implements ISessionManager {
 
           return { resolved: null, available }
         },
-        getCollaborationFn: async () => {
-          if (managed.executionPolicy) return getSuperAgentService(this).getNodeSharedData(managed.workspace.id, managed.id)
+        superAgentTaskFn: async args => {
+          if (!managed.executionPolicy) throw new Error('This is not a Super Agent node')
+          return getSuperAgentService(this).updateNodeTask(managed.workspace.id, managed.id, args)
+        },
+        getCollaborationFn: async query => {
+          if (managed.executionPolicy) return getSuperAgentService(this).getNodeSharedData(managed.workspace.id, managed.id, query)
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
           if (collaboration.relay) return this.getCollaborationRelayManager().readForSession(managed.id)
@@ -8285,10 +8322,25 @@ export class SessionManager implements ISessionManager {
   async respondToCredential(sessionId: string, requestId: string, response: import('@craft-agent/shared/protocol').CredentialResponse): Promise<boolean> {
     // First, check if this is a new unified auth flow request
     const managed = this.sessions.get(sessionId)
+    // Named credential forms contain no secrets and survive app restarts.
+    if (managed && !managed.pendingAuthRequest && this.localCredentialAccessEnabled) {
+      await this.ensureMessagesLoaded(managed)
+      const message = managed.messages.find(item => item.role === 'auth-request' && item.authStatus === 'pending'
+        && item.authRequestId === requestId && item.authRequestType === 'credential' && item.authSavedCredentialName)
+      if (message?.authSavedCredentialName) {
+        managed.pendingAuthRequest = {
+          type: 'credential', requestId, sessionId, sourceSlug: message.authSavedCredentialName,
+          sourceName: message.authSavedCredentialName, savedCredentialName: message.authSavedCredentialName,
+          savedCredentialKind: message.authSavedCredentialKind,
+          mode: message.authCredentialMode ?? 'basic', sourceUrl: message.authSourceUrl,
+        }
+        managed.pendingAuthRequestId = requestId
+      }
+    }
     if (managed?.pendingAuthRequest && managed.pendingAuthRequest.requestId === requestId) {
       sessionLog.info(`Credential response (unified flow) for ${requestId}: cancelled=${response.cancelled}`)
       await this.handleCredentialInput(sessionId, requestId, response)
-      return true
+      return managed.pendingAuthRequest?.requestId !== requestId
     }
 
     // Fall back to legacy callback flow

@@ -9,9 +9,10 @@ import {
 } from '@craft-agent/shared/credentials/native-types'
 import type { CredentialId } from '@craft-agent/shared/credentials/types'
 
-export type CredentialDomain = 'global' | 'llm' | 'workspace' | 'sources' | 'messaging' | 'pages' | 'connections'
+export type CredentialDomain = 'saved' | 'global' | 'llm' | 'workspace' | 'sources' | 'messaging' | 'pages' | 'connections'
 
 export function credentialDomain(type: string): CredentialDomain {
+  if (type === 'saved_credential') return 'saved'
   if (type.startsWith('llm_')) return 'llm'
   if (type.startsWith('source_')) return 'sources'
   if (type.startsWith('remote_')) return 'connections'
@@ -32,6 +33,7 @@ export function credentialIdentifierFields(type: string): Array<'connectionSlug'
     case 'sources': return ['workspaceId', 'sourceId']
     case 'workspace': return ['workspaceId']
     case 'messaging':
+    case 'saved':
     case 'pages': return ['workspaceId', 'name']
     case 'connections': return ['name']
     default: return []
@@ -92,6 +94,13 @@ export function parseNativeCredentialImport(
         if (!Number.isSafeInteger(value) || (value as number) < 0) invalid()
       } else if (field === 'source') {
         if (value !== 'native' && value !== 'cli') invalid()
+      } else if (field === 'credentialKind') {
+        if (!['password', 'api-key', 'secret'].includes(value as string)) invalid()
+      } else if (field === 'credentialUrl' && value) {
+        try {
+          const url = new URL(value as string)
+          if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) invalid()
+        } catch { invalid() }
       } else if (typeof value !== 'string' || bytes(value) > NATIVE_CREDENTIAL_LIMITS.maxFieldBytes
         || (field === 'value' && !value.trim())) invalid()
     }

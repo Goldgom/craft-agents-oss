@@ -1,10 +1,33 @@
 import { describe, it, expect } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveScriptRuntime } from './resolve-script-runtime.ts';
 
 describe('resolveScriptRuntime', () => {
+  it.skipIf(process.platform !== 'win32')('resolves the shared Windows Bun without an app-local duplicate or env override', () => {
+    const previousBun = process.env.CRAFT_BUN;
+    delete process.env.CRAFT_BUN;
+    const root = mkdtempSync(join(tmpdir(), 'tokenbird-shared-bun-'));
+    const resourcesBase = join(root, 'resources', 'app');
+    const bunPath = join(root, 'resources', 'vendor', 'bun', 'bun.exe');
+    mkdirSync(join(root, 'resources', 'vendor', 'bun'), { recursive: true });
+    mkdirSync(resourcesBase, { recursive: true });
+    writeFileSync(bunPath, '');
+
+    try {
+      expect(resolveScriptRuntime('bun', { isPackaged: true, resourcesBasePath: resourcesBase })).toEqual({
+        command: bunPath,
+        argsPrefix: [],
+        source: 'bundled',
+      });
+    } finally {
+      if (previousBun === undefined) delete process.env.CRAFT_BUN;
+      else process.env.CRAFT_BUN = previousBun;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('prefers CRAFT_UV for python3', () => {
     const prev = process.env.CRAFT_UV;
     process.env.CRAFT_UV = '/tmp/custom-uv';

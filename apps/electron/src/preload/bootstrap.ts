@@ -50,6 +50,7 @@ import type { RemoteServerConfig } from '@craft-agent/core/types'
 import type { ElectronAPI } from '../shared/types'
 import { TOKENNEST_RECHARGE_IPC } from '../shared/tokennest-recharge'
 import { canvasExportInfo } from '../shared/canvas-export'
+import { BIRD_COMPANION_IPC } from '../shared/bird-companion'
 import { NATIVE_CREDENTIAL_IPC } from '@craft-agent/shared/credentials/native-types'
 
 // ---------------------------------------------------------------------------
@@ -646,6 +647,9 @@ const invokeCurrentCollaboration = (nativeChannel: string, rpcChannel: string, .
 
 // i18n: sync language changes to main process (for native menus/dialogs)
 ;(api as ElectronAPI).changeLanguage = (lang: string) => ipcRenderer.invoke('i18n:changeLanguage', lang)
+;(api as ElectronAPI).getBirdCompanionPreferences = () => ipcRenderer.invoke(BIRD_COMPANION_IPC.getPreferences)
+;(api as ElectronAPI).setBirdCompanionPreferences = updates => ipcRenderer.invoke(BIRD_COMPANION_IPC.setPreferences, updates)
+;(api as ElectronAPI).observeBirdCompanionProgress = event => ipcRenderer.invoke(BIRD_COMPANION_IPC.observe, event)
 
 // webUtils.getPathForFile: returns the absolute OS path of a File object obtained
 // from <input type="file"> or OS drag-drop. Returns null for Files fabricated from

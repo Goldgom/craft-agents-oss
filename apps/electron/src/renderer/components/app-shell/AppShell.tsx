@@ -38,6 +38,7 @@ import {
   Users,
   ChartNoAxesCombined,
   WalletCards,
+  KeyRound,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -645,6 +646,7 @@ function AppShellContent({
   // full-width in the content area — there is no pages navigator list.
   const isPagesView = isPagesNavigation(navState)
   const isUsageView = isSettingsNavigation(navState) && navState.subpage === 'usage'
+  const isCredentialsView = isSettingsNavigation(navState) && navState.subpage === 'credentials'
   const isRechargeView = isSettingsNavigation(navState) && navState.subpage === 'recharge'
 
   // Derive source filter from navigation state (only when in sources navigator)
@@ -2163,6 +2165,7 @@ function AppShellContent({
     result.push({ id: 'nav:pages', type: 'nav', action: handlePagesClick })
     result.push({ id: 'nav:automations', type: 'nav', action: handleAutomationsClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick() })
+    result.push({ id: 'nav:credentials', type: 'nav', action: () => navigate(routes.view.settings('credentials')) })
     result.push({ id: 'nav:collaborations', type: 'nav', action: handleCollaborationsClick })
 
     return result
@@ -2769,6 +2772,13 @@ function AppShellContent({
                     { id: "separator:skills-settings", type: "separator" },
                     // --- Settings ---
                     {
+                      id: "nav:credentials",
+                      title: t('settings.credentials.title'),
+                      icon: KeyRound,
+                      variant: isCredentialsView ? "default" : "ghost",
+                      onClick: () => navigate(routes.view.settings('credentials')),
+                    },
+                    {
                       id: "nav:recharge",
                       title: t('settings.recharge.title'),
                       icon: WalletCards,
@@ -2786,7 +2796,7 @@ function AppShellContent({
                       id: "nav:settings",
                       title: t("sidebar.settings"),
                       icon: Settings,
-                      variant: (isSettingsNavigation(navState) && !isUsageView && !isRechargeView) ? "default" : "ghost",
+                      variant: (isSettingsNavigation(navState) && !isUsageView && !isRechargeView && !isCredentialsView) ? "default" : "ghost",
                       onClick: () => handleSettingsClick(),
                     },
                     {

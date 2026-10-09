@@ -254,8 +254,8 @@ export class RemoteBrowserPaneManager implements IBrowserPaneManager {
   async drag(id: string, x1: number, y1: number, x2: number, y2: number): Promise<void> {
     await this.invoke('drag', [id, x1, y1, x2, y2])
   }
-  async fillElement(id: string, ref: string, value: string): Promise<void> {
-    await this.invoke('fillElement', [id, ref, value])
+  async fillElement(id: string, ref: string, value: string, protection?: { expectedOrigin: string; sensitive: boolean }): Promise<void> {
+    await this.invoke('fillElement', [id, ref, value, protection])
   }
   async typeText(id: string, text: string): Promise<void> {
     await this.invoke('typeText', [id, text])

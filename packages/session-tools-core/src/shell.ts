@@ -39,7 +39,7 @@ function truncate(text: string): { text: string; truncated: boolean } {
   return { text: text.slice(0, MAX_OUTPUT_CHARS), truncated: true };
 }
 
-export async function executeShell(args: ShellExecArgs): Promise<ShellExecResult> {
+export async function executeShell(args: ShellExecArgs, privateEnv?: Record<string, string>): Promise<ShellExecResult> {
   const command = args.command;
   if (!command || !command.trim()) {
     throw new Error('Shell command is required');
@@ -63,7 +63,7 @@ export async function executeShell(args: ShellExecArgs): Promise<ShellExecResult
       shell: true,
       cwd,
       windowsHide: true,
-      env: process.env,
+      env: privateEnv ? { ...process.env, ...privateEnv } : process.env,
     });
 
     const timer = setTimeout(() => {

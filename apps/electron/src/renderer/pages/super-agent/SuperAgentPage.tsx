@@ -266,6 +266,8 @@ function WorkProgress({ snapshot, compact, busy, onCreateTask, onOpenPlans, onCo
   const summary = <span className="text-[11px] text-muted-foreground">{text('progressSummary', { working, queued, completed })}</span>
   const tasklessActivities = tasklessWorkerActivities(snapshot)
   const list = <div className="space-y-5">
+    {snapshot.state.metrics && <p className="text-[10px] leading-5 text-muted-foreground">{text('continuityMetrics', { turns: snapshot.state.metrics.modelTurns, tools: snapshot.state.metrics.toolCalls, retries: snapshot.state.metrics.retries, resumes: snapshot.state.metrics.resumptions })}</p>}
+    {!!snapshot.state.intents?.length && <section aria-label={text('goals')} className="space-y-2">{snapshot.state.intents.filter(goal => goal.status !== 'cancelled').slice(-5).map(goal => <div key={goal.id} className="rounded-lg bg-foreground/5 p-3 text-xs"><p className="font-medium">{goal.goal}</p><p className="mt-1 text-[10px] text-muted-foreground">{goal.status === 'delivered' ? text('goalDelivered') : text('active')} · {text('revision', { revision: goal.revision ?? 1 })}</p></div>)}</section>}
     {snapshot.state.nodes.filter(runtime => ['error', 'recovering'].includes(runtime.status)).map(runtime => <article key={runtime.nodeId} className="space-y-2 rounded-xl border border-amber-500/20 p-3">
       <h3 className="text-xs font-medium">{snapshot.config.nodes.find(node => node.id === runtime.nodeId)?.name ?? runtime.nodeId} · {text(runtime.status)}</h3>
       {runtime.error && <p className="break-words text-xs leading-5 text-destructive">{runtime.error}</p>}
@@ -352,12 +354,17 @@ function TaskList({ snapshot, busy, onCommand, onOpenSession }: {
     const sessionId = task.sessionId ?? state.nodes.find(item => item.nodeId === task.nodeId)?.sessionId
     const running = task.status === 'running' || task.status === 'queued'
     const submitted = config.nodes.some(node => node.role === 'orchestrator') && task.status === 'completed'
-    const statusLabel = submitted ? task.acceptance?.status === 'accepted' ? 'taskAccepted' : task.acceptance?.status === 'rejected' ? 'taskRejected' : 'taskSubmitted' : task.status
+    const statusLabel = task.phase === 'waiting' ? 'taskWaiting' : task.phase === 'outcome-unknown' ? 'taskUnknown' : task.acceptance?.status === 'stale' ? 'taskStale'
+      : submitted ? task.acceptance?.status === 'accepted' ? 'taskAccepted' : task.acceptance?.status === 'rejected' ? 'taskRejected' : 'taskSubmitted' : task.status
     const activity = taskActivity(snapshot, task)
     return <article key={task.id} className="space-y-3 rounded-xl border border-border/60 p-3">
       <div className="flex items-start gap-2"><h3 className="min-w-0 flex-1 break-words text-xs font-medium leading-5">{task.title}</h3><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', task.acceptance?.status === 'accepted' || (!submitted && task.status === 'completed') ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : task.status === 'failed' || task.acceptance?.status === 'rejected' ? 'bg-destructive/10 text-destructive' : 'bg-foreground/5 text-muted-foreground')}>{text(statusLabel)}</span></div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">{node && <AgentAvatar avatar={node.avatar} name={node.name} className="size-5 rounded text-[10px]" />}<span className="min-w-0 flex-1 truncate">{node?.name ?? task.nodeId}</span><span>{formatTimestamp(task.createdAt)}</span></div>
       {task.error && <p className="text-[11px] leading-5 text-destructive">{task.error}</p>}
+      {task.checkpoint && <details className="text-[11px]"><summary className="cursor-pointer text-muted-foreground">{text('checkpoint')} · {task.checkpoint.completedSteps.length}</summary><p className="mt-2 whitespace-pre-wrap">{task.checkpoint.nextStep}</p><ul className="mt-2 list-inside list-disc text-muted-foreground">{task.checkpoint.completedSteps.map((step, index) => <li key={index}>{step}</li>)}</ul></details>}
+      {task.waiting && <p className="text-[11px] leading-5 text-muted-foreground">{task.waiting.reason}</p>}
+      {task.checkpoint && (task.status === 'failed' || task.status === 'queued' && task.phase === 'waiting') && task.phase !== 'outcome-unknown' && <Button size="sm" variant="outline" disabled={busy} onClick={() => { void onCommand({ type: 'task-resume', taskId: task.id }).catch(() => {}) }}>{text('resumeTask')}</Button>}
+      {state.artifacts?.filter(artifact => artifact.taskId === task.id).map(artifact => <p key={artifact.id} className="break-all text-[10px] text-muted-foreground">{artifact.path} · {artifact.sha256.slice(0, 12)}{artifact.missing ? ` · ${text('missing')}` : ''}</p>)}
       {!!task.dependsOn?.length && <p className="text-[10px] leading-5 text-muted-foreground">{text('taskDependencies')}: {task.dependsOn.map(id => state.tasks.find(item => item.id === id)?.title ?? id).join(' · ')}</p>}
       {task.acceptance && <p className="text-[11px] leading-5 text-muted-foreground">{task.acceptance.note}</p>}
       {activity && <WorkerActivity activity={activity} />}

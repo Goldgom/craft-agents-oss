@@ -33,6 +33,7 @@ export {
   registerSessionScopedToolCallbacks,
   unregisterSessionScopedToolCallbacks,
   mergeSessionScopedToolCallbacks,
+  getSessionScopedToolCallbacks,
   // Types
   type SessionScopedToolCallbacks,
   type MessagingSendResult,

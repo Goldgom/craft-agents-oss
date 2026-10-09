@@ -3,7 +3,7 @@ import type { ToolResult } from '../types.ts';
 import { errorResponse, successResponse } from '../response.ts';
 
 export type CollaborationBoardArgs =
-  | { action: 'get' }
+  | { action: 'get'; goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }
   | { action: 'set'; itemId: string; value: unknown };
 
 /**
@@ -20,7 +20,8 @@ export async function handleCollaborationBoard(
       if (!ctx.getCollaboration) {
         return errorResponse('This session is not connected to collaboration storage.');
       }
-      const snapshot = await ctx.getCollaboration();
+      const { action: _, ...query } = args;
+      const snapshot = await ctx.getCollaboration(Object.keys(query).length ? query : undefined);
       return successResponse(JSON.stringify(snapshot, null, 2));
     }
 

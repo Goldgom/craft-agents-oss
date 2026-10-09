@@ -1,5 +1,6 @@
 export type * from './types'
 export * from './architecture'
+export * from './continuity'
 export { superAgentScriptOperation, superAgentNodePermissions, SuperAgentPermissionGrantSchema, superAgentPermissionEnvironmentKey, matchesSuperAgentPermissionGrant, canShareSuperAgentPermission } from './permissions'
 export { validateSuperAgentConfig, validateSuperAgentCommand, emptySuperAgentState } from './validation'
 export { planSuperAgentHistoryCleanup, protectedHistorySessionIds, historySessionEligible } from './history'

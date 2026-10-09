@@ -21,8 +21,9 @@ export function nodeSchedulingState(document: SuperAgentDocument, node: SuperAge
 }
 
 /** Automatic fallback only: the coordinator should name a worker for specialized tasks. */
-export function selectSuperAgentWorker(document: SuperAgentDocument, now: number): SuperAgentNode | undefined {
-  const candidates = document.config?.nodes.filter(node => node.role === 'worker').map(node => ({ node, state: nodeSchedulingState(document, node, now) })) ?? []
+export function selectSuperAgentWorker(document: SuperAgentDocument, now: number, requiredCapabilities: string[] = []): SuperAgentNode | undefined {
+  const candidates = document.config?.nodes.filter(node => node.role === 'worker' && requiredCapabilities.every(capability => node.capabilities?.includes(capability)))
+    .map(node => ({ node, state: nodeSchedulingState(document, node, now) })) ?? []
   return candidates.sort((a, b) => Number(a.state.needsRecovery) - Number(b.state.needsRecovery)
     || Number(a.state.busy) - Number(b.state.busy)
     || a.state.queuedTurns - b.state.queuedTurns

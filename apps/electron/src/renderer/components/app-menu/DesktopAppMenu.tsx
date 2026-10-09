@@ -196,6 +196,11 @@ export function DesktopAppMenu({
         {renderMenuSection(VIEW_MENU, actionHandlers, t)}
         {renderMenuSection(WINDOW_MENU, actionHandlers, t)}
 
+        <StyledDropdownMenuItem onClick={() => onOpenSettingsSubpage('credentials')}>
+          <Icons.KeyRound className="h-3.5 w-3.5" />
+          {t('settings.credentials.title')}
+        </StyledDropdownMenuItem>
+
         <StyledDropdownMenuSeparator />
 
         <DropdownMenuSub>

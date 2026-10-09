@@ -416,6 +416,10 @@ export interface ElectronAPI {
 
   // Event listeners
   onSessionEvent(callback: (event: SessionEvent) => void): () => void
+  /** Client-local desktop companion; absent in the web frontend. */
+  getBirdCompanionPreferences?(): Promise<import('./bird-companion').BirdCompanionPreferences>
+  setBirdCompanionPreferences?(updates: Partial<import('./bird-companion').BirdCompanionPreferences>): Promise<import('./bird-companion').BirdCompanionPreferences>
+  observeBirdCompanionProgress?(event: import('./bird-companion').BirdProgressEvent): Promise<void>
   onUnreadSummaryChanged(callback: (summary: UnreadSummary) => void): () => void
 
   // File operations
@@ -873,6 +877,7 @@ export interface ElectronAPI {
   getShowApiBalances(): Promise<boolean>
   setShowApiBalances(enabled: boolean): Promise<void>
   getTokenNestUsage(args: { connectionSlug: string; days?: number }): Promise<import('@craft-agent/shared/protocol').TokenNestUsageSnapshot>
+  getTokenNestPricing(): Promise<unknown>
 
   // Projects (workspace-scoped)
   getProjects(workspaceId: string): Promise<unknown>

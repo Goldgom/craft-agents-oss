@@ -25,7 +25,7 @@ export function classifyActionGate(toolName: string, input: Record<string, unkno
   }
   const name = tool.replace(/_/g, '');
   if (['read', 'glob', 'grep', 'find', 'ls', 'todowrite', 'taskoutput', 'askuserquestion', 'mermaidvalidate', 'getsessioninfo', 'sendagentmessage'].includes(name)
-    || (tool === 'collaboration_board' && input.action === 'get')) return;
+    || tool === 'super_agent_task' || (tool === 'collaboration_board' && input.action === 'get')) return;
   if (['write', 'edit', 'multiedit', 'notebookedit'].includes(name)) return 'state-change';
   if (['bash', 'localbash', 'runshell'].includes(name)) {
     if (typeof input.command === 'string' && !input.background && !input.run_in_background

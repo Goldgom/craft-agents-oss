@@ -29,6 +29,7 @@ import {
   handleMicrosoftOAuthTrigger,
 } from './handlers/source-oauth.ts';
 import { handleCredentialPrompt } from './handlers/credential-prompt.ts';
+import { handleSavedCredentials } from './handlers/saved-credentials.ts';
 import { handleUpdatePreferences } from './handlers/update-preferences.ts';
 import { handleTransformData } from './handlers/transform-data.ts';
 import { handleScriptSandbox } from './handlers/script-sandbox.ts';
@@ -55,6 +56,7 @@ import {
 import { handleArchiveSession } from './handlers/archive-session.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
 import { handleCollaborationBoard } from './handlers/collaboration-board.ts';
+import { handleSuperAgentTask } from './handlers/super-agent-task.ts';
 import { handleCollaborationFile } from './handlers/collaboration-file.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel, handleSendMessagingMedia, handleSendMessagingTemplateCard } from './handlers/messaging.ts';
 import { handleExportResources } from './handlers/export-resources.ts';
@@ -75,6 +77,24 @@ export const RequestClientFilesSchema = z.object({
 
 export const SubmitPlanSchema = z.object({
   planPath: z.string().describe('Absolute path to the plan markdown file you wrote'),
+});
+
+const CredentialNameSchema = z.string().trim().min(1).max(256).refine(value => !value.includes('::') && !/[\u0000-\u001f\u007f]/.test(value));
+export const SavedCredentialsSchema = z.object({
+  action: z.enum(['list', 'request', 'fill', 'run']),
+  name: CredentialNameSchema.optional(),
+  kind: z.enum(['password', 'api-key', 'secret']).optional(),
+  url: z.string().url().refine(value => {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+  }).optional(),
+  description: z.string().max(1000).optional(),
+  field: z.enum(['username', 'secret']).optional(),
+  ref: z.string().min(1).max(128).optional(),
+  command: z.string().min(1).max(32000).optional(),
+  env: z.record(z.enum(['username', 'secret'])).refine(value => Object.keys(value).length <= 20 && Object.keys(value).every(key => /^TB_CRED_[A-Z0-9_]+$/.test(key))).optional(),
+  cwd: z.string().optional(),
+  timeoutMs: z.number().int().min(1000).max(600000).optional(),
 });
 
 export const ConfigValidateSchema = z.object({
@@ -445,6 +465,17 @@ export const SendAgentMessageSchema = z.object({
 
 export const CollaborationBoardReadSchema = z.object({
   action: z.literal('get').describe('Read the members, current shared board, files, and activity history'),
+  goalId: z.string().max(64).optional(), taskId: z.string().max(64).optional(), itemIds: z.array(z.string().max(64)).max(100).optional(),
+  offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(),
+});
+export const SuperAgentTaskSchema = z.object({
+  action: z.enum(['get', 'checkpoint', 'wait', 'artifact', 'reconcile']), taskId: z.string().max(64).optional(),
+  expectedRevision: z.number().int().min(0).optional(), completedSteps: z.array(z.string().max(500)).max(100).optional(),
+  nextStep: z.string().max(4000).optional(), note: z.string().max(4000).optional(), reason: z.string().max(4000).optional(),
+  condition: z.object({ kind: z.enum(['time', 'board', 'task', 'file']), notBefore: z.number().optional(), itemId: z.string().optional(),
+    afterRevision: z.number().optional(), taskId: z.string().optional(), path: z.string().optional(), sha256: z.string().optional() }).optional(),
+  id: z.string().max(64).optional(), path: z.string().max(4096).optional(), description: z.string().max(4000).optional(),
+  operationId: z.string().max(64).optional(), evidenceTaskId: z.string().max(64).optional(), outcome: z.enum(['completed', 'not-executed']).optional(),
 });
 
 export const CollaborationBoardUpdateSchema = z.object({
@@ -960,6 +991,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'source_slack_oauth_trigger', description: TOOL_DESCRIPTIONS.source_slack_oauth_trigger, inputSchema: SourceOAuthTriggerSchema, executionMode: 'registry', safeMode: 'block', handler: handleSlackOAuthTrigger },
   { name: 'source_microsoft_oauth_trigger', description: TOOL_DESCRIPTIONS.source_microsoft_oauth_trigger, inputSchema: SourceOAuthTriggerSchema, executionMode: 'registry', safeMode: 'block', handler: handleMicrosoftOAuthTrigger },
   { name: 'source_credential_prompt', description: TOOL_DESCRIPTIONS.source_credential_prompt, inputSchema: CredentialPromptSchema, executionMode: 'registry', safeMode: 'block', handler: handleCredentialPrompt },
+  { name: 'saved_credentials', description: 'Manage user-named local credentials. list returns names/account metadata only. request pauses for secure user input and saves it; never ask users to paste passwords into chat. fill injects username or secret into a browser ref on the saved website origin (requires saved URL). run injects fields as environment variables named TB_CRED_* into a host shell command; refer to these variables in scripts, never embed secrets. run returns only exit status, no process output. Name matching is exact and workspace-scoped. Secrets are never returned to the model. Use request again to update an existing credential.', inputSchema: SavedCredentialsSchema, executionMode: 'registry', safeMode: 'block', handler: handleSavedCredentials },
   { name: 'update_user_preferences', description: TOOL_DESCRIPTIONS.update_user_preferences, inputSchema: UpdatePreferencesSchema, executionMode: 'registry', safeMode: 'block', handler: handleUpdatePreferences },
   { name: 'transform_data', description: TOOL_DESCRIPTIONS.transform_data, inputSchema: TransformDataSchema, executionMode: 'registry', safeMode: 'allow', handler: handleTransformData },
   { name: 'script_sandbox', description: TOOL_DESCRIPTIONS.script_sandbox, inputSchema: ScriptSandboxSchema, executionMode: 'registry', safeMode: 'allow', handler: handleScriptSandbox },
@@ -994,6 +1026,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   // Inter-session messaging
   { name: 'send_agent_message', description: TOOL_DESCRIPTIONS.send_agent_message, inputSchema: SendAgentMessageSchema, executionMode: 'registry', safeMode: 'block', handler: handleSendAgentMessage },
   { name: 'collaboration_board', description: TOOL_DESCRIPTIONS.collaboration_board, inputSchema: CollaborationBoardReadSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleCollaborationBoard },
+  { name: 'super_agent_task', description: 'Persist Super Agent task checkpoints during execution, wait for a concrete condition, register versioned artifacts, or read task/operation state. Only the current task owner can write. Reconcile an unknown operation only with a completed verification task and its evidence. This tool grants no external permissions.', inputSchema: SuperAgentTaskSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSuperAgentTask },
   { name: 'update_collaboration_board', description: TOOL_DESCRIPTIONS.update_collaboration_board, inputSchema: CollaborationBoardUpdateSchema, executionMode: 'registry', safeMode: 'block', handler: handleCollaborationBoard },
   { name: 'collaboration_file', description: TOOL_DESCRIPTIONS.collaboration_file, inputSchema: CollaborationFileSchema, executionMode: 'registry', safeMode: 'block', handler: handleCollaborationFile },
   // Messaging gateway tools

@@ -45,6 +45,7 @@ import { PROJECT_COLOR_PALETTE, type ProjectColorTreatment } from '@/utils/proje
 import { Info_DataTable, SortableHeader } from '@/components/info/Info_DataTable'
 import { Info_Badge } from '@/components/info/Info_Badge'
 import type { PresetTheme } from '@config/theme'
+import { BirdCompanionSettings } from '@/components/settings/BirdCompanionSettings'
 
 export const meta: DetailsPageMeta = {
   navigator: 'settings',
@@ -359,6 +360,7 @@ export default function AppearanceSettingsPage() {
         <ScrollArea className="h-full">
           <div className="px-5 py-7 max-w-3xl mx-auto">
             <div className="space-y-8">
+              <BirdCompanionSettings />
 
               {/* Default Theme */}
               <SettingsSection title={t("settings.appearance.defaultTheme")}>

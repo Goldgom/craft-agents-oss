@@ -10,6 +10,7 @@ import type { ISessionManager } from '../handlers/session-manager-interface'
 import { SuperAgentService } from './SuperAgentService'
 import { SuperAgentEnvironments } from './SuperAgentEnvironments'
 import { MicrosoftAgentWorkflow } from './MicrosoftAgentWorkflow'
+import { setSessionOperationRecorder } from '@craft-agent/shared/agent'
 
 const services = new WeakMap<ISessionManager, { service: SuperAgentService; environments: SuperAgentEnvironments }>()
 const closedHosts = new WeakSet<ISessionManager>()
@@ -86,6 +87,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
         if (!environment) throw new Error('Node environment has not been validated')
         const executor = await environments.prepareSession(session.workspaceId, environment, policy)
         await host.applySessionPolicy(sessionId, { ...policy, containerExecutor: executor })
+        setSessionOperationRecorder(sessionId, request => service.prepareNodeOperation(session.workspaceId, sessionId, request))
       },
     },
     rootForWorkspace: workspaceId => {
@@ -151,7 +153,8 @@ export async function restoreSuperAgents(host: ISessionManager, onError: (error:
   if (closedHosts.has(host)) return
   const service = getSuperAgentService(host)
   for (const workspace of host.getWorkspaces()) {
-    try { await access(join(workspace.rootPath, 'super-agent', 'state.json')) } catch { continue }
+    try { await access(join(workspace.rootPath, 'super-agent', 'state.json')) }
+    catch { try { await access(join(workspace.rootPath, 'super-agent', 'commit.json')) } catch { continue } }
     try { await service.get(workspace.id) } catch (error) { onError(error) }
   }
 }
