@@ -207,7 +207,7 @@ export function createWebApi(options: WebApiOptions): {
   })
   const downloadServerFile = async (path: string) => {
     const file = getPickedFile(path)
-    const blob = file ?? new Blob([await baseApi.readFileBinary(path) as BlobPart], { type: 'application/octet-stream' })
+    const blob = file ?? new Blob([await baseApi.readFileBinary(path, { userInitiated: true }) as BlobPart], { type: 'application/octet-stream' })
     await saveBlob(blob, file?.name ?? path.split(/[\\/]/).pop() ?? 'TokenBird-file')
   }
 
@@ -250,11 +250,11 @@ export function createWebApi(options: WebApiOptions): {
     getFilePath: () => null, // browser File bytes are handled by the attachment input
     openFolderDialog: () => pickServerDirectory(),
     pickStudioMindMapDirectory: pickServerDirectory,
-    readFile: path => getPickedFile(path)?.text() ?? baseApi.readFile(path),
-    readFileBinary: async path => getPickedFile(path) ? new Uint8Array(await getPickedFile(path)!.arrayBuffer()) : baseApi.readFileBinary(path),
+    readFile: (path, options) => getPickedFile(path)?.text() ?? baseApi.readFile(path, options),
+    readFileBinary: async (path, options) => getPickedFile(path) ? new Uint8Array(await getPickedFile(path)!.arrayBuffer()) : baseApi.readFileBinary(path, options),
     readFileAttachment: path => getPickedFile(path) ? pickedAttachment(path) : baseApi.readFileAttachment(path),
     readUserAttachment: path => getPickedFile(path) ? pickedAttachment(path) : baseApi.readUserAttachment(path),
-    readFileDataUrl: async path => getPickedFile(path) ? `data:${getPickedFile(path)!.type};base64,${await blobBase64(getPickedFile(path)!)}` : baseApi.readFileDataUrl(path),
+    readFileDataUrl: async (path, options) => getPickedFile(path) ? `data:${getPickedFile(path)!.type};base64,${await blobBase64(getPickedFile(path)!)}` : baseApi.readFileDataUrl(path, options),
     exportAllData: async () => {
       const result = await client.invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA_BUNDLE)
       if (!result.success) return result

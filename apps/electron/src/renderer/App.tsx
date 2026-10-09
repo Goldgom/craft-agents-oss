@@ -1998,9 +1998,9 @@ export default function App() {
         })
       }
     },
-    readFile: (path) => window.electronAPI.readFile(path),
-    readFileDataUrl: (path) => window.electronAPI.readFileDataUrl(path),
-    readFileBinary: (path) => window.electronAPI.readFileBinary(path),
+    readFile: (path) => window.electronAPI.readFile(path, { userInitiated: true }),
+    readFileDataUrl: (path) => window.electronAPI.readFileDataUrl(path, { userInitiated: true }),
+    readFileBinary: (path) => window.electronAPI.readFileBinary(path, { userInitiated: true }),
   })
 
   const connectionState = useTransportConnectionState()

@@ -697,6 +697,7 @@
   "menu.resetZoom": "Сбросить масштаб",
   "menu.selectAll": "Выбрать все",
   "menu.settings": "Настройки...",
+  "menu.showMainWindow": "Показать главное окно",
   "menu.toggleDevTools": "Переключить инструменты разработчика",
   "menu.toggleFocusMode": "Переключить режим фокусировки",
   "menu.toggleSidebar": "Переключить боковую панель",

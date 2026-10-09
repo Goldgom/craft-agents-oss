@@ -103,7 +103,58 @@ function findMarkdownLinkRanges(text: string): CodeRange[] {
     }
   }
 
+  // Reference definitions contain destinations too; never auto-link inside them.
+  const definitionRegex = /^[ \t]{0,3}\[[^\]\r\n]+\]:[^\r\n]*$/gm
+  while ((match = definitionRegex.exec(text)) !== null) {
+    ranges.push({ start: match.index, end: match.index + match[0].length })
+  }
+
   return ranges
+}
+
+/**
+ * Protect Windows destinations already inside Markdown links. CommonMark treats
+ * `\.` as an escape, so a live `C:\Users\name\.tokenbird` link loses the
+ * separator before the hidden directory. Auto-linked paths were already encoded;
+ * explicit inline links and reference definitions need the same protection.
+ */
+function protectWindowsLinkDestinations(text: string): string {
+  if (!text.includes('\\')) return text
+  const codeRanges = findCodeRanges(text)
+  const starts = /(?:\]\([ \t]*|^[ \t]{0,3}\[[^\]\r\n]+\]:[ \t]*)(<?)(?=[A-Za-z]:[\\/]|\\\\)/gm
+  let result = ''
+  let lastIndex = 0
+  let match
+  while ((match = starts.exec(text)) !== null) {
+    if (isInsideCode(match.index, codeRanges)) continue
+    const start = match.index + match[0].length
+    const angled = match[1] === '<'
+    let end = start
+    let depth = 0
+    for (; end < text.length; end++) {
+      const char = text[end]
+      if (char === '\r' || char === '\n') break
+      if (angled) {
+        if (char === '>') break
+      } else {
+        if (/\s/.test(char!)) break
+        if (char === '(') depth++
+        if (char === ')') {
+          if (depth === 0) break
+          depth--
+        }
+      }
+    }
+    const path = text.slice(start, end)
+    if (!path.includes('\\')) continue
+    // Encode parentheses too so path punctuation cannot terminate/nest links.
+    const destination = path.replace(/[\\()]/g, char =>
+      char === '\\' ? '%5C' : char === '(' ? '%28' : '%29')
+    result += text.slice(lastIndex, start) + destination
+    lastIndex = end
+    starts.lastIndex = end
+  }
+  return result + text.slice(lastIndex)
 }
 
 /**
@@ -237,6 +288,8 @@ function stripPlaceholderLinks(text: string): string {
  * Skips code blocks and already-linked content
  */
 export function preprocessLinks(text: string): string {
+  text = protectWindowsLinkDestinations(text)
+
   // First pass: strip markdown links with placeholder/fabricated URLs
   // (e.g., AI-generated `[commit](https://github.com/...)` → `\`commit\``)
   text = stripPlaceholderLinks(text)

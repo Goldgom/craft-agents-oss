@@ -21,6 +21,7 @@ const cloud = startCloudServer({
   databasePath: join(process.env.TOKENBIRD_CLOUD_DATA_DIR ?? './data', 'cloud.sqlite'),
   webuiDir: process.env.TOKENBIRD_CLOUD_WEBUI_DIR ?? './webui',
   serviceKey,
+  adminKey: process.env.TOKENBIRD_CLOUD_ADMIN_KEY,
   authenticate: async accessToken => {
     const result = await tokenNest('/api/internal/tokenbird/identity', { access_token: accessToken }) as { subject: string; expires_at: number }
     return { subject: result.subject, expiresAt: result.expires_at }

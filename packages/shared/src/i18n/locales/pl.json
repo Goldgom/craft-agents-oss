@@ -697,6 +697,7 @@
   "menu.resetZoom": "Resetuj zoom",
   "menu.selectAll": "Zaznacz wszystko",
   "menu.settings": "Ustawienia...",
+  "menu.showMainWindow": "Pokaż główne okno",
   "menu.toggleDevTools": "Przełącz DevTools",
   "menu.toggleFocusMode": "Przełącz tryb skupienia",
   "menu.toggleSidebar": "Przełącz panel boczny",

@@ -697,6 +697,7 @@
   "menu.resetZoom": "重置縮放",
   "menu.selectAll": "全選",
   "menu.settings": "設定...",
+  "menu.showMainWindow": "顯示主視窗",
   "menu.toggleDevTools": "切換開發者工具",
   "menu.toggleFocusMode": "切換專注模式",
   "menu.toggleSidebar": "切換側欄",

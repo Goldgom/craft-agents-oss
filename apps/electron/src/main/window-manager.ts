@@ -63,6 +63,8 @@ export class WindowManager {
   private keyboardCloseIntents: Set<number> = new Set()  // webContents.id flagged by Cmd/Ctrl+W before close
   private keyboardCloseIntentTimeouts: Map<number, NodeJS.Timeout> = new Map()  // Auto-clear stale keyboard-close intents
   private isAppQuitting = false  // Skip layered close interception during app quit
+  private closeToTrayEnabled = false
+  private lastActiveWindowId: number | null = null
 
   /**
    * Set the event sink and client resolver for pushing events via the RPC server
@@ -438,6 +440,7 @@ export class WindowManager {
 
     // Handle focus/blur to broadcast window focus state
     window.on('focus', () => {
+      this.lastActiveWindowId = webContentsId
       this.pushToWindow(window, RPC_CHANNELS.window.FOCUS_STATE, true)
     })
     window.on('blur', () => {
@@ -477,6 +480,13 @@ export class WindowManager {
         return
       }
 
+      // Native close hides main windows immediately, even if the renderer is
+      // unresponsive. Ctrl/Cmd+W still dismisses its layers before hiding.
+      if (!this.keyboardCloseIntents.has(webContentsId) && this.hideWindowToTray(webContentsId)) {
+        event.preventDefault()
+        return
+      }
+
       // Check if renderer is ready (mainFrame exists) - if not, allow close directly
       if (!window.webContents.isDestroyed() && window.webContents.mainFrame) {
         event.preventDefault()
@@ -502,10 +512,13 @@ export class WindowManager {
 
         this.pendingCloseTimeouts.set(wcId, setTimeout(() => {
           this.pendingCloseTimeouts.delete(wcId)
-          if (!window.isDestroyed()) window.destroy()
+          this.forceCloseWindow(wcId)
         }, 3000))
       }
-      // If renderer not ready, allow default close behavior
+      // If renderer is not ready, keep the main window available in the tray.
+      else if (this.hideWindowToTray(webContentsId)) {
+        event.preventDefault()
+      }
     })
 
     // Handle window closed - clean up theme listener and internal state
@@ -593,6 +606,31 @@ export class WindowManager {
     this.isAppQuitting = isQuitting
   }
 
+  /** Enable only after a native tray has been created successfully. */
+  setCloseToTrayEnabled(enabled: boolean): void {
+    this.closeToTrayEnabled = enabled
+  }
+
+  private hideWindowToTray(webContentsId: number): boolean {
+    if (!this.closeToTrayEnabled || this.isAppQuitting || this.focusedModeWindows.has(webContentsId)) return false
+    const managed = this.windows.get(webContentsId)
+    if (!managed || managed.window.isDestroyed()) return false
+    this.cancelPendingClose(webContentsId)
+    managed.window.hide()
+    return true
+  }
+
+  /** Restore the most recently used main window without reloading its page. */
+  showMainWindow(): boolean {
+    const windows = this.getAllWindows().filter(({ window }) => !this.focusedModeWindows.has(window.webContents.id))
+    const managed = windows.find(({ window }) => window.webContents.id === this.lastActiveWindowId) ?? windows[0]
+    if (!managed) return false
+    if (managed.window.isMinimized()) managed.window.restore()
+    managed.window.show()
+    managed.window.focus()
+    return true
+  }
+
   /**
    * Close window by webContents.id (triggers close event which may be intercepted)
    */
@@ -604,7 +642,7 @@ export class WindowManager {
   }
 
   /**
-   * Force close window by webContents.id (bypasses close event interception).
+   * Complete a close request (hide main windows when the tray is available).
    * Used when renderer confirms the close action (no modals to close).
    */
   forceCloseWindow(webContentsId: number): void {
@@ -617,6 +655,7 @@ export class WindowManager {
 
     const managed = this.windows.get(webContentsId)
     if (managed && !managed.window.isDestroyed()) {
+      if (this.hideWindowToTray(webContentsId)) return
       // Remove close listener temporarily to avoid infinite loop,
       // then destroy the window directly
       managed.window.destroy()
@@ -712,6 +751,7 @@ export class WindowManager {
       if (existing.isMinimized()) {
         existing.restore()
       }
+      existing.show()
       existing.focus()
       return existing
     }
@@ -765,6 +805,9 @@ export class WindowManager {
     if (focused) {
       return focused
     }
+
+    const lastActive = this.lastActiveWindowId !== null ? this.getWindowByWebContentsId(this.lastActiveWindowId) : null
+    if (lastActive && !lastActive.isDestroyed()) return lastActive
 
     // Fall back to any available window
     const allWindows = this.getAllWindows()

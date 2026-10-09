@@ -2,6 +2,7 @@
 // Protocol re-exports (channels, DTOs, events, wire types)
 // =============================================================================
 export * from '@craft-agent/shared/protocol'
+import type { FileReadOptions } from '@craft-agent/shared/protocol'
 
 // =============================================================================
 // Package re-exports (convenience for renderer imports)
@@ -418,11 +419,11 @@ export interface ElectronAPI {
   onUnreadSummaryChanged(callback: (summary: UnreadSummary) => void): () => void
 
   // File operations
-  readFile(path: string): Promise<string>
+  readFile(path: string, options?: FileReadOptions): Promise<string>
   /** Read a file as binary data (Uint8Array) */
-  readFileBinary(path: string): Promise<Uint8Array>
+  readFileBinary(path: string, options?: FileReadOptions): Promise<Uint8Array>
   /** Read a file as a data URL (data:{mime};base64,...) for binary preview (images, PDFs) */
-  readFileDataUrl(path: string): Promise<string>
+  readFileDataUrl(path: string, options?: FileReadOptions): Promise<string>
   /** Read an image file as a size-bounded preview data URL for lightweight thumbnail rendering. */
   readFilePreviewDataUrl(path: string, maxSize?: number): Promise<string>
   openFileDialog(): Promise<string[]>

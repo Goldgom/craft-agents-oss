@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'bun:test'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
-import { CLIENT_OPEN_EXTERNAL } from '@craft-agent/server-core/transport'
+import { CLIENT_OPEN_EXTERNAL, CLIENT_OPEN_PATH, CLIENT_SHOW_IN_FOLDER } from '@craft-agent/server-core/transport'
+import { homedir } from 'os'
+import { join, sep } from 'path'
 import type { RpcServer, HandlerFn, RequestContext } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { registerSystemCoreHandlers } from './system'
 
-function createTestHarness(overrides?: { workspaceId?: string | null }) {
+function createTestHarness(overrides?: { workspaceId?: string | null; openPathError?: string }) {
   const handlers = new Map<string, HandlerFn>()
   const invokeClientCalls: Array<{ clientId: string; channel: string; args: any[] }> = []
   const pushCalls: Array<{ channel: string; target: any; args: any[] }> = []
@@ -19,6 +21,7 @@ function createTestHarness(overrides?: { workspaceId?: string | null }) {
     },
     async invokeClient(clientId, channel, ...args) {
       invokeClientCalls.push({ clientId, channel, args })
+      if (channel === CLIENT_OPEN_PATH && overrides?.openPathError) return { error: overrides.openPathError }
       return undefined
     },
     hasClientCapability() { return false },
@@ -60,8 +63,43 @@ function createTestHarness(overrides?: { workspaceId?: string | null }) {
     webContentsId: 101,
   }
 
-  return { openUrl, ctx, invokeClientCalls, pushCalls }
+  return { openUrl, ctx, invokeClientCalls, pushCalls, handlers }
 }
+
+describe('user shell file actions', () => {
+  const outside = sep === '\\' ? 'Z:\\outside\\report.docx' : '/outside/report.docx'
+
+  it('opens files outside the workspace on the requesting client', async () => {
+    const { handlers, ctx, invokeClientCalls } = createTestHarness()
+    await handlers.get(RPC_CHANNELS.shell.OPEN_FILE)!(ctx, outside)
+    expect(invokeClientCalls).toEqual([{ clientId: ctx.clientId, channel: CLIENT_OPEN_PATH, args: [outside] }])
+  })
+
+  it('reveals files outside the workspace on the requesting client', async () => {
+    const { handlers, ctx, invokeClientCalls } = createTestHarness()
+    await handlers.get(RPC_CHANNELS.shell.SHOW_IN_FOLDER)!(ctx, outside)
+    expect(invokeClientCalls).toEqual([{ clientId: ctx.clientId, channel: CLIENT_SHOW_IN_FOLDER, args: [outside] }])
+  })
+
+  it('allows the user to open a sensitive file and expands the home shortcut', async () => {
+    const { handlers, ctx, invokeClientCalls } = createTestHarness()
+    await handlers.get(RPC_CHANNELS.shell.OPEN_FILE)!(ctx, '~/.ssh/id_rsa')
+    expect(invokeClientCalls[0]!.args).toEqual([join(homedir(), '.ssh', 'id_rsa')])
+  })
+
+  it('keeps OS open failures visible', async () => {
+    const { handlers, ctx } = createTestHarness({ openPathError: 'File does not exist' })
+    await expect(handlers.get(RPC_CHANNELS.shell.OPEN_FILE)!(ctx, outside)).rejects.toThrow('Failed to open file: File does not exist')
+  })
+
+  it('rejects malformed paths before invoking the client', async () => {
+    const { handlers, ctx, invokeClientCalls } = createTestHarness()
+    for (const path of ['', ' ', 'bad\0path', null]) {
+      await expect(handlers.get(RPC_CHANNELS.shell.OPEN_FILE)!(ctx, path)).rejects.toThrow('Invalid file path')
+    }
+    expect(invokeClientCalls).toHaveLength(0)
+  })
+})
 
 describe('registerSystemCoreHandlers OPEN_URL', () => {
   it('routes craftagents action links internally via deeplink:navigate', async () => {

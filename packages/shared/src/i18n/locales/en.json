@@ -697,6 +697,7 @@
   "menu.resetZoom": "Reset Zoom",
   "menu.selectAll": "Select All",
   "menu.settings": "Settings...",
+  "menu.showMainWindow": "Show Main Window",
   "menu.toggleDevTools": "Toggle DevTools",
   "menu.toggleFocusMode": "Toggle Focus Mode",
   "menu.toggleSidebar": "Toggle Sidebar",

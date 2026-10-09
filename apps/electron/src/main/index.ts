@@ -119,6 +119,7 @@ import { initModelRefreshService, getModelRefreshService, setFetcherPlatform } f
 import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/services'
 import { createApplicationMenu } from './menu'
 import { WindowManager } from './window-manager'
+import { SystemTray } from './system-tray'
 import { loadWindowState, saveWindowState } from './window-state'
 import {
   getWorkspaces,
@@ -711,19 +712,34 @@ if (!gotTheLock) {
         mainLog.error('Failed to handle deep link:', err)
       })
     } else if (windowManager) {
-      // No deep link - just focus the first window
-      const windows = windowManager.getAllWindows()
-      if (windows.length > 0) {
-        const win = windows[0].window
-        if (win.isMinimized()) win.restore()
-        win.focus()
-      }
+      showAppWindow()
     }
   })
 }
 
-// Helper to create initial windows on startup
-async function createInitialWindows(): Promise<void> {
+let systemTray: SystemTray | null = null
+
+function showAppWindow(): void {
+  if (isQuitting || process.env.CRAFT_HEADLESS || !windowManager) return
+  if (windowManager.showMainWindow()) return
+  if (!systemTray) return // Bootstrap has not created the UI yet.
+  const existing = windowManager.getLastActiveWindow()
+  if (existing) {
+    windowManager.createWindow({ workspaceId: windowManager.getWorkspaceForWindow(existing.webContents.id) ?? '' })
+    return
+  }
+  void createInitialWindows(false).catch(error => mainLog.error('Failed to restore app window:', error))
+}
+
+function initializeSystemTray(): void {
+  if (process.env.CRAFT_HEADLESS || !windowManager || systemTray) return
+  systemTray = new SystemTray(showAppWindow)
+  windowManager.setCloseToTrayEnabled(systemTray.isAvailable)
+}
+
+app.on('activate', showAppWindow)
+
+async function createInitialWindows(restoreSavedWindows = true): Promise<void> {
   if (!windowManager) return
 
   const selectWorkspaceFirst = consumeWorkspaceSelectionOnNextLaunch()
@@ -756,7 +772,7 @@ async function createInitialWindows(): Promise<void> {
 
   const validWorkspaceIds = workspaces.map(ws => ws.id)
 
-  if (savedState?.windows.length) {
+  if (restoreSavedWindows && savedState?.windows.length) {
     // Restore windows from saved state
     let restoredCount = 0
 
@@ -924,6 +940,7 @@ app.whenReady().then(async () => {
     if (pickerMode) {
       mainLog.info('[picker] Startup server location is "none" — skipping local service bootstrap, showing server picker')
       await createInitialWindows()
+      initializeSystemTray()
       return
     }
 
@@ -1605,6 +1622,7 @@ app.whenReady().then(async () => {
           app.setName(getLocalizedProductName(code))
           windowManager?.refreshLocalizedAppName()
         }
+        systemTray?.refresh()
         mainLog.info('[i18n] changeLanguage IPC applied', {
           incoming: code,
           previousResolved,
@@ -1766,6 +1784,7 @@ app.whenReady().then(async () => {
     // In headless mode the server runs without any UI — skip window creation.
     if (!isHeadless) {
       await createInitialWindows()
+      initializeSystemTray()
     }
 
     // Run credential health check at startup to detect issues early
@@ -1891,28 +1910,11 @@ app.whenReady().then(async () => {
       if (app.isPackaged) app.quit()
     }
   }
-
-  // macOS: Re-create window when dock icon is clicked
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0 && windowManager) {
-      // Open first workspace or last focused
-      const workspaces = getWorkspaces()
-      if (workspaces.length > 0) {
-        const savedState = loadWindowState()
-        const wsId = savedState?.lastFocusedWorkspaceId || workspaces[0].id
-        // Verify workspace still exists
-        if (workspaces.some(ws => ws.id === wsId)) {
-          windowManager.createWindow({ workspaceId: wsId })
-        } else {
-          windowManager.createWindow({ workspaceId: workspaces[0].id })
-        }
-      }
-    }
-  })
 })
 
 app.on('window-all-closed', () => {
   if (process.env.CRAFT_HEADLESS) return  // headless server stays alive
+  if (!isQuitting && systemTray?.isAvailable) return
   // On macOS, apps typically stay active until explicitly quit
   if (process.platform !== 'darwin') {
     app.quit()
@@ -1956,6 +1958,8 @@ async function performQuitCleanup(): Promise<void> {
     return
   }
   quitCleanupRan = true
+  systemTray?.destroy()
+  systemTray = null
   nativeRemoteTransport?.dispose()
   nativeRemoteTransport = null
 
@@ -2014,6 +2018,8 @@ app.on('before-quit', async (event) => {
 
   // Ensure Cmd+Q/app quit bypasses layered window close interception (Cmd+W behavior).
   windowManager?.setAppQuitting(true)
+  systemTray?.destroy()
+  systemTray = null
 
   if (windowManager) {
     const windows = windowManager.getWindowStates()

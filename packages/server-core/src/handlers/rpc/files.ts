@@ -3,13 +3,13 @@ import { isAbsolute, join, resolve, dirname, parse as parsePath } from 'path'
 import { homedir } from 'os'
 import { validatePathFormat } from '../../utils/path-validation'
 import { randomUUID } from 'crypto'
-import { RPC_CHANNELS, type FileAttachment, type DirectoryListingResult } from '@craft-agent/shared/protocol'
+import { RPC_CHANNELS, type FileAttachment, type FileReadOptions, type DirectoryListingResult } from '@craft-agent/shared/protocol'
 import type { StoredAttachment } from '@craft-agent/core/types'
 import { readFileAttachment, validateImageForClaudeAPI, IMAGE_LIMITS } from '@craft-agent/shared/utils'
 import { getSessionAttachmentsPath, validateSessionId } from '@craft-agent/shared/sessions'
 import { getWorkspaceByNameOrId } from '@craft-agent/shared/config'
 import { resizeImageForAPI, inspectImageBuffer } from '@craft-agent/server-core/services'
-import { sanitizeFilename, validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
+import { sanitizeFilename, validateFilePath, getWorkspaceAllowedDirs, resolveUserFilePath } from '@craft-agent/server-core/handlers'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { requestClientOpenFileDialog } from '@craft-agent/server-core/transport'
@@ -31,11 +31,18 @@ export const HANDLED_CHANNELS = [
 ] as const
 
 export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): void {
+  // Only explicit preview/download clicks opt out. Background reads and agent
+  // operations keep the existing workspace and sensitive-file restrictions.
+  const resolveReadPath = (path: string, workspaceId: string | null | undefined, options?: FileReadOptions) =>
+    options?.userInitiated === true
+      ? resolveUserFilePath(path)
+      : validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
+
   // Read a file (with path validation to prevent traversal attacks)
-  server.handle(RPC_CHANNELS.file.READ, async (ctx, path: string) => {
+  server.handle(RPC_CHANNELS.file.READ, async (ctx, path: string, options?: FileReadOptions) => {
     try {
       const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
-      const safePath = await validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
+      const safePath = await resolveReadPath(path, workspaceId, options)
       const content = await readFile(safePath, 'utf-8')
       return content
     } catch (error) {
@@ -52,10 +59,10 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
   // Read an image file as a data URL for in-app image preview overlays.
   // Returns data:{mime};base64,{content} — used by ImagePreviewOverlay and markdown image blocks.
-  server.handle(RPC_CHANNELS.file.READ_DATA_URL, async (ctx, path: string) => {
+  server.handle(RPC_CHANNELS.file.READ_DATA_URL, async (ctx, path: string, options?: FileReadOptions) => {
     try {
       const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
-      const safePath = await validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
+      const safePath = await resolveReadPath(path, workspaceId, options)
       const buffer = await readFile(safePath)
       const ext = safePath.split('.').pop()?.toLowerCase() ?? ''
 
@@ -104,10 +111,10 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
 
   // Read a file as raw binary (Uint8Array) for react-pdf.
   // The WS transport codec preserves Uint8Array payloads over JSON envelopes.
-  server.handle(RPC_CHANNELS.file.READ_BINARY, async (ctx, path: string) => {
+  server.handle(RPC_CHANNELS.file.READ_BINARY, async (ctx, path: string, options?: FileReadOptions) => {
     try {
       const workspaceId = ctx.workspaceId ?? deps.windowManager?.getWorkspaceForWindow(ctx.webContentsId!)
-      const safePath = await validateFilePath(path, getWorkspaceAllowedDirs(workspaceId))
+      const safePath = await resolveReadPath(path, workspaceId, options)
       const buffer = await readFile(safePath)
       // Return as Uint8Array (serializes to ArrayBuffer over IPC)
       return new Uint8Array(buffer)

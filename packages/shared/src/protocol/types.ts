@@ -4,6 +4,11 @@
  * Shared between server (main process / headless) and client (renderer / Node).
  */
 
+export interface FileReadOptions {
+  /** Set only for previews/downloads explicitly requested by a user click. */
+  userInitiated?: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Message envelope
 // ---------------------------------------------------------------------------

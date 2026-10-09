@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import { handleDeepLink } from '../deep-link'
 import { RPC_CHANNELS } from '../../shared/types'
 import type { EventSink } from '@craft-agent/server-core/transport'
@@ -8,6 +8,7 @@ function createMockWindow(webContentsId: number) {
   return {
     isMinimized: () => false,
     restore: () => {},
+    show: mock(() => {}),
     focus: () => {},
     isDestroyed: () => false,
     webContents: {
@@ -20,6 +21,19 @@ function createMockWindow(webContentsId: number) {
 }
 
 describe('handleDeepLink routing', () => {
+  it('shows the retained window when a deep link has no workspace', async () => {
+    const targetWindow = createMockWindow(19)
+    const windowManager = {
+      getFocusedWindow: () => null,
+      getLastActiveWindow: () => targetWindow,
+      getWorkspaceForWindow: () => 'ws-target',
+    } as unknown as WindowManager
+
+    const result = await handleDeepLink('tokenbird://settings/guides', windowManager)
+    expect(result.success).toBe(true)
+    expect(targetWindow.show).toHaveBeenCalledTimes(1)
+  })
+
   it('prefers resolved target client over preferred caller client', async () => {
     const targetWindow = createMockWindow(22)
 

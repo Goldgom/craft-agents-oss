@@ -697,6 +697,7 @@
   "menu.resetZoom": "줌 재설정",
   "menu.selectAll": "모두 선택",
   "menu.settings": "설정...",
+  "menu.showMainWindow": "메인 창 표시",
   "menu.toggleDevTools": "Toggle DevTools",
   "menu.toggleFocusMode": "초점 모드 전환",
   "menu.toggleSidebar": "사이드바 전환",

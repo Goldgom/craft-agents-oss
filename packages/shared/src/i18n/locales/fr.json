@@ -697,6 +697,7 @@
   "menu.resetZoom": "Réinitialiser le zoom",
   "menu.selectAll": "Sélectionner tout",
   "menu.settings": "Paramètres...",
+  "menu.showMainWindow": "Afficher la fenêtre principale",
   "menu.toggleDevTools": "Toggle Outils de développement",
   "menu.toggleFocusMode": "Basculer le mode de mise au point",
   "menu.toggleSidebar": "Basculer la barre latérale",

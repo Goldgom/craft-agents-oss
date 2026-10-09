@@ -1,4 +1,4 @@
-import { normalize, isAbsolute, sep } from 'path'
+import { normalize, isAbsolute, resolve, sep } from 'path'
 import { homedir, tmpdir } from 'os'
 import { realpath } from 'fs/promises'
 import { getWorkspaceByNameOrId, type Workspace } from '@craft-agent/shared/config'
@@ -63,6 +63,21 @@ export function getWorkspaceAllowedDirs(workspaceId?: string | null): string[] {
     dirs.push(config.defaults.workingDirectory)
   }
   return dirs
+}
+
+/**
+ * Resolve a path explicitly selected by the user for opening, revealing or
+ * previewing. User actions are not subject to the agent's directory/sensitive
+ * file policy; filesystem/OS errors still propagate to the caller.
+ */
+export function resolveUserFilePath(filePath: string): string {
+  if (typeof filePath !== 'string' || !filePath.trim() || filePath.includes('\0')) {
+    throw new Error('Invalid file path')
+  }
+  const expanded = filePath === '~' || /^~[\\/]/.test(filePath)
+    ? homedir() + filePath.slice(1)
+    : filePath
+  return resolve(expanded)
 }
 
 /**
