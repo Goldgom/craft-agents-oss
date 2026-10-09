@@ -13,6 +13,7 @@ import { GenerationImage, StudioGenerationHistory } from './StudioGenerationHist
 import { deleteStudioGeneration, getStudioGeneration, listStudioGenerations, saveStudioGeneration, type StudioGeneration } from './studio-generation-history'
 import { assessEditOutput, composeInpaint, composeOutpaint, fillTransparentForEdit, referenceCoverage, type EditOutputIssue } from './studio-image-composite'
 import { classifyStudioConnectionError, type StudioConnectionIssue } from './studio-connection-error'
+import { StudioErrorToast } from './StudioErrorToast'
 import { rechargeOnInsufficientBalance } from '@/lib/tokennest-recharge'
 import { StudioSessionWorkspace, type StudioSessionEditorProps } from './StudioSessionWorkspace'
 import { StudioCanvasChat, type CanvasChatMessage, type CanvasSuggestion } from './StudioCanvasChat'
@@ -195,7 +196,11 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
   const [recentVisible, setRecentVisible] = useState(() => sessionStorage.getItem('tokenbird.studio.recentPreviewHidden') !== '1')
   const [mobilePreviewVisible, setMobilePreviewVisible] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setCanvasError] = useState('')
+  function setError(message: string) {
+    setCanvasError(message)
+    if (message) setAssistantError('')
+  }
   const [notice, setNotice] = useState('')
   const [historyRevision, setHistoryRevision] = useState(0)
   const [setupDone, setSetupDone] = useState(() => localStorage.getItem('tokenbird.studio.imageSetupDone') === '1')
@@ -1121,10 +1126,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
     applyingSuggestions.current.add(index)
     try {
       const result = await generate(suggestion.operation, suggestion.prompt)
-      if (result?.status === 'error') {
-        const issue = classifyStudioConnectionError(result.message, connection?.oauthProvider === 'tokennest')
-        if (!issue) setError(t('studio.suggestionImageFailed'))
-      }
+      // generate() already reports the specific failure or opens connection recovery.
       if (result?.status === 'applied' || (result?.status === 'candidates' && result.candidates?.some(candidate => !candidate.issue))) {
         const current = assistantHistoryRef.current
         if (current[index]?.suggestion !== suggestion) return
@@ -1450,7 +1452,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
           thinkingLevel={assistantThinking} onThinkingLevelChange={setAssistantThinking}
           mode={assistantMode} onModeChange={setAssistantMode}
           onSubmit={question => { void askCanvasAssistant(question) }} onApply={index => { void applyCanvasSuggestion(index) }}
-          busy={assistantBusy} canvasBusy={busy} error={assistantError || error} notice={notice}
+          busy={assistantBusy} canvasBusy={busy} notice={error || assistantError ? '' : notice}
           connectionPicker={<StudioConnectionPicker connections={assistantConnection.connections} connectionSlug={assistantConnection.connectionSlug}
             setConnectionSlug={assistantConnection.setConnectionSlug} model={assistantConnection.model} setModel={assistantConnection.setModel} />} />}
         {tool==='workspace' && <CanvasPhotoshopPanel documentSettings={documentSettings} layers={layers} activeId={activeId} selection={selected?selection:null} clipboardAvailable={!!clipboard.current} history={undoStack.current.map((action,index)=>({index,kind:action.kind}))} onCommand={input=>canvasCommand(input).catch(cause=>{setError(String(cause));throw cause})} onSave={saveFile} />}
@@ -1572,7 +1574,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
           </div>
           <div className="flex gap-2 border-t border-border/70 pt-3"><button className={`${actionClass} flex-1`} disabled={adjustmentsAreNeutral(adjustments)} onClick={() => adjust()}>{t('studio.applyAdjustments')}</button><button className={actionClass} disabled={adjustmentsAreNeutral(adjustments)} onClick={() => setAdjustments({ ...defaultAdjustments })}>{t('studio.reset')}</button></div>
         </section>}
-        {!compact && tool !== 'assist' && (error || notice) && <div className={`sticky bottom-0 border-t px-4 py-3 text-xs ${error ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-border bg-background text-muted-foreground'}`} role={error ? 'alert' : 'status'}>{error || notice}</div>}
+        {!compact && tool !== 'assist' && notice && !error && !assistantError && <div className="sticky bottom-0 border-t border-border bg-background px-4 py-3 text-xs text-muted-foreground" role="status">{notice}</div>}
       </aside>)
   return <div ref={layoutRef} data-compact={compact} data-studio-editor="canvas" className="flex h-full min-h-0 flex-col bg-background text-foreground">
     {compact ? <div data-studio-mobile-header>
@@ -1631,7 +1633,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
             <div className="flex min-w-0 gap-1.5 overflow-x-auto">{recentRecords.map(record => <div key={record.id} className="shrink-0 rounded-md border border-border/70 p-0.5" title={record.prompt}><GenerationImage record={record} className="size-10 rounded object-cover" /></div>)}</div>
             <button className={`${iconClass} ${compact ? 'min-h-11 min-w-11' : ''}`} title={t('studio.hidePreview')} aria-label={t('studio.hidePreview')} onClick={() => { if (compact) setMobilePreviewVisible(false); else { sessionStorage.setItem('tokenbird.studio.recentPreviewHidden', '1'); setRecentVisible(false) } }}><X className="size-3.5" /></button>
           </div> : <button className={`absolute top-3 z-10 flex items-center justify-center rounded-lg border border-border bg-background/95 p-2 text-muted-foreground shadow-middle hover:text-foreground ${compact ? 'left-3 min-h-11 min-w-11' : 'right-3'}`} title={t('studio.showPreview')} aria-label={t('studio.showPreview')} onClick={() => { if (compact) setMobilePreviewVisible(true); else { sessionStorage.removeItem('tokenbird.studio.recentPreviewHidden'); setRecentVisible(true) } }}><History className="size-4" /></button>)}
-          {compact && (error || notice) && <div data-studio-mobile-status role={error ? 'alert' : 'status'}><span>{error || notice}</span><button aria-label={t('common.close')} onClick={() => { setError(''); setNotice('') }}><X className="size-4" /></button></div>}
+          {compact && notice && !error && !assistantError && <div data-studio-mobile-status role="status"><span>{notice}</span><button aria-label={t('common.close')} onClick={() => setNotice('')}><X className="size-4" /></button></div>}
           {!contentBounds(layers) && !selected && <div className="pointer-events-none absolute inset-0 flex items-center justify-center"><div className="rounded-2xl border border-border bg-background/90 px-8 py-6 text-center shadow-middle"><ImagePlus className="mx-auto mb-3 h-6 w-6 text-primary" /><strong className="text-sm">{t('studio.emptyCanvasTitle')}</strong><p className="mt-1 text-xs text-muted-foreground">{t('studio.emptyCanvasHint')}</p></div></div>}
         </div>
         <footer className="flex h-9 shrink-0 items-center gap-3 border-t border-border/70 px-3 text-[11px] text-muted-foreground">
@@ -1674,6 +1676,8 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
         </>}
       </DialogContent>
     </Dialog>
+    {active && (error || assistantError) && <StudioErrorToast error={error || assistantError} onClose={() => { setError(''); setAssistantError('') }}
+      onRetry={assistantError && !assistantBusy && !busy && assistantHistory.at(-1)?.role === 'user' ? () => { void askCanvasAssistant(assistantHistory.at(-1)?.text) } : undefined} />}
     <StudioImageConnectionDialog open={setupOpen} issue={connectionIssue}
       onClose={() => { sessionStorage.setItem('tokenbird.studio.imageSetupDismissed', '1'); setSetupDismissed(true); setConnectionSettingsOpen(false); setConnectionIssue(null) }}
       onFinish={() => { localStorage.setItem('tokenbird.studio.imageSetupDone', '1'); setSetupDone(true); setConnectionSettingsOpen(false); setConnectionIssue(null); setError('') }}

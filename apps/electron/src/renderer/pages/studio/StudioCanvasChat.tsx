@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, Check, Clipboard, LoaderCircle, MessageCircle, RotateCcw, Sparkles } from 'lucide-react'
+import { ArrowUp, Check, Clipboard, LoaderCircle, MessageCircle, Sparkles } from 'lucide-react'
 import { Markdown } from '@/components/markdown'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StudioThinkingPicker, type StudioThinkingLevel } from './StudioThinkingPicker'
@@ -24,11 +24,10 @@ interface StudioCanvasChatProps {
   connectionPicker: ReactNode
   busy: boolean
   canvasBusy: boolean
-  error: string
   notice: string
 }
 
-export function StudioCanvasChat({ sessionTitle, selectionLabel, messages, draft, onDraftChange, thinkingLevel, onThinkingLevelChange, mode, onModeChange, onSubmit, onApply, connectionPicker, busy, canvasBusy, error, notice }: StudioCanvasChatProps) {
+export function StudioCanvasChat({ sessionTitle, selectionLabel, messages, draft, onDraftChange, thinkingLevel, onThinkingLevelChange, mode, onModeChange, onSubmit, onApply, connectionPicker, busy, canvasBusy, notice }: StudioCanvasChatProps) {
   const { t } = useTranslation()
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -42,9 +41,6 @@ export function StudioCanvasChat({ sessionTitle, selectionLabel, messages, draft
     }
     previousCount.current = messages.length
   }, [messages.length, busy])
-
-  const lastQuestion = [...messages].reverse().find(message => message.role === 'user')?.text
-  const lastMessageIsQuestion = messages.at(-1)?.role === 'user'
 
   return <div className="flex h-full min-h-0 flex-col">
     <header className="shrink-0 border-b border-border/70 px-4 py-3">
@@ -79,10 +75,9 @@ export function StudioCanvasChat({ sessionTitle, selectionLabel, messages, draft
         </div>}
       </article>)}
       {busy && <div className="flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" />{t('studio.gptThinking')}</div>}
-      {!error && notice && <div role="status" className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">{notice}</div>}
+      {notice && <div role="status" className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">{notice}</div>}
     </div>
     <div className="shrink-0 border-t border-border/70 bg-background p-3">
-      {error && <div role="alert" className="mb-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}{lastMessageIsQuestion && lastQuestion && <button type="button" className="mt-2 flex items-center gap-1 font-medium underline" onClick={() => onSubmit(lastQuestion)}><RotateCcw className="size-3" />{t('studio.retry')}</button>}</div>}
       <div className="rounded-xl border border-border bg-muted/20 focus-within:border-primary/50">
         <textarea ref={inputRef} className="min-h-24 max-h-56 w-full resize-y bg-transparent px-3 pt-3 text-xs leading-5 outline-none placeholder:text-muted-foreground" aria-label={t('studio.askGpt')} placeholder={t('studio.drawingQuestion')} maxLength={4000} value={draft} onChange={event => onDraftChange(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSubmit() } }} />
         <div className="flex items-center gap-2 px-2 pb-2"><StudioExecutionModePicker value={mode} onChange={onModeChange} /><StudioThinkingPicker value={thinkingLevel} onChange={onThinkingLevelChange} /><span className="min-w-0 flex-1 truncate text-right text-[11px] text-muted-foreground" title={selectionLabel}>{selectionLabel}</span><button type="button" className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground disabled:opacity-40" aria-label={t('studio.sendMessage')} disabled={busy || !draft.trim()} onClick={() => onSubmit()}>{busy ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}</button></div>
