@@ -1,0 +1,25 @@
+appId: top.goldgom.tokenbird.win7remote
+productName: TokenBird Win7 Remote
+electronVersion: "22.3.27"
+npmRebuild: false
+asar: true
+directories:
+  app: dist/app
+  output: release
+files:
+  - "**/*"
+  - "!**/*.map"
+  - "!**/node_modules/**"
+win:
+  executableName: TokenBird-Win7-Remote
+  icon: ../electron/resources/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: "TokenBird-Win7-Remote-${version}-${arch}-Setup.${ext}"
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+  installerLanguages: [zh_CN, en_US]

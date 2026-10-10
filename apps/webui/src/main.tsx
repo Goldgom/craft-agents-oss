@@ -1,3 +1,4 @@
+import './win7-compat'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Provider as JotaiProvider, useAtomValue } from 'jotai'

@@ -131,6 +131,12 @@ Pages 是保存在工作区中的 HTML 页面，适合报告、交互说明、�
 
 ## 快速开始
 
+Windows 7 x64 的实验性远程客户端（不包含本地 Agent），参见
+[构建与使用说明](docs/win7-remote-client.md)。
+
+Windows 7 x64 的实验性本地版（原版 UI/配置流程，本机 Pi Agent + API Key），参见
+[本地版构建与使用说明](docs/win7-local-client.md)。两种实验版均尚未在真实 Win7 上验证。
+
 ### 安装桌面应用
 
 macOS / Linux：

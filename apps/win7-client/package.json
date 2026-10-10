@@ -1,0 +1,8 @@
+{
+  "name": "@tokenbird/win7-client",
+  "version": "26.9.28",
+  "private": true,
+  "description": "Experimental Windows 7 x64 remote-only TokenBird client",
+  "license": "Apache-2.0",
+  "type": "commonjs"
+}
