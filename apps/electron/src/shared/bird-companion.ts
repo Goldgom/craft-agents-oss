@@ -17,14 +17,18 @@ export const BIRD_COMPANION_IPC = {
   state: 'bird-companion:state',
   getState: 'bird-companion:get-state',
   ready: 'bird-companion:ready',
-  dismiss: 'bird-companion:dismiss',
+  dismissBubble: 'bird-companion:dismiss-bubble',
+  showBubble: 'bird-companion:show-bubble',
+  resizeBubble: 'bird-companion:resize-bubble',
   interactive: 'bird-companion:interactive',
   move: 'bird-companion:move',
 } as const
 
 export type BirdMood = 'idle' | 'thinking' | 'working' | 'waiting' | 'success' | 'error' | 'interrupted'
+export type BirdWindowRole = 'bird' | 'bubble'
 export interface BirdCompanionState {
   visible: boolean
+  bubbleVisible: boolean
   mood: BirdMood
   /** Translation suffix, never tool inputs, credentials, or raw model output. */
   activity: string
@@ -34,7 +38,7 @@ export interface BirdCompanionState {
 }
 
 export const IDLE_BIRD_STATE: BirdCompanionState = {
-  visible: false, mood: 'idle', activity: 'idle', completedSteps: 0, activeSessions: 0,
+  visible: false, bubbleVisible: false, mood: 'idle', activity: 'idle', completedSteps: 0, activeSessions: 0,
 }
 
 export type BirdProgressEvent =

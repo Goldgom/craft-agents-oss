@@ -1,11 +1,12 @@
-import { appendFile, mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { SuperAgentConfig, SuperAgentState } from './types'
 import { emptySuperAgentState, validateSuperAgentConfig } from './validation'
 import { SuperAgentPermissionGrantSchema } from './permissions'
-import { ContinuityTaskFields, ArtifactSchema, OperationSchema, MetricsSchema } from './continuity'
+import { SuperAgentArchiveSchema, SuperAgentMemorySchema } from './library'
+import { ContinuityTaskFields, ArtifactSchema, OperationSchema, MetricsSchema, StatisticsSchema } from './continuity'
 
 export interface SuperAgentPendingTurn {
   id: string
@@ -24,6 +25,7 @@ export interface SuperAgentPendingTurn {
   recoveryError?: string
   emptyResponseRetryAttempt?: number
   backgroundInspection?: boolean
+  usageBaseline?: { outputTokens: number; costUsd: number }
   /** Bound model-to-model message chains to prevent autonomous ping-pong. */
   depth: number
   chainId: string
@@ -62,6 +64,8 @@ const TaskContractSchema = {
     artifactHashes: z.array(z.object({ id: string, sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict()).max(100).optional() }).strict().optional(),
 }
 const StateSchema = z.object({
+  memories: z.array(SuperAgentMemorySchema).max(1000).default([]),
+  archives: z.array(SuperAgentArchiveSchema).max(100).default([]),
   version: z.literal(1), revision: number.int(),
   permissionGrants: z.array(SuperAgentPermissionGrantSchema).max(256).default([]),
   nodes: z.array(z.object({ nodeId: string, sessionId: string.optional(), status: z.enum(['idle', 'preparing', 'working', 'recovering', 'error']), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), activeTaskId: string.optional(), lastStartedAt: number.optional(), lastCompletedAt: number.optional(), error: string.optional() }).strict()).max(32),
@@ -70,6 +74,7 @@ const StateSchema = z.object({
   artifacts: z.array(ArtifactSchema).max(1000).default([]),
   operations: z.array(OperationSchema).max(2000).default([]),
   metrics: MetricsSchema.optional(),
+  statistics: StatisticsSchema.optional(),
   connectionStarts: z.array(z.object({ connection: string, at: number }).strict()).max(20_000).optional(),
   messages: z.array(z.object({ id: string, fromNodeId: string, toNodeId: string, kind: z.enum(['chat', 'message', 'task', 'result', 'inspection', 'script', 'error']), body: string, taskId: string.optional(), createdAt: number, userFacing: z.boolean().optional(), actionReceipt: ActionReceiptSchema.optional(), permission: PermissionRecordSchema.optional() }).strict()).max(500),
   board: z.array(z.object({ id: string, title: string, content: string, revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256),
@@ -78,7 +83,7 @@ const StateSchema = z.object({
   allIdleSince: number.optional(),
   plans: z.array(z.object({ id: string, goalId: string.optional(), goalRevision: number.int().min(1).optional(), title: string, instructions: string, status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: string, revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256).default([]),
 }).strict()
-const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, taskId: string.optional(), scriptRunId: string.optional(), createdAt: number, startedAt: number.optional(), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), manualRecovery: z.boolean().optional(), recoveryError: string.optional(), emptyResponseRetryAttempt: number.int().optional(), backgroundInspection: z.boolean().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
+const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, taskId: string.optional(), scriptRunId: string.optional(), createdAt: number, startedAt: number.optional(), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), manualRecovery: z.boolean().optional(), recoveryError: string.optional(), emptyResponseRetryAttempt: number.int().optional(), backgroundInspection: z.boolean().optional(), usageBaseline: z.object({ outputTokens: number, costUsd: number }).strict().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
 
 export async function loadSuperAgentDocument(workspaceRoot: string): Promise<SuperAgentDocument> {
   const candidates: SuperAgentDocument[] = []; const errors: unknown[] = []
@@ -121,4 +126,18 @@ export async function saveSuperAgentDocument(workspaceRoot: string, document: Su
     tasks: document.state.tasks.filter(task => ['running', 'failed'].includes(task.status)).map(task => ({ id: task.id, status: task.status, phase: task.phase })),
     }) + '\n', { mode: 0o600 })
   } catch { /* Observational log failure does not invalidate the synced commit. */ }
+}
+
+/** Remove coordination archives only; project files and workspace resources live elsewhere. */
+export async function clearSuperAgentHistory(workspaceRoot: string): Promise<void> {
+  const directory = join(workspaceRoot, 'super-agent')
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return []
+    throw error
+  })
+  for (const name of names) {
+    if (name === 'history' || name === 'archive' || name === 'events.jsonl' || /^(?:state|commit)\.json\.[a-f0-9-]+\.tmp$/.test(name)) {
+      await rm(join(directory, name), { recursive: name === 'history' || name === 'archive', force: true })
+    }
+  }
 }

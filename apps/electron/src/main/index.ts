@@ -19,6 +19,7 @@ import { validateNativeRemoteUrl } from './remote-transport-policy'
 import { registerNativeRemoteTransport } from './native-remote-transport'
 import { NATIVE_REMOTE_TRANSPORT } from '../shared/native-remote-transport'
 import { WsRpcClient } from '@craft-agent/server-core/transport'
+import { createNodeCloudPeer } from '@craft-agent/server-core/cloud/peer-node'
 import { redactWorkspaceRemoteCredentials } from '@craft-agent/server-core/handlers/rpc/workspace-remote-input'
 import { sourceCredentialWorkspaceId, workspaceForSourceCredentialId } from './credential-scope'
 import * as Sentry from '@sentry/electron/main'
@@ -994,6 +995,7 @@ app.whenReady().then(async () => {
       createClient: (target, capabilities) => new WsRpcClient(validateNativeRemoteUrl(target.url), {
         token: target.token, workspaceId: target.remoteWorkspaceId,
         mode: 'remote', autoReconnect: true, tlsRejectUnauthorized: true, useNodeWebSocket: true,
+        cloudPeerFactory: createNodeCloudPeer,
         clientCapabilities: [...capabilities],
       }),
       transferSftp: async (target, request, assertCurrent) => {
@@ -1771,7 +1773,7 @@ app.whenReady().then(async () => {
           }
           const target = await freshStartupRemoteTarget()
           const connection = new WsRpcClient(validateNativeRemoteUrl(target.url), { token: target.token, autoReconnect: false,
-            tlsRejectUnauthorized: true, useNodeWebSocket: true, requestTimeout: 10_000 })
+            tlsRejectUnauthorized: true, useNodeWebSocket: true, cloudPeerFactory: createNodeCloudPeer, requestTimeout: 10_000 })
           connection.setHandshakeGuard(async () => { await freshStartupRemoteTarget() })
           connection.connect()
           try {

@@ -614,15 +614,45 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   const { navigate } = useNavigation()
   const branchSessionMetadata = useAtomValue(sessionBranchesAtom)
   const branchesByMessage = useMemo(() => {
-    const result = new Map<string, Array<{ id: string; name?: string }>>()
+    const result = new Map<string, Array<{ id: string; name?: string; sourceSessionId?: string }>>()
     for (const item of branchSessionMetadata.values()) {
       if (item.workspaceId !== session?.workspaceId || !item.branchFromMessageId) continue
       const branches = result.get(item.branchFromMessageId) ?? []
-      branches.push({ id: item.id, name: item.name })
+      branches.push({ id: item.id, name: item.name, sourceSessionId: item.branchFromSessionId })
       result.set(item.branchFromMessageId, branches)
     }
     return result
   }, [branchSessionMetadata, session?.workspaceId])
+  const [branchPoint, setBranchPoint] = useState<{ sessionId: string; index: number } | null>(null)
+  useEffect(() => {
+    setBranchPoint(null)
+    if (!session?.branchFromSessionId || !session.branchFromMessageId) return
+    let cancelled = false
+    const sessionId = session.id
+    const sourceMessageId = session.branchFromMessageId
+    // An edited variant has its own message ID. Locate it by its position in
+    // the retained parent transcript so the pager also appears on the variant.
+    void window.electronAPI.getSessionMessages(session.branchFromSessionId).then(parent => {
+      const index = parent?.messages.filter(message => message.role !== 'status').findIndex(message => message.id === sourceMessageId) ?? -1
+      if (!cancelled && index >= 0) setBranchPoint({ sessionId, index })
+    }).catch(() => { /* The source may have been deleted; copied history remains usable. */ })
+    return () => { cancelled = true }
+  }, [session?.id, session?.branchFromSessionId, session?.branchFromMessageId])
+  const currentBranchMessageId = branchPoint?.sessionId === session?.id
+    ? session?.messages.filter(message => message.role !== 'status')[branchPoint!.index]?.id
+    : undefined
+  const historyBranches = (messageId: string) => {
+    const ownBranches = branchesByMessage.get(messageId)
+    const isCurrentBranchPoint = messageId === currentBranchMessageId || messageId === session?.branchFromMessageId
+    const siblings = isCurrentBranchPoint && session?.branchFromMessageId
+      ? branchesByMessage.get(session.branchFromMessageId) : undefined
+    const variants = ownBranches?.length ? ownBranches : siblings
+    if (!variants?.length) return undefined
+    const originalId = variants[0]!.sourceSessionId
+    return originalId
+      ? [{ id: originalId, name: t('chat.history.original') }, ...variants]
+      : variants
+  }
   const editHistoryMessage = useCallback(async (messageId: string, content: string) => {
     if (!session) return
     try {
@@ -1599,14 +1629,6 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         <div className="flex flex-1 flex-col min-h-0 min-w-0 relative">
           {/* Content layer */}
           <div className="flex flex-1 flex-col min-h-0 min-w-0 relative z-10">
-          {session.branchFromSessionId && <div className="flex flex-wrap items-center gap-1 px-6 py-2 text-xs border-b border-border/30">
-            <button type="button" className="rounded px-2 py-1 hover:bg-foreground/5"
-              onClick={() => navigate(routes.view.allSessions(session.branchFromSessionId!))}>{t('chat.history.original')}</button>
-            {(branchesByMessage.get(session.branchFromMessageId ?? '') ?? []).map((branch, index) =>
-              <button type="button" key={branch.id} aria-current={branch.id === session.id ? 'page' : undefined}
-                title={branch.name} className={cn('rounded px-2 py-1 hover:bg-foreground/5', branch.id === session.id && 'bg-foreground/5 font-medium')}
-                onClick={() => navigate(routes.view.allSessions(branch.id))}>{t('chat.history.branchNumber', { number: index + 1 })}</button>)}
-          </div>}
           {/* === MESSAGES AREA: Scrollable list of message bubbles === */}
           <div className="relative flex-1 min-h-0">
             {/* Mask wrapper - fades content at top and bottom over transparent/image backgrounds */}
@@ -1758,7 +1780,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             onEdit={value => editHistoryMessage(turn.message.id, value)}
                             editDisabled={disabled || session.isProcessing || turn.message.isPending || turn.message.isQueued}
                             branchCount={branchesByMessage.get(turn.message.id)?.length}
-                            branches={branchesByMessage.get(turn.message.id)}
+                            branches={historyBranches(turn.message.id)}
+                            currentSessionId={session.id}
                             onSelectBranch={id => navigate(routes.view.allSessions(id))}>
                           <MemoizedMessageBubble
                             message={turn.message}
@@ -1854,7 +1877,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                         onEdit={turn.response?.messageId && !turn.response.isPlan && !turn.isStreaming ? value => editHistoryMessage(turn.response!.messageId!, value) : undefined}
                         editDisabled={disabled || session.isProcessing || !turn.isComplete}
                         branchCount={turn.response?.messageId ? branchesByMessage.get(turn.response.messageId)?.length : 0}
-                        branches={turn.response?.messageId ? branchesByMessage.get(turn.response.messageId) : undefined}
+                        branches={turn.response?.messageId ? historyBranches(turn.response.messageId) : undefined}
+                        currentSessionId={session.id}
                         onSelectBranch={id => navigate(routes.view.allSessions(id))}>
                       <TurnCard
                         sessionId={session.id}

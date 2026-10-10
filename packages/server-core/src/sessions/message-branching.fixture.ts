@@ -77,6 +77,83 @@ const countBeforeFailure = listSessions(workspaceRoot).length
 await assert.rejects(manager.createSession(workspace.id, { branchFromSessionId: source.id, branchFromMessageId: 'later', editedMessageContent: 'copy fails', llmConnection: 'test' }), /ENOENT/)
 assert.equal(listSessions(workspaceRoot).length, countBeforeFailure)
 
+// Stopping before text_complete must keep renderer IDs and persisted history
+// aligned, including providers that stream without a turn ID.
+for (const turnId of ['stopped-turn', undefined]) {
+  const parent = await manager.createSession(workspace.id, { llmConnection: 'test', name: 'Interrupted parent' })
+  const managed = internals.sessions.get(parent.id)
+  managed.messages.push({ id: 'stopped-user', role: 'user', content: 'hello', timestamp: 1 })
+  managed.sdkSessionId = 'interrupted-sdk-session'
+  managed.isProcessing = true
+  const events: string[] = []
+  let partialId: string | undefined
+  manager.setEventSink((_channel, _target, event: any) => {
+    if (event.sessionId !== parent.id) return
+    events.push(event.type)
+    if (event.type === 'text_complete') {
+      partialId = event.messageId
+      assert.equal(event.text, 'partial answer')
+      assert.equal(event.turnId, turnId)
+    }
+  })
+  await internals.processEvent(managed, { type: 'text_delta', text: 'partial answer', turnId })
+  await manager.cancelProcessing(parent.id)
+  // Repeated stop must not append the same reply twice.
+  await manager.cancelProcessing(parent.id)
+  await internals.onProcessingStopped(parent.id, 'interrupted')
+  await manager.flushSession(parent.id)
+  assert.ok(partialId)
+  assert.equal(events.filter(type => type === 'text_complete').length, 1)
+  assert.ok(events.indexOf('text_complete') < events.indexOf('interrupted'))
+  const savedParent = loadSession(workspaceRoot, parent.id)!
+  assert.equal(savedParent.messages.find(message => message.id === partialId)?.content, 'partial answer')
+  assert.equal(savedParent.messages.at(-1)?.type, 'info')
+  assert.equal(managed.streamingText, '')
+  const edited = await manager.createSession(workspace.id, {
+    branchFromSessionId: parent.id, branchFromMessageId: partialId,
+    editedMessageContent: 'edited partial answer', llmConnection: 'test',
+  })
+  assert.equal(edited.messages.at(-1)?.content, 'edited partial answer')
+  // Exercise ordinary branch validation/storage without contacting a provider.
+  const getOrCreateAgent = internals.getOrCreateAgent
+  internals.getOrCreateAgent = async (child: any) => {
+    child.agent = { ensureBranchReady: async () => {} }
+  }
+  const warn = console.warn
+  const warnings: string[] = []
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')) }
+  let branch
+  try {
+    branch = await manager.createSession(workspace.id, {
+      branchFromSessionId: parent.id, branchFromMessageId: partialId, llmConnection: 'test',
+    })
+  } finally {
+    internals.getOrCreateAgent = getOrCreateAgent
+    console.warn = warn
+  }
+  assert.equal(warnings.length, 1)
+  assert.ok(warnings[0]!.includes('Claude branch anchor missing'))
+  internals.sessions.get(branch.id).agent = undefined
+  assert.equal(branch.messages.at(-1)?.content, 'partial answer')
+  assert.equal(branch.messages.at(-1)?.id, partialId)
+}
+
+// An empty stream creates no assistant bubble; an already finalized reply
+// must not be saved a second time when Stop races with turn completion.
+for (const hasCompletedReply of [false, true]) {
+  const parent = await manager.createSession(workspace.id, { llmConnection: 'test' })
+  const managed = internals.sessions.get(parent.id)
+  managed.isProcessing = true
+  if (hasCompletedReply) {
+    await internals.processEvent(managed, { type: 'text_complete', text: 'finished reply', turnId: 'finished-turn' })
+  }
+  await manager.cancelProcessing(parent.id)
+  await internals.onProcessingStopped(parent.id, 'interrupted')
+  await manager.flushSession(parent.id)
+  const replies = loadSession(workspaceRoot, parent.id)!.messages.filter(message => message.type === 'assistant')
+  assert.equal(replies.length, hasCompletedReply ? 1 : 0)
+}
+
 // Removing the source must not remove the child's attached files.
 deleteSession(workspaceRoot, source.id)
 assert.equal(await readFile(loadSession(workspaceRoot, children[0]!.id)!.messages[2]!.attachments![0]!.storedPath, 'utf8'), 'attached content')

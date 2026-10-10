@@ -16,6 +16,7 @@
 
 import type { ComponentType } from 'react'
 import type { SessionFilter } from '../../shared/types'
+import { SETTINGS_PAGES, type SettingsSubpage } from '../../shared/settings-registry'
 
 // =============================================================================
 // Types
@@ -156,17 +157,7 @@ export const NavigationRegistry = {
 
   settings: {
     displayName: 'Settings',
-    detailsPages: {
-      app: PlaceholderComponent, // AppSettingsPage
-      ai: PlaceholderComponent, // AiSettingsPage
-      appearance: PlaceholderComponent, // AppearanceSettingsPage
-      input: PlaceholderComponent, // InputSettingsPage
-      workspace: PlaceholderComponent, // WorkspaceSettingsPage
-      permissions: PlaceholderComponent, // PermissionsSettingsPage
-      labels: PlaceholderComponent, // LabelsSettingsPage
-      shortcuts: PlaceholderComponent, // ShortcutsPage
-      preferences: PlaceholderComponent, // PreferencesPage
-    },
+    detailsPages: Object.fromEntries(SETTINGS_PAGES.map(page => [page.id, PlaceholderComponent])) as Record<SettingsSubpage, typeof PlaceholderComponent>,
     defaultDetails: 'app', // Always has a default
     getFirstItem: () => 'app',
   },

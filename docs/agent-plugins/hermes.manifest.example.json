@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "plugin:hermes",
+  "name": "Hermes",
+  "description": "Hermes native agent loop with TokenBird host tools and shared preferences",
+  "version": "2.0.0",
+  "enabled": true,
+  "capabilities": ["resume", "steering", "nativeTools", "hostTools", "toolApproval"],
+  "compatibility": {
+    "providerTypes": ["pi", "pi_compat"],
+    "piAuthProviders": ["openai", "deepseek"],
+    "authTypes": ["api_key_with_endpoint", "api_key", "bearer_token", "oauth", "none"]
+  },
+  "useConnectionCredentials": true,
+  "transport": {
+    "type": "stdio",
+    "command": "C:/path/to/hermes-agent/.venv/Scripts/python.exe",
+    "args": ["tokenbird:bridge:hermes", "--hermes-root", "C:/path/to/hermes-agent"]
+  }
+}

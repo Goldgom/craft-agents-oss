@@ -16,6 +16,7 @@ import { useAppShellContext } from '@/context/AppShellContext'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import { cn } from '@/lib/utils'
 import { CatalogPagination } from './CatalogPagination'
+import { ToolBehaviorSettings } from './ToolBehaviorSettings'
 
 export const meta: DetailsPageMeta = { navigator: 'settings', slug: 'tools' }
 
@@ -141,6 +142,7 @@ export default function ToolsSettingsPage() {
       <div className="min-h-0 flex-1 mask-fade-y">
         <ScrollArea className="h-full">
           <div className="mx-auto max-w-4xl space-y-7 px-5 py-7">
+            <ToolBehaviorSettings />
             <SettingsSection title={t('settings.tools.runtimeTitle')} description={t('settings.tools.runtimeDescription')}>
               <SettingsCard divided>
                 {(['java', 'python', 'node'] as RuntimeToolId[]).map((tool) => {

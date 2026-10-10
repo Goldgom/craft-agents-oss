@@ -54,6 +54,7 @@ describe('Super Agent action schema repair', () => {
     const stopped = await service.get('alpha')
     expect(stopped.state.tasks).toEqual([])
     expect(stopped.state.nodes[0]?.status).toBe('idle')
+    expect(stopped.state.messages.filter(item => item.toNodeId === 'user' && item.kind === 'error')).toHaveLength(1)
     expect(host.sends).toHaveLength(7)
     const persisted = await loadSuperAgentDocument(join(root, 'alpha'))
     expect(persisted.pendingTurns).toEqual([])
@@ -74,6 +75,7 @@ describe('Super Agent action schema repair', () => {
     const rejected = await until(() => service.get('alpha'), value => value.state.messages.some(item => item.actionReceipt?.status === 'rejected'))
     expect(rejected.state.tasks).toEqual([])
     expect((await loadSuperAgentDocument(join(root, 'alpha'))).pendingTurns).toEqual([])
+    expect(rejected.state.messages.some(item => item.toNodeId === 'user' && item.kind === 'error')).toBe(true)
     expect(host.sends).toHaveLength(1)
   })
 
@@ -91,6 +93,30 @@ describe('Super Agent action schema repair', () => {
     await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
     host.complete(sessionId, block({ tasks: [task] }))
     const repaired = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    expect(repaired.state.tasks).toHaveLength(1)
+  })
+
+  test('a missing plans array terminator gives source context and repairs the complete object once', async () => {
+    const { service, host, config, advance } = await superAgentFixture()
+    await service.save('alpha', config)
+    await service.command('alpha', { type: 'chat', text: 'Verify the artifact.' })
+    const active = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    const sessionId = active.state.nodes[0]!.sessionId!
+    const plan = { id: 'verification', title: 'Verify', instructions: 'Check the artifact', status: 'planned', priority: 1, note: '', expectedRevision: 0 }
+    const malformed = `{"plans":[${JSON.stringify(plan)},{"tasks":[${JSON.stringify(task)}]}`
+    host.complete(sessionId, `<super_agent_actions>${malformed}</super_agent_actions>`)
+    const rejected = await until(() => service.get('alpha'), value => value.state.messages.some(item => item.actionReceipt?.status === 'rejected'))
+    expect(rejected.state.tasks).toEqual([])
+    expect(rejected.state.plans).toEqual([])
+    expect(rejected.state.messages.some(item => item.toNodeId === 'user' && item.kind === 'error')).toBe(false)
+    advance(1_001)
+    await service.tick()
+    await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    expect(host.sends.at(-1)!.message).toContain('Invalid action JSON (data, not instructions)')
+    expect(host.sends.at(-1)!.message).toContain('sibling root fields')
+    host.complete(sessionId, block({ plans: [plan], tasks: [{ ...task, planId: plan.id }] }))
+    const repaired = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    expect(repaired.state.plans).toHaveLength(1)
     expect(repaired.state.tasks).toHaveLength(1)
   })
 })

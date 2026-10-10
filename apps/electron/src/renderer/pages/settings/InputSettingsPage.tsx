@@ -18,6 +18,7 @@ import { routes } from '@/lib/navigate'
 import { isMac } from '@/lib/platform'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import { dispatchAutoCapitalisationChange } from '@/components/app-shell/input/input-settings-events'
+import { KeyboardShortcutsSection } from './KeyboardShortcutsSection'
 
 import {
   SettingsSection,
@@ -35,7 +36,7 @@ export const meta: DetailsPageMeta = {
 // Main Component
 // ============================================
 
-export default function InputSettingsPage() {
+export default function InputSettingsPage({ showShortcuts = false }: { showShortcuts?: boolean }) {
   const { t } = useTranslation()
 
   // Auto-capitalisation state
@@ -146,6 +147,7 @@ export default function InputSettingsPage() {
                   />
                 </SettingsCard>
               </SettingsSection>
+              <KeyboardShortcutsSection sendMessageKey={sendMessageKey} defaultOpen={showShortcuts} />
             </div>
           </div>
         </ScrollArea>

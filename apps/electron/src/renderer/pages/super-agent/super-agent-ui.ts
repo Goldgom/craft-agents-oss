@@ -2,11 +2,44 @@ import { useTranslation } from 'react-i18next'
 import { getModelsForProviderType, isImageGenerationModelId } from '@config/llm-connections'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import type { SuperAgentConfig, SuperAgentEnvironment, SuperAgentNode } from '@craft-agent/shared/super-agent'
-import { PRESET_RECIPES, presetModels, presetStrings, type SuperAgentPreset } from './super-agent-presets'
+import { PRESET_RECIPES, presetModels, presetStrings, nodePresetProfile, presetRequirements, type SuperAgentPreset } from './super-agent-presets'
 export type { SuperAgentPreset } from './super-agent-presets'
+import { improvementStrings } from './super-agent-improvement-strings'
 
 const strings = {
+  conversationErrorGeneral: ['超级智能体操作失败', 'Super Agent action failed'],
+  conversationErrorConflict: ['共享状态已更新，本次操作未完成', 'Shared state changed; this action could not complete'],
+  conversationErrorFormat: ['动作格式有误，未能执行', 'Invalid action format; the action could not run'],
+  conversationErrorPartial: ['部分操作未完成', 'Some actions could not complete'],
+  conversationErrorDetails: ['详情', 'Details'],
+  ...improvementStrings,
   ...presetStrings,
+  archiveLibrary: ['档案库', 'Archive library'],
+  memoryLibrary: ['Memory 库', 'Memory library'],
+  archiveLibraryHint: ['保存工程中间版本、报告和其他文件副本，可恢复到新目录。重启或清理历史后仍保留。', 'Save project versions, reports and other file snapshots; restore into a new directory. Retained across restarts and history cleanup.'],
+  memoryLibraryHint: ['保存长期偏好、项目决策、已核实事实与经验，智能体可跨任务检索。', 'Store lasting preferences, project decisions, verified facts and lessons for agents to retrieve across tasks.'],
+  librarySearch: ['搜索标题、标签和内容', 'Search titles, tags and content'],
+  libraryTags: ['标签（逗号分隔）', 'Tags (comma separated)'],
+  memoryAdd: ['添加记忆', 'Add memory'],
+  memoryCategory: ['记忆类型', 'Memory category'],
+  memoryEvidence: ['依据或来源', 'Evidence or source'],
+  memoryPreference: ['稳定偏好', 'Preference'],
+  memoryFact: ['已核实事实', 'Verified fact'],
+  memoryDecision: ['项目决策', 'Decision'],
+  memoryLesson: ['经验教训', 'Lesson'],
+  memoryOther: ['其他', 'Other'],
+  memoryEmpty: ['暂无长期记忆', 'No long-term memories yet'],
+  memoryDeleteHint: ['删除这条长期记忆后，智能体将不再从记忆库检索它。', 'Once deleted, agents will no longer retrieve this entry from the memory library.'],
+  archiveAdd: ['归档版本', 'Archive version'],
+  archiveEmpty: ['暂无档案', 'No archives yet'],
+  archiveSource: ['源文件或目录', 'Source file or directory'],
+  archiveSourceHint: ['工作目录内的路径；复制实际文件，不改变原工程。最多 2000 项、256 MB，单文件 64 MB，不支持链接。', 'Path inside the working directory. Copies actual files. Up to 2000 entries, 256 MB total and 64 MB per file; links are unsupported.'],
+  archiveVersion: ['版本说明', 'Version label'],
+  archiveRestore: ['恢复副本', 'Restore copy'],
+  archiveDestination: ['恢复到新目录', 'Restore into a new directory'],
+  archiveRestoreHint: ['目录须位于工作目录内且尚不存在，父目录已存在。恢复时校验 SHA-256。', 'Use a new directory inside the working directory with an existing parent. SHA-256 is checked during restoration.'],
+  archiveRestored: ['已恢复副本', 'Copy restored'],
+  archiveFiles: ['文件', 'Files'],
   title: ['超级智能体', 'Super Agent'],
   subtitle: ['一个和你沟通的主节点，一组专注工作的独立节点。', 'One coordinator to talk with you, independent nodes to do the work.'],
   welcome: ['创建你的超级智能体', 'Create your Super Agent'],
@@ -72,7 +105,7 @@ const strings = {
   vmDescription: ['连接虚拟机内的 TokenBird 服务工作区；服务端需设置 TOKENBIRD_EXECUTION_HOST=vm。', 'Connect a TokenBird server workspace inside your VM. The server must set TOKENBIRD_EXECUTION_HOST=vm.'],
   unavailableEnvironment: ['当前服务端尚未连接此执行环境。配置后不能启动工作。', 'This execution environment is not connected to the server yet. Work cannot start in it.'],
   folderIsolation: ['文件夹权限控制不提供操作系统级隔离。需要强隔离时请连接沙箱或虚拟机执行端。', 'Folder permissions do not provide operating system isolation. Connect a sandbox or VM executor for stronger isolation.'],
-  folderPrograms: ['所有壳命令与脚本需要已验证的容器沙箱。文件夹模式可使用受控文件与浏览器工具。', 'All shell commands and scripts require a verified container sandbox. Folder mode supports mediated file and browser tools.'],
+  folderPrograms: ['没有沙箱也可运行程序和脚本，但每次宿主命令必须由用户明确批准；完全控制模式无需审批。工作目录不提供沙箱隔离。', 'Programs and scripts can run without a sandbox. Every host command requires explicit user approval unless full control is enabled. A working folder provides no sandbox isolation.'],
   workingDirectory: ['工作目录', 'Working directory'],
   pickDirectory: ['选择文件夹', 'Choose folder'],
   containerImage: ['容器镜像', 'Container image'],
@@ -95,7 +128,7 @@ const strings = {
   goals: ['任务目标', 'Goals'],
   goalDelivered: ['已交付', 'Delivered'],
   continuityMetrics: ['执行 {{turns}} 轮 · 工具 {{tools}} 次 · 重试 {{retries}} 次 · 续做 {{resumes}} 次', '{{turns}} turns · {{tools}} tools · {{retries}} retries · {{resumes}} resumptions'],
-  fullControlDescription: ['开启全部工作能力，跳过所有人工审批、行动门和自动审查。工作目录、数据源、禁止规则与容器边界仍生效；程序和脚本仍需容器。', 'Enable all worker capabilities and skip all human approvals, Action Gates and Auto-review. Folder, source, deny rules and container boundaries still apply; programs and scripts still require a container.'],
+  fullControlDescription: ['开启全部工作能力，文件工具可访问工作目录内外的宿主路径，跳过所有人工审批、行动门和自动审查。没有沙箱时可直接运行宿主程序和脚本；已有沙箱继续使用原容器。数据源和禁止规则仍生效。', 'Enable all worker capabilities and host file access, and skip human approvals, Action Gates and Auto-review. Programs and scripts can run directly on the host without a sandbox; configured sandboxes remain in use. Source and deny rules still apply.'],
   fullControlBoundary: ['完全控制已开启：范围内操作直接执行，正在等待的范围内审批会自动恢复。关闭后恢复审批规则。', 'Full control is on: operations within the execution boundary run directly, and pending approvals within that boundary resume automatically. Turn it off to restore approval rules.'],
   fullControlEnabled: ['完全控制（跳过所有审批）', 'Full control (skip all approvals)'],
   actionGates: ['行动门与独立审查', 'Action Gates and independent review'],
@@ -126,6 +159,12 @@ const strings = {
   setupComplete: ['已准备创建', 'Ready to create'],
   setupSummary: ['{{workers}} 个工作节点 · 1 个主节点 · 每 {{minutes}} 分钟检查', '{{workers}} workers · 1 coordinator · inspect every {{minutes}} minutes'],
   settings: ['设置', 'Settings'],
+  reset: ['完全重置', 'Reset everything'],
+  resetHint: ['清除超级智能体的全部配置与内容，返回首次配置页面。', 'Clear all Super Agent settings and content and return to initial setup.'],
+  resetConfirm: ['确认完全重置超级智能体', 'Confirm complete Super Agent reset'],
+  resetDescription: ['将停止节点与托管脚本，永久删除当前工作区超级智能体的配置、节点会话及附件、对话、任务、计划、共享板、记忆库、归档库、授权、脚本注册与运行记录（包括历史归档），无法恢复。', 'Stop nodes and managed scripts and permanently delete this workspace’s Super Agent settings, node conversations and attachments, messages, tasks, plans, shared board, memory library, archive library, permissions, script registrations and runtime history (including archives). This cannot be undone.'],
+  resetPreserved: ['项目目录文件、AI 连接、工作区数据源和技能会保留。', 'Project files, AI connections, workspace sources and skills are preserved.'],
+  resetting: ['正在完全重置…', 'Resetting everything…'],
   history: ['历史信息清理', 'History cleanup'],
   historyHint: ['选择清理范围并预览。未完成计划、当前节点会话及其依赖资料会保留。', 'Choose what to clean and review the scope. Unfinished plans, current node sessions and their dependencies are preserved.'],
   historyRuntime: ['运行历史', 'Runtime history'],
@@ -174,6 +213,10 @@ const strings = {
   generalSettings: ['基本设置', 'General settings'],
   backToAssistant: ['返回助手', 'Back to assistant'],
   workProgress: ['工作进展', 'Work progress'],
+  workStatus: ['当前工作状态', 'Current work status'],
+  workStatusIdle: ['摸鱼中', 'Taking a break'],
+  workStatusThinking: ['思考中', 'Thinking'],
+  workStatusUnavailable: ['暂不可用', 'Unavailable'],
   progressSummary: ['{{working}} 进行中 · {{queued}} 排队 · {{completed}} 完成', '{{working}} active · {{queued}} queued · {{completed}} completed'],
   conversation: ['助手', 'Assistant'],
   board: ['共享数据板', 'Shared board'],
@@ -194,6 +237,17 @@ const strings = {
   nodeRefreshHint: ['暂时故障最多自动恢复 10 分钟。登录、余额或权限问题请先处理，再刷新以继续原任务；执行结果不明时仅重置节点，不自动重跑。', 'Transient failures recover automatically for up to 10 minutes. Resolve login, billing or permission issues before refreshing to continue the task. Unknown outcomes only reset the node and are not replayed.'],
   error: ['异常', 'Error'],
   queued: ['排队中', 'Queued'],
+  queueBlocked: ['受阻，暂时无法继续', 'Blocked'],
+  queueBlockedCount: ['{{count}} 项受阻', '{{count}} blocked'],
+  queueNextStep: ['请查看下方原因；补充所需信息或说明如何处理后，发送给智能体。也可以点击“检查并继续”重新评估。', 'Review the reasons below, then send the needed information or instructions. You can also select “Check and continue” to reassess.'],
+  queueInspect: ['检查并继续', 'Check and continue'],
+  goalChanged: ['目标已更新（{{detail}}），旧任务需要重新规划', 'Goal changed ({{detail}}); this task needs replanning'],
+  goalCancelled: ['目标已取消：{{detail}}', 'Goal cancelled: {{detail}}'],
+  dependencyCancelled: ['前置任务已取消：{{detail}}，需要重新规划依赖', 'Dependency cancelled: {{detail}}; replan dependencies'],
+  dependencyMissing: ['找不到前置任务：{{detail}}，需要修正依赖', 'Missing dependency: {{detail}}; correct dependencies'],
+  dependencyFailed: ['前置任务失败：{{detail}}，需要修复或重试', 'Dependency failed: {{detail}}; repair or retry it'],
+  dependencyWaiting: ['等待前置任务完成并通过验收：{{detail}}', 'Waiting for dependency completion and acceptance: {{detail}}'],
+  planBlocked: ['计划受阻：{{detail}}', 'Plan blocked: {{detail}}'],
   running: ['运行中', 'Running'],
   completed: ['已完成', 'Completed'],
   failed: ['失败', 'Failed'],
@@ -294,7 +348,7 @@ const strings = {
   scriptPath: ['脚本路径', 'Script path'],
   scriptPathHint: ['必须位于工作目录内，支持 .js、.mjs、.cjs、.py、.sh、.ps1。', 'Must be inside the work folder. Supports .js, .mjs, .cjs, .py, .sh and .ps1.'],
   scriptPathFullControlHint: ['可使用工作目录内的相对路径，或执行机器上目录外的绝对路径。支持 .js、.mjs、.cjs、.py、.sh、.ps1。', 'Use a relative path inside the work folder or an absolute path elsewhere on the execution machine. Supports .js, .mjs, .cjs, .py, .sh and .ps1.'],
-  hostScriptPermissions: ['在宿主文件夹运行脚本需要明确开启全部能力。脚本有宿主权限；需要隔离时选择容器沙箱。', 'Host scripts require all capabilities to be explicitly enabled. They run with host access; use a container sandbox for isolation.'],
+  hostScriptPermissions: ['宿主脚本没有沙箱隔离。受限控制需开启程序能力并确认当前脚本、参数和环境；完全控制无需审批。', 'Host scripts have no sandbox isolation. Restricted control requires program capability and approval of the current script, arguments and environment; full control skips approval.'],
   manualScriptPermissions: ['手动运行脚本需要开启“运行程序和脚本”。', 'Manual scripts require Run programs and scripts to be enabled.'],
   scriptArgs: ['参数（每行一个）', 'Arguments (one per line)'],
   timeout: ['运行超时（秒）', 'Timeout (seconds)'],
@@ -402,7 +456,7 @@ export function withExecuteMode(config: SuperAgentConfig): SuperAgentConfig {
 }
 
 export function scriptAccessGranted(environment: SuperAgentEnvironment): boolean {
-  return environment.kind === 'sandbox' && (environment.fullControl === true || environment.permissions.runPrograms)
+  return environment.fullControl === true || environment.permissions.runPrograms
 }
 
 export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, connection: LlmConnectionWithStatus, text: SuperAgentText): SuperAgentConfig {
@@ -412,12 +466,16 @@ export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, 
   if (!connection.isAuthenticated || !models.length) return executionConfig
   const choices = presetModels(models, connection.defaultModel)
   const recipe = PRESET_RECIPES[preset]
-  const existing = new Map<SuperAgentNode['role'], SuperAgentNode[]>(['coordinator', 'orchestrator', 'worker'].map(role => [role as SuperAgentNode['role'], config.nodes.filter(node => node.role === role)]))
-  const nodes = recipe.nodes.map(item => {
-    const old = existing.get(item.role)?.shift()
+  const used = new Set<string>()
+  const nodes: SuperAgentNode[] = recipe.nodes.map(item => {
+    const old = config.nodes.find(node => !used.has(node.id) && node.role === item.role
+      && (item.role !== 'worker' || nodePresetProfile(node, text) === item.profile))
+    if (old) used.add(old.id)
     return {
       ...createNode(item.role, [connection], text, connection.slug),
       ...(old ? { id: old.id, sourceSlugs: [...old.sourceSlugs], abilityProfileIds: [...old.abilityProfileIds] } : {}),
+      presetProfile: item.profile, thinkingMode: old?.thinkingMode ?? 'task' as const,
+      capabilities: [...new Set([...(old?.capabilities ?? []).filter(capability => capability !== old?.presetProfile), item.profile])],
       name: text(`${item.profile}Name`), description: text(`${item.profile}Description`), workPreferences: text(`${item.profile}Preferences`),
       model: choices[item.model], thinkingLevel: /luna/i.test(choices[item.model]) ? 'max' : item.thinking,
       maxCallsPerMinute: item.rate, intelligenceRating: item.rating,
@@ -425,12 +483,13 @@ export function applyPreset(config: SuperAgentConfig, preset: SuperAgentPreset, 
   })
   // Keep extra resource-bound nodes so choosing a smaller team never orphans scripts or bindings.
   nodes.push(...config.nodes.filter(node => !nodes.some(item => item.id === node.id)
-    && (node.sourceSlugs.length || node.abilityProfileIds.length || config.scripts.some(script => script.nodeId === node.id))))
-  return { ...executionConfig, nodes, workflow: { ...recipe.workflow }, continuousWork: recipe.continuousWork, idleInspectionMinutes: recipe.idleInspectionMinutes }
+    && (node.sourceSlugs.length || node.abilityProfileIds.length || node.capabilities?.some(capability => capability !== node.presetProfile) || config.scripts.some(script => script.nodeId === node.id))))
+  return { ...executionConfig, nodes, requirements: presetRequirements(preset), workflow: { ...recipe.workflow }, continuousWork: recipe.continuousWork, idleInspectionMinutes: recipe.idleInspectionMinutes }
 }
 
 export function configError(config: SuperAgentConfig, connections: LlmConnectionWithStatus[], text: SuperAgentText): string | null {
   if (!config.name.trim()) return text('nameRequired')
+  if (config.workflow?.independentReview && config.nodes.filter(node => node.role === 'worker').length < 2) return text('reviewWorkersRequired')
   // Loaded legacy teams can still change permissions/intervals while migration waits for idle.
   if (config.nodes.filter(node => node.role === 'coordinator').length !== 1 || config.nodes.filter(node => node.role === 'orchestrator').length > 1 || !config.nodes.some(node => node.role === 'worker')) return text('nodesRequired')
   for (const node of config.nodes) {

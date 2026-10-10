@@ -14,6 +14,8 @@ import {
   REQUEST_TIMEOUT_MS,
   RPC_CHANNELS,
   STUDIO_IMAGE_REQUEST_TIMEOUT_MS,
+  FRAMEWORK_TEST_REQUEST_TIMEOUT_MS,
+  FRAMEWORK_INSTALL_REQUEST_TIMEOUT_MS,
   SEQUENCE_ACK_INTERVAL_MS,
   CLIENT_HEARTBEAT_INTERVAL_MS,
   CLIENT_HEARTBEAT_TIMEOUT_MS,
@@ -23,6 +25,9 @@ import {
 } from '@craft-agent/shared/protocol'
 import type { RpcClient } from './types'
 import { serializeEnvelope, deserializeEnvelope } from './codec'
+import { CloudSocket, isCloudConnectUrl } from '../cloud/socket'
+import { createBrowserCloudPeer, hasBrowserCloudPeer } from '../cloud/peer-browser'
+import type { CloudPeerFactory } from '../cloud/peer'
 
 // ---------------------------------------------------------------------------
 // Pending request state
@@ -79,6 +84,8 @@ export interface TransportConnectionState {
   /** Timestamp of the last successful heartbeat round-trip (ping→pong). */
   lastHeartbeatAt?: number
   updatedAt: number
+  /** Actual cloud data route; direct retains a separate authorization socket. */
+  dataPath?: 'direct' | 'relay'
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +124,10 @@ export interface WsRpcClientOptions {
   /** Host/main-only pre-send revalidation. Never serialized or exposed by RPC.
    * False or rejection prevents the token handshake; guard errors are redacted. */
   beforeHandshake?: WsRpcHandshakeGuard
+  /** Node/main WebRTC adapter. Browsers use their native implementation. */
+  cloudPeerFactory?: CloudPeerFactory
+  /** Disable direct negotiation, for deployments or clients requiring relay. */
+  cloudDirect?: boolean
 }
 
 export type WsRpcHandshakeGuard = () => void | boolean | Promise<void | boolean>
@@ -179,6 +190,8 @@ export class WsRpcClient implements RpcClient {
   private readonly tlsRejectUnauthorized: boolean
   private readonly useNodeWebSocket: boolean
   private readonly maxPayloadBytes: number | undefined
+  private readonly cloudPeerFactory: CloudPeerFactory | undefined
+  private cloudDirectFailed = false
 
   constructor(url: string, opts?: WsRpcClientOptions) {
     this.url = url
@@ -189,7 +202,7 @@ export class WsRpcClient implements RpcClient {
     this.requestTimeout = opts?.requestTimeout ?? REQUEST_TIMEOUT_MS
     this.maxReconnectDelay = opts?.maxReconnectDelay ?? 30_000
     this.autoReconnect = opts?.autoReconnect ?? true
-    this.connectTimeout = opts?.connectTimeout ?? 10_000
+    this.connectTimeout = opts?.connectTimeout ?? (isCloudConnectUrl(url) ? 20_000 : 10_000)
     this.heartbeatIntervalMs = opts?.heartbeatIntervalMs ?? CLIENT_HEARTBEAT_INTERVAL_MS
     this.heartbeatTimeoutMs = opts?.heartbeatTimeoutMs ?? CLIENT_HEARTBEAT_TIMEOUT_MS
     this.mode = opts?.mode ?? this.inferMode(url)
@@ -197,6 +210,8 @@ export class WsRpcClient implements RpcClient {
     this.useNodeWebSocket = opts?.useNodeWebSocket ?? false
     this.maxPayloadBytes = opts?.maxPayloadBytes
     this.handshakeGuard = opts?.beforeHandshake
+    this.cloudPeerFactory = opts?.cloudDirect === false ? undefined : opts?.cloudPeerFactory
+      ?? (hasBrowserCloudPeer() ? createBrowserCloudPeer : undefined)
 
     this.connectionState = {
       mode: this.mode,
@@ -223,6 +238,10 @@ export class WsRpcClient implements RpcClient {
       const id = crypto.randomUUID()
       const timeoutMs = channel === RPC_CHANNELS.studio.GENERATE_IMAGE
         ? Math.max(this.requestTimeout, STUDIO_IMAGE_REQUEST_TIMEOUT_MS)
+        : channel === RPC_CHANNELS.agentPlugins.TEST_FRAMEWORK
+          ? Math.max(this.requestTimeout, FRAMEWORK_TEST_REQUEST_TIMEOUT_MS)
+        : channel === RPC_CHANNELS.agentPlugins.INSTALL_FRAMEWORK || channel === RPC_CHANNELS.codex.INSTALL
+          ? Math.max(this.requestTimeout, FRAMEWORK_INSTALL_REQUEST_TIMEOUT_MS)
         : this.requestTimeout
       const timeout = setTimeout(() => {
         this.pending.delete(id)
@@ -389,6 +408,16 @@ export class WsRpcClient implements RpcClient {
    * In the renderer (browser), falls back to the global WebSocket.
    */
   private createWebSocket(url: string): WebSocket {
+    const raw = this.createRawWebSocket(url)
+    if (!this.token || !isCloudConnectUrl(url)) return raw
+    this.setConnectionState({ dataPath: 'relay' })
+    if (!this.cloudPeerFactory || this.cloudDirectFailed || !this.tlsRejectUnauthorized) return raw
+    return new CloudSocket(raw, this.cloudPeerFactory,
+      dataPath => this.setConnectionState({ dataPath }),
+      () => { this.cloudDirectFailed = true }) as unknown as WebSocket
+  }
+
+  private createRawWebSocket(url: string): WebSocket {
     const needsTlsOptions = url.startsWith('wss://') && !this.tlsRejectUnauthorized
 
     if ((needsTlsOptions || this.useNodeWebSocket) && typeof process !== 'undefined' && process.versions?.node) {

@@ -14,7 +14,7 @@ const html = `<!doctype html>
 <div id="dashboard" hidden>
 <div class="toolbar"><nav aria-label="管理栏目"><button class="tab active" data-tab="connections">连接管理</button><button class="tab" data-tab="limits">限流管理</button></nav><div class="right"><span id="updated" class="refresh-info"></span><button id="refresh">刷新</button></div></div>
 <div id="notice" role="status" hidden></div>
-<div class="stats"><div class="stat"><small>在线设备</small><strong id="stat-hosts">0</strong></div><div class="stat"><small>访问连接</small><strong id="stat-clients">0</strong></div><div class="stat"><small>转发流量 · 本次运行</small><strong id="stat-bytes">0 B</strong></div><div class="stat"><small>限流拦截 · 本次运行</small><strong id="stat-rejected">0</strong></div></div>
+<div class="stats"><div class="stat"><small>在线设备</small><strong id="stat-hosts">0</strong></div><div class="stat"><small>访问连接</small><strong id="stat-clients">0</strong><small id="stat-direct">其中直连 0 个</small></div><div class="stat"><small>转发流量 · 本次运行</small><strong id="stat-bytes">0 B</strong></div><div class="stat"><small>限流拦截 · 本次运行</small><strong id="stat-rejected">0</strong></div></div>
 <section id="connections-section">
 <div class="panel"><div class="panel-head"><div><h2>设备列表</h2><p>断开允许自动重连；撤销需主机重新启用；封禁由管理员解除。</p></div><form id="search-form"><input id="search" placeholder="搜索设备名、账户或设备 ID" aria-label="搜索设备"><button type="submit">搜索</button></form></div><div class="table-wrap"><table><thead><tr><th>设备 / ID</th><th>账户</th><th>状态</th><th>访问连接</th><th>最后心跳</th><th>管理操作</th></tr></thead><tbody id="devices"></tbody></table></div><div class="pager"><span id="page-info"></span><button id="previous">上一页</button><button id="next">下一页</button></div></div>
 <div class="panel"><div class="panel-head"><div><h2>当前连接</h2><p>包含主机隧道与访问端连接。等待握手的连接也计入连接上限。</p></div><span class="muted" id="connection-count"></span></div><div class="table-wrap"><table><thead><tr><th>连接 / 设备</th><th>账户</th><th>类型</th><th>建立时间</th><th>授权到期</th><th>操作</th></tr></thead><tbody id="connection-rows"></tbody></table></div><div class="pager"><span id="connection-page-info"></span><button id="connection-previous">上一页</button><button id="connection-next">下一页</button></div></div>
@@ -56,7 +56,7 @@ const html = `<!doctype html>
     for (const connection of state.connections.slice((connectionPage - 1) * 100, connectionPage * 100)) {
       const row = document.createElement('tr');
       cell(row, connection.id.slice(0, 8), connection.deviceId); cell(row, connection.owner || '等待认证');
-      badge(row, connection.role === 'host' ? '主机隧道' : connection.authenticated ? '访问端' : '等待握手', connection.authenticated ? 'online' : '');
+      badge(row, connection.role === 'host' ? '主机隧道' : !connection.authenticated ? '等待握手' : connection.dataPath === 'direct' ? '访问端 · 直连' : connection.dataPath === 'negotiating' ? '访问端 · 协商中' : '访问端 · 云端中转', connection.authenticated ? 'online' : '');
       cell(row, date(connection.openedAt)); cell(row, date(connection.expiresAt));
       const actions = cell(row, ''); actions.className = 'actions';
       action(actions, '断开', 'connections/' + connection.id, 'DELETE', connection.role === 'host' ? '断开主机隧道将关闭此设备的全部访问连接，主机可自动重连。继续？' : '断开此访问连接？', true);
@@ -69,6 +69,8 @@ const html = `<!doctype html>
   }
   function render() {
     $('stat-hosts').textContent = state.stats.hosts; $('stat-clients').textContent = state.stats.clients;
+    $('stat-clients').title = '直连 ' + (state.stats.directClients || 0) + ' 个；协商流量 ' + bytes(state.stats.signalingBytes || 0);
+    $('stat-direct').textContent = '其中直连 ' + (state.stats.directClients || 0) + ' 个';
     $('stat-bytes').textContent = bytes(state.stats.relayedBytes);
     $('stat-rejected').textContent = state.stats.rejectedRequests + state.stats.rejectedConnections + state.stats.rejectedFrames;
     const devices = $('devices'); devices.replaceChildren();

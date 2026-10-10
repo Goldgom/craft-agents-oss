@@ -158,7 +158,7 @@ describe('separated Super Agent architecture', () => {
     const f = await team()
     f.config.workflow = { pattern: 'incident', maxParallelTasks: 1, independentReview: true }
     await f.service.save('alpha', f.config)
-    await plan(f, { tasks: [task('first', 'worker', { acceptanceCriteria: ['Recovery metric reached'], requiresIndependentReview: false }), task('second', 'verifier')] })
+    await plan(f, { tasks: [task('first', 'worker', { acceptanceCriteria: ['Recovery metric reached'], requiresIndependentReview: false }), task('second', 'verifier', { acceptanceCriteria: ['Output verified'] })] })
     await started(f, 'worker')
     const state = (await f.service.get('alpha')).state
     expect(state.tasks[0]!.requiresIndependentReview).toBe(true)

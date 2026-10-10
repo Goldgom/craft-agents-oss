@@ -24,6 +24,43 @@ function policy(): SuperAgentSessionPolicy {
 const runtimePath = process.platform === 'win32' ? 'C:\\Program Files\\Docker\\docker.exe' : '/usr/bin/docker'
 
 describe('Super Agent execution environments', () => {
+  it('checks image toolchains without mounting the project, pulling images or running host tools', async () => {
+    const calls: string[][] = []
+    const environments = new SuperAgentEnvironments({ findRuntime: async () => runtimePath, run: async (_runtime, args) => {
+      calls.push(args)
+      return args[0] === 'run' ? 'ok:sh\nok:git\nmissing:bun' : 'ready'
+    } })
+    const config = { environment: environment(), requirements: { programs: ['git', 'bun'], browser: true } } as SuperAgentConfig
+    const readiness = await environments.checkReadiness('workspace', config, false)
+    expect(readiness.ready).toBe(false)
+    expect(readiness.checks.find(check => check.id === 'program:git')?.ok).toBe(true)
+    expect(readiness.checks.find(check => check.id === 'program:bun')?.ok).toBe(false)
+    expect(readiness.checks.find(check => check.id === 'browser')?.ok).toBe(false)
+    const run = calls.find(args => args[0] === 'run')!
+    expect(run).toContain('--pull=never')
+    expect(run).toContain('--network=none')
+    expect(run).not.toContain('--mount')
+    expect(run).not.toContain('--privileged')
+    expect(calls.some(args => args[0] === 'pull')).toBe(false)
+    expect(calls.filter(args => args[0] === 'rm')).toHaveLength(1)
+    await environments.cleanup()
+  })
+
+  it('reports folder, image and program-permission gaps before starting a model', async () => {
+    const environments = new SuperAgentEnvironments({ findRuntime: async () => runtimePath, run: async (_runtime, args) => {
+      if (args[0] === 'image') throw new Error('Image not present')
+      return 'ready'
+    } })
+    const config = { environment: { ...environment(), kind: 'folder' }, requirements: { programs: ['python3'], browser: false } } as SuperAgentConfig
+    expect((await environments.checkReadiness('workspace', config, true)).ready).toBe(false)
+    config.environment = environment()
+    const missing = await environments.checkReadiness('workspace', config, true)
+    expect(missing.ready).toBe(false)
+    expect(missing.checks.some(check => check.detail.includes('Image not present'))).toBe(true)
+    config.environment.permissions.runPrograms = false
+    expect((await environments.checkReadiness('workspace', config, true)).checks.some(check => check.id === 'programs' && !check.ok)).toBe(true)
+    await environments.cleanup()
+  })
   it('polling verifies availability without launching containers or preparing images', async () => {
     const calls: string[][] = []
     const environments = new SuperAgentEnvironments({ findRuntime: async () => runtimePath, run: async (_runtime, args) => { calls.push(args); return '28.0.0' } })
@@ -139,5 +176,22 @@ describe('Super Agent execution environments', () => {
     expect(next!.containerId).not.toBe(first!.containerId)
     await environments.cleanup()
     expect(removed).toHaveLength(2)
+  })
+
+  it('reset retires only the selected workspace containers', async () => {
+    const removed: string[] = []
+    const environments = new SuperAgentEnvironments({ findRuntime: async () => runtimePath, run: async (_runtime, args) => {
+      if (args[0] === 'inspect') throw new Error('No such container')
+      if (args[0] === 'rm') removed.push(args[2]!)
+      return 'ready'
+    } })
+    try {
+      const first = await environments.prepareSession('workspace', environment(), policy())
+      const other = await environments.prepareSession('other', environment(), policy())
+      await environments.reconcile('workspace', null)
+      expect(removed).toEqual([first!.containerId])
+      await expect(environments.prepareSession('workspace', environment(), policy())).rejects.toThrow('settings changed')
+      expect(await environments.prepareSession('other', environment(), policy())).toEqual(other)
+    } finally { await environments.cleanup() }
   })
 })

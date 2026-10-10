@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, resolve, sep } from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import type { CloudDevice, CloudShare, TunnelFrame } from '../../shared/src/cloud/types'
-import { normalizeCloudUrl } from '../../shared/src/cloud/types'
+import { normalizeCloudUrl, DEFAULT_CLOUD_ICE_SERVERS, isCloudSignal, validateCloudIceServers, type CloudIceServer, type CloudSignal } from '../../shared/src/cloud/types'
 import { adminPage } from './admin-page'
 import { DEFAULT_LIMITS, validateLimits, WindowLimiter, type CloudLimits } from './limits'
 
@@ -17,11 +17,13 @@ export interface CloudServerOptions {
   webuiDir?: string
   serviceKey?: string
   adminKey?: string
+  directEnabled?: boolean
+  iceServers?: CloudIceServer[]
   authenticate: (token: string) => Promise<CloudIdentity>
   recordDevice: (owner: string, device: CloudDevice) => Promise<void>
 }
 interface DeviceRow { id: string; owner: string; secret: string; name: string; lastSeen: number; revoked: number; blocked: number }
-interface SocketData { role: 'host' | 'client'; deviceId: string; owner?: string; expiresAt: number; authenticated: boolean; streamId?: string; openedAt: number; connectionId: string }
+interface SocketData { role: 'host' | 'client'; deviceId: string; owner?: string; expiresAt: number; authenticated: boolean; streamId?: string; openedAt: number; connectionId: string; directCapable?: boolean; dataPath?: 'negotiating' | 'direct' | 'relay'; requestedMode?: 'direct' | 'relay'; offerSent?: boolean; answerSent?: boolean }
 interface Ticket { role: 'host' | 'client'; owner: string; deviceId: string; expiresAt: number; identityExpiresAt: number }
 const MAX_FRAME = 16 * 1024 * 1024
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -32,6 +34,8 @@ class RateLimitError extends Error {}
 
 /** Cloud relay has no agent credentials or execution engine. */
 export function startCloudServer(options: CloudServerOptions) {
+  const iceServers = options.iceServers ?? DEFAULT_CLOUD_ICE_SERVERS
+  if (!validateCloudIceServers(iceServers)) throw new Error('Invalid cloud STUN server configuration')
   if (options.serviceKey && options.serviceKey.length < 32) throw new Error('Cloud service key must contain at least 32 characters')
   if (options.adminKey && (options.adminKey.length < 32 || options.adminKey.trim() !== options.adminKey || /[\r\n]/.test(options.adminKey))) throw new Error('Cloud admin key must contain at least 32 characters')
   if (options.adminKey && options.serviceKey && credentialMatches(options.adminKey, options.serviceKey)) throw new Error('Cloud admin key must differ from the service key')
@@ -52,7 +56,7 @@ export function startCloudServer(options: CloudServerOptions) {
   const limiter = new WindowLimiter()
   const adminSessions = new Map<string, { expiresAt: number; csrf: string }>()
   const startedAt = Date.now()
-  let rejectedRequests = 0, rejectedConnections = 0, rejectedFrames = 0, relayedBytes = 0
+  let rejectedRequests = 0, rejectedConnections = 0, rejectedFrames = 0, relayedBytes = 0, signalingBytes = 0
   const hosts = new Map<string, ServerWebSocket<SocketData>>()
   const streams = new Map<string, ServerWebSocket<SocketData>>()
   const tickets = new Map<string, Ticket>()
@@ -132,6 +136,20 @@ export function startCloudServer(options: CloudServerOptions) {
     relayedBytes += bytes
     return true
   }
+  function acceptSignal(ws: ServerWebSocket<SocketData>, text: string): boolean {
+    if (Buffer.byteLength(text) > 80 * 1024 || !limiter.consume('signal:' + ws.data.connectionId, 1, ws.data.role === 'host' ? 4096 : 120, 60_000)) {
+      rejectedFrames++; ws.close(1013, 'Signaling rate exceeded'); return false
+    }
+    signalingBytes += Buffer.byteLength(text)
+    return true
+  }
+  function hostSignal(client: ServerWebSocket<SocketData>, signal: CloudSignal): void {
+    if (signal.action === 'offer' && client.data.dataPath === 'negotiating' && !client.data.offerSent) client.data.offerSent = true
+    else if (signal.action === 'selected' && client.data.dataPath === 'negotiating'
+      && (signal.mode === 'relay' || client.data.requestedMode === 'direct')) client.data.dataPath = signal.mode
+    else return
+    send(client, { type: 'cloud_transport', signal })
+  }
   async function record(id: string): Promise<void> {
     if (stopping) return
     const row = lookup(id)
@@ -207,9 +225,9 @@ export function startCloudServer(options: CloudServerOptions) {
             const filter = "WHERE id LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' OR owner LIKE ? ESCAPE '\\'"
             const total = db.query<{ count: number }, [string, string, string]>(`SELECT COUNT(*) AS count FROM devices ${filter}`).get(pattern, pattern, pattern)!.count
             const devices = db.query<DeviceRow, [string, string, string, number]>(`SELECT * FROM devices ${filter} ORDER BY lastSeen DESC, id LIMIT 100 OFFSET ?`).all(pattern, pattern, pattern, (page - 1) * 100)
-            return json({ csrf: session.csrf, limits, stats: { startedAt, hosts: hosts.size, clients: clientCount(), tickets: tickets.size, rejectedRequests, rejectedConnections, rejectedFrames, relayedBytes },
+            return json({ csrf: session.csrf, limits, stats: { startedAt, hosts: hosts.size, clients: clientCount(), directClients: [...streams.values()].filter(ws => ws.data.dataPath === 'direct').length, signalingBytes, tickets: tickets.size, rejectedRequests, rejectedConnections, rejectedFrames, relayedBytes },
               page, total, devices: devices.map(row => ({ ...describe(row), owner: row.owner, revoked: !!row.revoked, blocked: !!row.blocked, clients: clientCount(row.id) })),
-              connections: [...sockets].filter(ws => ws.readyState === 1).map(ws => ({ id: ws.data.connectionId, deviceId: ws.data.deviceId, owner: ws.data.owner ?? '', role: ws.data.role, authenticated: ws.data.authenticated, openedAt: ws.data.openedAt, expiresAt: ws.data.expiresAt })) })
+              connections: [...sockets].filter(ws => ws.readyState === 1).map(ws => ({ id: ws.data.connectionId, deviceId: ws.data.deviceId, owner: ws.data.owner ?? '', role: ws.data.role, authenticated: ws.data.authenticated, dataPath: ws.data.dataPath, openedAt: ws.data.openedAt, expiresAt: ws.data.expiresAt })) })
           }
           if (url.pathname === '/admin/api/limits' && req.method === 'PUT') {
             const body: unknown = await req.json()
@@ -393,11 +411,19 @@ export function startCloudServer(options: CloudServerOptions) {
           const text = typeof message === 'string' ? message : message.toString()
           if (ws.data.role === 'host') {
             const frame = JSON.parse(text) as TunnelFrame
+            if (hosts.get(ws.data.deviceId) !== ws) return
+            if (frame.type === 'capabilities') { ws.data.directCapable = frame.direct === true; return }
             const client = streams.get(frame.streamId)
             if (!client || client.data.deviceId !== ws.data.deviceId || hosts.get(ws.data.deviceId) !== ws) return
             if (client.data.expiresAt <= Date.now()) { client.close(1008, 'Connection expired'); return }
-            if (!acceptRelay(ws, text)) return
+            if (frame.type === 'signal') {
+              if (!isCloudSignal(frame.signal) || !acceptSignal(ws, text)) return
+              hostSignal(client, frame.signal)
+              return
+            }
             if (frame.type === 'data' && typeof frame.data === 'string') {
+              if (client.data.dataPath && client.data.dataPath !== 'relay') { ws.close(1008, 'Relay route not selected'); return }
+              if (!acceptRelay(ws, text)) return
               if (client.send(frame.data) === -1) client.close(1013, 'Slow connection')
             } else if (frame.type === 'close') client.close(1000, 'Device stream closed')
             return
@@ -421,8 +447,30 @@ export function startCloudServer(options: CloudServerOptions) {
             // Do not let a remote client impersonate a local Electron window.
             delete handshake.webContentsId
             delete handshake.reconnectClientId
+            const direct = options.directEnabled !== false && host.data.directCapable && handshake.cloudDirect === true
+            delete handshake.cloudDirect
             data = JSON.stringify(handshake)
+            ws.data.dataPath = direct ? 'negotiating' : 'relay'
+            if (direct) {
+              send(ws, { type: 'cloud_transport', signal: { action: 'negotiate', iceServers } })
+              if (!send(host, { type: 'open', streamId: ws.data.streamId, iceServers })) ws.close(1011, 'Tunnel unavailable')
+              return
+            }
             if (!send(host, { type: 'open', streamId: ws.data.streamId })) { ws.close(1011, 'Tunnel unavailable'); return }
+          } else {
+            const control = JSON.parse(text)
+            if (control.type === 'cloud_transport') {
+              if (!isCloudSignal(control.signal) || !acceptSignal(ws, text)) return
+              const signal = control.signal
+              if (signal.action === 'keepalive') { send(ws, { type: 'cloud_transport', signal: { action: 'keepalive_ack' } }); return }
+              if (ws.data.dataPath !== 'negotiating') return
+              if (signal.action === 'select') ws.data.requestedMode = signal.mode
+              else if (signal.action === 'answer' && ws.data.offerSent && !ws.data.answerSent) ws.data.answerSent = true
+              else { ws.close(1008, 'Unexpected cloud signal'); return }
+              send(host, { type: 'signal', streamId: ws.data.streamId, signal })
+              return
+            }
+            if (ws.data.dataPath && ws.data.dataPath !== 'relay') { ws.close(1008, 'Relay route not selected'); return }
           }
           if (!acceptRelay(ws, text)) return
           send(host, { type: 'data', streamId: ws.data.streamId!, data })

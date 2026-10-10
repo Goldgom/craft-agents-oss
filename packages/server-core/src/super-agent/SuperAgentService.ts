@@ -3,26 +3,35 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { z } from 'zod'
+import { THINKING_LEVEL_IDS, type ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 import type { CreateSessionOptions, Session, SessionEvent } from '@craft-agent/shared/protocol'
 import type { SessionCompletionEvent } from '../sessions/SessionManager'
 import { EMPTY_RESPONSE_ERROR_CODE } from '../sessions/session-turn-completion'
 import { buildSuperAgentNodePrompt } from './SuperAgentPrompt'
+import { createSuperAgentArchive, restoreSuperAgentArchive, updateSuperAgentMemory } from './SuperAgentLibrary'
+import { finiteUsage, statisticsForNode, recordTurnStatistics } from './SuperAgentStatistics'
 import { fingerprintArtifact, markArtifactStale, operationFingerprint, taskPriority } from './SuperAgentContinuity'
 import type { SuperAgentWorkflow } from './MicrosoftAgentWorkflow'
 import { superAgentActionErrorMessage } from './SuperAgentActionErrors'
 import { nodeSchedulingState, sameNodeSessionIdentity, selectSuperAgentWorker } from './SuperAgentScheduling'
 import { canRecoverSuperAgentTurn, MAX_EMPTY_RESPONSE_RETRIES, SUPER_AGENT_RECOVERY_WINDOW_MS, superAgentRetryDelay } from './SuperAgentRetry'
-import { parseSuperAgentActionBlock, stripSuperAgentActionBlocks, SuperAgentActionProtocolError } from './SuperAgentActions'
+import { parseSuperAgentActionBlock, parseSuperAgentActionJson, stripSuperAgentActionBlocks, SuperAgentActionProtocolError } from './SuperAgentActions'
 import {
   withSuperAgentOrchestrator,
+  SuperAgentLibraryRequestSchema,
+  searchSuperAgentLibrary,
+  type SuperAgentLibraryCommand,
   SuperAgentTaskUpdateSchema,
   emptyContinuityMetrics,
   superAgentDependencySatisfied,
+  superAgentTaskBlocker,
   superAgentResourcesConflict,
   type SuperAgentTaskContract,
   type SuperAgentTask,
   loadSuperAgentDocument,
   saveSuperAgentDocument,
+  clearSuperAgentHistory,
+  emptySuperAgentState,
   validateSuperAgentCommand,
   validateSuperAgentConfig,
   superAgentNodePermissions,
@@ -54,11 +63,12 @@ import {
   type SuperAgentScriptRuntime,
   type SuperAgentSessionPolicy,
   type SuperAgentSnapshot,
+  type SuperAgentReadiness,
 } from '@craft-agent/shared/super-agent'
 
 export interface SuperAgentSessionHost {
   createSession(workspaceId: string, options: CreateSessionOptions): Promise<{ id: string }>
-  getSession(sessionId: string): Promise<{ id: string; workspaceId: string; isProcessing: boolean } | null>
+  getSession(sessionId: string): Promise<{ id: string; workspaceId: string; isProcessing: boolean; tokenUsage?: Session['tokenUsage'] } | null>
   sendMessage(sessionId: string, message: string, context?: string, hidden?: boolean): Promise<void>
   cancelProcessing(sessionId: string, silent?: boolean): Promise<void>
   onSessionComplete(listener: (event: SessionCompletionEvent) => void): () => void
@@ -66,11 +76,13 @@ export interface SuperAgentSessionHost {
   respondToPermission?(sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean): boolean
   getSessionFinalText(sessionId: string): string | undefined
   getSessions?(workspaceId?: string): Session[]
-  deleteSession?(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true }): Promise<void>
+  deleteSession?(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true; superAgentReset?: true }): Promise<void>
+  getSuperAgentSessionIds?(workspaceId: string): string[]
   /** Mandatory for execution. Absence fails closed; prompts are not a security boundary. */
   applySessionPolicy?(sessionId: string, policy: SuperAgentSessionPolicy): Promise<void> | void
   /** Reconcile mode and instructions on existing sessions without losing their transcripts. */
   ensureSuperAgentSessionSettings?(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void>
+  setSessionThinkingLevel?(sessionId: string, level: ThinkingLevel): void
   /** Apply explicit control changes to current and former node sessions in this workspace. */
   setSuperAgentFullControl?(workspaceId: string, fullControl: boolean): Promise<void>
   clearSuperAgentPermissionGrants?(workspaceId: string): void
@@ -81,8 +93,11 @@ export interface SuperAgentServiceDeps {
   rootForWorkspace: (workspaceId: string) => string
   /** Verify configured provider/models/sources using the existing settings catalogs. */
   validateConfig?: (workspaceId: string, config: SuperAgentConfig) => Promise<void>
+  checkReadiness?: (workspaceId: string, config: SuperAgentConfig, force?: boolean) => Promise<SuperAgentReadiness>
   /** Runs after a successful save, outside the workspace lock (e.g. retire containers). */
   onConfigChanged?: (workspaceId: string, config: SuperAgentConfig) => Promise<void>
+  /** Retire only this workspace's managed execution environments. */
+  onReset?: (workspaceId: string) => Promise<void>
   onChanged?: (workspaceId: string, snapshot: SuperAgentSnapshot) => void
   /** A host may supply an actual container or connected remote-VM execution adapter. */
   resolveEnvironment?: (workspaceId: string, environment: SuperAgentEnvironment) => Promise<SuperAgentResolvedEnvironment>
@@ -132,7 +147,7 @@ const ActionsSchema = z.object({
   intent: z.object({ id: z.string().max(64).optional(), expectedRevision: z.number().int().min(0).optional(), goal: z.string().trim().min(1).max(16_000), constraints: z.array(z.string().trim().min(1).max(2_000)).max(16), deliverables: z.array(z.string().trim().min(1).max(2_000)).max(16), acceptanceCriteria: z.array(z.string().trim().min(1).max(2_000)).max(16) }).strict().optional(),
   acceptances: z.array(z.object({ taskId: z.string().min(1).max(64), evidenceTaskId: z.string().min(1).max(64), status: z.enum(['accepted', 'rejected']), note: z.string().trim().min(1).max(4_000) }).strict()).max(4).optional(),
   userReply: z.string().trim().max(32_000).optional(),
-  tasks: z.array(z.object({ id: z.string().max(64).optional(), goalId: z.string().max(64).optional(), goalCriteria: z.array(z.number().int().min(0).max(15)).max(16).optional(), requiredCapabilities: z.array(z.string().min(1).max(100)).max(32).optional(), dependsOn: z.array(z.string().max(64)).max(32).optional(), resources: z.array(z.string().trim().min(1).max(200)).max(32).optional(), acceptanceCriteria: z.array(z.string().trim().min(1).max(32_000)).max(16).optional(), requiresIndependentReview: z.boolean().optional(), reviewOf: z.string().max(64).optional(), title: z.string().trim().min(1).max(120), instructions: z.string().trim().min(1).max(32_000), nodeId: z.string().max(64).optional(), planId: z.string().max(64).optional() }).strict()).max(4).optional(),
+  tasks: z.array(z.object({ thinkingLevel: z.enum(THINKING_LEVEL_IDS).optional(), id: z.string().max(64).optional(), goalId: z.string().max(64).optional(), goalCriteria: z.array(z.number().int().min(0).max(15)).max(16).optional(), requiredCapabilities: z.array(z.string().min(1).max(100)).max(32).optional(), dependsOn: z.array(z.string().max(64)).max(32).optional(), resources: z.array(z.string().trim().min(1).max(200)).max(32).optional(), acceptanceCriteria: z.array(z.string().trim().min(1).max(32_000)).max(16).optional(), requiresIndependentReview: z.boolean().optional(), reviewOf: z.string().max(64).optional(), title: z.string().trim().min(1).max(120), instructions: z.string().trim().min(1).max(32_000), nodeId: z.string().max(64).optional(), planId: z.string().max(64).optional() }).strict()).max(4).optional(),
   plans: z.array(z.object({ id: z.string().max(64).optional(), goalId: z.string().max(64).optional(), title: z.string().trim().min(1).max(120), instructions: z.string().trim().min(1).max(32_000), status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: z.string().max(4_000), expectedRevision: z.number().int().min(0) }).strict()).max(8).optional(),
   messages: z.array(z.object({ toNodeId: z.string().min(1).max(64), body: z.string().trim().min(1).max(32_000) }).strict()).max(8).optional(),
   board: z.array(z.object({ id: z.string().max(64).optional(), title: z.string().trim().min(1).max(120), content: z.string().trim().min(1).max(32_000), expectedRevision: z.number().int().min(0) }).strict()).max(8).optional(),
@@ -141,9 +156,16 @@ const ActionsSchema = z.object({
 }).strict()
 
 export class SuperAgentConflictError extends Error {
-  constructor(readonly currentRevision: number) {
-    super(`Shared board changed (revision ${currentRevision}); refresh before saving`)
+  constructor(readonly currentRevision: number, resource = 'Shared board') {
+    super(`${resource} changed (revision ${currentRevision}); refresh before saving`)
     this.name = 'SuperAgentConflictError'
+  }
+}
+
+class SuperAgentGoalContractError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SuperAgentGoalContractError'
   }
 }
 
@@ -157,6 +179,9 @@ export class SuperAgentService {
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly scriptProcesses = new Map<string, { child: ChildProcess; timer: ReturnType<typeof setTimeout>; output: string; stopping: boolean; stop?: () => Promise<void> }>()
   private readonly launching = new Set<string>()
+  private readonly dispatches = new Map<string, { workspaceId: string; promise: Promise<void> }>()
+  private readonly resetting = new Set<string>()
+  private readonly unassignedSessions = new Map<string, Set<string>>()
   private readonly preparingTurns = new Map<string, string>()
   /** Streaming deltas and live approval state never enter the durable control file. */
   private readonly activities = new Map<string, Map<string, SuperAgentNodeActivity>>()
@@ -216,7 +241,9 @@ export class SuperAgentService {
 
   async save(workspaceId: string, value: SuperAgentConfig): Promise<SuperAgentSnapshot> {
     let config = validateSuperAgentConfig(value)
+    if (config.workflow?.independentReview && config.nodes.filter(node => node.role === 'worker').length < 2) throw new Error('Independent review requires at least two worker nodes')
     const snapshot = await this.serial(workspaceId, async () => {
+      if (this.resetting.has(workspaceId)) throw new Error('Super Agent reset is in progress')
       const document = await this.load(workspaceId)
       const previous = document.config
       if (this.deps.upgradeArchitecture && !document.pendingTurns.length
@@ -236,6 +263,11 @@ export class SuperAgentService {
         throw new Error('Wait for pending script results to reach the coordinator before removing their registrations')
       }
       await this.deps.validateConfig?.(workspaceId, config)
+      if (config.requirements && this.deps.checkReadiness && !onlyControlChanged && !onlyIntervalChanged
+        && (!previous || JSON.stringify([previous.environment, previous.requirements]) !== JSON.stringify([config.environment, config.requirements]))) {
+        const readiness = await this.deps.checkReadiness(workspaceId, config)
+        if (!readiness.ready) throw new Error(readiness.checks.filter(check => !check.ok).map(check => check.detail).join('\n'))
+      }
       if (config.environment.kind === 'folder') await this.folder(config.environment.workingDirectory)
       if (fullControlChanged) {
         if (!this.deps.host.setSuperAgentFullControl) throw new Error('This execution host cannot update Super Agent control permissions')
@@ -300,9 +332,25 @@ export class SuperAgentService {
 
   async command(workspaceId: string, value: SuperAgentCommand): Promise<SuperAgentSnapshot> {
     const command = validateSuperAgentCommand(value)
+    if (command.type === 'reset') return this.reset(workspaceId)
+    if (command.type === 'environment-check') {
+      const config = validateSuperAgentConfig(command.config)
+      if (!this.deps.checkReadiness) throw new Error('This host cannot check execution requirements')
+      const readiness = await this.deps.checkReadiness(workspaceId, config, true)
+      return { ...await this.get(workspaceId), readiness }
+    }
     return this.serial(workspaceId, async () => {
+      if (this.resetting.has(workspaceId)) throw new Error('Super Agent reset is in progress')
       const document = await this.load(workspaceId)
       this.configured(document)
+      if (['memory-upsert', 'memory-delete', 'archive-create', 'archive-restore'].includes(command.type)) {
+        const next = structuredClone(document)
+        await this.applyLibraryCommand(workspaceId, next, command as SuperAgentLibraryCommand, 'user')
+        next.state.lastUserActivityAt = this.now()
+        await this.commit(workspaceId, next)
+        this.documents.set(workspaceId, next)
+        return this.snapshot(workspaceId, next)
+      }
       if (command.type === 'history-cleanup' || command.type === 'history-compact' || command.type === 'history-delete-sessions') {
         return this.cleanupHistory(workspaceId, document, command)
       }
@@ -378,6 +426,118 @@ export class SuperAgentService {
     })
   }
 
+  private async reset(workspaceId: string): Promise<SuperAgentSnapshot> {
+    if (this.resetting.has(workspaceId)) throw new Error('Super Agent reset is in progress')
+    this.resetting.add(workspaceId)
+    try {
+      await this.serial(workspaceId, async () => {
+        const document = await this.load(workspaceId)
+        if (!this.deps.host.getSessions || !this.deps.host.deleteSession) throw new Error('This host cannot reset Super Agent sessions')
+        const referencedIds = new Set([...document.state.nodes.flatMap(node => node.sessionId ? [node.sessionId] : []),
+          ...document.state.tasks.flatMap(task => task.sessionId ? [task.sessionId] : []),
+          ...(this.unassignedSessions.get(workspaceId) ?? []),
+          ...(this.deps.host.getSuperAgentSessionIds?.(workspaceId) ?? [])])
+        for (const id of referencedIds) {
+          const session = await this.deps.host.getSession(id)
+          if (session && session.workspaceId !== workspaceId) throw new Error('Cannot reset a node session owned by another workspace')
+        }
+        if (document.config) document.config.continuousWork = false
+        // Fence queued work before waiting for preparation outside the lock.
+        document.pendingTurns = []; document.failedTurns = []; document.chainCounts = {}
+        for (const task of document.state.tasks) {
+          if (['queued', 'running'].includes(task.status)) { task.status = 'cancelled'; task.completedAt = this.now() }
+          task.checkpoint = undefined; task.waiting = undefined
+        }
+        for (const runtime of document.state.nodes) if (runtime.sessionId) this.expireSessionPermissions(workspaceId, document, runtime.sessionId)
+        if (document.config?.environment.fullControl) {
+          if (!this.deps.host.setSuperAgentFullControl) throw new Error('This host cannot revoke Super Agent control permissions')
+          await this.deps.host.setSuperAgentFullControl(workspaceId, false)
+          document.config.environment.fullControl = false
+        }
+        await this.commit(workspaceId, document)
+        for (const id of referencedIds) {
+          const session = await this.deps.host.getSession(id)
+          if (session?.isProcessing) await this.deps.host.cancelProcessing(id, true)
+          if ((await this.deps.host.getSession(id))?.isProcessing) throw new Error('A node is still processing; stop it before resetting Super Agent')
+        }
+        for (const script of document.state.scripts) {
+          if (['running', 'untracked'].includes(script.status) || this.scriptProcesses.has(`${workspaceId}:${script.scriptId}`)) {
+            await this.stopScript(workspaceId, document, script.scriptId)
+          }
+        }
+      })
+      // Preparation may itself need the workspace lock. Drain it outside the lock.
+      await Promise.all([...this.dispatches.values()].filter(item => item.workspaceId === workspaceId).map(item => item.promise))
+      return await this.serial(workspaceId, async () => {
+        const document = await this.load(workspaceId)
+        const sessionIds = new Set([
+          ...document.state.nodes.flatMap(node => node.sessionId ? [node.sessionId] : []),
+          ...document.state.tasks.flatMap(task => task.sessionId ? [task.sessionId] : []),
+          ...(this.unassignedSessions.get(workspaceId) ?? []),
+          ...(this.deps.host.getSuperAgentSessionIds?.(workspaceId) ?? []),
+        ])
+        // Validate the entire selection before cancelling or deleting any session.
+        for (const id of sessionIds) {
+          const session = await this.deps.host.getSession(id)
+          if (session && session.workspaceId !== workspaceId) throw new Error('Cannot reset a node session owned by another workspace')
+        }
+        for (const id of sessionIds) {
+          const session = await this.deps.host.getSession(id)
+          if (session?.isProcessing) await this.deps.host.cancelProcessing(id, true)
+          if ((await this.deps.host.getSession(id))?.isProcessing) throw new Error('A node is still processing; stop it before resetting Super Agent')
+        }
+        if (document.state.permissionGrants?.length && !this.deps.host.clearSuperAgentPermissionGrants) throw new Error('This host cannot revoke shared permissions')
+        this.deps.host.clearSuperAgentPermissionGrants?.(workspaceId)
+        await this.deps.onReset?.(workspaceId)
+        for (const id of sessionIds) {
+          const session = this.deps.host.getSessions!(workspaceId).find(item => item.id === id)
+          if (!session) continue
+          await this.deps.host.deleteSession!(id, { workspaceId, lastMessageAt: session.lastMessageAt, onlyIdle: true, superAgentReset: true })
+        }
+        for (const script of document.state.scripts) {
+          const key = `${workspaceId}:${script.scriptId}`, record = this.scriptProcesses.get(key)
+          if (record) clearTimeout(record.timer)
+          this.scriptProcesses.delete(key)
+        }
+        await clearSuperAgentHistory(this.deps.rootForWorkspace(workspaceId))
+        const empty: SuperAgentDocument = { version: 1, config: null, state: emptySuperAgentState(this.now()), pendingTurns: [], failedTurns: [], chainCounts: {} }
+        empty.state.revision = document.state.revision + 1
+        try { await saveSuperAgentDocument(this.deps.rootForWorkspace(workspaceId), empty) }
+        catch (error) {
+          // commit.json can already be authoritative if updating state.json failed.
+          // Reconcile the cache so an old in-memory team cannot overwrite that reset.
+          const persisted = await loadSuperAgentDocument(this.deps.rootForWorkspace(workspaceId)).catch(() => null)
+          if (persisted?.config === null && persisted.state.revision >= empty.state.revision) this.documents.set(workspaceId, persisted)
+          throw error
+        }
+        this.documents.set(workspaceId, empty)
+        this.unassignedSessions.delete(workspaceId)
+        this.activities.delete(workspaceId); this.permissions.delete(workspaceId); this.permissionDeadlines.delete(workspaceId)
+        this.historyCleanupResults.delete(workspaceId)
+        for (const key of this.artifactProbes.keys()) if (key.startsWith(`${workspaceId}:`)) this.artifactProbes.delete(key)
+        const timer = this.activityTimers.get(workspaceId)
+        if (timer) clearTimeout(timer)
+        this.activityTimers.delete(workspaceId)
+        const snapshot = await this.snapshot(workspaceId, empty)
+        this.deps.onChanged?.(workspaceId, snapshot)
+        return snapshot
+      })
+    } catch (error) {
+      // Stopping a script may have queued its failure report. A failed reset must
+      // leave execution paused until the user chooses to retry or start new work.
+      await this.serial(workspaceId, async () => {
+        const document = this.documents.get(workspaceId)
+        if (!document?.config) return
+        document.config.continuousWork = false
+        document.pendingTurns = []; document.failedTurns = []
+        this.pauseScriptResults(document)
+        document.state.lastUserActivityAt = this.now()
+        await this.commit(workspaceId, document)
+      }).catch(() => undefined)
+      throw error
+    } finally { this.resetting.delete(workspaceId) }
+  }
+
   private async cleanupHistory(workspaceId: string, document: SuperAgentDocument,
     command: Extract<SuperAgentCommand, { type: 'history-cleanup' | 'history-compact' | 'history-delete-sessions' }>): Promise<SuperAgentSnapshot> {
     if (command.expectedRevision !== document.state.revision) throw new Error('History changed; refresh the cleanup preview before continuing')
@@ -446,6 +606,52 @@ export class SuperAgentService {
     this.historyCleanupResults.set(workspaceId, result)
     this.schedule(workspaceId)
     return this.snapshot(workspaceId, document)
+  }
+
+  /** Read/write library operations are bound to the currently active node session. */
+  async accessNodeLibrary(workspaceId: string, sessionId: string, value: unknown): Promise<unknown> {
+    const request = SuperAgentLibraryRequestSchema.parse(value)
+    return this.serial(workspaceId, async () => {
+      const document = await this.load(workspaceId)
+      const { node, task } = this.activeNode(document, sessionId)
+      if (request.type === 'library-list' || request.type === 'library-get') {
+        const items = request.library === 'memory' ? document.state.memories ?? [] : document.state.archives ?? []
+        if (request.type === 'library-get') {
+          const item = items.find(item => item.id === request.id)
+          if (!item) throw new Error('Library entry does not exist')
+          return structuredClone(item)
+        }
+        const matches = searchSuperAgentLibrary([...items], request.query)
+        return { total: matches.length, offset: request.offset, items: matches.slice(request.offset, request.offset + request.limit).map(item => {
+          if ('files' in item) return { ...item, files: undefined, directories: undefined, fileCount: item.files.length }
+          return { ...item, content: contextExcerpt(item.content, 1000) }
+        }) }
+      }
+      if (node.role !== 'worker') throw new Error('Only workers may write libraries or restore archives')
+      const permissions = superAgentNodePermissions(document.config!.environment, node.role)
+      if (request.type === 'archive-create' && !permissions.readFiles) throw new Error('Archive creation requires file read permission')
+      if (request.type === 'archive-restore' && !permissions.writeFiles) throw new Error('Archive restore requires file write permission')
+      const next = structuredClone(document)
+      const result = await this.applyLibraryCommand(workspaceId, next, request, node.id, task?.id)
+      await this.commit(workspaceId, next)
+      this.documents.set(workspaceId, next)
+      return structuredClone(result)
+    })
+  }
+
+  private async applyLibraryCommand(workspaceId: string, document: SuperAgentDocument, command: SuperAgentLibraryCommand, actor: string, taskId?: string): Promise<unknown> {
+    if (command.type === 'memory-upsert' || command.type === 'memory-delete') {
+      return updateSuperAgentMemory(document.state, command, actor, this.now())
+    }
+    if (command.type === 'archive-create') {
+      if ((document.state.archives?.length ?? 0) >= 100) throw new Error('Archive library is full (100 snapshots)')
+      const item = await createSuperAgentArchive(this.deps.rootForWorkspace(workspaceId), document.config!.environment.workingDirectory, command.item, actor, this.now(), taskId)
+      ;(document.state.archives ??= []).push(item)
+      return item
+    }
+    const archive = document.state.archives?.find(item => item.id === command.id)
+    if (!archive) throw new Error('Archive does not exist')
+    return { id: archive.id, destination: await restoreSuperAgentArchive(this.deps.rootForWorkspace(workspaceId), document.config!.environment.workingDirectory, archive, command.destination) }
   }
 
   private activeNode(document: SuperAgentDocument, sessionId: string) {
@@ -680,9 +886,10 @@ export class SuperAgentService {
     if (scanContinuity) this.lastContinuityScan = this.now()
     await Promise.allSettled([...this.documents.keys()].map(workspaceId => this.serial(workspaceId, async () => {
       const document = this.documents.get(workspaceId)!
-      if (!document.config) return
+      if (!document.config || this.resetting.has(workspaceId)) return
       if (this.expirePermissionDeadlines(workspaceId, document)) await this.commit(workspaceId, document)
       await this.reconcileStartedTurns(workspaceId, document)
+      await this.reconcileQueuedTasks(workspaceId, document)
       if (scanContinuity) await this.scanContinuity(workspaceId, document)
       await this.expireRecoveryWindows(workspaceId, document)
       if (this.flushScriptResults(document)) await this.commit(workspaceId, document)
@@ -753,8 +960,26 @@ export class SuperAgentService {
     }
   }
 
+  private async reconcileQueuedTasks(workspaceId: string, document: SuperAgentDocument): Promise<void> {
+    const retired: string[] = []
+    for (const task of document.state.tasks) {
+      if (task.status !== 'queued' || document.state.nodes.some(node => node.activeTaskId === task.id && node.status === 'preparing')) continue
+      const blocker = superAgentTaskBlocker(document.state, task)
+      if (!blocker?.permanent || document.pendingTurns.some(turn => turn.taskId === task.id && turn.startedAt != null)) continue
+      task.status = 'cancelled'; task.completedAt = this.now()
+      task.error = `Queued task cannot run: ${blocker.code} (${blocker.detail}). Preserve existing results and reconcile against the current goal and dependencies.`
+      document.pendingTurns = document.pendingTurns.filter(turn => turn.taskId !== task.id)
+      retired.push(`${task.id} (${task.title}): ${task.error}`)
+    }
+    if (!retired.length) return
+    const notice = `Retired obsolete queued tasks; these were never dispatched:\n${retired.join('\n')}\nReview the latest goal and existing results. Arrange only remaining authorized work with valid dependencies; do not bypass cancelled dependencies or repeat completed work. If blocked by missing input, permissions or external conditions, explain the specific blocker and the next user action through the interaction node.`
+    this.message(document, 'system', this.planner(document).id, 'message', notice)
+    if (document.pendingTurns.length < MAX_PENDING_TURNS) this.enqueuePlannerSummary(document, notice, 0)
+    await this.commit(workspaceId, document)
+  }
+
   private async checkContinuousWork(workspaceId: string, document: SuperAgentDocument): Promise<void> {
-    const busy = document.pendingTurns.length > 0
+    const busy = document.pendingTurns.some(turn => turn.startedAt != null || this.taskReady(document, turn))
       || document.state.nodes.some(node => node.status === 'working' || node.status === 'preparing' || this.launching.has(`${workspaceId}:${node.nodeId}`))
       || document.state.scripts.some(script => script.status === 'running' || script.status === 'untracked')
       || [...(this.permissions.get(workspaceId)?.values() ?? [])].some(request => request.status === 'pending')
@@ -943,6 +1168,8 @@ export class SuperAgentService {
         break
       case 'tool_start':
         ;(document.state.metrics ??= emptyContinuityMetrics()).toolCalls++
+        const statisticsNode = document.config?.nodes.find(node => node.id === turn.nodeId)
+        if (statisticsNode) statisticsForNode(document, statisticsNode, now).toolCalls++
         for (const operation of document.state.operations ?? []) if (operation.sessionId === event.sessionId && operation.invocationId === event.toolUseId && operation.status === 'prepared') {
           operation.status = 'running'; operation.updatedAt = now
         }
@@ -1254,7 +1481,7 @@ export class SuperAgentService {
         if (task) {
           task.status = 'failed'; task.error = runtime?.error; task.completedAt = this.now()
           const plan = document.state.plans.find(item => item.id === task.planId)
-          if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: task.error ?? 'Previous task was interrupted; inspect before retrying' }, 'system', plan.revision)
+          if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: task.error ?? 'Previous task was interrupted; inspect before retrying' }, 'system', plan.revision, true)
         }
       }
       for (const script of document.state.scripts) if (script.status === 'running') {
@@ -1321,6 +1548,8 @@ export class SuperAgentService {
     const task = document.state.tasks.find(task => task.id === turn.taskId)
     if (!task) return true
     if (task.phase === 'waiting') return false
+    const blocker = superAgentTaskBlocker(document.state, task)
+    if (blocker && !(turn.manualRecovery && blocker.code === 'planBlocked' && !blocker.permanent)) return false
     const goal = document.state.intents?.find(goal => goal.id === task.goalId)
     if (goal && (goal.status === 'cancelled' || task.goalRevision !== (goal.revision ?? 1))) return false
     const occupied = document.state.nodes.filter(node => node.activeTaskId && node.activeTaskId !== task.id && ['working', 'preparing', 'recovering'].includes(node.status)).length
@@ -1365,7 +1594,9 @@ export class SuperAgentService {
   }
 
   private addTask(document: SuperAgentDocument, command: SuperAgentTaskContract, depth = 0, chainId?: string): void {
-    if (!command.reviewOf && command.acceptanceCriteria?.length && this.configured(document).workflow?.independentReview) {
+    if (!command.reviewOf && this.configured(document).workflow?.independentReview) {
+      if (!command.acceptanceCriteria?.length) throw new Error('This workflow requires explicit acceptanceCriteria for every output task; add verifiable criteria before assigning work')
+      if (this.configured(document).nodes.filter(node => node.role === 'worker').length < 2) throw new Error('Independent review requires at least two worker nodes')
       command = { ...command, requiresIndependentReview: true }
     }
     if (command.id && document.state.tasks.some(task => task.id === command.id)) throw new Error('Task identity already exists; inspect its receipt instead of replaying')
@@ -1383,13 +1614,14 @@ export class SuperAgentService {
     const workers = this.configured(document).nodes.filter(node => node.role === 'worker')
     const worker = command.nodeId ? workers.find(node => node.id === command.nodeId) : selectSuperAgentWorker(document, this.now(), command.requiredCapabilities)
     if (!worker) throw new Error('Work must be assigned to a worker node')
+    if (worker.thinkingMode === 'fixed' && command.thinkingLevel && command.thinkingLevel !== worker.thinkingLevel) throw new Error('This worker uses a fixed thinking level; enable task thinking overrides in node settings')
     if (command.requiredCapabilities?.some(capability => !worker.capabilities?.includes(capability))) throw new Error('The assigned worker lacks a required capability')
     const goalId = command.goalId ?? plan?.goalId
     const goal = document.state.intents?.find(goal => goal.id === goalId)
     if (goalId && !goal) throw new Error('Unknown goal')
     if (goal?.status === 'cancelled') throw new Error('The goal is cancelled')
     if (plan?.goalId && command.goalId && plan.goalId !== command.goalId) throw new Error('Task and plan must reference the same goal')
-    if (plan?.goalId && plan.goalRevision !== (goal?.revision ?? 1)) throw new Error('Refresh the plan contract after the goal changes')
+    if (plan?.goalId && plan.goalRevision !== (goal?.revision ?? 1)) throw new SuperAgentGoalContractError(`Refresh the plan contract after the goal changes: plan ${plan.id}, goal ${goalId}, current goal revision ${goal?.revision ?? 1}. Update the plan instructions for the current goal before assigning new tasks.`)
     if (command.goalCriteria?.some(index => !goal || index >= goal.acceptanceCriteria.length)) throw new Error('Goal criterion index is outside the current goal')
     if (command.reviewOf && document.state.tasks.find(task => task.id === command.reviewOf)?.nodeId === worker.id) throw new Error('Independent review requires another worker')
     if (document.state.tasks.length >= 500) throw new Error('Super Agent task history is full; archive finished work using history cleanup before adding tasks')
@@ -1401,14 +1633,14 @@ export class SuperAgentService {
       this.upsertPlan(document, { id: planId, goalId, title: command.title, instructions: command.instructions, status: 'planned', priority: 3, note: '' }, this.planner(document).id, 0)
       plan = document.state.plans.find(item => item.id === planId)!
     }
-    const task: SuperAgentTask = { title: command.title, instructions: command.instructions, goalId, goalRevision: goal ? goal.revision ?? 1 : undefined,
+    const task: SuperAgentTask = { title: command.title, instructions: command.instructions, thinkingLevel: command.thinkingLevel, goalId, goalRevision: goal ? goal.revision ?? 1 : undefined,
       goalCriteria: command.goalCriteria, requiredCapabilities: command.requiredCapabilities, dependsOn: command.dependsOn, resources: command.resources,
       acceptanceCriteria: command.acceptanceCriteria, requiresIndependentReview: command.requiresIndependentReview, reviewOf: command.reviewOf,
       id: command.id ?? this.id('task'), planId: plan.id, nodeId: worker.id, status: 'queued', createdAt: this.now() }
     document.state.tasks.push(task)
     this.message(document, this.planner(document).id, worker.id, 'task', `${task.title}\n${task.instructions}`, task.id)
     this.enqueue(document, worker.id, 'task', task.instructions, task.id, depth, chainId)
-    if (plan) this.upsertPlan(document, { ...plan, status: 'active' }, this.planner(document).id, plan.revision)
+    if (plan) this.upsertPlan(document, { ...plan, status: 'active' }, this.planner(document).id, plan.revision, true)
   }
 
   private routeMessage(document: SuperAgentDocument, fromNodeId: string, toNodeId: string, body: string, depth: number, chainId?: string): void {
@@ -1440,13 +1672,13 @@ export class SuperAgentService {
     else document.state.board.push(item)
   }
 
-  private upsertPlan(document: SuperAgentDocument, input: Omit<SuperAgentPlanItem, 'id' | 'revision' | 'updatedBy' | 'updatedAt'> & { id?: string }, actor: string, expectedRevision: number): void {
+  private upsertPlan(document: SuperAgentDocument, input: Omit<SuperAgentPlanItem, 'id' | 'revision' | 'updatedBy' | 'updatedAt'> & { id?: string }, actor: string, expectedRevision: number, preserveContract = false): void {
     if (input.status === 'completed' && this.planner(document).role === 'orchestrator') {
       const tasks = document.state.tasks.filter(task => task.planId === input.id)
       if (!tasks.length || tasks.some(task => task.status !== 'completed' || task.acceptance?.status !== 'accepted')) throw new Error('Plan completion requires accepted evidence for every linked task')
     }
     const current = input.id ? document.state.plans.find(item => item.id === input.id) : undefined
-    if (expectedRevision !== (current?.revision ?? 0)) throw new SuperAgentConflictError(current?.revision ?? 0)
+    if (expectedRevision !== (current?.revision ?? 0)) throw new SuperAgentConflictError(current?.revision ?? 0, `Plan ${input.id ?? '(new)'}`)
     if (!current && document.state.plans.length >= 256) throw new Error('The plan list is full')
     if (current && ['completed', 'cancelled'].includes(input.status) && document.state.tasks.some(task => task.planId === current.id && ['queued', 'running'].includes(task.status))) throw new Error('Stop or finish linked work before closing its plan')
     if (current && ['completed', 'cancelled'].includes(input.status) && document.state.scripts.some(script => this.scriptPlanId(document, script) === current.id && (script.status === 'running' || script.status === 'untracked' || script.resultPending || script.resultQueuedAt != null))) throw new Error('Stop or reconcile linked scripts and deliver their results before closing its plan')
@@ -1455,7 +1687,12 @@ export class SuperAgentService {
     const goal = document.state.intents?.find(goal => goal.id === goalId)
     if (goalId && !goal) throw new Error('Unknown goal')
     if (current?.goalId && input.goalId && input.goalId !== current.goalId) throw new Error('An existing plan cannot be moved to another goal')
-    const item: SuperAgentPlanItem = { id: input.id ?? this.id('plan'), goalId, goalRevision: goal ? goal.revision ?? 1 : undefined,
+    const goalRevision = preserveContract && current ? current.goalRevision : goal ? goal.revision ?? 1 : undefined
+    // Completion must re-evaluate accepted coverage even when the plan text is unchanged.
+    if (current && input.status !== 'completed' && current.goalId === goalId && current.goalRevision === goalRevision
+      && current.title === input.title && current.instructions === input.instructions && current.status === input.status
+      && current.priority === input.priority && current.note === input.note.slice(0, 4_000)) return
+    const item: SuperAgentPlanItem = { id: input.id ?? this.id('plan'), goalId, goalRevision,
       title: input.title, instructions: input.instructions, status: input.status, priority: input.priority, note: input.note.slice(0, 4_000), revision: (current?.revision ?? 0) + 1, updatedBy: actor, updatedAt: this.now() }
     if (current) Object.assign(current, item)
     else document.state.plans.push(item)
@@ -1484,7 +1721,7 @@ export class SuperAgentService {
   }
 
   private schedule(workspaceId: string): void {
-    if (this.closed) return
+    if (this.closed || this.resetting.has(workspaceId)) return
     const document = this.documents.get(workspaceId)
     if (!document?.config) return
     for (const node of document.config.nodes) {
@@ -1496,7 +1733,9 @@ export class SuperAgentService {
       if (runtime.lastStartedAt != null && this.now() - runtime.lastStartedAt < 60_000 / node.maxCallsPerMinute) continue
       if (!document.pendingTurns.some(turn => turn.nodeId === node.id)) continue
       this.launching.add(key)
-      void this.dispatch(workspaceId, node.id).finally(() => { this.launching.delete(key); this.preparingTurns.delete(key) }).catch(() => undefined)
+      const promise = this.dispatch(workspaceId, node.id).finally(() => { this.launching.delete(key); this.preparingTurns.delete(key); this.dispatches.delete(key) })
+      this.dispatches.set(key, { workspaceId, promise })
+      void promise.catch(() => undefined)
     }
   }
 
@@ -1541,30 +1780,50 @@ export class SuperAgentService {
       if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
       const environment = this.deps.prepareEnvironment ? await this.deps.prepareEnvironment(workspaceId, config.environment) : await this.environment(workspaceId, config.environment)
       if (!environment.status.available) throw new Error(environment.status.detail)
+      if (node.role === 'worker' && config.requirements && this.deps.checkReadiness) {
+        const readiness = await this.deps.checkReadiness(workspaceId, config)
+        if (!readiness.ready) throw new Error(readiness.checks.filter(check => !check.ok).map(check => check.detail).join('\n'))
+      }
       const sourceSlugs = node.sourceSlugs.filter(slug => config.sourceSlugs.includes(slug))
       if (existing && existing.workspaceId !== workspaceId) throw new Error('Node session is not owned by this workspace')
-      if (this.closed) return
+      if (this.closed || (this.resetting.has(workspaceId) && !document.pendingTurns.some(item => item.id === turn.id))) return
       if (!existing) {
         const session = await this.deps.host.createSession(workspaceId, {
           name: `${config.name} · ${node.name}`,
           hidden: true,
           llmConnection: node.llmConnection,
           model: node.model,
-          thinkingLevel: node.thinkingLevel,
+          thinkingLevel: document.state.tasks.find(task => task.id === turn.taskId)?.thinkingLevel ?? node.thinkingLevel,
           workingDirectory: environment.workingDirectory,
           permissionMode: 'allow-all',
           enabledSourceSlugs: sourceSlugs,
           agentSystemPrompt: this.nodePrompt(config, node, turn.text),
         })
+        let unassigned = this.unassignedSessions.get(workspaceId)
+        if (!unassigned) { unassigned = new Set(); this.unassignedSessions.set(workspaceId, unassigned) }
+        unassigned.add(session.id)
         const assigned = await this.serial(workspaceId, async () => {
-          if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return false
+          if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) {
+            // Keep ownership durable even if reset/cancellation retired the turn
+            // while the host was allocating its session.
+            if (!this.closed && this.documents.get(workspaceId) === document && document.state.nodes.includes(runtime)) {
+              runtime.sessionId = session.id
+              if (runtime.status === 'preparing') { runtime.status = 'idle'; runtime.activeTaskId = undefined }
+              await this.commit(workspaceId, document)
+            }
+            return false
+          }
           runtime.sessionId = session.id
           await this.commit(workspaceId, document)
           return true
         })
         if (!assigned) return
+        unassigned.delete(session.id)
       }
       if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
+      const taskThinking = document.state.tasks.find(task => task.id === turn.taskId)?.thinkingLevel
+      if (taskThinking && !this.deps.host.setSessionThinkingLevel) throw new Error('This host cannot apply task thinking levels')
+      this.deps.host.setSessionThinkingLevel?.(runtime.sessionId!, taskThinking ?? node.thinkingLevel)
       // Container image preparation can take minutes. It must not hold the
       // workspace mutation lock, so polling and cancellation remain responsive.
       for (;;) {
@@ -1608,9 +1867,11 @@ export class SuperAgentService {
         this.activities.get(workspaceId)?.delete(nodeId)
         this.activity(workspaceId, nodeId, runtime.sessionId!, turn.taskId, runtime.lastStartedAt)
         turn.startedAt = this.now()
+        turn.usageBaseline = { outputTokens: finiteUsage(session.tokenUsage?.outputTokens), costUsd: finiteUsage(session.tokenUsage?.costUsd) }
         turn.retryAt = undefined
         const task = document.state.tasks.find(task => task.id === turn.taskId)
         ;(document.state.metrics ??= emptyContinuityMetrics()).modelTurns++
+        statisticsForNode(document, node, this.now()).turns++
         document.state.connectionStarts = [...(document.state.connectionStarts ?? []).filter(start => this.now() - start.at < 60_000), { connection: node.llmConnection, at: this.now() }]
         if (task) {
           const metrics = document.state.metrics!
@@ -1666,6 +1927,7 @@ export class SuperAgentService {
   private async finishTurn(workspaceId: string, document: SuperAgentDocument, turn: SuperAgentPendingTurn, event: SessionCompletionEvent): Promise<void> {
     const runtime = document.state.nodes.find(item => item.nodeId === turn.nodeId)!
     const node = this.configured(document).nodes.find(node => node.id === turn.nodeId)!
+    recordTurnStatistics(document, node, turn, event, this.now())
     const emptyResponseRetries = turn.emptyResponseRetryAttempt ?? 0
     const recoveryExpired = turn.retryDeadline != null && this.now() >= turn.retryDeadline
     const hasUnsettledOperations = document.state.operations?.some(operation => operation.turnId === turn.id && ['prepared', 'running', 'unknown'].includes(operation.status))
@@ -1739,7 +2001,7 @@ export class SuperAgentService {
       const plan = document.state.plans.find(item => item.id === task.planId)
       // A sibling task may already have blocked this shared plan. A successful
       // result cannot resolve that blocker; the coordinator must review it.
-      if (plan && (!success || plan.status !== 'blocked')) this.upsertPlan(document, { ...plan, status: success ? 'active' : 'blocked', note: success ? '工作节点已提交结果，等待依据验证节点报告确认目标状态。' : task.error ?? '工作被中断，请检查结果后再安排。' }, node.id, plan.revision)
+      if (plan && (!success || plan.status !== 'blocked')) this.upsertPlan(document, { ...plan, status: success ? 'active' : 'blocked', note: success ? '工作节点已提交结果，等待依据验证节点报告确认目标状态。' : task.error ?? '工作被中断，请检查结果后再安排。' }, node.id, plan.revision, true)
     }
     // Successful internal turns stay in team history. User replies are selected
     // explicitly after validating the control block, never from live reasoning.
@@ -1762,7 +2024,7 @@ export class SuperAgentService {
         const block = parseSuperAgentActionBlock(raw)
         if (block !== undefined) {
           receipt = { turnId: turn.id, status: 'applied', applied: [], createdAt: this.now() }
-          const actions = ActionsSchema.parse(JSON.parse(block))
+          const actions = ActionsSchema.parse(parseSuperAgentActionJson(block))
           if (actions.intent && node.role !== 'coordinator') throw new Error('Only the intent node may hand off user intent')
           if (actions.acceptances?.length && node.id !== this.planner(document).id) throw new Error('Only the orchestrator may accept work')
           if (node.role === 'coordinator' && this.planner(document).role === 'orchestrator' && (actions.tasks?.length || actions.plans?.length || actions.board?.length || actions.messages?.some(message => message.toNodeId !== this.planner(document).id))) throw new Error('The intent node only hands off intent to the orchestrator and communicates with the user')
@@ -1807,7 +2069,10 @@ export class SuperAgentService {
               || (evidence.actionReceipt && evidence.actionReceipt.status !== 'applied') || (target.actionReceipt && target.actionReceipt.status !== 'applied')) throw new Error('Acceptance requires completed work and a successful evidence task report')
             if (target.requiresIndependentReview && (evidence.nodeId === target.nodeId || evidence.reviewOf !== target.id || !evidence.dependsOn?.includes(target.id))) throw new Error('Independent review must run on another worker and reference the target dependency')
             const goal = document.state.intents?.find(goal => goal.id === target.goalId)
-            if (goal && target.goalRevision !== (goal.revision ?? 1)) throw new Error('The submitted task uses an older goal contract')
+            if (input.status === 'accepted' && (target.dependsOn ?? []).some(id => id !== target.reviewOf
+              && !document.state.tasks.some(dependency => dependency.id === id && superAgentDependencySatisfied(dependency)))) throw new SuperAgentGoalContractError(`Task ${target.id} has an unaccepted dependency; reconcile upstream acceptance before accepting this result.`)
+            if (input.status === 'accepted' && goal && (target.goalRevision !== (goal.revision ?? 1)
+              || evidence.goalId !== goal.id || evidence.goalRevision !== (goal.revision ?? 1))) throw new SuperAgentGoalContractError(`The submitted task uses an older goal contract or mismatched evidence: task ${target.id} has goal revision ${target.goalRevision ?? 'unset'}, evidence ${evidence.id} has goal ${evidence.goalId ?? 'unset'} revision ${evidence.goalRevision ?? 'unset'}, but goal ${goal.id} is at revision ${goal.revision ?? 1}. Preserve the historical result; assign verification under the current goal contract before accepting it. A rejected review may still be recorded.`)
             if (input.status === 'accepted' && document.state.operations?.some(operation => operation.taskId === target.id && ['unknown', 'running', 'prepared'].includes(operation.status))) throw new Error('Unsettled operation outcomes must be verified before acceptance')
             const hashes: Array<{ id: string; sha256: string }> = []
             if (input.status === 'accepted') for (const artifact of document.state.artifacts ?? []) if (target.artifactIds?.includes(artifact.id)) {
@@ -1815,9 +2080,14 @@ export class SuperAgentService {
               if (artifact.missing || actual.sha256 !== artifact.sha256 || evidence.id !== target.id && !evidence.inputArtifacts?.some(value => value.id === artifact.id && value.sha256 === actual.sha256)) throw new Error('Evidence does not verify the current artifact version; run verification again')
               hashes.push({ id: artifact.id, sha256: actual.sha256 })
             }
-            if (target.acceptance?.status === 'accepted' && document.state.tasks.some(task => task.dependsOn?.includes(target.id)
-              && (task.startedAt != null || document.state.nodes.some(node => node.activeTaskId === task.id && node.status === 'preparing')))) throw new Error('Accepted evidence already has dispatched dependents; create a new versioned task instead of changing its acceptance')
+            const previous = target.acceptance
+            const sameEvidence = previous?.status === input.status && previous.evidenceTaskId === evidence.id
+              && JSON.stringify([...(previous.artifactHashes ?? [])].sort((a, b) => a.id.localeCompare(b.id))) === JSON.stringify([...hashes].sort((a, b) => a.id.localeCompare(b.id)))
+            if (previous?.status === 'accepted' && !sameEvidence && input.status === 'accepted' && document.state.tasks.some(task => task.dependsOn?.includes(target.id)
+              && task.reviewOf !== target.id && (task.startedAt != null || document.state.nodes.some(node => node.activeTaskId === task.id && node.status === 'preparing')))) throw new SuperAgentGoalContractError(`Accepted evidence already has dispatched dependents; create a new versioned task instead of changing its acceptance: task ${target.id}. Rejection of an incorrect acceptance is allowed and invalidates downstream results.`)
+            if (sameEvidence && previous?.note === input.note) return
             target.acceptance = { status: input.status, evidenceTaskId: evidence.id, note: input.note, reviewedBy: node.id, reviewedAt: this.now(), artifactHashes: hashes.length ? hashes : undefined }
+            if (previous?.status === 'accepted' && input.status === 'rejected') await this.invalidateAcceptanceDependents(workspaceId, document, target)
           })
           for (const input of actions.plans ?? []) {
             await apply('plan-upsert', input.id, () => {
@@ -1898,16 +2168,21 @@ export class SuperAgentService {
         this.message(document, 'system', node.id, 'error', notice)
         const coordinator = this.coordinator(document)
         if (node.id !== coordinator.id) this.message(document, 'system', coordinator.id, 'error', notice, task?.id)
-        this.message(document, 'system', 'user', 'error', notice, task?.id)
         // Repair schema/framing errors and refresh revisions in a bounded turn;
         // never overwrite concurrent edits or repeat actions already committed.
-        const repairable = error instanceof SuperAgentConflictError || error instanceof SuperAgentActionProtocolError
+        const repairable = error instanceof SuperAgentConflictError || error instanceof SuperAgentGoalContractError || error instanceof SuperAgentActionProtocolError
           || error instanceof SyntaxError || error instanceof z.ZodError
-        if (repairable && node.role !== 'worker'
+        const repairQueued = repairable && node.role !== 'worker'
           && turn.depth < MAX_CHAIN_DEPTH && document.pendingTurns.length < MAX_PENDING_TURNS
-          && (document.chainCounts[turn.chainId] ?? 0) < MAX_CHAIN_TURNS) {
+          && (document.chainCounts[turn.chainId] ?? 0) < MAX_CHAIN_TURNS
+        if (repairQueued) {
           this.enqueue(document, node.id, 'summary', `${notice}\nReview the receipt and latest Current team state to reconcile the rejected actions. Repair the rejected protocol or revision using one valid final action block. Applied actions have already committed: check their IDs and active tasks before retrying. Dispatch only remaining authorized work; do not repeat completed work or report rejected work as queued.`, undefined, turn.depth + 1, turn.chainId)
         }
+        // Keep recoverable model formatting/state failures internal while repair is pending.
+        // Execution failures, partial commits and exhausted repairs remain visible.
+        const stateOrFormattingError = error instanceof SyntaxError || error instanceof z.ZodError || error instanceof SuperAgentActionProtocolError
+          || error instanceof SuperAgentConflictError || error instanceof SuperAgentGoalContractError
+        if (!repairQueued || !stateOrFormattingError || receipt.applied.length) this.message(document, 'system', 'user', 'error', notice, task?.id)
       }
     }
     if (task && receipt) task.actionReceipt = receipt
@@ -1943,7 +2218,35 @@ export class SuperAgentService {
     this.schedule(workspaceId)
   }
 
-  private async cancel(workspaceId: string, document: SuperAgentDocument, taskId?: string): Promise<void> {
+  private async invalidateAcceptanceDependents(workspaceId: string, document: SuperAgentDocument, target: SuperAgentTask): Promise<void> {
+    const affected = new Set([target.id])
+    let size = -1
+    while (size !== affected.size) {
+      size = affected.size
+      for (const task of document.state.tasks) if (task.dependsOn?.some(id => affected.has(id) && task.reviewOf !== id)) affected.add(task.id)
+    }
+    const reason = `Upstream acceptance for ${target.id} was rejected; preserve existing work and reconcile dependencies before continuing.`
+    for (const task of document.state.tasks) {
+      if (!affected.has(task.id)) continue
+      if (task.id !== target.id) {
+        if (task.acceptance) task.acceptance = { ...task.acceptance, status: 'stale', note: reason }
+        const active = task.status === 'running' || document.state.nodes.some(node => node.activeTaskId === task.id && ['working', 'preparing', 'recovering'].includes(node.status))
+        if (active) {
+          const checkpoint = task.checkpoint
+          await this.cancel(workspaceId, document, task.id, true)
+          task.status = 'failed'; task.error = reason; task.checkpoint = checkpoint
+          task.phase = document.state.operations?.some(operation => operation.taskId === task.id && ['unknown', 'running', 'prepared'].includes(operation.status)) ? 'outcome-unknown' : 'waiting'
+        }
+        for (const script of document.state.scripts.filter(script => script.taskId === task.id && script.status === 'running')) await this.stopScript(workspaceId, document, script.scriptId, reason)
+      }
+      const plan = document.state.plans.find(plan => plan.id === task.planId)
+      if (plan && plan.status !== 'cancelled') this.upsertPlan(document, { ...plan, status: 'blocked', note: reason }, 'system', plan.revision, true)
+      const goal = document.state.intents?.find(goal => goal.id === task.goalId)
+      if (goal?.status === 'delivered') goal.status = 'active'
+    }
+  }
+
+  private async cancel(workspaceId: string, document: SuperAgentDocument, taskId?: string, preserveCheckpoint = false): Promise<void> {
     if (taskId && !document.state.tasks.some(task => task.id === taskId)) throw new Error('Task does not exist')
     this.pauseScriptResults(document, taskId)
     const runIds = new Set(document.state.scripts.filter(script => !taskId || script.taskId === taskId).flatMap(script => script.runId ? [script.runId] : []))
@@ -1973,7 +2276,7 @@ export class SuperAgentService {
       if (task) {
         task.status = 'cancelled'; task.completedAt = this.now()
         const plan = document.state.plans.find(item => item.id === task.planId)
-        if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: '关联任务已停止；检查已执行操作后再决定是否恢复。' }, 'user', plan.revision)
+        if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: '关联任务已停止；检查已执行操作后再决定是否恢复。' }, 'user', plan.revision, true)
       }
     }
     // Waiting tasks have no pending turn. Explicit stop must still prevent
@@ -1982,9 +2285,9 @@ export class SuperAgentService {
       if (['queued', 'running'].includes(task.status)) {
         task.status = 'cancelled'; task.completedAt = this.now()
         const plan = document.state.plans.find(plan => plan.id === task.planId)
-        if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: 'Task stopped by user.' }, 'user', plan.revision)
+        if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: 'Task stopped by user.' }, 'user', plan.revision, true)
       }
-      if (['cancelled', 'failed'].includes(task.status)) { task.checkpoint = undefined; task.waiting = undefined }
+      if (['cancelled', 'failed'].includes(task.status)) { if (!preserveCheckpoint) task.checkpoint = undefined; task.waiting = undefined }
     }
     // Removal is durable before stopping: late completion events cannot resurrect cancelled tasks.
     await this.commit(workspaceId, document)
@@ -2033,8 +2336,10 @@ export class SuperAgentService {
     const nodes = config.nodes.filter(node => coordinator || node.id === recipient.id || node.role !== 'worker')
     const nodeIds = new Set(nodes.map(node => node.id))
     const relevantTasks = document.state.tasks.filter(task => coordinator || task.id === turn.taskId)
+    const referencedTasks = relevantTasks.filter(task => turn.text.includes(task.id))
+    const referencedIds = new Set(referencedTasks.flatMap(task => [task.id, ...(task.dependsOn ?? []), ...(task.reviewOf ? [task.reviewOf] : [])]))
     const tasks = coordinator
-      ? [...relevantTasks.filter(task => ['queued', 'running'].includes(task.status)), ...relevantTasks.filter(task => !['queued', 'running'].includes(task.status)).slice(-4)].slice(0, 24)
+      ? [...new Map([...referencedTasks, ...relevantTasks.filter(task => referencedIds.has(task.id)), ...relevantTasks.filter(task => ['queued', 'running'].includes(task.status)), ...relevantTasks.filter(task => !['queued', 'running'].includes(task.status)).slice(-4)].map(task => [task.id, task])).values()].slice(0, 24)
       : relevantTasks
     const plans = document.state.plans.filter(plan => coordinator || plan.id === currentTask?.planId)
       .sort((a, b) => Number(b.id === currentTask?.planId || turn.text.includes(b.id)) - Number(a.id === currentTask?.planId || turn.text.includes(a.id))
@@ -2049,11 +2354,16 @@ export class SuperAgentService {
       && ['message', 'error'].includes(message.kind) && !(message.body && turn.text.includes(message.body)))
       .slice(coordinator ? -6 : -3)
     const permissions = [...(this.permissions.get(workspaceId)?.values() ?? [])].filter(request => request.status === 'pending' && (coordinator || request.nodeId === recipient.id))
-    return JSON.stringify({ nodes: nodes.map(node => ({ id: node.id, name: node.name, role: node.role, capabilities: node.capabilities,
+    return JSON.stringify({ nodes: nodes.map(node => ({ id: node.id, name: node.name, role: node.role, capabilities: node.capabilities, thinkingLevel: node.thinkingLevel, thinkingMode: node.thinkingMode,
         ...(coordinator ? { description: contextExcerpt(node.description, 300), model: node.model, intelligenceRating: node.intelligenceRating, workPreferences: contextExcerpt(node.workPreferences, 200), sourceSlugs: node.sourceSlugs, abilityProfileIds: node.abilityProfileIds,
           scheduling: nodeSchedulingState(document, node, this.now()) } : {}) })),
       intents: document.state.intents?.slice(-3),
       workflow: config.workflow,
+      library: {
+        memoryCount: document.state.memories?.length ?? 0, archiveCount: document.state.archives?.length ?? 0,
+        memories: searchSuperAgentLibrary(document.state.memories ?? [], turn.text).slice(0, 6).map(item => ({ id: item.id, title: item.title, category: item.category, revision: item.revision, content: contextExcerpt(item.content, 700) })),
+        archives: searchSuperAgentLibrary(document.state.archives ?? [], turn.text).slice(0, 6).map(item => ({ id: item.id, title: item.title, versionLabel: item.versionLabel, description: contextExcerpt(item.description, 300), fileCount: item.files.length })),
+      },
       interactionNodeId: this.coordinator(document).id, orchestrationNodeId: this.planner(document).id,
       executionMode: 'allow-all',
       turn: { id: turn.id, kind: turn.kind, taskId: turn.taskId,
@@ -2077,7 +2387,7 @@ export class SuperAgentService {
           completedStepCount: task.checkpoint.completedSteps.length, completedSteps: task.checkpoint.completedSteps.slice(-8).map(step => contextExcerpt(step, 200)),
           nextStep: contextExcerpt(task.checkpoint.nextStep, 500), note: contextExcerpt(task.checkpoint.note, 300) } : task.checkpoint,
         waiting: task.waiting, artifactIds: task.artifactIds, inputArtifacts: task.inputArtifacts,
-        title: task.title, nodeId: task.nodeId, status: task.status, dependsOn: task.dependsOn, resources: task.resources, acceptanceCriteria: task.acceptanceCriteria, requiresIndependentReview: task.requiresIndependentReview, reviewOf: task.reviewOf, acceptance: task.acceptance,
+        title: task.title, nodeId: task.nodeId, thinkingLevel: task.thinkingLevel, status: task.status, dependsOn: task.dependsOn, resources: task.resources, acceptanceCriteria: task.acceptanceCriteria, requiresIndependentReview: task.requiresIndependentReview, reviewOf: task.reviewOf, acceptance: task.acceptance,
         ...(coordinator ? { output: task.output && !turn.text.includes(task.output) ? contextExcerpt(task.output, 600) : undefined, error: contextExcerpt(task.error, 400), actionReceipt: task.actionReceipt } : {}) })) } : {}),
       ...(board.length ? { board: board.map(item => ({ id: item.id, title: item.title, revision: item.revision, content: contextExcerpt(item.content, 1_000) })), boardCount: document.state.board.length } : {}),
       artifacts: document.state.artifacts?.filter(artifact => tasks.some(task => task.id === artifact.taskId)),
@@ -2207,7 +2517,7 @@ export class SuperAgentService {
     if (!blocker && plan.status === 'blocked') return
     this.upsertPlan(document, { ...plan, status: blocker ? 'blocked' : 'active', note: blocker
       ? `Required script ${blocker.scriptId} (${blocker.runId ?? 'legacy run'}) is ${blocker.status}. ${blocker.error ?? 'Review the execution environment and result before assigning recovery work.'}`
-      : `Required script ${runtime.scriptId} (${runtime.runId}) completed; a worker must verify its output before the coordinator records plan acceptance.` }, 'system', plan.revision)
+      : `Required script ${runtime.scriptId} (${runtime.runId}) completed; a worker must verify its output before the coordinator records plan acceptance.` }, 'system', plan.revision, true)
   }
 
   private scriptResultText(script: Pick<SuperAgentScript, 'id' | 'name'>, runtime: SuperAgentScriptRuntime): string {
@@ -2245,7 +2555,7 @@ export class SuperAgentService {
     runtime.resultDeliveryError = (error || 'The coordinator script result review failed before acknowledgement.').slice(0, 2_000)
     const planId = this.scriptPlanId(document, runtime)
     const plan = document.state.plans.find(item => item.id === planId)
-    if (plan && plan.status !== 'cancelled') this.upsertPlan(document, { ...plan, status: 'blocked', note: `Script result review is incomplete: ${runtime.resultDeliveryError}` }, 'system', plan.revision)
+    if (plan && plan.status !== 'cancelled') this.upsertPlan(document, { ...plan, status: 'blocked', note: `Script result review is incomplete: ${runtime.resultDeliveryError}` }, 'system', plan.revision, true)
     if ((runtime.resultDeliveryAttempts ?? 0) >= MAX_SCRIPT_RESULT_ATTEMPTS) {
       const notice = `Script ${runtime.scriptId} result (${runtime.runId}) could not be reviewed after ${MAX_SCRIPT_RESULT_ATTEMPTS} delivery attempts. The result is retained and automatic delivery is suspended. ${runtime.resultDeliveryError}\nAn explicit user continuation or inspection can resume result delivery; do not restart the script automatically.`
       this.message(document, 'system', this.planner(document).id, 'error', notice, runtime.taskId)
@@ -2309,12 +2619,11 @@ export class SuperAgentService {
     const runId = this.id('run')
     try {
       if (this.deps.actionGates && !config.environment.fullControl && (context.taskId || context.planId)) throw new Error('Action Gate: automatic script launches require user approval. Ask the user to review and run the registered script from the Scripts panel.')
-      if (this.deps.actionGates && config.environment.kind !== 'sandbox') throw new Error('Action Gate: managed scripts require a verified container sandbox; host and client execution cannot be authorized by an approval.')
       if (!config.environment.fullControl && !config.environment.permissions.runPrograms) throw new Error('Script execution requires program permission')
       const environment = this.deps.prepareEnvironment ? await this.deps.prepareEnvironment(workspaceId, config.environment) : await this.environment(workspaceId, config.environment)
       if (!environment.status.available) throw new Error(environment.status.detail)
       if (config.environment.kind !== 'folder' && !this.deps.spawnScript) throw new Error('This execution adapter does not support managed scripts')
-      if (!config.environment.fullControl && config.environment.kind === 'folder' && Object.values(config.environment.permissions).some(allowed => !allowed)) throw new Error('Host scripts need all file, program and browser permissions; use a container for restricted scripts')
+      if (!this.deps.actionGates && !config.environment.fullControl && config.environment.kind === 'folder' && Object.values(config.environment.permissions).some(allowed => !allowed)) throw new Error('Host scripts need all file, program and browser permissions; use explicit script approval or a container for restricted scripts')
       const path = await this.scriptPath({ ...config.environment, workingDirectory: environment.workingDirectory }, script)
       const approvedContent = this.deps.actionGates ? await readFile(path) : undefined
       if (this.deps.actionGates) {
@@ -2341,7 +2650,7 @@ export class SuperAgentService {
       Object.assign(state, { runId, taskId: context.taskId, planId, resultPending: undefined, resultQueuedAt: undefined, resultReportedAt: undefined, resultDeliveryAttempts: undefined, resultDeliveryPaused: undefined, resultDeliveryError: undefined,
         status: 'running', startedAt: this.now(), completedAt: undefined, output: '', error: undefined, exitCode: undefined, exitSignal: undefined })
       document.state.allIdleSince = undefined
-      const record = { child, timer: setTimeout(() => { void this.serial(workspaceId, async () => { await this.stopScript(workspaceId, document, scriptId, 'Script exceeded its timeout'); await this.commit(workspaceId, document) }).catch(() => undefined) }, script.timeoutSeconds * 1_000), output: '', stopping: false, stop: remote?.stop }
+      const record = { child, timer: setTimeout(() => { void this.serial(workspaceId, async () => { if (this.scriptProcesses.get(key) !== record) return; await this.stopScript(workspaceId, document, scriptId, 'Script exceeded its timeout'); await this.commit(workspaceId, document) }).catch(() => undefined) }, script.timeoutSeconds * 1_000), output: '', stopping: false, stop: remote?.stop }
       record.timer.unref?.()
       this.scriptProcesses.set(key, record)
       const append = (chunk: Buffer) => {

@@ -30,6 +30,7 @@ import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopo
 import { getDocUrl } from '@craft-agent/shared/docs/doc-links'
 import { routes } from '@/lib/navigate'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
+import { WorkspacePermissionSettings } from './WorkspacePermissionSettings'
 
 export const meta: DetailsPageMeta = {
   navigator: 'settings',
@@ -161,6 +162,7 @@ export default function PermissionsSettingsPage() {
 
   // Load both default and workspace permissions configs
   useEffect(() => {
+    let cancelled = false
     const loadPermissions = async () => {
       if (!window.electronAPI) {
         setIsLoading(false)
@@ -168,25 +170,29 @@ export default function PermissionsSettingsPage() {
       }
 
       setIsLoading(true)
+      setCustomConfig(null)
       try {
         // Load default permissions (app-level) - returns both config and path
         const { config: defaults, path: defaultsPath } = await window.electronAPI.getDefaultPermissionsConfig()
+        if (cancelled) return
         setDefaultConfig(defaults)
         setDefaultPermissionsPath(defaultsPath)
 
         // Load workspace permissions if we have an active workspace
         if (activeWorkspaceId) {
           const workspace = await window.electronAPI.getWorkspacePermissionsConfig(activeWorkspaceId)
+          if (cancelled) return
           setCustomConfig(workspace)
         }
       } catch (error) {
         console.error('Failed to load permissions:', error)
       } finally {
-        setIsLoading(false)
+        if (!cancelled) setIsLoading(false)
       }
     }
 
     loadPermissions()
+    return () => { cancelled = true }
   }, [activeWorkspaceId])
 
   // Listen for default permissions changes (file watcher)
@@ -209,6 +215,7 @@ export default function PermissionsSettingsPage() {
         <ScrollArea className="h-full">
           <div className="px-5 py-7 max-w-3xl mx-auto">
             <div className="space-y-8">
+              {activeWorkspaceId && <WorkspacePermissionSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId} />}
               {isLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
@@ -277,6 +284,7 @@ export default function PermissionsSettingsPage() {
                   </SettingsSection>
 
                   {/* Custom Permissions Section */}
+                  {activeWorkspaceId && (
                   <SettingsSection
                     title={t("settings.permissions.workspaceCustomizations")}
                     description={t("settings.permissions.workspaceCustomizationsDesc")}
@@ -318,6 +326,7 @@ export default function PermissionsSettingsPage() {
                       )}
                     </SettingsCard>
                   </SettingsSection>
+                  )}
                 </>
               )}
             </div>

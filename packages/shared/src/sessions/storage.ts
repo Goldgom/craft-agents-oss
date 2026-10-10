@@ -268,6 +268,8 @@ export async function getOrCreateSessionById(
     return {
       id: existing.id,
       sdkSessionId: existing.sdkSessionId,
+      sdkSessionRuntime: existing.sdkSessionRuntime,
+      agentRuntimeMigrationContext: existing.agentRuntimeMigrationContext,
       workspaceRootPath: existing.workspaceRootPath,
       name: existing.name,
       createdAt: existing.createdAt,

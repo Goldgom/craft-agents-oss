@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "plugin:dsh",
+  "name": "DeepSeek Harness",
+  "description": "DeepSeek Harness native loop with TokenBird sources, pages and approved host tools",
+  "version": "2.0.0",
+  "enabled": true,
+  "capabilities": ["nativeTools", "hostTools", "toolApproval"],
+  "compatibility": {
+    "providerTypes": ["pi", "pi_compat"],
+    "piAuthProviders": ["deepseek", "openai"],
+    "authTypes": ["api_key", "api_key_with_endpoint", "bearer_token", "oauth", "none"]
+  },
+  "useConnectionCredentials": true,
+  "transport": {
+    "type": "stdio",
+    "command": "C:/agents/dsh/.venv/Scripts/python.exe",
+    "args": ["tokenbird:bridge:dsh"],
+    "requestTimeoutMs": 120000
+  }
+}

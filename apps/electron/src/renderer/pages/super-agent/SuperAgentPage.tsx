@@ -7,6 +7,7 @@ import {
   Settings2, ShieldCheck, Square, Wrench, Archive,
 } from 'lucide-react'
 import type { SuperAgentCommand, SuperAgentConfig, SuperAgentSnapshot } from '@craft-agent/shared/super-agent'
+import { superAgentTaskBlocker } from '@craft-agent/shared/super-agent'
 import type { LoadedSkill, LoadedSource } from '../../../shared/types'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { useContainerWidth } from '@/hooks/useContainerWidth'
@@ -19,8 +20,10 @@ import { Markdown } from '@/components/markdown'
 import { cn } from '@/lib/utils'
 import { AgentAvatar, FormField, textareaClass } from './SuperAgentForms'
 import { SuperAgentSetup } from './SuperAgentSetup'
+import { SuperAgentStatus } from './SuperAgentStatus'
 import { SuperAgentConfiguration } from './SuperAgentConfiguration'
 import { SuperAgentResources, SuperAgentScripts } from './SuperAgentResources'
+import { SuperAgentLibrary } from './SuperAgentLibrary'
 import { NodeCommunication, SharedBoard } from './SuperAgentCollaboration'
 import { SuperAgentPlans } from './SuperAgentPlans'
 import { SuperAgentHistory } from './SuperAgentHistory'
@@ -28,6 +31,8 @@ import { SuperAgentPermissions } from './SuperAgentPermissions'
 import { SuperAgentNodeRecovery } from './SuperAgentNodeRecovery'
 import { SuperAgentConversation, SuperAgentPermissionHistory } from './SuperAgentConversation'
 import { SuperAgentFileContext } from './SuperAgentFileContext'
+import { SuperAgentStatistics } from './SuperAgentStatistics'
+import { THINKING_LEVEL_IDS, type ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 import { formatTimestamp, useSuperAgentText, withExecuteMode } from './super-agent-ui'
 import { recentActivityEntries, taskActivity, tasklessWorkerActivities, visibleActivityText, type SuperAgentActivity } from './super-agent-activity'
 
@@ -37,14 +42,16 @@ export interface SuperAgentPageProps {
   onOpenSession?: (sessionId: string) => void
 }
 
-type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts' | 'history' | 'permissionManagement'
+type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts' | 'history' | 'permissionManagement' | 'statistics' | 'archiveLibrary' | 'memoryLibrary'
 const settingsSections: Array<{ id: SettingsSection; icon: typeof Bot }> = [
   { id: 'settings', icon: Settings2 }, { id: 'team', icon: Layers3 },
   { id: 'plans', icon: ClipboardList },
   { id: 'permissionManagement', icon: ShieldCheck },
   { id: 'board', icon: ClipboardList }, { id: 'communication', icon: MessagesSquare },
   { id: 'resources', icon: BookOpen }, { id: 'scripts', icon: Code2 },
+  { id: 'archiveLibrary', icon: Archive }, { id: 'memoryLibrary', icon: BrainCircuit },
   { id: 'history', icon: Archive },
+  { id: 'statistics', icon: Activity },
 ]
 
 export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpenSession }: SuperAgentPageProps) {
@@ -197,7 +204,9 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
   </div> : undefined
 
   return <SuperAgentFileContext workingDirectory={workDirectory}><div ref={pageRef} className="flex h-full min-h-0 flex-col bg-background">
-    <PanelHeader title={view === 'settings' ? text('settingsTitle') : config?.name ?? text('title')} leadingAction={leadingAction} rightSidebarButton={rightSidebarButton} actions={headerActions} />
+    <PanelHeader title={view === 'settings' ? text('settingsTitle') : config?.name ?? text('title')}
+      badge={snapshot?.config ? <SuperAgentStatus snapshot={snapshot} pendingPermissions={pendingPermissions} /> : undefined}
+      leadingAction={leadingAction} rightSidebarButton={rightSidebarButton} actions={headerActions} />
     {!activeWorkspaceId ? <PageNotice icon={FolderOpen} title={text('workspaceRequired')} description={text('workspaceRequiredDescription')} />
       : loading ? <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{text('loading')}</div>
         : !snapshot ? <PageNotice icon={Bot} title={text('loadFailed')} description={error}><Button variant="outline" size="sm" onClick={() => { setError(''); setLoading(true); void refresh() }}>{text('retry')}</Button></PageNotice>
@@ -230,11 +239,18 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
                     {settingsSection === 'plans' && <SuperAgentPlans items={snapshot.state.plans} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'permissionManagement' && <SuperAgentPermissions key={activeWorkspaceId!} snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} busy={busy} onCommand={command} />}
                     {settingsSection === 'history' && <SuperAgentHistory key={activeWorkspaceId!} workspaceId={activeWorkspaceId!} snapshot={snapshot} busy={busy} onCommand={command} />}
+                    {settingsSection === 'statistics' && <SuperAgentStatistics snapshot={snapshot} />}
                     {settingsSection === 'communication' && <NodeCommunication config={config} messages={snapshot.state.messages} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'resources' && <SuperAgentResources config={config} sources={sources} skills={skills} onSave={async value => { await save(value) }} />}
+                    {(settingsSection === 'archiveLibrary' || settingsSection === 'memoryLibrary') && <SuperAgentLibrary key={activeWorkspaceId + ':' + settingsSection} library={settingsSection === 'archiveLibrary' ? 'archive' : 'memory'} snapshot={snapshot} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'scripts' && <SuperAgentScripts snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} onSave={async value => { await save(value) }} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'settings' && <SuperAgentConfiguration key={activeWorkspaceId + ':' + (selectedNodeId ?? 'settings')} config={config} connections={llmConnections} sources={sources} environmentStatus={snapshot.environment}
                       onContinuousWork={async enabled => { await command({ type: 'continuous-work', enabled }) }}
+                      onReset={async () => {
+                        const workspaceId = activeWorkspaceId
+                        await command({ type: 'reset', confirmed: true })
+                        if (workspaceRef.current === workspaceId) { setView('home'); setSettingsSection('settings'); setSelectedNodeId(undefined); setTaskDialogNode(null) }
+                      }}
                       onSave={async value => { await save(value) }} onOpenAiSettings={onOpenAiSettings} initialNodeId={selectedNodeId} />}
                   </div>
                 </div>}
@@ -262,8 +278,9 @@ function WorkProgress({ snapshot, compact, busy, onCreateTask, onOpenPlans, onCo
   const completed = tasks.filter(task => task.status === 'completed'
     && (!snapshot.config.nodes.some(node => node.role === 'orchestrator') || task.acceptance?.status === 'accepted')).length
   const working = tasks.filter(task => task.status === 'running').length
-  const queued = tasks.filter(task => task.status === 'queued').length
-  const summary = <span className="text-[11px] text-muted-foreground">{text('progressSummary', { working, queued, completed })}</span>
+  const blocked = tasks.filter(task => task.status === 'queued' && superAgentTaskBlocker(snapshot.state, task)).length
+  const queued = tasks.filter(task => task.status === 'queued').length - blocked
+  const summary = <span className="text-[11px] text-muted-foreground">{text('progressSummary', { working, queued, completed })}{blocked > 0 && ` · ${text('queueBlockedCount', { count: blocked })}`}</span>
   const tasklessActivities = tasklessWorkerActivities(snapshot)
   const list = <div className="space-y-5">
     {snapshot.state.metrics && <p className="text-[10px] leading-5 text-muted-foreground">{text('continuityMetrics', { turns: snapshot.state.metrics.modelTurns, tools: snapshot.state.metrics.toolCalls, retries: snapshot.state.metrics.retries, resumes: snapshot.state.metrics.resumptions })}</p>}
@@ -354,13 +371,15 @@ function TaskList({ snapshot, busy, onCommand, onOpenSession }: {
     const sessionId = task.sessionId ?? state.nodes.find(item => item.nodeId === task.nodeId)?.sessionId
     const running = task.status === 'running' || task.status === 'queued'
     const submitted = config.nodes.some(node => node.role === 'orchestrator') && task.status === 'completed'
-    const statusLabel = task.phase === 'waiting' ? 'taskWaiting' : task.phase === 'outcome-unknown' ? 'taskUnknown' : task.acceptance?.status === 'stale' ? 'taskStale'
+    const blocker = task.status === 'queued' ? superAgentTaskBlocker(state, task) : undefined
+    const statusLabel = blocker ? 'queueBlocked' : task.phase === 'waiting' ? 'taskWaiting' : task.phase === 'outcome-unknown' ? 'taskUnknown' : task.acceptance?.status === 'stale' ? 'taskStale'
       : submitted ? task.acceptance?.status === 'accepted' ? 'taskAccepted' : task.acceptance?.status === 'rejected' ? 'taskRejected' : 'taskSubmitted' : task.status
     const activity = taskActivity(snapshot, task)
     return <article key={task.id} className="space-y-3 rounded-xl border border-border/60 p-3">
       <div className="flex items-start gap-2"><h3 className="min-w-0 flex-1 break-words text-xs font-medium leading-5">{task.title}</h3><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', task.acceptance?.status === 'accepted' || (!submitted && task.status === 'completed') ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : task.status === 'failed' || task.acceptance?.status === 'rejected' ? 'bg-destructive/10 text-destructive' : 'bg-foreground/5 text-muted-foreground')}>{text(statusLabel)}</span></div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">{node && <AgentAvatar avatar={node.avatar} name={node.name} className="size-5 rounded text-[10px]" />}<span className="min-w-0 flex-1 truncate">{node?.name ?? task.nodeId}</span><span>{formatTimestamp(task.createdAt)}</span></div>
       {task.error && <p className="text-[11px] leading-5 text-destructive">{task.error}</p>}
+      {blocker && <p className="text-[11px] leading-5 text-amber-700 dark:text-amber-400">{text(blocker.code, { detail: blocker.detail })}</p>}
       {task.checkpoint && <details className="text-[11px]"><summary className="cursor-pointer text-muted-foreground">{text('checkpoint')} · {task.checkpoint.completedSteps.length}</summary><p className="mt-2 whitespace-pre-wrap">{task.checkpoint.nextStep}</p><ul className="mt-2 list-inside list-disc text-muted-foreground">{task.checkpoint.completedSteps.map((step, index) => <li key={index}>{step}</li>)}</ul></details>}
       {task.waiting && <p className="text-[11px] leading-5 text-muted-foreground">{task.waiting.reason}</p>}
       {task.checkpoint && (task.status === 'failed' || task.status === 'queued' && task.phase === 'waiting') && task.phase !== 'outcome-unknown' && <Button size="sm" variant="outline" disabled={busy} onClick={() => { void onCommand({ type: 'task-resume', taskId: task.id }).catch(() => {}) }}>{text('resumeTask')}</Button>}
@@ -415,20 +434,28 @@ function TaskDialog({ config, nodeId, onClose, onCommand }: {
   const [selected, setSelected] = useState('')
   const [title, setTitle] = useState('')
   const [instructions, setInstructions] = useState('')
+  const [thinkingLevel, setThinkingLevel] = useState('default')
+  const [criteria, setCriteria] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  useEffect(() => { if (nodeId !== null) { setSelected(nodeId); setTitle(''); setInstructions(''); setError('') } }, [nodeId])
+  useEffect(() => { if (nodeId !== null) { setSelected(nodeId); setTitle(''); setInstructions(''); setThinkingLevel('default'); setCriteria(''); setError('') } }, [nodeId])
   async function submit() {
     setPending(true); setError('')
-    try { await onCommand({ type: 'task', title: title.trim(), instructions: instructions.trim(), nodeId: selected || undefined }); onClose() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
+    try { await onCommand({ type: 'task', title: title.trim(), instructions: instructions.trim(), nodeId: selected || undefined,
+      thinkingLevel: thinkingLevel === 'default' ? undefined : thinkingLevel as ThinkingLevel,
+      acceptanceCriteria: criteria.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
+    }); onClose() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
   }
   return <Dialog open={nodeId !== null} onOpenChange={open => { if (!open && !pending) onClose() }}><DialogContent className="sm:max-w-xl"><DialogHeader><DialogTitle>{text('createTask')}</DialogTitle><DialogDescription>{text('coordinatorRule')}</DialogDescription></DialogHeader>
     <fieldset disabled={pending} className="min-w-0 space-y-4">
       <FormField label={text('taskTitle')}><Input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} /></FormField>
       <FormField label={text('taskInstructions')}><textarea className={textareaClass} rows={6} value={instructions} onChange={event => setInstructions(event.target.value)} /></FormField>
-      <FormField label={text('assignedNode')}><WorkbenchSelect value={selected} onValueChange={value => setSelected(value)} options={[{ value: "", label: text('automatic') }, ...config.nodes.filter(node => node.role === 'worker').map(node => ({ value: node.id, label: node.name }))]} /></FormField>
+      <FormField label={text('assignedNode')}><WorkbenchSelect value={selected} onValueChange={value => { setSelected(value); if (config.nodes.find(node => node.id === value)?.thinkingMode === 'fixed') setThinkingLevel('default') }} options={[{ value: "", label: text('automatic') }, ...config.nodes.filter(node => node.role === 'worker').map(node => ({ value: node.id, label: node.name }))]} /></FormField>
+      <FormField label={text('thinking')} hint={text('taskThinkingHint')}><WorkbenchSelect value={thinkingLevel} onValueChange={setThinkingLevel}
+        disabled={config.nodes.find(node => node.id === selected)?.thinkingMode === 'fixed'} options={[{ value: 'default', label: text('nodeThinkingDefault') }, ...THINKING_LEVEL_IDS.map(value => ({ value, label: value }))]} /></FormField>
+      <FormField label={text('taskAcceptance')} hint={text('taskAcceptanceHint')}><textarea className={textareaClass} rows={3} value={criteria} onChange={event => setCriteria(event.target.value)} /></FormField>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter><Button type="button" variant="outline" onClick={onClose}>{text('cancel')}</Button><Button type="button" disabled={!title.trim() || !instructions.trim()} onClick={() => void submit()}>{pending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}{text('createTask')}</Button></DialogFooter>
+      <DialogFooter><Button type="button" variant="outline" onClick={onClose}>{text('cancel')}</Button><Button type="button" disabled={!title.trim() || !instructions.trim() || (config.workflow?.independentReview && !criteria.trim())} onClick={() => void submit()}>{pending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}{text('createTask')}</Button></DialogFooter>
     </fieldset>
   </DialogContent></Dialog>
 }

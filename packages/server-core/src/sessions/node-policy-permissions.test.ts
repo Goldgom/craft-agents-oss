@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy,
+  authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, consumeSessionActionGate, claimSessionActionGateDispatch,
   getSessionPolicyGrantTarget, hasSessionPolicyToolGrant, setSessionExecutionPolicy, setSessionProgramExecutor,
   type SessionExecutionPolicy, type SessionPolicyPermissionRequest,
 } from '@craft-agent/shared/agent'
@@ -303,13 +303,31 @@ describe('node permission lifecycle in SessionManager', () => {
 })
 
 describe('localbash approval binds the real execution destination', () => {
-  test('verified system metadata inspections use the actual connected client without an exact grant', async () => {
+  test('host metadata inspections wait for approval of the actual connected client', async () => {
     const args = { command: 'uname -a && df -h', cwd: root }
-    expect((await authorizeSessionPolicyTool(sessionId, localTool, args, root)).allowed).toBe(true)
+    await approveLocalShell(args)
     expect((await manager.runSessionLocalShell(managed, args)).stdout).toBe('client-a')
     expect(invocations).toHaveLength(1)
-    expect(hasSessionPolicyToolGrant(sessionId, localTool, args, root)).toBe(false)
-    expect(events).toHaveLength(0)
+    expect(hasSessionPolicyToolGrant(sessionId, localTool, args, root)).toBe(true)
+    expect(events.some(event => event.type === 'permission_request')).toBe(true)
+  })
+
+  test('gated localbash executes only once on the device named in the user approval', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, actionGates: true })
+    manager.attachNodePermissionHandler(managed)
+    const args = { command: 'echo approved-client', cwd: root }
+    const pending = authorizeSessionPolicyTool(sessionId, localTool, args, root, undefined, 'host-invocation')
+    const event = events.findLast((item): item is PermissionEvent => item.type === 'permission_request')!
+    expect(event.request.policyScope?.target).toBe('client:client-a')
+    expect(event.request.impact).toContain('no sandbox isolation')
+    await expect(manager.runSessionLocalShell(managed, args)).rejects.toThrow('no longer available')
+    expect(manager.respondToPermission(sessionId, event.request.requestId, true, false)).toBe(true)
+    expect((await pending).allowed).toBe(true)
+    expect(consumeSessionActionGate(sessionId, localTool, args, root, 'host-invocation').allowed).toBe(true)
+    expect(claimSessionActionGateDispatch(sessionId, localTool, args, root, 'host-invocation').allowed).toBe(true)
+    expect((await manager.runSessionLocalShell(managed, args)).stdout).toBe('client-a')
+    await expect(manager.runSessionLocalShell(managed, args)).rejects.toThrow('no longer available')
+    expect(invocations).toHaveLength(1)
   })
 
   test('full control selects the current actual client and can fall back to host without stale grants', async () => {
@@ -379,7 +397,7 @@ describe('localbash approval binds the real execution destination', () => {
   test('full control bypasses gates and backend approval; disabling it restores one-time gates', async () => {
     managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, actionGates: true, fullControl: true })
     manager.attachNodePermissionHandler(managed)
-    const input = { file_path: join(root, 'approved.txt'), content: 'approved' }
+    const input = { file_path: join(outside, 'approved.txt'), content: 'approved' }
     expect((await authorizeSessionPolicyTool(sessionId, 'Write', input, root)).allowed).toBe(true)
     expect(events).toHaveLength(0)
     const responses: boolean[] = []
@@ -394,6 +412,8 @@ describe('localbash approval binds the real execution destination', () => {
     const event = events.find((event): event is PermissionEvent => event.type === 'permission_request')!
     expect(event).toBeDefined()
     expect(event.request.policyScope?.actionGate?.invocationId).toBe('write-once')
+    expect(event.request.policyScope?.boundary).toBe('outside-environment')
+    expect(checkSessionExecutionPolicy(sessionId, 'Write', input, root, 'write-once').allowed).toBe(false)
     expect(manager.respondToPermission(sessionId, event.request.requestId, true, true)).toBe(true)
     expect((await pending).allowed).toBe(true)
     expect(manager.pendingNodePermissions.size).toBe(0)

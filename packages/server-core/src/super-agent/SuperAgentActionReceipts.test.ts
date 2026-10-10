@@ -24,16 +24,17 @@ describe('Super Agent control outcomes', () => {
     }
   })
 
-  test('rejects ambiguous blocks visibly and repairs within the original communication budget', async () => {
+  test('records ambiguous blocks internally and repairs within the original communication budget', async () => {
     const { service, host, config, advance } = await superAgentFixture()
     await service.save('alpha', config)
     await service.command('alpha', { type: 'chat', text: 'Arrange verification' })
     let current = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
     const mainSession = current.state.nodes[0]!.sessionId!
     host.complete(mainSession, `${block(assignment)}\n${block(assignment)}`)
-    current = await until(() => service.get('alpha'), value => value.state.messages.some(message => message.toNodeId === 'user' && message.kind === 'error'))
+    current = await until(() => service.get('alpha'), value => value.state.messages.some(message => message.actionReceipt?.status === 'rejected'))
     expect(current.state.tasks).toHaveLength(0)
-    expect(current.state.messages.findLast(message => message.toNodeId === 'user' && message.kind === 'error')!.body).toContain('Action receipt')
+    expect(current.state.messages.some(message => message.toNodeId === 'user' && message.kind === 'error')).toBe(false)
+    expect(current.state.messages.findLast(message => message.kind === 'error')!.body).toContain('Action receipt')
     advance(1_001)
     await service.tick()
     await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')

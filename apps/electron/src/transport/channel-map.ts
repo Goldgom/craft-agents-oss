@@ -442,6 +442,19 @@ export const CHANNEL_MAP = {
 
   // LLM Connections
   listLlmConnections: invoke(RPC_CHANNELS.llmConnections.LIST),
+  listAgentPlugins: invoke(RPC_CHANNELS.agentPlugins.LIST),
+  listBackendFrameworks: invoke(RPC_CHANNELS.agentPlugins.LIST_FRAMEWORKS),
+  saveBackendFramework: invoke(RPC_CHANNELS.agentPlugins.SAVE_FRAMEWORK),
+  testBackendFramework: invoke(RPC_CHANNELS.agentPlugins.TEST_FRAMEWORK),
+  installBackendFramework: invoke(RPC_CHANNELS.agentPlugins.INSTALL_FRAMEWORK),
+  cancelBackendFrameworkInstall: invoke(RPC_CHANNELS.agentPlugins.CANCEL_INSTALL),
+  onBackendFrameworkInstallProgress: listener(RPC_CHANNELS.agentPlugins.INSTALL_PROGRESS),
+  setAgentPluginEnabled: invoke(RPC_CHANNELS.agentPlugins.SET_ENABLED),
+  saveAgentPlugin: invoke(RPC_CHANNELS.agentPlugins.SAVE),
+  deleteAgentPlugin: invoke(RPC_CHANNELS.agentPlugins.DELETE),
+  exportAgentProfile: invoke(RPC_CHANNELS.agentPlugins.EXPORT_PROFILE),
+  importAgentProfile: invoke(RPC_CHANNELS.agentPlugins.IMPORT_PROFILE),
+  onAgentPluginsChanged: listener(RPC_CHANNELS.agentPlugins.CHANGED),
   generateStudioImage: invoke(RPC_CHANNELS.studio.GENERATE_IMAGE),
   assistStudioCanvas: invoke(RPC_CHANNELS.studio.ASSIST_CANVAS),
   generateStudioMindMap: invoke(RPC_CHANNELS.studio.GENERATE_MIND_MAP),
@@ -463,7 +476,7 @@ export const CHANNEL_MAP = {
   getShowApiBalances: invoke(RPC_CHANNELS.llmConnections.GET_SHOW_BALANCES),
   setShowApiBalances: invoke(RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES),
   getTokenNestUsage: invoke(RPC_CHANNELS.tokennest.GET_USAGE),
-  getTokenNestPricing: invoke(RPC_CHANNELS.tokennest.GET_PRICING),
+  getModelPeakValleyPricing: invoke(RPC_CHANNELS.llmConnections.GET_PRICING),
   getTokenNestRechargeUrl: invoke(RPC_CHANNELS.tokennest.GET_RECHARGE_URL),
 
   // Projects

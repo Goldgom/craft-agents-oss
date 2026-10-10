@@ -24,6 +24,10 @@ export function classifyActionGate(toolName: string, input: Record<string, unkno
     return 'unknown';
   }
   const name = tool.replace(/_/g, '');
+  if (tool === 'super_agent_library') {
+    if (['library-list', 'library-get', 'memory-upsert', 'memory-delete'].includes(String(input.type))) return;
+    return 'state-change';
+  }
   if (['read', 'glob', 'grep', 'find', 'ls', 'todowrite', 'taskoutput', 'askuserquestion', 'mermaidvalidate', 'getsessioninfo', 'sendagentmessage'].includes(name)
     || tool === 'super_agent_task' || (tool === 'collaboration_board' && input.action === 'get')) return;
   if (['write', 'edit', 'multiedit', 'notebookedit'].includes(name)) return 'state-change';

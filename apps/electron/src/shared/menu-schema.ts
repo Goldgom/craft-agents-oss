@@ -365,7 +365,7 @@ export const DEBUG_MENU: MenuSection = {
  * Settings item definition
  * Used by both AppMenu (logo dropdown) and SettingsNavigator (sidebar panel)
  */
-import { SETTINGS_PAGES, type SettingsSubpage } from './settings-registry'
+import { SETTINGS_MENU_PAGES, type SettingsSubpage } from './settings-registry'
 
 export interface SettingsMenuItem {
   id: SettingsSubpage
@@ -406,7 +406,7 @@ const SETTINGS_ICONS: Record<SettingsSubpage, string> = {
  * All settings pages - derived from settings-registry (single source of truth)
  * Order is determined by SETTINGS_PAGES in settings-registry.ts
  */
-export const SETTINGS_ITEMS: SettingsMenuItem[] = SETTINGS_PAGES
+export const SETTINGS_ITEMS: SettingsMenuItem[] = SETTINGS_MENU_PAGES
   .filter(page => page.id !== 'usage' && page.id !== 'recharge' && (page.id !== 'server' || FEATURE_FLAGS.embeddedServer))
   .map(page => ({
     id: page.id,

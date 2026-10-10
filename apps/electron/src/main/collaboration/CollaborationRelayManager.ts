@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WsRpcClient } from '@craft-agent/server-core/transport';
+import { createNodeCloudPeer } from '@craft-agent/server-core/cloud/peer-node';
 import { COLLABORATION_RELAY_CAPABILITY, COLLABORATION_RELAY_RPC as C, RPC_CHANNELS, type CollaborationServerRef as ServerRef, type CollaborationSetupContext as SetupContext, type CollaborationRelaySelection as Selection, type CollaborationRelayCandidate as Candidate, type CollaborationRelayCreateInput as CreateInput, type CollaborationRelayCreateResult as CreateResult, type CollaborationRelayStatus as Status, type CollaborationRelayStatusLookup as Lookup, type CollaborationRelayInfo as Info, type CollaborationRelayMember as Member, type CollaborationRelayGroup as Group, type CollaborationRelayForward as Forward, type CollaborationRelayOperation as Operation, type CollaborationRelayDelivery as Delivery } from '@craft-agent/shared/protocol';
 export interface RelayClient {
     invoke(channel: string, ...args: unknown[]): Promise<unknown>;
@@ -272,7 +273,7 @@ export class CollaborationRelayManager {
         this.opening.set(key, entry);
         entry.promise = (async () => {
             const endpoint = { ...resolved, url };
-            const client: RelayClient = this.deps.createClient?.(endpoint, workspaceId) ?? new WsRpcClient(url, { token: resolved.token, workspaceId, autoReconnect: false, tlsRejectUnauthorized: true, useNodeWebSocket: true, maxPayloadBytes: 16 * 1024 * 1024, clientCapabilities: [COLLABORATION_RELAY_CAPABILITY] });
+            const client: RelayClient = this.deps.createClient?.(endpoint, workspaceId) ?? new WsRpcClient(url, { token: resolved.token, workspaceId, autoReconnect: false, tlsRejectUnauthorized: true, useNodeWebSocket: true, cloudPeerFactory: createNodeCloudPeer, maxPayloadBytes: 16 * 1024 * 1024, clientCapabilities: [COLLABORATION_RELAY_CAPABILITY] });
             entry.client = client;
             this.pendingClients.add(client);
             client.handleCapability(COLLABORATION_RELAY_CAPABILITY, async (request) => {

@@ -169,6 +169,8 @@ function assembleResources(config: ServerBuildConfig): void {
         const stat = lstatSync(src);
         if (stat.isFile()) {
           copyFileSync(src, join(destScripts, entry));
+        } else if (stat.isDirectory() && entry === 'agent-plugins') {
+          cpSync(src, join(destScripts, entry), { recursive: true });
         }
       }
     }

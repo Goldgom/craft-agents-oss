@@ -170,6 +170,7 @@ export function registerNativeRemoteTransport(ipc: NativeRegistrar, deps: Native
       ...(state.nextRetryInMs !== undefined ? { nextRetryInMs: state.nextRetryInMs } : {}),
       ...(state.lastHeartbeatAt !== undefined ? { lastHeartbeatAt: state.lastHeartbeatAt } : {}),
       updatedAt: state.updatedAt,
+      ...(state.dataPath === 'direct' || state.dataPath === 'relay' ? { dataPath: state.dataPath } : {}),
       ...(state.lastError ? { lastError: { kind, code: connectionFailureCode(kind), message: failureMessages[connectionFailureCode(kind)] } } : {}),
       ...(state.lastClose ? { lastClose: { code: state.lastClose.code, wasClean: state.lastClose.wasClean } } : {}),
     }

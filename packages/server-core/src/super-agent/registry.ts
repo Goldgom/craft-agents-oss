@@ -69,6 +69,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       createSession: (workspaceId, options) => host.createSession(workspaceId, options),
       getSession: sessionId => host.getSession(sessionId),
       getSessions: workspaceId => host.getSessions(workspaceId),
+      getSuperAgentSessionIds: workspaceId => host.getSuperAgentSessionIds?.(workspaceId) ?? [],
       deleteSession: (sessionId, guard) => host.deleteSession(sessionId, guard),
       sendMessage: (sessionId, message, context, hidden) => host.sendMessage(sessionId, message, undefined, undefined, { collaborationDispatch: true, superAgentContext: context, hidden }),
       cancelProcessing: (sessionId, silent) => host.cancelProcessing(sessionId, silent),
@@ -77,6 +78,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       respondToPermission: (sessionId, requestId, allowed, alwaysAllow) => host.respondToPermission(sessionId, requestId, allowed, alwaysAllow),
       getSessionFinalText: sessionId => host.getSessionFinalText(sessionId),
       ensureSuperAgentSessionSettings: (sessionId, settings) => host.ensureSuperAgentSessionSettings(sessionId, settings),
+      setSessionThinkingLevel: (sessionId, level) => host.setSessionThinkingLevel(sessionId, level),
       setSuperAgentFullControl: (workspaceId, fullControl) => host.setSuperAgentFullControl(workspaceId, fullControl),
       clearSuperAgentPermissionGrants: workspaceId => host.clearSuperAgentPermissionGrants(workspaceId),
       applySessionPolicy: async (sessionId, policy) => {
@@ -96,7 +98,15 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       if (workspace.id !== workspaceId) throw new Error('Use the canonical workspace ID for Super Agent')
       return workspace.rootPath
     },
+    checkReadiness: async (workspaceId, config, force) => {
+      await validateExecutionRoot(workspaceId, config.environment)
+      return environments.checkReadiness(workspaceId, config, host.hasSuperAgentBrowserSupport?.(workspaceId) === true, force)
+    },
     validateConfig: validateSuperAgentCatalog,
+    onReset: async workspaceId => {
+      environmentConfigs.delete(workspaceId)
+      await environments.reconcile(workspaceId, null)
+    },
     onConfigChanged: async workspaceId => {
       const current = (await service.get(workspaceId)).config
       if (current) await environments.reconcile(workspaceId, current)
@@ -111,8 +121,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       // A VM workspace's server is already inside the chosen VM. Reuse its OS
       // executor only after the environment adapter has verified that host mode.
       const resolved = await environments.resolve(workspaceId, environment)
-      if (!resolved.status.available || resolved.status.isolation !== 'remote-vm') throw new Error(resolved.status.detail)
-      if (!environment.fullControl && !Object.values(environment.permissions).every(Boolean)) throw new Error('VM host scripts require all environment permissions')
+      if (!resolved.status.available || (environment.kind !== 'folder' && resolved.status.isolation !== 'remote-vm')) throw new Error(resolved.status.detail)
       const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
       const commands: Record<string, [string, string[]]> = {
         '.js': [process.execPath, [path]], '.mjs': [process.execPath, [path]], '.cjs': [process.execPath, [path]],

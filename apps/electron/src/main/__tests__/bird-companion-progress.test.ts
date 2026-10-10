@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { BirdCompanionProgress } from '../bird-companion-progress'
 import { toBirdProgressEvent, type BirdProgressEvent } from '../../shared/bird-companion'
+import { defaultBirdBounds, bubbleBounds } from '../bird-companion-layout'
 
 const tool = (id = 't1', computer = true, sessionId = 's1'): BirdProgressEvent => ({ type: 'tool', sessionId, toolUseId: id, activity: computer ? 'click' : 'reading', computer })
 const result = (id = 't1', isError = false): BirdProgressEvent => ({ type: 'result', sessionId: 's1', toolUseId: id, isError })
@@ -102,18 +103,60 @@ describe('bird companion lifecycle', () => {
     expect(progress.getState()).toMatchObject({ mood: 'error', activity: 'finishedWithErrors' })
   })
 
-  it('dismisses the current task until a new turn and handles session deletion', () => {
+  it('closes only the bubble, keeps the bird awake, and lets the bird reopen progress', () => {
     const progress = new BirdCompanionProgress()
     progress.observe('w', tool())
-    progress.dismiss()
+    expect(progress.getState()).toMatchObject({ visible: true, bubbleVisible: true })
+    progress.dismissBubble()
     progress.observe('w', tool('t2'))
-    expect(progress.getState().visible).toBe(false)
+    expect(progress.getState()).toMatchObject({ visible: true, bubbleVisible: false, mood: 'working' })
+    progress.showBubble()
+    expect(progress.getState()).toMatchObject({ visible: true, bubbleVisible: true })
+    progress.dismissBubble()
     progress.observe('w', finish())
+    expect(progress.getState()).toMatchObject({ visible: true, bubbleVisible: true, activity: 'finished' })
+    progress.clearFinished()
+    expect(progress.getState()).toMatchObject({ visible: false, bubbleVisible: false })
     progress.observe('w', { type: 'start', sessionId: 's1', startId: 'm2' })
+    expect(progress.getState().visible).toBe(false)
     progress.observe('w', tool('t3'))
     expect(progress.getState().visible).toBe(true)
     progress.observe('w', { type: 'delete', sessionId: 's1' })
     expect(progress.getState().visible).toBe(false)
+  })
+
+  it('does not wake for normal chat or unrelated permission requests', () => {
+    const progress = new BirdCompanionProgress()
+    progress.observe('w', { type: 'start', sessionId: 's1', startId: 'normal-message' })
+    progress.observe('w', { type: 'permission', sessionId: 's1', requestId: 'p', computer: false })
+    progress.observe('w', tool('read', false))
+    expect(progress.getState()).toMatchObject({ visible: false, bubbleVisible: false })
+    progress.setPreferences({ alwaysVisible: true, autoShowComputerUse: true })
+    progress.observe('w', finish())
+    progress.clearFinished()
+    expect(progress.getState()).toMatchObject({ visible: true, bubbleVisible: false, mood: 'idle' })
+    progress.showBubble()
+    expect(progress.getState()).toMatchObject({ visible: true, bubbleVisible: true, activity: 'greeting' })
+    progress.dismissBubble()
+    expect(progress.getState()).toMatchObject({ visible: true, bubbleVisible: false })
+  })
+})
+
+describe('bird companion desktop layout', () => {
+  it('anchors the compact bird at the bottom right, including desktops with negative coordinates', () => {
+    expect(defaultBirdBounds({ x: 0, y: 0, width: 1920, height: 1040 })).toEqual({ x: 1668, y: 824, width: 236, height: 200 })
+    expect(defaultBirdBounds({ x: -1920, y: -100, width: 1920, height: 1040 })).toEqual({ x: -252, y: 724, width: 236, height: 200 })
+  })
+
+  it('keeps the separate bubble above the bird and moves it with the bird', () => {
+    const area = { x: 0, y: 0, width: 1920, height: 1040 }
+    const bird = defaultBirdBounds(area)
+    const bubble = bubbleBounds(bird, area, 144)
+    expect(bubble).toEqual({ x: 1584, y: 672, width: 320, height: 144 })
+    expect(bubbleBounds({ ...bird, x: bird.x - 100, y: bird.y - 30 }, area, 144)).toEqual({ ...bubble, x: bubble.x - 100, y: bubble.y - 30 })
+    const beside = bubbleBounds({ ...bird, x: 0, y: 0 }, area, 200)
+    expect(beside).toMatchObject({ x: 244, y: 0 })
+    expect(beside.x + beside.width).toBeLessThanOrEqual(area.width)
   })
 })
 

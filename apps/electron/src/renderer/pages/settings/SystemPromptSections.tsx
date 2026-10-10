@@ -1,0 +1,187 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { SettingsCard, SettingsSection, SettingsTextarea, SettingsToggle } from '@/components/settings'
+import { useAppShellContext } from '@/context/AppShellContext'
+import type { SystemPromptSource } from '@craft-agent/shared/protocol'
+
+const SOURCE_KEYS: Record<SystemPromptSource['source'], string> = {
+  builtin: 'builtin',
+  user: 'user',
+  workspace: 'workspace',
+  project: 'project',
+  context: 'context',
+  debug: 'debug',
+}
+
+function isMissingRemoteHandler(error: unknown): boolean {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
+  const message = error instanceof Error ? error.message : String(error)
+  return code === 'CHANNEL_NOT_FOUND' || message.includes('No handler for:')
+}
+
+export function SystemPromptSections({ revision, defaultOpen = false }: { revision: number; defaultOpen?: boolean }) {
+  const { t } = useTranslation()
+  const { activeWorkspaceId } = useAppShellContext()
+  const [sources, setSources] = useState<SystemPromptSource[]>([])
+  const [loading, setLoading] = useState(true)
+  const [capabilities, setCapabilities] = useState<Record<string, boolean>>({})
+  const [editableInstructions, setEditableInstructions] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [legacyRemote, setLegacyRemote] = useState(false)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+  const lastRevision = useRef(revision)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setSettingsLoaded(false)
+    let usingLegacyRemote = false
+    try {
+      const nextSources = activeWorkspaceId ? await window.electronAPI.getSystemPromptSources(activeWorkspaceId) : []
+      setSources(nextSources)
+    } catch (error) {
+      if (isMissingRemoteHandler(error)) {
+        // Older remote servers do not know the aggregate system-prompt RPC.
+        // Workspace prompts are still useful and are supported by those servers.
+        try {
+          const prompts = activeWorkspaceId ? await window.electronAPI.getWorkspacePrompts(activeWorkspaceId) : []
+          setSources(prompts.map(prompt => ({
+            id: `workspace-preference:${prompt.id}`,
+            source: 'workspace' as const,
+            title: prompt.title,
+            content: prompt.content,
+            enabled: prompt.enabled,
+          })))
+        } catch (fallbackError) {
+          setSources([])
+          if (!isMissingRemoteHandler(fallbackError)) {
+            toast.error(fallbackError instanceof Error ? fallbackError.message : t('settings.promptOverview.loadError'))
+          }
+        }
+        usingLegacyRemote = true
+      } else {
+        setSources([])
+        toast.error(error instanceof Error ? error.message : t('settings.promptOverview.loadError'))
+      }
+    }
+
+    try {
+      const settings = await window.electronAPI.getSystemPromptSettings()
+      setCapabilities(settings.capabilities)
+      setEditableInstructions(settings.editableInstructions ?? '')
+      setSettingsLoaded(true)
+    } catch (error) {
+      if (isMissingRemoteHandler(error)) {
+        setCapabilities({ browserTools: true, webSearch: true, structuredData: true, subagents: false, documentTools: true, themeDesign: true })
+        setEditableInstructions('')
+        usingLegacyRemote = true
+      } else {
+        toast.error(error instanceof Error ? error.message : t('settings.promptOverview.loadError'))
+      }
+    }
+    setLegacyRemote(usingLegacyRemote)
+    setLoading(false)
+  }, [activeWorkspaceId, t])
+
+  useEffect(() => { void load() }, [load])
+
+  // Workspace prompt edits only refresh the preview, preserving the global draft.
+  useEffect(() => {
+    if (!activeWorkspaceId || loading || lastRevision.current === revision) return
+    lastRevision.current = revision
+    let cancelled = false
+    const refresh = legacyRemote
+      ? window.electronAPI.getWorkspacePrompts(activeWorkspaceId).then(prompts => prompts.map(prompt => ({
+        id: `workspace-preference:${prompt.id}`, source: 'workspace' as const,
+        title: prompt.title, content: prompt.content, enabled: prompt.enabled,
+      })))
+      : window.electronAPI.getSystemPromptSources(activeWorkspaceId)
+    void refresh
+      .then(nextSources => { if (!cancelled) setSources(nextSources) })
+      .catch(error => {
+        if (!cancelled && !isMissingRemoteHandler(error)) {
+          toast.error(error instanceof Error ? error.message : t('settings.promptOverview.loadError'))
+        }
+      })
+    return () => { cancelled = true }
+  }, [revision, activeWorkspaceId, legacyRemote, loading, t])
+
+  const activeCount = useMemo(() => sources.filter(source => source.enabled).length, [sources])
+  const saveSettings = async (nextCapabilities = capabilities, nextInstructions = editableInstructions) => {
+    if (legacyRemote || !settingsLoaded || saving) return
+    setSaving(true)
+    try {
+      await window.electronAPI.setSystemPromptSettings({ capabilities: nextCapabilities, editableInstructions: nextInstructions })
+      await load()
+      toast.success(t('settings.promptOverview.saved'))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.promptOverview.saveError'))
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="space-y-8">
+      {legacyRemote && (
+        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{t('settings.promptOverview.remoteUpgrade')}</span>
+        </div>
+      )}
+      <SettingsSection title={t('settings.promptOverview.capabilitiesTitle')} description={t('settings.promptOverview.capabilitiesDescription')}>
+        <SettingsCard divided>
+          {(['browserTools', 'webSearch', 'structuredData', 'subagents', 'documentTools', 'themeDesign'] as const).map(capability => (
+            <SettingsToggle
+              key={capability}
+              label={t(`settings.promptOverview.capability.${capability}`)}
+              description={t(`settings.promptOverview.capability.${capability}Desc`)}
+              checked={capabilities[capability] !== false}
+              disabled={loading || saving || legacyRemote || !settingsLoaded}
+              onCheckedChange={checked => {
+                const next = { ...capabilities, [capability]: checked }
+                void saveSettings(next, editableInstructions)
+              }}
+            />
+          ))}
+        </SettingsCard>
+      </SettingsSection>
+      <SettingsSection title={t('settings.promptOverview.editableTitle')} description={t('settings.promptOverview.editableDescription')}>
+        <SettingsCard>
+          <SettingsTextarea value={editableInstructions} onChange={setEditableInstructions} maxLength={20000} rows={7} placeholder={t('settings.promptOverview.editablePlaceholder')} inCard disabled={loading || saving || legacyRemote || !settingsLoaded} />
+          <div className="flex justify-end border-t border-border/50 px-4 py-3"><Button disabled={loading || saving || legacyRemote || !settingsLoaded} onClick={() => void saveSettings()}>{t('settings.promptOverview.save')}</Button></div>
+        </SettingsCard>
+      </SettingsSection>
+      <SettingsSection
+        title={t('settings.promptOverview.sectionTitle')}
+        description={t('settings.promptOverview.sectionDescription', { count: activeCount })}
+        action={<Button variant="outline" size="sm" disabled={loading || saving} onClick={() => void load()}><RefreshCw className="mr-1.5 h-3.5 w-3.5" />{t('common.refresh')}</Button>}
+      >
+        <details open={defaultOpen || undefined}>
+          <summary className="cursor-pointer text-sm text-muted-foreground">{t('settings.prompts.totalPrompt')}</summary>
+          <SettingsCard divided>
+            {loading ? (
+              <div className="px-4 py-10 text-center text-sm text-muted-foreground">{t('common.loading')}</div>
+            ) : sources.length === 0 ? (
+              <div className="px-4 py-10 text-center text-sm text-muted-foreground">{t('settings.promptOverview.empty')}</div>
+            ) : sources.map(source => (
+              <article key={source.id} className="space-y-2 px-4 py-4">
+                <div className="flex items-center gap-2">
+                  <h3 className="min-w-0 flex-1 truncate text-sm font-medium">{source.title}</h3>
+                  <Badge variant="outline" className="shrink-0 text-[10px]">
+                    {t(`settings.promptOverview.source.${SOURCE_KEYS[source.source]}`)}
+                  </Badge>
+                  <Badge variant={source.enabled ? 'secondary' : 'outline'} className="shrink-0 text-[10px]">
+                    {source.enabled ? t('settings.promptOverview.enabled') : t('settings.promptOverview.disabled')}
+                  </Badge>
+                </div>
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs leading-relaxed text-foreground/75">{source.content}</pre>
+              </article>
+            ))}
+          </SettingsCard>
+        </details>
+      </SettingsSection>
+    </div>
+  )
+}

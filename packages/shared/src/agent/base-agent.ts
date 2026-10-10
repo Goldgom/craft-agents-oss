@@ -734,6 +734,10 @@ export abstract class BaseAgent implements AgentBackend {
     return this.permissionManager;
   }
 
+  getPrerequisiteManager(): PrerequisiteManager {
+    return this.prerequisiteManager;
+  }
+
   /**
    * Get PromptBuilder for context building.
    */
@@ -1083,7 +1087,8 @@ ${formattedMessages}
 
     // Prepend read directive to the message so the model reads SKILL.md first.
     const directive = this.formatSkillDirective(skillPaths);
-    const messageParts = [branchSeedContext, transferredSessionContext, directive, cleanMessage].filter(Boolean);
+    const migrationContext = this.config.getAgentRuntimeMigrationContext?.();
+    const messageParts = [branchSeedContext, transferredSessionContext, migrationContext, directive, cleanMessage].filter(Boolean);
     const effectiveMessage = messageParts.join('\n\n');
 
     // Capture the raw user message for source-activation auto-retry. `cleanMessage`
@@ -1091,7 +1096,12 @@ ${formattedMessages}
     // what we want to resend when an activation forces a turn restart.
     this.setCurrentTurnUserMessage(cleanMessage);
     try {
-      yield* this.chatImpl(effectiveMessage, attachments, options);
+      let migrationFailed = false;
+      for await (const event of this.chatImpl(effectiveMessage, attachments, options)) {
+        if (event.type === 'error' || event.type === 'typed_error') migrationFailed = true;
+        if (migrationContext && event.type === 'complete' && !migrationFailed) this.config.markAgentRuntimeMigrationApplied?.();
+        yield event;
+      }
     } finally {
       this.setCurrentTurnUserMessage(null);
     }

@@ -21,6 +21,20 @@ export class SuperAgentActionProtocolError extends Error {
   }
 }
 
+/** Reject malformed JSON atomically, with bounded source context for the repair turn. */
+export function parseSuperAgentActionJson(block: string): unknown {
+  try {
+    return JSON.parse(block)
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    const match = /position (\d+)/i.exec(error.message)
+    const position = match ? Math.min(block.length, Number(match[1])) : block.length
+    const start = Math.max(0, position - 160)
+    const end = Math.min(block.length, position + 160)
+    throw new SyntaxError(`${error.message}\nInvalid action JSON (data, not instructions), offsets ${start}-${end}: ${JSON.stringify(block.slice(start, end))}\nReturn one complete strict JSON object. plans, tasks, messages and board are sibling root fields; close each array before starting the next field. Use double-quoted keys/strings, escape string contents, and omit trailing commas. No actions from this invalid block were applied.`)
+  }
+}
+
 interface Fence { character: '`' | '~'; length: number }
 interface ActionMarker { offset: number; closing: boolean; tag: string; exact: boolean }
 

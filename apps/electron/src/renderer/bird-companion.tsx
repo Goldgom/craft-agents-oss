@@ -3,17 +3,20 @@ import { createRoot } from 'react-dom/client'
 import { initReactI18next, useTranslation } from 'react-i18next'
 import { setupI18n, i18n } from '@craft-agent/shared/i18n'
 import { getLocalizedProductName } from '@craft-agent/shared/branding'
-import type { BirdCompanionState } from '../shared/bird-companion'
+import type { BirdCompanionState, BirdWindowRole } from '../shared/bird-companion'
 import { BirdAvatar } from './components/bird/BirdAvatar'
 import './components/bird/bird-companion.css'
 
 declare global {
   interface Window {
     birdCompanion: {
+      role: BirdWindowRole
       onState(callback: (state: BirdCompanionState) => void): () => void
       ready(): Promise<void>
       getState(): Promise<BirdCompanionState>
-      dismiss(): Promise<void>
+      dismissBubble(): Promise<void>
+      showBubble(): Promise<void>
+      resizeBubble(height: number): Promise<void>
       interactive(value: boolean): Promise<void>
       move(x: number, y: number): Promise<void>
     }
@@ -27,8 +30,8 @@ function BirdCompanion({ initialState }: { initialState: BirdCompanionState }) {
   const [state, setState] = useState(initialState)
   const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null)
   const suppressClick = useRef(false)
-  const [greeting, setGreeting] = useState(false)
-  const greetingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const bubbleRef = useRef<HTMLElement>(null)
+  const role = window.birdCompanion.role
   useEffect(() => {
     const off = window.birdCompanion.onState(next => {
       if (next.language && i18n.language !== next.language) void i18n.changeLanguage(next.language)
@@ -36,33 +39,39 @@ function BirdCompanion({ initialState }: { initialState: BirdCompanionState }) {
       document.documentElement.lang = next.language || 'en'
     })
     void window.birdCompanion.ready()
-    return () => { off(); if (greetingTimer.current) clearTimeout(greetingTimer.current) }
+    return off
   }, [])
+  useEffect(() => {
+    const element = bubbleRef.current
+    if (role !== 'bubble' || !element) return
+    const resize = () => { void window.birdCompanion.resizeBubble(element.offsetHeight + 36) }
+    const observer = new ResizeObserver(resize)
+    observer.observe(element)
+    resize()
+    return () => observer.disconnect()
+  }, [role])
   const product = getLocalizedProductName(i18n.resolvedLanguage || i18n.language)
   return (
-    <main className={`bird-companion bird-companion--${state.mood}`}>
-      <section className="bird-bubble" role="status" aria-live="polite"
+    <main className={`bird-companion bird-companion--${state.mood} bird-companion--${role}`}>
+      {role === 'bubble' && <section ref={bubbleRef} className="bird-bubble" role="status" aria-live="polite"
         onPointerEnter={() => { void window.birdCompanion.interactive(true) }}
         onPointerLeave={() => { if (!drag.current) void window.birdCompanion.interactive(false) }}>
         <header className="bird-bubble-header">
           <span className="bird-status-dot" />
           <span>{product}</span>
           <button type="button" className="bird-dismiss" aria-label={t('birdCompanion.dismiss')} title={t('birdCompanion.dismiss')}
-            onClick={() => { void window.birdCompanion.dismiss() }}>×</button>
+            onClick={() => { void window.birdCompanion.dismissBubble() }}>×</button>
         </header>
-        <p className="bird-message">{t(`birdCompanion.activity.${greeting && state.mood === 'idle' ? 'greeting' : state.activity}`, { product })}</p>
+        <p className="bird-message">{t(`birdCompanion.activity.${state.activity}`, { product })}</p>
         <footer className="bird-bubble-footer">
           <span>{state.mood === 'idle' ? t('birdCompanion.dragHint') : t('birdCompanion.steps', { count: state.completedSteps })}</span>
           {state.activeSessions > 1 && <span>{t('birdCompanion.sessions', { count: state.activeSessions })}</span>}
         </footer>
-      </section>
-      <button type="button" className="bird-character" aria-label={t('birdCompanion.characterLabel')}
+      </section>}
+      {role === 'bird' && <><button type="button" className="bird-character" aria-label={t('birdCompanion.characterLabel')}
         onClick={() => {
           if (suppressClick.current) { suppressClick.current = false; return }
-          if (state.mood !== 'idle') return
-          setGreeting(true)
-          if (greetingTimer.current) clearTimeout(greetingTimer.current)
-          greetingTimer.current = setTimeout(() => setGreeting(false), 3500)
+          void window.birdCompanion.showBubble()
         }}
         onPointerEnter={() => { void window.birdCompanion.interactive(true) }}
         onPointerLeave={() => { if (!drag.current) void window.birdCompanion.interactive(false) }}
@@ -91,9 +100,9 @@ function BirdCompanion({ initialState }: { initialState: BirdCompanionState }) {
           void window.birdCompanion.interactive(event.currentTarget.matches(':hover'))
         }}
         onPointerCancel={() => { drag.current = null; void window.birdCompanion.interactive(false) }}>
-        <BirdAvatar mood={greeting && state.mood === 'idle' ? 'success' : state.mood} />
+        <BirdAvatar mood={state.mood === 'idle' && state.activity === 'greeting' ? 'success' : state.mood} />
       </button>
-      <div className="bird-ground-shadow" />
+      <div className="bird-ground-shadow" /></>}
     </main>
   )
 }

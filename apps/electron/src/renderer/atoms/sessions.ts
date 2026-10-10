@@ -157,12 +157,12 @@ export const sessionMetaMapAtom = atom<Map<string, SessionMeta>>(new Map())
 export const sessionBranchesAtom = selectAtom(sessionMetaMapAtom,
   map => [...map.values()].filter(session => !!session.branchFromMessageId).map(session => ({
     id: session.id, workspaceId: session.workspaceId, name: session.name,
-    branchFromMessageId: session.branchFromMessageId, createdAt: session.createdAt,
+    branchFromMessageId: session.branchFromMessageId, branchFromSessionId: session.branchFromSessionId, createdAt: session.createdAt,
   })).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id.localeCompare(b.id)),
   (previous, next) => previous.length === next.length && previous.every((session, index) => {
     const other = next[index]!
     return session.id === other.id && session.workspaceId === other.workspaceId && session.name === other.name
-      && session.branchFromMessageId === other.branchFromMessageId && session.createdAt === other.createdAt
+      && session.branchFromMessageId === other.branchFromMessageId && session.branchFromSessionId === other.branchFromSessionId && session.createdAt === other.createdAt
   }))
 
 /**

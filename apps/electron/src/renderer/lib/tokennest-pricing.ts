@@ -1,16 +1,16 @@
 import { TOKENNEST_RECHARGE_URL, getProviderRechargeTarget } from '@craft-agent/shared/utils/billing'
 import type { LlmConnection } from '@config/llm-connections'
+import { getPeakValleyPeriod, parsePeakValleySchedule, type PeakValleySchedule } from '@craft-agent/shared/utils/peak-valley'
 
-export interface PeakValleySchedule {
-  timezone: string
-  start: string
-  end: string
-  multiplier: number
-}
+export { getPeakValleyPeriod, type PeakValleySchedule }
+export type PricingSource = 'tokennest' | 'deepseek'
 
-export function supportsTokenNestPricing(connection: LlmConnection | null | undefined, modelId: string): boolean {
-  return !!connection && /^deepseek[-/]/i.test(modelId.replace(/^pi\//, ''))
-    && getProviderRechargeTarget(connection)?.url === TOKENNEST_RECHARGE_URL
+export function getModelPricingSource(connection: LlmConnection | null | undefined, modelId: string): PricingSource | undefined {
+  if (!connection || !/^deepseek[-/]/i.test(modelId.replace(/^pi\//, ''))) return undefined
+  const target = getProviderRechargeTarget(connection)
+  if (target?.url === TOKENNEST_RECHARGE_URL) return 'tokennest'
+  if (target?.url === 'https://platform.deepseek.com/top_up') return 'deepseek'
+  return undefined
 }
 
 /** Use only opted-in models in the gateway's current public pricing catalog. */
@@ -21,68 +21,55 @@ export function parsePeakValleyPricing(payload: unknown): Record<string, PeakVal
   const schedules: Record<string, PeakValleySchedule> = {}
   for (const row of catalog.data) {
     if (!row || typeof row !== 'object' || typeof row.model_name !== 'string') continue
-    const schedule = row.peak_valley_pricing
-    if (!schedule || typeof schedule !== 'object') continue
-    const { timezone, start, end, multiplier } = schedule
-    const clock = /^(?:[01]\d|2[0-3]):[0-5]\d$/
-    if (typeof timezone !== 'string' || !timezone || timezone === 'Local'
-      || typeof start !== 'string' || typeof end !== 'string'
-      || !clock.test(start) || !clock.test(end) || start === end
-      || typeof multiplier !== 'number' || !Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 1) continue
-    try { new Intl.DateTimeFormat('en-GB', { timeZone: timezone }) } catch { continue }
-    schedules[row.model_name] = { timezone, start, end, multiplier }
+    const schedule = parsePeakValleySchedule(row.peak_valley_pricing)
+    if (schedule) schedules[row.model_name] = schedule
   }
   return schedules
 }
 
-const formatters = new Map<string, Intl.DateTimeFormat>()
-
-export function getPeakValleyPeriod(schedule: PeakValleySchedule, at: number): 'peak' | 'off-peak' {
-  let formatter = formatters.get(schedule.timezone)
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-GB', {
-      timeZone: schedule.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-    })
-    formatters.set(schedule.timezone, formatter)
-  }
-  const clock = formatter.format(at)
-  const offPeak = schedule.start < schedule.end
-    ? clock >= schedule.start && clock < schedule.end
-    : clock >= schedule.start || clock < schedule.end
-  return offPeak ? 'off-peak' : 'peak'
+interface PricingStore {
+  listeners: Set<() => void>
+  snapshot: { schedules: Record<string, PeakValleySchedule>; at: number }
+  fetchedAt: number
+  pending?: Promise<void>
 }
-
-const listeners = new Set<() => void>()
-let snapshot = { schedules: {} as Record<string, PeakValleySchedule>, at: Date.now() }
-let fetchedAt = 0
-let pending: Promise<void> | undefined
+const stores: Record<PricingSource, PricingStore> = {
+  tokennest: { listeners: new Set(), snapshot: { schedules: {}, at: Date.now() }, fetchedAt: 0 },
+  deepseek: { listeners: new Set(), snapshot: { schedules: {}, at: Date.now() }, fetchedAt: 0 },
+}
 let timer: ReturnType<typeof setTimeout> | undefined
 
-export function getPricingSnapshot() { return snapshot }
+export function getPricingSnapshot() { return stores.tokennest.snapshot }
+export function getDeepSeekPricingSnapshot() { return stores.deepseek.snapshot }
 
-async function refreshPricing(): Promise<void> {
-  if (pending) return pending
-  if (Date.now() - fetchedAt < 5 * 60_000) return
-  pending = (async () => {
+async function refreshPricing(source: PricingSource): Promise<void> {
+  const store = stores[source]
+  if (store.pending) return store.pending
+  if (Date.now() - store.fetchedAt < 5 * 60_000) return
+  store.pending = (async () => {
     try {
-      const catalog = await window.electronAPI.getTokenNestPricing()
-      snapshot = { schedules: parsePeakValleyPricing(catalog), at: Date.now() }
+      const catalog = await window.electronAPI.getModelPeakValleyPricing(source)
+      store.snapshot = { schedules: parsePeakValleyPricing(catalog), at: Date.now() }
     } catch {
       // Hide the badge when live metadata is unavailable instead of claiming a price period.
-      snapshot = { schedules: {}, at: Date.now() }
+      store.snapshot = { schedules: {}, at: Date.now() }
     } finally {
-      fetchedAt = Date.now()
-      pending = undefined
-      for (const listener of listeners) listener()
+      store.fetchedAt = Date.now()
+      store.pending = undefined
+      for (const listener of store.listeners) listener()
     }
   })()
-  return pending
+  return store.pending
 }
 
 function updatePricingClock() {
-  snapshot = { ...snapshot, at: Date.now() }
-  for (const listener of listeners) listener()
-  void refreshPricing()
+  for (const source of ['tokennest', 'deepseek'] as const) {
+    const store = stores[source]
+    if (!store.listeners.size) continue
+    store.snapshot = { ...store.snapshot, at: Date.now() }
+    for (const listener of store.listeners) listener()
+    void refreshPricing(source)
+  }
 }
 
 function schedulePricingClock() {
@@ -93,18 +80,23 @@ function schedulePricingClock() {
 }
 
 /** One request, clock, and focus listener shared by desktop/mobile model badges. */
-export function subscribePricing(listener: () => void): () => void {
-  listeners.add(listener)
-  if (listeners.size === 1) {
-    updatePricingClock()
+export function subscribePricing(listener: () => void, source: PricingSource = 'tokennest'): () => void {
+  const previouslyActive = stores.tokennest.listeners.size + stores.deepseek.listeners.size
+  stores[source].listeners.add(listener)
+  if (stores[source].listeners.size === 1) updatePricingClock()
+  if (!previouslyActive) {
     schedulePricingClock()
     window.addEventListener('focus', updatePricingClock)
   }
   return () => {
-    listeners.delete(listener)
-    if (!listeners.size) {
+    stores[source].listeners.delete(listener)
+    if (!stores.tokennest.listeners.size && !stores.deepseek.listeners.size) {
       clearTimeout(timer)
       window.removeEventListener('focus', updatePricingClock)
     }
   }
+}
+
+export function subscribeDeepSeekPricing(listener: () => void): () => void {
+  return subscribePricing(listener, 'deepseek')
 }

@@ -180,6 +180,9 @@ export interface CoreBackendConfig {
 
   /** Explicit agent loop / tool protocol selected for this connection. */
   agentRuntime?: AgentRuntimeProtocol;
+  /** Recent transcript context when changing native agent engines. */
+  getAgentRuntimeMigrationContext?: () => string | undefined;
+  markAgentRuntimeMigrationApplied?: () => void;
 
   /** Per-model prompt behavior resolved from the LLM connection. */
   modelPromptSettings?: ModelPromptSettings;

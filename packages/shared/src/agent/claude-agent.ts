@@ -1200,8 +1200,8 @@ export class ClaudeAgent extends BaseAgent {
       // - EnterPlanMode/ExitPlanMode: We use safe mode instead (user-controlled via UI)
       // - AskUserQuestion: Requires interactive UI to show question options to user
       // Note: Mini agents use a minimal tool list directly, so no additional blocking needed
-      const disallowedTools: string[] = ['EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'Skill'];
-      if (hasSessionExecutionPolicy(sessionId)) disallowedTools.push(...NATIVE_WEB_TOOL_NAMES);
+      const disallowedTools: string[] = ['EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion'];
+      if (hasSessionExecutionPolicy(sessionId)) disallowedTools.push('Skill', ...NATIVE_WEB_TOOL_NAMES);
 
       // Build MCP servers config
       // Mini agents: only session tools (config_validate) to minimize token usage
@@ -1757,15 +1757,14 @@ export class ClaudeAgent extends BaseAgent {
         // Bash permission logic is in PreToolUse where it actually executes.
         // Selectively disable tools - file tools are disabled (use MCP), web/code controlled by settings
         disallowedTools,
-        // No plugins — skills are handled by BaseAgent.chat() via read-before-execute
-        // (the model reads SKILL.md files directly, enforced by PrerequisiteManager)
-        plugins: [],
+        // Ordinary sessions retain SDK-native skills and configured plugins.
         // Filesystem settings can run command hooks, and discovered MCP servers
         // can spawn host programs before any PreToolUse callback is invoked.
         ...(hasSessionExecutionPolicy(sessionId) ? {
           settingSources: [],
           strictMcpConfig: true,
           skills: [],
+          plugins: [],
         } : {}),
       };
 

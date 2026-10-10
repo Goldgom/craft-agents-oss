@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import type { CreateSessionOptions, PermissionRequest, Session, SessionEvent } from '@craft-agent/shared/protocol'
 import type { SessionCompletionEvent } from '../sessions/SessionManager'
 import type { SuperAgentConfig, SuperAgentSessionPolicy } from '@craft-agent/shared/super-agent'
+import type { ThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
 import { SuperAgentService, type SuperAgentSessionHost, type SuperAgentServiceDeps } from './SuperAgentService'
 
 /** Shared deterministic host for the scheduler reliability regression suites. */
@@ -43,6 +44,9 @@ export class SuperAgentTestHost implements SuperAgentSessionHost {
   }
 
   async applySessionPolicy(sessionId: string, policy: SuperAgentSessionPolicy) { this.policies.set(sessionId, policy) }
+  setSessionThinkingLevel(sessionId: string, level: ThinkingLevel) {
+    this.options.set(sessionId, { ...this.options.get(sessionId), thinkingLevel: level })
+  }
 
   async ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }) {
     if (!this.sessions.has(sessionId) || this.sessions.get(sessionId)!.isProcessing) throw new Error('Node session must be idle')
@@ -90,9 +94,10 @@ export class SuperAgentTestHost implements SuperAgentSessionHost {
   /** Intentionally drop the completion notification while changing host state. */
   loseCompletion(sessionId: string) { this.sessions.get(sessionId)!.isProcessing = false }
 
-  complete(sessionId: string, finalText: string, reason: SessionCompletionEvent['reason'] = 'complete', failure: Pick<SessionCompletionEvent, 'errorCode' | 'canRetry'> = {}) {
+  complete(sessionId: string, finalText: string, reason: SessionCompletionEvent['reason'] = 'complete', failure: Pick<SessionCompletionEvent, 'errorCode' | 'canRetry' | 'tokenUsage'> = {}) {
     const session = this.sessions.get(sessionId)!
     session.isProcessing = false
+    if (failure.tokenUsage) session.tokenUsage = failure.tokenUsage
     for (const [requestId, pending] of [...this.pendingPermissions]) {
       if (pending.sessionId !== sessionId) continue
       this.pendingPermissions.delete(requestId)
@@ -119,7 +124,7 @@ afterEach(async () => {
 })
 
 export async function superAgentFixture(options: Partial<Pick<SuperAgentServiceDeps,
-  'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged' | 'workflow' | 'upgradeArchitecture' | 'actionGates'>> = {}) {
+  'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged' | 'workflow' | 'upgradeArchitecture' | 'actionGates' | 'checkReadiness'>> = {}) {
   const root = await mkdtemp(join(tmpdir(), fixturePrefix))
   const workingDirectory = join(root, 'work')
   await mkdir(workingDirectory)

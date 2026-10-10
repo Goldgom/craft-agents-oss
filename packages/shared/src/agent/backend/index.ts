@@ -68,6 +68,7 @@ export {
   createBackendFromConnection,
   createBackendFromResolvedContext,
   initializeBackendHostRuntime,
+  refreshBackendFrameworkLocations,
   resolveBackendHostTooling,
   fetchBackendModels,
   validateStoredBackendConnection,

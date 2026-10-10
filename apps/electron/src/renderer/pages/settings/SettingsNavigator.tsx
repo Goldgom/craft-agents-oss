@@ -22,6 +22,7 @@ import { Separator } from '@/components/ui/separator'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { SettingsSubpage } from '../../../shared/types'
 import { SETTINGS_ITEMS } from '../../../shared/menu-schema'
+import { resolveSettingsSubpage } from '../../../shared/settings-registry'
 import { SETTINGS_ICONS } from '@/components/icons/SettingsIcons'
 
 export const meta: DetailsPageMeta = {
@@ -172,7 +173,7 @@ export default function SettingsNavigator({
             <SettingsItemRow
               key={item.id}
               item={item}
-              isSelected={selectedSubpage === item.id}
+              isSelected={selectedSubpage !== null && resolveSettingsSubpage(selectedSubpage) === item.id}
               isFirst={index === 0}
               onSelect={() => onSelectSubpage(item.id)}
             />

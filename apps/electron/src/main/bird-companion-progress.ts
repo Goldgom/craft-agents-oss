@@ -21,39 +21,43 @@ interface Turn {
 export class BirdCompanionProgress {
   preferences: BirdCompanionPreferences = { ...DEFAULT_BIRD_COMPANION_PREFERENCES }
   private turns = new Map<string, Turn>()
-  private dismissed = new Set<string>()
   private sequence = 0
-  private manuallyDismissed = false
+  private bubbleDismissed = false
+  private greeting = false
 
   setPreferences(preferences: BirdCompanionPreferences): void {
     this.preferences = preferences
-    this.manuallyDismissed = false
-    this.dismissed.clear()
+    this.bubbleDismissed = false
+    this.greeting = false
   }
 
-  dismiss(): void {
-    this.manuallyDismissed = true
-    for (const key of this.turns.keys()) this.dismissed.add(key)
+  dismissBubble(): void {
+    this.bubbleDismissed = true
+    this.greeting = false
+  }
+
+  showBubble(): void {
+    this.bubbleDismissed = false
+    this.greeting = true
   }
 
   observe(workspaceId: string, event: BirdProgressEvent): boolean {
     const key = JSON.stringify([workspaceId, event.sessionId])
     let turn = this.turns.get(key)
-    if (event.type === 'delete') { this.turns.delete(key); this.dismissed.delete(key); return true }
+    if (event.type === 'delete') { this.turns.delete(key); return true }
     if (event.type === 'permission' && turn?.seenPermissions.has(event.requestId)) return false
     if (event.type === 'start' || (!turn && (event.type === 'tool' || event.type === 'permission'))
       || (turn?.outcome && (event.type === 'tool' && !turn.tools.has(event.toolUseId) || event.type === 'permission'))) {
       if (event.type === 'start' && turn?.startId === event.startId) return false
       turn = { startId: event.type === 'start' ? event.startId : undefined, computer: false, tools: new Map(), permissions: new Set(), seenPermissions: new Set(), completed: 0, hadError: false, activity: 'thinking', sequence: ++this.sequence }
       this.turns.set(key, turn)
-      this.dismissed.delete(key)
-      this.manuallyDismissed = false
     }
     if (!turn) return false
     switch (event.type) {
       case 'start': break
       case 'tool':
         if (turn.tools.has(event.toolUseId)) return false
+        if (event.computer && !turn.computer) this.bubbleDismissed = false
         turn.tools.set(event.toolUseId, { done: false, activity: event.activity })
         turn.computer ||= event.computer
         turn.activity = event.activity
@@ -69,6 +73,7 @@ export class BirdCompanionProgress {
         if (turn.permissions.has(event.requestId)) return false
         turn.permissions.add(event.requestId)
         turn.seenPermissions.add(event.requestId)
+        if (event.computer && !turn.computer) this.bubbleDismissed = false
         turn.computer ||= event.computer
         break
       case 'permission_resolved':
@@ -81,13 +86,15 @@ export class BirdCompanionProgress {
         if (turn.outcome) return false
         turn.outcome = event.outcome
         turn.permissions.clear()
+        if (turn.computer) this.bubbleDismissed = false
         break
     }
+    this.greeting = false
     turn.sequence = ++this.sequence
     // Bound memory, keeping active turns and the most recent outcomes.
     if (this.turns.size > 100) {
       for (const [oldKey, oldTurn] of this.turns) {
-        if (oldTurn.outcome && oldKey !== key) { this.turns.delete(oldKey); this.dismissed.delete(oldKey) }
+        if (oldTurn.outcome && oldKey !== key) this.turns.delete(oldKey)
         if (this.turns.size <= 100) break
       }
     }
@@ -95,21 +102,20 @@ export class BirdCompanionProgress {
   }
 
   clearFinished(): void {
-    for (const [key, turn] of this.turns) {
+    for (const turn of this.turns.values()) {
       // Keep bounded history so delayed duplicate deliveries cannot revive an
       // already hidden turn. New message/tool ids still start a fresh turn.
-      if (turn.outcome) { turn.expired = true; this.dismissed.delete(key) }
+      if (turn.outcome) turn.expired = true
     }
   }
 
   getState(): BirdCompanionState {
-    const pinned = this.preferences.alwaysVisible && !this.manuallyDismissed
-    const candidates = [...this.turns.entries()]
-      .filter(([key, turn]) => !turn.expired && !this.dismissed.has(key) && (pinned || this.preferences.autoShowComputerUse && turn.computer))
-      .map(([, turn]) => turn)
+    const pinned = this.preferences.alwaysVisible
+    const candidates = [...this.turns.values()]
+      .filter(turn => !turn.expired && (pinned || this.preferences.autoShowComputerUse && turn.computer))
     const active = candidates.filter(turn => !turn.outcome)
     const turn = (active.length ? active : candidates).sort((a, b) => b.sequence - a.sequence)[0]
-    if (!turn) return { ...IDLE_BIRD_STATE, visible: pinned }
+    if (!turn) return { ...IDLE_BIRD_STATE, visible: pinned, bubbleVisible: pinned && this.greeting && !this.bubbleDismissed, activity: this.greeting ? 'greeting' : 'idle' }
     let mood: BirdCompanionState['mood'] = 'thinking'
     let activity = turn.activity
     if (turn.outcome) {
@@ -120,6 +126,6 @@ export class BirdCompanionProgress {
       const pending = [...turn.tools.values()].filter(tool => !tool.done)
       if (pending.length) { mood = 'working'; activity = pending[pending.length - 1]!.activity }
     }
-    return { visible: true, mood, activity, completedSteps: turn.completed, activeSessions: active.length }
+    return { visible: true, bubbleVisible: !this.bubbleDismissed, mood, activity, completedSteps: turn.completed, activeSessions: active.length }
   }
 }

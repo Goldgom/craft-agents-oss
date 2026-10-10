@@ -113,19 +113,42 @@ async function startAndComplete(harness: ReturnType<typeof createHarness>, conne
 }
 
 describe('TokenNest OAuth RPC handlers', () => {
+  it('reads DeepSeek rules directly from the public official page and rejects changed rules', async () => {
+    spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-09T02:00:00Z'))
+    const html = '<table><td>deepseek-flash</td><td>deepseek-v4-pro</td></table><p>空闲时段价格为高峰时段价格的一半。北京时间周一至周五（不含中国法定节假日）9:00 - 12:00、14:00 - 18:00 为高峰时段；其余时段，包括周末及中国法定节假日全天均为空闲时段。</p>'
+    const request = spyOn(globalThis, 'fetch').mockResolvedValue(new Response(html))
+    const harness = createHarness()
+    const getPricing = harness.getHandler(RPC_CHANNELS.llmConnections.GET_PRICING)
+    const result = await getPricing(harness.context, 'deepseek') as { data: Array<{ model_name: string; peak_valley_pricing: { holidays: string[] } }> }
+    expect(result).toMatchObject({ success: true, data: [
+      { model_name: 'deepseek-flash', peak_valley_pricing: { mode: 'china_business_hours', timezone: 'Asia/Shanghai', multiplier: 0.5, holiday_year: 2026 } },
+      { model_name: 'deepseek-v4-pro' },
+    ] })
+    expect(result.data[0]?.peak_valley_pricing.holidays).toContain('2026-10-07')
+    expect(result.data[0]?.peak_valley_pricing.holidays).not.toContain('2026-10-10')
+    expect(String(request.mock.calls[0]?.[0])).toBe('https://api-docs.deepseek.com/zh-cn/quick_start/pricing')
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit', cache: 'no-store' })
+    expect(new Headers(request.mock.calls[0]?.[1]?.headers).get('authorization')).toBeNull()
+    request.mockResolvedValue(new Response(html.replace('9:00 - 12:00', '8:00 - 12:00')))
+    await expect(getPricing(harness.context, 'deepseek')).rejects.toThrow('rule is unavailable or has changed')
+    request.mockResolvedValue(new Response(null, { status: 503 }))
+    await expect(getPricing(harness.context, 'deepseek')).rejects.toThrow('HTTP 503')
+  })
+
   it('fetches current public pricing without credentials and propagates HTTP failures', async () => {
     const catalog = { success: true, data: [{ model_name: 'deepseek-flash', peak_valley_pricing: {
       timezone: 'Asia/Shanghai', start: '00:30', end: '08:30', multiplier: 0.5,
     } }] }
     const request = spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(catalog))
     const harness = createHarness()
-    const getPricing = harness.getHandler(RPC_CHANNELS.tokennest.GET_PRICING)
-    await expect(getPricing(harness.context)).resolves.toEqual(catalog)
+    const getPricing = harness.getHandler(RPC_CHANNELS.llmConnections.GET_PRICING)
+    await expect(getPricing(harness.context, 'tokennest')).resolves.toEqual(catalog)
     expect(String(request.mock.calls[0]?.[0])).toBe('https://openai.goldgom.top/api/pricing')
     expect(request.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit', cache: 'no-store' })
     expect(new Headers(request.mock.calls[0]?.[1]?.headers).get('authorization')).toBeNull()
     request.mockResolvedValue(new Response(null, { status: 503 }))
-    await expect(getPricing(harness.context)).rejects.toThrow('HTTP 503')
+    await expect(getPricing(harness.context, 'tokennest')).rejects.toThrow('HTTP 503')
+    await expect(getPricing(harness.context, 'https://third-party.example')).rejects.toThrow('Unsupported pricing source')
   })
 
   it('bypasses the balance cache after recharge while normal queries reuse it', async () => {

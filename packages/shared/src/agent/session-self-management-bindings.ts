@@ -43,6 +43,10 @@ export function attachSessionSelfManagementBindings(
     get() { return getSessionScopedToolCallbacks(sessionId)?.superAgentTaskFn; },
     configurable: true, enumerable: true,
   });
+  Object.defineProperty(context, 'superAgentLibrary', {
+    get() { return getSessionScopedToolCallbacks(sessionId)?.superAgentLibraryFn; },
+    configurable: true, enumerable: true,
+  });
   // Direct pass-through bindings — signatures match, no wrapping needed.
   // Each getter resolves fresh from the registry on every access.
 

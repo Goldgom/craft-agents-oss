@@ -11,7 +11,7 @@
  * 4. Add icon to SETTINGS_ICONS in components/icons/SettingsIcons.tsx
  */
 
-import type { ComponentType } from 'react'
+import { createElement, type ComponentType } from 'react'
 import type { SettingsSubpage } from '../../../shared/settings-registry'
 
 import AppSettingsPage from './AppSettingsPage'
@@ -23,7 +23,6 @@ import AppearanceSettingsPage from './AppearanceSettingsPage'
 import InputSettingsPage from './InputSettingsPage'
 import WorkspaceSettingsPage from './WorkspaceSettingsPage'
 import WorkspacePromptsPage from './WorkspacePromptsPage'
-import PromptOverviewPage from './PromptOverviewPage'
 import PermissionsSettingsPage from './PermissionsSettingsPage'
 import ToolsSettingsPage from './ToolsSettingsPage'
 import PerformanceSettingsPage from './PerformanceSettingsPage'
@@ -32,7 +31,6 @@ import LabelsSettingsPage from './LabelsSettingsPage'
 import MessagingSettingsPage from './MessagingSettingsPage'
 import RemoteServersPage from './RemoteServersPage'
 import ServerSettingsPage from './ServerSettingsPage'
-import ShortcutsPage from './ShortcutsPage'
 import PreferencesPage from './PreferencesPage'
 import CollaborationManagementPage from './CollaborationManagementPage'
 
@@ -50,7 +48,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   input: InputSettingsPage,
   workspace: WorkspaceSettingsPage,
   prompts: WorkspacePromptsPage,
-  promptOverview: PromptOverviewPage,
+  promptOverview: () => createElement(WorkspacePromptsPage, { showOverview: true }),
   permissions: PermissionsSettingsPage,
   tools: ToolsSettingsPage,
   performance: PerformanceSettingsPage,
@@ -59,7 +57,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<SettingsSubpage, ComponentType> = 
   messaging: MessagingSettingsPage,
   remoteServers: RemoteServersPage,
   server: ServerSettingsPage,
-  shortcuts: ShortcutsPage,
+  shortcuts: () => createElement(InputSettingsPage, { showShortcuts: true }),
   preferences: PreferencesPage,
   collaborations: CollaborationManagementPage,
 }

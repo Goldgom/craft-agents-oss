@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import type { BackendHostRuntimeContext } from '../types.ts';
 import { setPathToClaudeCodeExecutable, isAndroidRuntime, ANDROID_CLAUDE_UNSUPPORTED_MESSAGE } from '../../options.ts';
+import { loadBackendFrameworkConfiguration, setDetectedFrameworkLocation } from '../../../agent-plugins/framework-storage.ts';
 
 /**
  * When set, the resolver walks further up from the .app bundle to find SDK,
@@ -298,7 +299,7 @@ function resolveRipgrepPath(hostRuntime: BackendHostRuntimeContext): string | un
 export function resolveBackendRuntimePaths(hostRuntime: BackendHostRuntimeContext): ResolvedBackendRuntimePaths {
   const bundledRuntimePath = hostRuntime.nodeRuntimePath || resolveBundledRuntimePath(hostRuntime);
 
-  return {
+  const paths = {
     claudeCliPath: resolveClaudeBinaryPath(hostRuntime),
     interceptorBundlePath: resolveInterceptorBundlePath(hostRuntime),
     sessionServerPath: resolveServerPath(hostRuntime, 'session-mcp-server'),
@@ -307,6 +308,13 @@ export function resolveBackendRuntimePaths(hostRuntime: BackendHostRuntimeContex
     nodeRuntimePath: hostRuntime.nodeRuntimePath || bundledRuntimePath || process.execPath,
     bundledRuntimePath,
   };
+  setDetectedFrameworkLocation('pi', { executablePath: paths.nodeRuntimePath, entrypointPath: paths.piServerPath });
+  setDetectedFrameworkLocation('claude-code', { executablePath: paths.claudeCliPath });
+  const pi = loadBackendFrameworkConfiguration('pi');
+  const claude = loadBackendFrameworkConfiguration('claude-code');
+  return { ...paths, ...(pi?.executablePath ? { nodeRuntimePath: pi.executablePath } : {}),
+    ...(pi?.entrypointPath ? { piServerPath: pi.entrypointPath } : {}),
+    ...(claude?.executablePath ? { claudeCliPath: claude.executablePath } : {}) };
 }
 
 export function resolveBackendHostTooling(hostRuntime: BackendHostRuntimeContext): ResolvedBackendHostTooling {

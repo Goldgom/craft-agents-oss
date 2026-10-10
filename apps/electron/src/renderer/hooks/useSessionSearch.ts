@@ -7,6 +7,7 @@ import type { LabelConfig } from "@craft-agent/shared/labels"
 import { fuzzyScore } from "@craft-agent/shared/search"
 import { getSessionTitle, getSessionStatus } from "@/utils/session"
 import type { SessionMeta } from "@/atoms/sessions"
+import { collapseSessionBranchHistory } from '../lib/session-branch-history'
 import type { ViewConfig } from "@craft-agent/shared/views"
 import type { SessionFilter } from "@/contexts/NavigationContext"
 
@@ -44,6 +45,7 @@ export interface CollapsedGroupMeta {
 
 export interface UseSessionSearchOptions {
   items: SessionMeta[]
+  selectedSessionId?: string | null
   searchActive: boolean
   searchQuery: string
   workspaceId?: string
@@ -287,6 +289,7 @@ export function sessionMatchesCurrentFilter(
 
 export function useSessionSearch({
   items,
+  selectedSessionId,
   searchActive,
   searchQuery,
   workspaceId,
@@ -399,12 +402,13 @@ export function useSessionSearch({
   // Filter items by search query or current filter
   const searchFilteredItems = useMemo(() => {
     if (!isSearchMode) {
-      return sortedItems.filter(item =>
+      const matches = sortedItems.filter(item =>
         sessionMatchesCurrentFilter(item, currentFilter, { evaluateViews, statusFilter, labelFilterMap, labelConfigs })
       )
+      return collapseSessionBranchHistory(matches, selectedSessionId, visibleItems)
     }
 
-    return sortedItems
+    const matches = sortedItems
       .filter(item => contentSearchResults.has(item.id))
       .sort((a, b) => {
         const aScore = fuzzyScore(getSessionTitle(a), searchQuery)
@@ -418,7 +422,9 @@ export function useSessionSearch({
         const countB = contentSearchResults.get(b.id)?.matchCount || 0
         return countB - countA
       })
-  }, [sortedItems, isSearchMode, searchQuery, contentSearchResults, currentFilter, evaluateViews, statusFilter, labelFilterMap, labelConfigs])
+    // Search every variant, then keep one entry targeting a matching variant.
+    return collapseSessionBranchHistory(matches, undefined, visibleItems)
+  }, [sortedItems, visibleItems, selectedSessionId, isSearchMode, searchQuery, contentSearchResults, currentFilter, evaluateViews, statusFilter, labelFilterMap, labelConfigs])
 
   // Split search results: matching current filter vs others
   const { matchingFilterItems, otherResultItems, exceededSearchLimit } = useMemo(() => {

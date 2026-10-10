@@ -43,6 +43,7 @@ import {
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
 import { TopBar } from "./TopBar"
+import { StudioPagePanel } from "./StudioPagePanel"
 import { SquarePenRounded } from "../icons/SquarePenRounded"
 import { McpIcon } from "../icons/McpIcon"
 import { cn } from "@/lib/utils"
@@ -78,6 +79,7 @@ import {
   springTransition as collapsibleSpring,
 } from "@/components/ui/collapsible"
 import { SessionList, type ChatGroupingMode } from "./SessionList"
+import { collapseSessionBranchHistory } from '@/lib/session-branch-history'
 import { MainContentPanel } from "./MainContentPanel"
 import { BoardListToggle } from "./kanban/BoardListToggle"
 import { PanelStackContainer } from "./PanelStackContainer"
@@ -1438,13 +1440,16 @@ function AppShellContent({
   // For remote workspaces, sessions have the remote workspace ID (not the local one),
   // so we match against both the local and remote workspace IDs.
   const remoteWorkspaceId = activeWorkspace?.remoteServer?.remoteWorkspaceId
-  const workspaceSessionMetas = useMemo(() => {
+  const rawWorkspaceSessionMetas = useMemo(() => {
     const metas = Array.from(sessionMetaMap.values())
     if (!activeWorkspaceId) return metas.filter(s => !s.hidden)
     return metas.filter(s =>
       !s.hidden && (s.workspaceId === activeWorkspaceId || (remoteWorkspaceId && s.workspaceId === remoteWorkspaceId))
     )
   }, [sessionMetaMap, activeWorkspaceId, remoteWorkspaceId])
+  const workspaceSessionMetas = useMemo(() =>
+    collapseSessionBranchHistory(rawWorkspaceSessionMetas, focusedSessionId ?? session.selected),
+    [rawWorkspaceSessionMetas, focusedSessionId, session.selected])
 
   // Active sessions exclude archived - use this for all counts and filters except archived view
   const activeSessionMetas = useMemo(() => {
@@ -2421,16 +2426,16 @@ function AppShellContent({
           isCompact={isAutoCompact}
         />
 
-      <div className={studioMode === 'agent' ? 'hidden' : 'h-full min-h-0'}>
+      <div className="grid h-full min-h-0 min-w-0 grid-cols-1 grid-rows-1">
         {studioContent}
-      </div>
 
       {/* === OUTER LAYOUT: Unified Panel Stack | Right Sidebar === */}
-      <div
+      <StudioPagePanel
         ref={shellRef}
+        active={studioMode === 'agent'}
+        display="flex"
         className="flex items-stretch relative"
         style={{
-          display: studioMode === 'agent' ? 'flex' : 'none',
           height: '100%',
           paddingRight: isAutoCompact ? 0 : PANEL_EDGE_INSET,
           paddingBottom: isAutoCompact ? 0 : PANEL_EDGE_INSET,
@@ -3681,7 +3686,7 @@ function AppShellContent({
                 {/* Key on sidebarMode forces full remount when switching views, skipping animations */}
                 <SessionList
                   key={sessionFilter?.kind}
-                  items={searchActive ? workspaceSessionMetas : filteredSessionMetas}
+                  items={searchActive ? rawWorkspaceSessionMetas : filteredSessionMetas}
                   onDelete={handleDeleteSession}
                   onFlag={onFlagSession}
                   onUnflag={onUnflagSession}
@@ -3816,6 +3821,7 @@ function AppShellContent({
         </div>
         )}
 
+      </StudioPagePanel>
       </div>
 
       {/* ============================================================================

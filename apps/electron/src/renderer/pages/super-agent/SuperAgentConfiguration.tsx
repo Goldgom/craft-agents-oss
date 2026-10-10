@@ -1,22 +1,25 @@
 import { useEffect, useState } from 'react'
-import { Check, LoaderCircle, Plus, Settings2, Sparkles } from 'lucide-react'
+import { Check, LoaderCircle, Plus, Settings2, Sparkles, Trash2 } from 'lucide-react'
 import type { SuperAgentConfig, SuperAgentEnvironmentStatus } from '@craft-agent/shared/super-agent'
 import type { LlmConnectionWithStatus, LoadedSource } from '../../../shared/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { AgentAvatar, AvatarEditor, EnvironmentEditor, FormField, FormSection, NodeEditor } from './SuperAgentForms'
 import { applyPreset, configError, createNode, nodeModels, useSuperAgentText, withExecuteMode, type SuperAgentPreset } from './super-agent-ui'
 import { SuperAgentPresetPicker } from './SuperAgentPresetPicker'
+import { SuperAgentReadiness } from './SuperAgentReadiness'
 
-export function SuperAgentConfiguration({ config, connections, sources, environmentStatus, onSave, onContinuousWork, onOpenAiSettings, initialNodeId }: {
+export function SuperAgentConfiguration({ config, connections, sources, environmentStatus, onSave, onContinuousWork, onReset, onOpenAiSettings, initialNodeId }: {
   config: SuperAgentConfig
   connections: LlmConnectionWithStatus[]
   sources: LoadedSource[]
   environmentStatus: SuperAgentEnvironmentStatus
   onSave: (config: SuperAgentConfig) => Promise<void>
   onContinuousWork: (enabled: boolean) => Promise<void>
+  onReset?: () => Promise<void>
   onOpenAiSettings?: () => void
   initialNodeId?: string
 }) {
@@ -25,6 +28,8 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
   const [selectedNodeId, setSelectedNodeId] = useState(initialNodeId ?? config.nodes[0].id)
   const [section, setSection] = useState<'identity' | 'team' | 'environment'>(initialNodeId ? 'team' : 'identity')
   const [pending, setPending] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetPending, setResetPending] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const [preset, setPreset] = useState<SuperAgentPreset>('custom')
@@ -46,6 +51,13 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
   async function toggleContinuousWork(enabled: boolean) {
     setPending(true); setError('')
     try { await onContinuousWork(enabled); patch({ continuousWork: enabled }) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
+  }
+  async function reset() {
+    if (!onReset || pending) return
+    setPending(true); setResetPending(true); setError('')
+    try { await onReset(); setResetOpen(false) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setResetOpen(false) }
+    finally { setPending(false); setResetPending(false) }
   }
   return <div className="h-full min-h-0 overflow-y-auto">
     <div className="mx-auto max-w-3xl space-y-6 p-6">
@@ -95,6 +107,7 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
         </>}
         {section === 'environment' && <>
           <EnvironmentEditor environment={draft.environment} status={environmentStatus} onChange={environment => patch({ environment })} />
+          <SuperAgentReadiness config={draft} onChange={requirements => patch({ requirements })} />
           <FormSection title={text('continuity')}><div className="grid gap-4 sm:grid-cols-2">
             {(['connectionConcurrency', 'connectionCallsPerMinute', 'stallMinutes', 'maxResumeAttempts'] as const).map(key => {
               const defaults = { connectionConcurrency: 4, connectionCallsPerMinute: 60, stallMinutes: 15, maxResumeAttempts: 3 }
@@ -110,6 +123,21 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
         {saved && <span role="status" className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400"><Check className="size-3.5" />{text('completed')}</span>}
         <Button disabled={pending} onClick={() => void save()}>{pending ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}{text('save')}</Button>
       </div>
+      {onReset && <section className="space-y-3 rounded-xl border border-destructive/25 p-4">
+        <h3 className="text-sm font-medium">{text('reset')}</h3>
+        <p className="text-xs leading-5 text-muted-foreground">{text('resetHint')}</p>
+        <Button variant="destructive" size="sm" disabled={pending} onClick={() => setResetOpen(true)}><Trash2 className="size-3.5" />{text('reset')}</Button>
+      </section>}
     </div>
+    <Dialog open={resetOpen} onOpenChange={open => { if (!resetPending) setResetOpen(open) }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>{text('resetConfirm')}</DialogTitle><DialogDescription>{text('resetDescription')}</DialogDescription></DialogHeader>
+        <p className="text-sm text-muted-foreground">{text('resetPreserved')}</p>
+        <DialogFooter>
+          <Button variant="outline" disabled={resetPending} onClick={() => setResetOpen(false)}>{text('cancel')}</Button>
+          <Button variant="destructive" disabled={resetPending} onClick={() => void reset()}>{resetPending ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}{text(resetPending ? 'resetting' : 'reset')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 }

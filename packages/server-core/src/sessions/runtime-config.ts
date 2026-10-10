@@ -9,6 +9,7 @@ export interface BackendRuntimeSignatureInput {
   authType?: LlmAuthType
   resolvedModel: string
   miniModel?: string
+  agentPluginFingerprint?: string
 }
 
 export interface ModelAttachmentFilterResult {
@@ -54,6 +55,7 @@ export function buildRestartRequiredSignature(input: BackendRuntimeSignatureInpu
   return JSON.stringify(definedObject({
     provider,
     agentRuntime,
+    agentPluginFingerprint: input.agentPluginFingerprint,
     authType,
     slug: connection?.slug,
     providerType: connection?.providerType,
@@ -96,6 +98,7 @@ export function buildBackendRuntimeSignature(input: BackendRuntimeSignatureInput
   return JSON.stringify(definedObject({
     provider,
     agentRuntime,
+    agentPluginFingerprint: input.agentPluginFingerprint,
     authType,
     resolvedModel,
     autoCompactionTokenLimit: getModelPromptSettings(connection ?? undefined, resolvedModel)?.autoCompactionTokenLimit,

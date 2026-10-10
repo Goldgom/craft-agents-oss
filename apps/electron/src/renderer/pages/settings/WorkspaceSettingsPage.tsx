@@ -5,7 +5,7 @@
  *
  * Settings:
  * - Identity (Name, Icon)
- * - Permissions (Default mode, Mode cycling)
+ * Permissions are managed in PermissionsSettingsPage.
  * - Advanced (Working directory, Local MCP servers)
  *
  * Note: AI settings (model, thinking, connection) have been moved to AiSettingsPage.
@@ -14,7 +14,6 @@
 import * as React from 'react'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { motion, AnimatePresence } from 'motion/react'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
@@ -23,10 +22,9 @@ import { cn } from '@/lib/utils'
 import { routes } from '@/lib/navigate'
 import { Spinner } from '@craft-agent/ui'
 import { RenameDialog } from '@/components/ui/rename-dialog'
-import type { PermissionMode, WorkspaceSettings, LoadedSource } from '../../../shared/types'
+import type { WorkspaceSettings, LoadedSource } from '../../../shared/types'
 import { useDirectoryPicker } from '@/hooks/useDirectoryPicker'
 import { ServerDirectoryBrowser } from '@/components/ServerDirectoryBrowser'
-import { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/mode-types'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { toast } from 'sonner'
@@ -36,7 +34,6 @@ import {
   SettingsCard,
   SettingsRow,
   SettingsToggle,
-  SettingsMenuSelectRow,
 } from '@/components/settings'
 
 export const meta: DetailsPageMeta = {
@@ -62,7 +59,6 @@ export default function WorkspaceSettingsPage() {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [wsIconUrl, setWsIconUrl] = useState<string | null>(null)
   const [isUploadingIcon, setIsUploadingIcon] = useState(false)
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask')
   const [workingDirectory, setWorkingDirectory] = useState('')
   const [localMcpEnabled, setLocalMcpEnabled] = useState(true)
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true)
@@ -70,10 +66,6 @@ export default function WorkspaceSettingsPage() {
   // Default sources state
   const [availableSources, setAvailableSources] = useState<LoadedSource[]>([])
   const [enabledSourceSlugs, setEnabledSourceSlugs] = useState<string[]>([])
-
-  // Mode cycling state
-  const [enabledModes, setEnabledModes] = useState<PermissionMode[]>(['safe', 'ask', 'allow-all'])
-  const [modeCyclingError, setModeCyclingError] = useState<string | null>(null)
 
   // Load workspace settings when active workspace changes
   useEffect(() => {
@@ -89,14 +81,8 @@ export default function WorkspaceSettingsPage() {
         if (settings) {
           setWsName(settings.name || '')
           setWsNameEditing(settings.name || '')
-          setPermissionMode(settings.permissionMode || 'ask')
           setWorkingDirectory(settings.workingDirectory || '')
           setLocalMcpEnabled(settings.localMcpEnabled ?? true)
-          // Load cyclable permission modes from workspace settings
-          if (settings.cyclablePermissionModes && settings.cyclablePermissionModes.length >= 2) {
-            setEnabledModes(settings.cyclablePermissionModes)
-          }
-
           // Load default source slugs
           const savedSlugs = settings.enabledSourceSlugs ?? []
 
@@ -242,14 +228,6 @@ export default function WorkspaceSettingsPage() {
   }, [activeWorkspaceId, onRefreshWorkspaces])
 
   // Workspace settings handlers
-  const handlePermissionModeChange = useCallback(
-    async (newMode: PermissionMode) => {
-      setPermissionMode(newMode)
-      await updateWorkspaceSetting('permissionMode', newMode)
-    },
-    [updateWorkspaceSetting]
-  )
-
   const handleWorkingDirectorySelected = useCallback(async (selectedPath: string) => {
     const saved = await updateWorkspaceSetting('workingDirectory', selectedPath)
     if (saved) {
@@ -291,37 +269,6 @@ export default function WorkspaceSettingsPage() {
       await updateWorkspaceSetting('enabledSourceSlugs', newSlugs)
     },
     [enabledSourceSlugs, updateWorkspaceSetting]
-  )
-
-  const handleModeToggle = useCallback(
-    async (mode: PermissionMode, checked: boolean) => {
-      if (!window.electronAPI) return
-
-      // Calculate what the new modes would be
-      const newModes = checked
-        ? [...enabledModes, mode]
-        : enabledModes.filter((m) => m !== mode)
-
-      // Validate: at least 2 modes required
-      if (newModes.length < 2) {
-        setModeCyclingError(t('settings.workspace.atLeast2Modes'))
-        // Auto-dismiss after 2 seconds
-        setTimeout(() => {
-          setModeCyclingError(null)
-        }, 2000)
-        return
-      }
-
-      // Update state and persist
-      setEnabledModes(newModes)
-      setModeCyclingError(null)
-      try {
-        await updateWorkspaceSetting('cyclablePermissionModes', newModes)
-      } catch (error) {
-        console.error('Failed to save mode cycling settings:', error)
-      }
-    },
-    [enabledModes, updateWorkspaceSetting, t]
   )
 
   // Show empty state if no workspace is active
@@ -427,62 +374,6 @@ export default function WorkspaceSettingsPage() {
                 }}
                 placeholder={t("settings.workspace.enterWorkspaceName")}
               />
-            </SettingsSection>
-
-            {/* Permissions */}
-            <SettingsSection title={t("settings.workspace.permissionsSection")}>
-              <SettingsCard>
-                <SettingsMenuSelectRow
-                  label={t("settings.workspace.defaultMode")}
-                  description={t("settings.workspace.defaultModeDesc")}
-                  value={permissionMode}
-                  onValueChange={(v) => handlePermissionModeChange(v as PermissionMode)}
-                  options={[
-                    { value: 'safe', label: t("mode.explore"), description: t("mode.exploreDesc") },
-                    { value: 'ask', label: t("mode.ask"), description: t("mode.askDesc") },
-                    { value: 'allow-all', label: t("mode.execute"), description: t("mode.executeDesc") },
-                  ]}
-                />
-              </SettingsCard>
-            </SettingsSection>
-
-            {/* Mode Cycling */}
-            <SettingsSection
-              title={t("settings.workspace.modeCycling")}
-              description={t("settings.workspace.modeCyclingDesc")}
-            >
-              <SettingsCard>
-                {(['safe', 'ask', 'allow-all'] as const).map((m) => {
-                  const modeTranslations: Record<string, { label: string; desc: string }> = {
-                    'safe': { label: t("mode.explore"), desc: t("mode.exploreFullDesc") },
-                    'ask': { label: t("mode.askToEdit"), desc: t("mode.askFullDesc") },
-                    'allow-all': { label: t("mode.execute"), desc: t("mode.executeFullDesc") },
-                  }
-                  const isEnabled = enabledModes.includes(m)
-                  return (
-                    <SettingsToggle
-                      key={m}
-                      label={modeTranslations[m].label}
-                      description={modeTranslations[m].desc}
-                      checked={isEnabled}
-                      onCheckedChange={(checked) => handleModeToggle(m, checked)}
-                    />
-                  )
-                })}
-              </SettingsCard>
-              <AnimatePresence>
-                {modeCyclingError && (
-                  <motion.p
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
-                    className="text-xs text-destructive mt-1 overflow-hidden"
-                  >
-                    {modeCyclingError}
-                  </motion.p>
-                )}
-              </AnimatePresence>
             </SettingsSection>
 
             {/* Default Sources */}

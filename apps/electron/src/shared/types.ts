@@ -857,6 +857,19 @@ export interface ElectronAPI {
 
   // LLM Connections (provider configurations)
   listLlmConnections(): Promise<LlmConnection[]>
+  listAgentPlugins(): Promise<import('@craft-agent/shared/agent-plugins/types').AgentPluginCatalog>
+  listBackendFrameworks(): Promise<import('@craft-agent/shared/agent-plugins/frameworks').BackendFrameworkCatalog>
+  saveBackendFramework(configuration: import('@craft-agent/shared/agent-plugins/frameworks').BackendFrameworkConfiguration): Promise<void>
+  testBackendFramework(configuration: import('@craft-agent/shared/agent-plugins/frameworks').BackendFrameworkConfiguration): Promise<import('@craft-agent/shared/agent-plugins/frameworks').BackendFrameworkTestResult>
+  installBackendFramework(id: import('@craft-agent/shared/agent-plugins/types').AgentPluginRuntime, source?: import('@craft-agent/shared/agent-plugins/frameworks').FrameworkDownloadSource): Promise<import('@craft-agent/shared/agent-plugins/frameworks').BackendFrameworkInstallResult>
+  cancelBackendFrameworkInstall(id: import('@craft-agent/shared/agent-plugins/types').AgentPluginRuntime): Promise<void>
+  onBackendFrameworkInstallProgress(callback: (progress: import('@craft-agent/shared/agent-plugins/frameworks').FrameworkInstallProgress) => void): () => void
+  setAgentPluginEnabled(id: import('@craft-agent/shared/agent-plugins/types').AgentPluginRuntime, enabled: boolean): Promise<void>
+  saveAgentPlugin(manifest: import('@craft-agent/shared/agent-plugins/types').AgentPluginManifest): Promise<void>
+  deleteAgentPlugin(id: import('@craft-agent/shared/agent-plugins/types').AgentPluginRuntime): Promise<void>
+  exportAgentProfile(workspaceId?: string): Promise<unknown>
+  importAgentProfile(input: string, workspaceId?: string): Promise<unknown>
+  onAgentPluginsChanged(callback: () => void): () => void
   generateStudioImage(input: { connectionSlug: string; model: string; prompt: string; channelGroup?: string; imageBase64?: string; maskBase64?: string; size?: string; count?: number; transparentBackground?: boolean }): Promise<{ imageBase64: string; mimeType: string; images: Array<{ imageBase64: string; mimeType: string }> }>
   assistStudioCanvas(input: { connectionSlug: string; model: string; channelGroup?: string; sessionId: string; sessionTitle: string; question: string; imageBase64?: string; selection?: { x: number; y: number; width: number; height: number }; priorQuestions?: string[]; history?: Array<{ role: 'user' | 'assistant'; text: string }>; thinkingLevel?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }): Promise<{ reply: string; operation: 'none' | 'generate' | 'inpaint' | 'outpaint' | 'adjust'; prompt?: string; adjustments?: { brightness?: number; contrast?: number; saturation?: number; hue?: number; temperature?: number; blur?: number; style?: 'none' | 'grayscale' | 'sepia' | 'vintage' | 'noir' } }>
   onStudioCanvasRequest(handler: (request: Record<string, unknown>) => Promise<unknown>): () => void
@@ -877,7 +890,7 @@ export interface ElectronAPI {
   getShowApiBalances(): Promise<boolean>
   setShowApiBalances(enabled: boolean): Promise<void>
   getTokenNestUsage(args: { connectionSlug: string; days?: number }): Promise<import('@craft-agent/shared/protocol').TokenNestUsageSnapshot>
-  getTokenNestPricing(): Promise<unknown>
+  getModelPeakValleyPricing(source: 'tokennest' | 'deepseek'): Promise<unknown>
 
   // Projects (workspace-scoped)
   getProjects(workspaceId: string): Promise<unknown>

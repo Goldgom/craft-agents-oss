@@ -7,6 +7,7 @@ import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsCard, SettingsSection } from '@/components/settings'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
@@ -146,7 +147,19 @@ export default function UsageSettingsPage() {
             return <div key={connection.slug} role="button" tabIndex={0} onClick={() => setSelectedSlug(connection.slug)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') setSelectedSlug(connection.slug) }} className={cn('group rounded-xl border bg-background/90 p-4 transition-colors', selected ? 'border-accent/35 shadow-xs ring-1 ring-accent/10' : 'border-border/70 hover:border-accent/25')}>
               <div className="flex items-start gap-3"><div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent"><WalletCards className="size-5" /></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><div className="truncate text-sm font-semibold">{connection.name}</div>{selected && <span className="size-2 shrink-0 rounded-full bg-accent ring-4 ring-accent/10" />}</div><div className="mt-1 text-xs text-muted-foreground">{t('settings.usage.balance')}</div><div className="mt-0.5 text-xl font-semibold tracking-tight tabular-nums">{balanceText(balance)}</div></div></div>
               <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/50 pt-3" onClick={event => event.stopPropagation()}>
-                {(connection.channelGroups?.length ?? 0) > 0 && <label className="flex h-8 items-center gap-2 rounded-md border bg-muted/30 px-2 text-xs text-muted-foreground">{t('settings.ai.channelGroup')}<select className="max-w-36 bg-transparent text-sm font-medium text-foreground outline-none" value={connection.channelGroup ?? connection.channelGroups?.[0]?.id ?? ''} onChange={event => void changeGroup(connection.slug, event.target.value)}>{connection.channelGroups?.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>}
+                {(connection.channelGroups?.length ?? 0) > 0 && (
+                  <div className="flex h-8 max-w-full items-center gap-2 rounded-md border bg-muted/30 px-2 text-xs text-muted-foreground" onKeyDown={event => event.stopPropagation()}>
+                    <span className="shrink-0">{t('settings.ai.channelGroup')}</span>
+                    <Select value={`group:${connection.channelGroup ?? connection.channelGroups?.[0]?.id ?? ''}`} onValueChange={value => void changeGroup(connection.slug, value.slice(6))}>
+                      <SelectTrigger aria-label={t('settings.ai.channelGroup')} className="h-7 w-36 min-w-0 border-0 px-0 py-0 font-medium text-foreground">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent align="end" collisionPadding={8} className="max-h-[min(16rem,var(--radix-select-content-available-height))] max-w-[calc(100vw-1rem)]">
+                        {connection.channelGroups?.map(group => <SelectItem key={group.id} value={`group:${group.id}`} className="break-words data-[state=checked]:bg-accent/10">{group.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <Button variant="ghost" size="sm" className="ml-auto h-8" disabled={refreshingSlug === connection.slug} onClick={() => void refreshConnection(connection.slug)}><RefreshCw className={cn('mr-1.5 size-3.5', refreshingSlug === connection.slug && 'animate-spin')} />{t('settings.usage.refreshModelsAndGroups')}</Button>
               </div>
             </div>

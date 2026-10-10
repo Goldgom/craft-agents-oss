@@ -267,10 +267,16 @@ describe('qualifySkillName with filesystem resolution', () => {
     expect(result.modified).toBe(false)
   })
 
-  it('falls back to workspace plugin for unknown skill', () => {
+  it('retains native SDK discovery for a skill absent from shared stores', () => {
     const result = qualifySkillName({ skill: 'nonexistent' }, workspaceSlug, workspaceRoot, projectDir)
-    expect(result.modified).toBe(true)
-    expect(result.input).toEqual({ skill: 'my-workspace:nonexistent' })
+    expect(result.modified).toBe(false)
+    expect(result.input).toEqual({ skill: 'nonexistent' })
+  })
+
+  it('preserves an explicit native plugin namespace despite a shared skill with the same slug', () => {
+    const result = qualifySkillName({ skill: 'native-plugin:shared-skill' }, workspaceSlug, workspaceRoot, projectDir)
+    expect(result.input).toEqual({ skill: 'native-plugin:shared-skill' })
+    expect(result.modified).toBe(false)
   })
 
   it('resolves without project dir (workspace-only mode)', () => {

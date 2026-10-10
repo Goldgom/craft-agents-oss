@@ -255,6 +255,7 @@ export const RPC_CHANNELS = {
     SET_DEFAULT: 'LLM_Connection:setDefault',
     SET_WORKSPACE_DEFAULT: 'LLM_Connection:setWorkspaceDefault',
     REFRESH_MODELS: 'LLM_Connection:refreshModels',
+    GET_PRICING: 'LLM_Connection:getPricing',
     GET_BALANCES: 'LLM_Connection:getBalances',
     GET_SHOW_BALANCES: 'LLM_Connection:getShowBalances',
     SET_SHOW_BALANCES: 'LLM_Connection:setShowBalances',
@@ -288,7 +289,6 @@ export const RPC_CHANNELS = {
     CANCEL_OAUTH: 'tokennest:cancelOAuth',
     CHECK_AUTH: 'tokennest:checkAuth',
     GET_USAGE: 'tokennest:getUsage',
-    GET_PRICING: 'tokennest:getPricing',
     GET_RECHARGE_URL: 'tokennest:getRechargeUrl',
   },
   copilot: {
@@ -330,6 +330,21 @@ export const RPC_CHANNELS = {
   catalog: {
     LIST_TOOLS: 'catalog:listTools',
     LIST_GUIDES: 'catalog:listGuides',
+  },
+  agentPlugins: {
+    LIST: 'agentPlugins:list',
+    LIST_FRAMEWORKS: 'agentPlugins:listFrameworks',
+    SAVE_FRAMEWORK: 'agentPlugins:saveFramework',
+    TEST_FRAMEWORK: 'agentPlugins:testFramework',
+    INSTALL_FRAMEWORK: 'agentPlugins:installFramework',
+    CANCEL_INSTALL: 'agentPlugins:cancelInstall',
+    INSTALL_PROGRESS: 'agentPlugins:installProgress',
+    SET_ENABLED: 'agentPlugins:setEnabled',
+    SAVE: 'agentPlugins:save',
+    DELETE: 'agentPlugins:delete',
+    EXPORT_PROFILE: 'agentPlugins:exportProfile',
+    IMPORT_PROFILE: 'agentPlugins:importProfile',
+    CHANGED: 'agentPlugins:changed',
   },
   pi: {
     GET_API_KEY_PROVIDERS: 'pi:getApiKeyProviders',

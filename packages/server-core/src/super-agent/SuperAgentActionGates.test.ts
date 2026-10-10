@@ -88,11 +88,29 @@ test.each(['manual', 'node'] as const)('full control starts a %s script without 
   expect(launches).toBe(1); expect(captured).toBe('console.log("direct entry");');
 });
 
-test('full control still requires a verified container for scripts', async () => {
+test('full control runs a real host script without a sandbox or approval descriptor', async () => {
   const f = await superAgentFixture({ actionGates: true });
   f.config.environment.fullControl = true;
   f.config.scripts = [{ id: 'script', name: 'Script', path: 'script.js', args: [], timeoutSeconds: 5 }];
   await writeFile(join(f.workingDirectory, 'script.js'), 'console.log("host");');
   await f.service.save('alpha', f.config);
-  await expect(f.service.command('alpha', { type: 'script-run', scriptId: 'script' })).rejects.toThrow('verified container sandbox');
+  await f.service.command('alpha', { type: 'script-run', scriptId: 'script' });
+  const done = await until(() => f.service.get('alpha'), state => state.state.scripts[0]?.status === 'completed');
+  expect(done.state.scripts[0]!.output).toContain('host');
+});
+
+test('restricted host scripts require matching user approval even without file or browser capability', async () => {
+  const f = await superAgentFixture({ actionGates: true });
+  f.config.environment.fullControl = false;
+  f.config.environment.permissions = { readFiles: false, writeFiles: false, runPrograms: true, browser: false };
+  const script = { id: 'script', name: 'Script', path: 'script.js', args: [], timeoutSeconds: 5 };
+  f.config.scripts = [script];
+  const content = 'console.log("approved host script");';
+  await writeFile(join(f.workingDirectory, 'script.js'), content);
+  await f.service.save('alpha', f.config);
+  await expect(f.service.command('alpha', { type: 'script-run', scriptId: 'script' })).rejects.toThrow('refresh and approve');
+  const approval = { sha256: createHash('sha256').update(content).digest('hex'), operation: superAgentScriptOperation(f.config.environment, script) };
+  await f.service.command('alpha', { type: 'script-run', scriptId: 'script', approval });
+  const done = await until(() => f.service.get('alpha'), state => state.state.scripts[0]?.status === 'completed');
+  expect(done.state.scripts[0]!.output).toContain('approved host script');
 });

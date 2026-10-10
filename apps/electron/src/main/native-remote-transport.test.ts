@@ -6,6 +6,7 @@ import { registerNativeRemoteTransport, type MainRemoteTarget, type NativeRemote
 import { NativeRemoteClient } from '../preload/native-remote-client'
 import { NATIVE_REMOTE_TRANSPORT as IPC, type NativeRemotePacket } from '../shared/native-remote-transport'
 import { retrySessionListRequest } from '../renderer/lib/session-load'
+import { reconcileSessionPermissionModes } from '../renderer/lib/session-permission-reconciliation'
 
 const cleanup: Array<() => void> = []
 afterEach(() => { for (const fn of cleanup.splice(0).reverse()) fn() })
@@ -60,6 +61,55 @@ async function fixture(options: { auth?: boolean; thin?: boolean; maxHandles?: n
 }
 
 describe('main-owned remote transport boundary with real WebSocket peers', () => {
+  test('unbounded permission reads reproduce the conversation LIMIT failure', async () => {
+    const f = await fixture(); const w = f.window(1)
+    const release = deferred<void>(); cleanup.push(() => release.resolve())
+    let calls = 0
+    f.server.handle(RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE, async () => {
+      calls++; await release.promise
+      return { permissionMode: 'ask', modeVersion: 1 }
+    })
+    f.server.handle(RPC_CHANNELS.sessions.GET_MESSAGES, async () => 'loaded')
+    await w.adapter.invoke(RPC_CHANNELS.sessions.GET)
+    const refresh = Promise.allSettled(Array.from({ length: 300 }, (_, index) =>
+      w.adapter.invoke(RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE, `session-${index}`)))
+    await until(() => calls === 128)
+    const error = await w.adapter.invoke(RPC_CHANNELS.sessions.GET_MESSAGES, 'selected').catch(error => error)
+    expect(error.code).toBe('LIMIT')
+    expect(error.message).toBe('Too many remote transport operations are pending. Retry after they finish.')
+    release.resolve(); await refresh
+    expect(await w.adapter.invoke(RPC_CHANNELS.sessions.GET_MESSAGES, 'selected')).toBe('loaded')
+  })
+
+  test('large permission refresh leaves room to load a conversation through native IPC', async () => {
+    const f = await fixture(); const w = f.window(1)
+    const release = deferred<void>(); cleanup.push(() => release.resolve())
+    let calls = 0; let active = 0; let peak = 0
+    f.server.handle(RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE, async () => {
+      calls++; peak = Math.max(peak, ++active)
+      await release.promise
+      active--
+      return { permissionMode: 'ask', modeVersion: 1 }
+    })
+    f.server.handle(RPC_CHANNELS.sessions.GET_MESSAGES, async () => ({ id: 'selected', messages: ['loaded'] }))
+    await w.adapter.invoke(RPC_CHANNELS.sessions.GET)
+    const sessions = Array.from({ length: 300 }, (_, index) => ({ id: `session-${index}` }))
+    const failures: unknown[] = []
+    const refresh = reconcileSessionPermissionModes(sessions, async id => {
+      try { await w.adapter.invoke(RPC_CHANNELS.sessions.GET_PERMISSION_MODE_STATE, id) }
+      catch (error) { failures.push(error); throw error }
+    }, () => true)
+    await until(() => calls === 8)
+    expect(await w.adapter.invoke(RPC_CHANNELS.sessions.GET_MESSAGES, 'selected')).toEqual({ id: 'selected', messages: ['loaded'] })
+    expect(calls).toBe(8)
+    release.resolve(); await refresh
+    expect(calls).toBe(300)
+    expect(peak).toBe(8)
+    expect(failures).toEqual([])
+    expect(w.adapter.isConnected).toBe(true)
+    expect(JSON.stringify(f.snapshots)).not.toContain(f.token)
+  })
+
   test('recovers the first session-list timeout after switching remote workspace without refreshing', async () => {
     let switched = false; let calls = 0
     const release = deferred<void>(); cleanup.push(() => release.resolve())

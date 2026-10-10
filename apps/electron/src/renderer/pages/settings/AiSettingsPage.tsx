@@ -1,4 +1,5 @@
 import { getProviderRechargeTarget } from '@craft-agent/shared/utils/billing'
+import { BackendFrameworkSettings, agentRuntimeLabel, agentRuntimeDescription } from './BackendFrameworkSettings'
 /**
  * AiSettingsPage
  *
@@ -487,14 +488,14 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
               aria-label={t('settings.ai.runtime.title')}
             >
               <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
-              <span>{t(`settings.ai.runtime.${currentRuntime === 'claude-code' ? 'claudeCode' : currentRuntime}`)}</span>
+              <span>{agentRuntimeLabel(currentRuntime, t)}</span>
               <ChevronDown className="h-3 w-3 text-muted-foreground" />
             </button>
           </DropdownMenuTrigger>
           <StyledDropdownMenuContent align="end">
             {getCompatibleAgentRuntimes(connection).map(runtime => (
               <StyledDropdownMenuItem key={runtime} onClick={() => onSetAgentRuntime(runtime)}>
-                <span className="flex-1">{t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}`)}</span>
+                <span className="flex-1">{agentRuntimeLabel(runtime, t)}</span>
                 {currentRuntime === runtime && <Check className="h-3.5 w-3.5" />}
               </StyledDropdownMenuItem>
             ))}
@@ -833,6 +834,8 @@ function getApiKeyMethodForConnection(conn: LlmConnectionWithStatus): ApiSetupMe
 export default function AiSettingsPage() {
   const { t } = useTranslation()
   const { llmConnections, refreshLlmConnections, activeWorkspaceId } = useAppShellContext()
+  const [pluginCatalogRevision, setPluginCatalogRevision] = useState(0)
+  const handlePluginCatalogChanged = useCallback(() => setPluginCatalogRevision(value => value + 1), [])
 
   // API Setup overlay state
   const [showApiSetup, setShowApiSetup] = useState(false)
@@ -929,7 +932,7 @@ export default function AiSettingsPage() {
       }
     }
     load()
-  }, [activeWorkspaceId])
+  }, [activeWorkspaceId, pluginCatalogRevision])
 
   // Helpers to open/close the fullscreen API setup overlay
   const openApiSetup = useCallback((connectionSlug?: string) => {
@@ -1487,8 +1490,8 @@ export default function AiSettingsPage() {
                     }}
                     options={(defaultConnection ? getCompatibleAgentRuntimes(defaultConnection) : ['pi']).map(runtime => ({
                       value: runtime,
-                      label: t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}`),
-                      description: t(`settings.ai.runtime.${runtime === 'claude-code' ? 'claudeCode' : runtime}Desc`),
+                      label: agentRuntimeLabel(runtime as AgentRuntimeProtocol, t),
+                      description: agentRuntimeDescription(runtime as AgentRuntimeProtocol, t),
                     }))}
                   />
                   {defaultConnection?.oauthProvider === 'tokennest' && (defaultConnection.channelGroups?.length ?? 0) > 0 && (
@@ -1529,7 +1532,10 @@ export default function AiSettingsPage() {
                   )}
                 </SettingsCard>
               </SettingsSection>
+
               )}
+
+              <BackendFrameworkSettings workspaceId={activeWorkspaceId} onChanged={handlePluginCatalogChanged} />
 
               {/* Workspace Overrides - only show if connections exist */}
               {workspaces.length > 0 && llmConnections.length > 0 && (

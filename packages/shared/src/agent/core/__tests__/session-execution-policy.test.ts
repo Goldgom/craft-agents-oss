@@ -7,7 +7,7 @@ import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionEx
 import { PermissionManager } from '../permission-manager.ts';
 import { setSessionOperationRecorder } from '../session-execution-policy.ts';
 import { runPreToolUseChecks, runPreToolUseChecksWithPermissions } from '../pre-tool-use.ts';
-import { setPermissionMode, cleanupModeState } from '../../mode-manager.ts';
+import { setPermissionMode, cleanupModeState, formatSessionState } from '../../mode-manager.ts';
 import { writeSessionJsonl, readSessionJsonl } from '../../../sessions/jsonl.ts';
 import type { StoredSession } from '../../../sessions/types.ts';
 
@@ -30,6 +30,51 @@ beforeEach(() => {
 });
 
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
+
+describe('node output paths in model context', () => {
+  test('advertised output directories are writable within the environment, including full control', () => {
+    for (const fullControl of [false, true]) {
+      setSessionExecutionPolicy(sessionId, { ...policy, actionGates: true, fullControl });
+      const sessionData = join(outside, 'sessions', sessionId, 'data');
+      const state = formatSessionState(sessionId, {
+        plansFolderPath: join(outside, 'sessions', sessionId, 'plans'), dataFolderPath: sessionData,
+      });
+      expect(state).not.toContain(outside);
+      expect(state).toContain(`workingDirectory: ${root}`);
+      for (const field of ['plansFolderPath', 'dataFolderPath']) {
+        const directory = state.split('\n').find(line => line.startsWith(`${field}: `))!.slice(field.length + 2);
+        const input = { file_path: join(directory, 'report.md'), content: 'Evidence' };
+        // Limited control still requires approval, but the directory ceiling passes.
+        const result = checkSessionExecutionPolicy(sessionId, 'Write', input);
+        if (fullControl) expect(result.allowed).toBe(true);
+        else expect(result).toMatchObject({ allowed: false, reason: expect.stringContaining('approval') });
+      }
+      const result = checkSessionExecutionPolicy(sessionId, 'Write', { file_path: join(sessionData, 'report.md'), content: 'Evidence' });
+      expect(result.allowed).toBe(fullControl);
+      if (!result.allowed) {
+        expect(result.reason).toContain('Path is outside the node environment');
+        expect(result.reason).toContain(`Requested path: ${JSON.stringify(join(sessionData, 'report.md'))}`);
+        expect(result.reason).toContain(`Allowed working directory: ${JSON.stringify(root)}`);
+      }
+    }
+  });
+
+  test('non-executing and invalid nodes advertise no output folders; ordinary sessions retain their paths', () => {
+    const options = { plansFolderPath: join(outside, 'plans'), dataFolderPath: join(outside, 'data') };
+    for (const role of ['coordinator', 'orchestrator'] as const) {
+      setSessionExecutionPolicy(sessionId, { ...policy, role });
+      const state = formatSessionState(sessionId, options);
+      expect(state).not.toContain('plansFolderPath:');
+      expect(state).not.toContain('dataFolderPath:');
+    }
+    expect(() => setSessionExecutionPolicy(sessionId, { ...policy, rootPath: join(temp, 'missing') })).toThrow();
+    expect(formatSessionState(sessionId, options)).not.toContain(outside);
+    clearSessionExecutionPolicy(sessionId);
+    const state = formatSessionState(sessionId, options);
+    expect(state).toContain(`plansFolderPath: ${options.plansFolderPath}`);
+    expect(state).toContain(`dataFolderPath: ${options.dataFolderPath}`);
+  });
+});
 
 describe('durable operation dispatch', () => {
   const context = () => ({ toolName: 'Write', input: { file_path: 'report.txt', content: 'report', _intent: 'Save report' },
@@ -190,18 +235,18 @@ describe('Super Agent permission ceiling', () => {
     expect(parse(isolated.command as string)).toEqual([...environment, executable.replace(/\\/g, '/'), 'exec', '--workdir', '/workspace', 'tokenbird-super-test', '/bin/sh', '-lc', command]);
   });
 
-  test('limited nodes auto-run AST-verified system metadata but not filesystem reads, mutations, injections or background jobs', async () => {
+  test('limited nodes require user approval for host metadata commands as well as other host programs', async () => {
     let requests = 0;
     setSessionPolicyPermissionHandler(sessionId, async () => { requests++; return false; });
     for (const tool of ['Bash', 'mcp__session__localbash', 'mcp__session__runshell']) {
-      expect(isSessionPolicyShellAutoAllowed(sessionId, tool, { command: 'uname -a && df -h' })).toBe(true);
-      expect((await authorizeSessionPolicyTool(sessionId, tool, { command: 'uname -a && df -h' })).allowed).toBe(true);
+      expect(isSessionPolicyShellAutoAllowed(sessionId, tool, { command: 'uname -a && df -h' })).toBe(false);
+      expect((await authorizeSessionPolicyTool(sessionId, tool, { command: 'uname -a && df -h' })).allowed).toBe(false);
       for (const input of [{ command: 'cat /etc/passwd' }, { command: 'hostname new-name' }, { command: 'df -h; rm -rf somewhere' },
         { command: 'df -h > file' }, { command: 'df $(touch file)' }, { command: 'df -h', run_in_background: true }, { command: '' }, { command: 'df -h', cwd: outside }]) {
         expect(isSessionPolicyShellAutoAllowed(sessionId, tool, input)).toBe(false);
       }
     }
-    expect(requests).toBe(0);
+    expect(requests).toBe(3);
     setSessionExecutionPolicy(sessionId, { ...policy, readFiles: false });
     expect(isSessionPolicyShellAutoAllowed(sessionId, 'Bash', { command: 'df -h' })).toBe(false);
   });

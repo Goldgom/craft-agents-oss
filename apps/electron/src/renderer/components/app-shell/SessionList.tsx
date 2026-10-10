@@ -252,6 +252,7 @@ export function SessionList({
     searchInputRef,
   } = useSessionSearch({
     items,
+    selectedSessionId: focusedSessionId !== undefined ? focusedSessionId : selectionStore.state.selected,
     searchActive: searchActive ?? false,
     searchQuery,
     workspaceId,

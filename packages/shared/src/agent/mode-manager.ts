@@ -19,6 +19,7 @@ import { dirname, isAbsolute, relative, resolve } from 'path';
 import { getSessionSafeAllowedToolNames, isComputerUseTool, isComputerUseReadOnly } from '@craft-agent/session-tools-core';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
 import { isBrowserToolNameOrAlias } from './browser-tool-names.ts';
+import { getSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import type { PermissionsContext, MergedPermissionsConfig } from './permissions-config.ts';
 import {
   validateBashCommand,
@@ -2150,7 +2151,7 @@ export function getSessionState(sessionId: string): { permissionMode: Permission
 
 /**
  * Format session state as a lightweight XML block for injection into user messages.
- * Always includes the plans folder path so agent knows where plans are stored.
+ * Advertise output paths within the node environment for restricted sessions.
  */
 export function formatSessionState(
   sessionId: string,
@@ -2180,14 +2181,24 @@ export function formatSessionState(
     }
   }
 
-  // Always include plans folder path so agent knows where plans are stored
-  if (options?.plansFolderPath) {
-    result += `\nplansFolderPath: ${options.plansFolderPath}`;
+  // Session storage belongs to the protected control directory. Advertising it
+  // as writable makes Super Agent nodes follow instructions their policy denies.
+  const policy = getSessionExecutionPolicy(sessionId);
+  const plansFolderPath = policy === undefined ? options?.plansFolderPath
+    : policy?.role === 'worker' ? policy.rootPath : undefined;
+  const dataFolderPath = policy === undefined ? options?.dataFolderPath
+    : policy?.role === 'worker' ? policy.rootPath : undefined;
+  if (policy) {
+    result += `\nworkingDirectory: ${policy.rootPath}`;
+    result += '\nfilesystemBoundary: File tools use host paths. Save outputs in the working directory by default. Other host paths execute directly with full control; limited control requests permission for the exact file operation. Container /workspace paths belong to container commands.';
+  }
+  if (plansFolderPath) {
+    result += `\nplansFolderPath: ${plansFolderPath}`;
   }
 
-  // Include data folder path so agent knows where transform_data output goes
-  if (options?.dataFolderPath) {
-    result += `\ndataFolderPath: ${options.dataFolderPath}`;
+  // Ordinary sessions keep their data folder; nodes save artifacts in their environment.
+  if (dataFolderPath) {
+    result += `\ndataFolderPath: ${dataFolderPath}`;
   }
 
   result += '\n</session_state>';

@@ -2,6 +2,7 @@ import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 
 import { registerAuthHandlers } from './auth'
+import { registerAgentPluginHandlers } from './agent-plugins'
 import { registerAutomationsHandlers } from './automations'
 import { registerCatalogHandlers } from './catalog'
 import { registerFilesHandlers } from './files'
@@ -45,6 +46,7 @@ export function registerCoreRpcHandlers(
     serverCtx.onStop?.(() => cloud.stop())
   }
   registerAuthHandlers(server, deps)
+  registerAgentPluginHandlers(server, deps)
   registerAutomationsHandlers(server, deps)
   registerAgentsHandlers(server, deps)
   registerCatalogHandlers(server, deps)

@@ -460,6 +460,7 @@ export interface SessionToolContext {
   /** Read the collaboration shared board and durable activity history for this session. */
   getCollaboration?(query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }): Promise<unknown>;
   superAgentTask?(args: Record<string, unknown>): Promise<unknown>;
+  superAgentLibrary?(args: Record<string, unknown>): Promise<unknown>;
 
   /** Write one item to the collaboration shared board. */
   updateCollaborationBoard?(itemId: string, value: unknown): Promise<unknown>;

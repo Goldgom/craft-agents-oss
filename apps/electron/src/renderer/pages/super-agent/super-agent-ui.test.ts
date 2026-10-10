@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import { applyPreset, configError, createConfig, nodeModels, scriptAccessGranted, withExecuteMode, type SuperAgentText } from './super-agent-ui'
-import { SUPER_AGENT_PRESETS, PRESET_RECIPES } from './super-agent-presets'
+import { SUPER_AGENT_PRESETS, PRESET_RECIPES, recommendedThinking } from './super-agent-presets'
 import { validateSuperAgentConfig } from '@craft-agent/shared/super-agent'
 
 const text: SuperAgentText = key => key
@@ -39,18 +39,18 @@ describe('Super Agent model authorization and setup', () => {
     }
   })
 
-  it('requires a container for scripts even when all worker capabilities are enabled', () => {
+  it('allows host scripts with program capability or full control', () => {
     const environment = createConfig([tokenNest], text).environment
     environment.fullControl = false
     environment.permissions = { readFiles: false, writeFiles: false, runPrograms: false, browser: false }
     expect(scriptAccessGranted(environment)).toBe(false)
-    expect(scriptAccessGranted({ ...environment, fullControl: true })).toBe(false)
+    expect(scriptAccessGranted({ ...environment, fullControl: true })).toBe(true)
     expect(scriptAccessGranted({ ...environment, kind: 'sandbox', fullControl: true })).toBe(true)
     environment.permissions.runPrograms = true
-    expect(scriptAccessGranted(environment)).toBe(false)
+    expect(scriptAccessGranted(environment)).toBe(true)
     expect(scriptAccessGranted({ ...environment, kind: 'sandbox' })).toBe(true)
     environment.permissions = { readFiles: true, writeFiles: true, runPrograms: true, browser: true }
-    expect(scriptAccessGranted(environment)).toBe(false)
+    expect(scriptAccessGranted(environment)).toBe(true)
   })
 
   it('keeps legacy environment boundaries and capabilities when editing or choosing any preset', () => {
@@ -110,9 +110,12 @@ describe('Super Agent model authorization and setup', () => {
     config.scripts = [{ id: 'checks', name: 'Checks', path: 'checks.ts', args: [], timeoutSeconds: 60, nodeId: config.nodes[6].id }]
     const original = structuredClone(config)
     const result = applyPreset(config, 'daily', tokenNest, text)
-    expect(result.nodes.map(node => node.id)).toEqual([...config.nodes.slice(0, 5), config.nodes[6]].map(node => node.id))
+    expect(result.nodes.slice(0, 2).map(node => node.id)).toEqual(config.nodes.slice(0, 2).map(node => node.id))
+    expect(result.nodes.find(node => node.id === config.nodes[2].id)?.presetProfile).toBe('developer')
+    expect(result.nodes.find(node => node.id === config.nodes[6].id)?.presetProfile).toBe('checkRunner')
+    expect(result.nodes.find(node => node.presetProfile === 'dailyWorker')?.abilityProfileIds).toEqual([])
     expect(result.nodes[1].sourceSlugs).toEqual(['repo'])
-    expect(result.nodes[2].abilityProfileIds).toEqual(['review'])
+    expect(result.nodes.find(node => node.id === config.nodes[2].id)?.abilityProfileIds).toEqual(['review'])
     expect(result.scripts).toEqual(config.scripts)
     expect(() => validateSuperAgentConfig(result)).not.toThrow()
     expect(config).toEqual(original)
@@ -156,6 +159,23 @@ describe('Super Agent model authorization and setup', () => {
     expect(configError(config, [{ ...tokenNest, isAuthenticated: false }], text)).toBe('nodeRequired')
     config.nodes[1].model = 'private-opus'
     expect(configError(config, [tokenNest], text)).toBe('nodeRequired')
+  })
+
+  it('matches stable responsibilities after reorder or rename and retains custom capability owners', () => {
+    const config = applyPreset(createConfig([tokenNest], text), 'coding', tokenNest, text)
+    const developer = config.nodes.find(node => node.presetProfile === 'developer')!
+    developer.name = 'My developer'
+    developer.capabilities!.push('custom-api')
+    config.nodes = [config.nodes[0]!, config.nodes[1]!, ...config.nodes.slice(2).reverse()]
+    const reapplied = applyPreset(config, 'coding', tokenNest, text)
+    expect(reapplied.nodes.find(node => node.presetProfile === 'developer')?.id).toBe(developer.id)
+    expect(reapplied.nodes.find(node => node.id === developer.id)?.capabilities).toContain('custom-api')
+    const research = applyPreset(reapplied, 'research', tokenNest, text)
+    expect(research.nodes.find(node => node.id === developer.id)?.presetProfile).toBe('developer')
+    expect(research.nodes.find(node => node.presetProfile === 'literature')?.capabilities).not.toContain('custom-api')
+    expect(research.nodes.find(node => node.presetProfile === 'organizer')?.thinkingMode).toBe('task')
+    expect(recommendedThinking(research.nodes.find(node => node.presetProfile === 'organizer')!)).toBe('low')
+    expect(recommendedThinking(developer)).toBe('high')
   })
 
   it('requires exactly one coordinator and at least one worker before activation', () => {

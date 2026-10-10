@@ -64,6 +64,23 @@ export function presetModels(models: string[], defaultModel?: string): Record<No
   }
 }
 
+export function nodePresetProfile(node: SuperAgentNode, text: (key: keyof typeof presetStrings) => string): string | undefined {
+  if (node.presetProfile) return node.presetProfile
+  const profiles = [...new Set(Object.values(PRESET_RECIPES).flatMap(recipe => recipe.nodes.map(item => item.profile)))]
+  return profiles.find(profile => node.name === text(`${profile}Name`)
+    || (presetStrings[`${profile}Name`] as readonly string[]).includes(node.name))
+}
+
+export function recommendedThinking(node: SuperAgentNode): SuperAgentNode['thinkingLevel'] {
+  if (['organizer', 'collaborationAssistant', 'codeAssistant', 'checkRunner'].includes(node.presetProfile ?? '')) return 'low'
+  if (node.role === 'coordinator' || ['dailyLead', 'dailyWorker', 'workLead', 'analyst', 'producer'].includes(node.presetProfile ?? '')) return 'medium'
+  return 'high'
+}
+
+export function presetRequirements(preset: SuperAgentPreset): NonNullable<SuperAgentConfig['requirements']> {
+  return { programs: preset === 'coding' ? ['git'] : preset === 'research' ? ['python3'] : preset === 'operations' ? ['sh'] : [], browser: preset === 'research' }
+}
+
 export const presetStrings = {
   intentLeadName: ['意图理解与用户交互', 'Intent and user interaction'],
   intentLeadDescription: ['理解目标、约束与验收条件，交给编排节点；转交结果和必要澄清。', 'Understand goals, constraints and acceptance; hand off to the orchestrator and relay results or clarifications.'],

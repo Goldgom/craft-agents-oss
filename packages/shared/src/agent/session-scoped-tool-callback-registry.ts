@@ -141,6 +141,7 @@ export interface SessionScopedToolCallbacks {
   /** Read the invoking session's collaboration snapshot. */
   getCollaborationFn?: (query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }) => Promise<unknown>;
   superAgentTaskFn?: (args: Record<string, unknown>) => Promise<unknown>;
+  superAgentLibraryFn?: (args: Record<string, unknown>) => Promise<unknown>;
   /** Update one shared-board item as the invoking collaboration member. */
   updateCollaborationBoardFn?: (itemId: string, value: unknown) => Promise<unknown>;
   /** Publish a local file into the invoking session's collaboration. */

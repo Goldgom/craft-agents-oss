@@ -31,7 +31,7 @@ type RegisteredPolicy = {
   grants?: Map<string, OperationGrant>;
   generation?: number;
   reviewAction?: (request: ActionReviewRequest) => Promise<ActionReview>;
-  gates?: Map<string, { key: string; pathIdentity: string; generation: number | undefined; expiresAt: number; dispatched: boolean; executed?: boolean }>;
+  gates?: Map<string, { key: string; pathIdentity: string; generation: number | undefined; expiresAt: number; dispatched: boolean; approved?: boolean; executed?: boolean; fileAccess?: boolean; target?: string; targetClaimed?: boolean }>;
   recordOperation?: (request: { toolName: string; input: Record<string, unknown>; invocationId: string }) => Promise<void>;
 };
 const policies = new Map<string, RegisteredPolicy>();
@@ -184,14 +184,16 @@ export function setSessionReferenceFiles(sessionId: string, paths: string[]): vo
 
 /** Resolve missing write targets through their nearest existing parent, including junctions. */
 export function checkSessionPolicyPath(policy: SessionExecutionPolicy, value: string, cwd?: string, scanDirectory = false): string | null {
-  if (policy.fullControl === true && !policy.actionGates) return null;
+  if (policy.fullControl === true) return null;
   try {
     if (!value || value.includes('\0') || /^(?:[a-z]+:\/\/|\\\\)/i.test(value)
       || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(value)) return 'Unsupported filesystem path';
     const expanded = expandPath(value, cwd || policy.rootPath);
     const path = resolve(cwd || policy.rootPath, expanded);
     const root = realpathSync(policy.rootPath);
-    if (root !== policy.rootPath || !contained(root, path)) return 'Path is outside the node environment';
+    if (root !== policy.rootPath || !contained(root, path)) {
+      return `Path is outside the node environment\nRequested path: ${JSON.stringify(path)}\nAllowed working directory: ${JSON.stringify(policy.rootPath)}\nUse a file path inside the allowed working directory; file tools use host paths, not container /workspace paths.`;
+    }
     let ancestor = path;
     const missing: string[] = [];
     while (true) {
@@ -295,11 +297,30 @@ function getOperationGrant(sessionId: string, toolName: string, input: Record<st
 }
 
 export function getSessionPolicyGrantTarget(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string): string | undefined {
+  const registered = policies.get(sessionId);
+  if (registered?.policy?.actionGates && !registered.policy.fullControl) {
+    const key = operationKey(registered.policy, toolName, input, cwd);
+    const pathIdentity = operationPathIdentity(registered.policy, toolName, input, cwd);
+    for (const lease of registered.gates?.values() ?? []) {
+      if (!lease.approved || !lease.dispatched || lease.targetClaimed || lease.expiresAt <= Date.now()
+        || lease.generation !== registered.generation || lease.key !== key || lease.pathIdentity !== pathIdentity) continue;
+      lease.targetClaimed = true;
+      return lease.target;
+    }
+    return;
+  }
   return getOperationGrant(sessionId, toolName, input, cwd)?.scope.target;
 }
 
 export function hasSessionPolicyToolGrant(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
   return !!getOperationGrant(sessionId, toolName, input, cwd);
+}
+
+function hostProgram(registered: RegisteredPolicy, toolName: string): boolean {
+  const parts = toolName.toLowerCase().split('__');
+  const name = parts.at(-1)!.replace(/_/g, '');
+  return (!parts[1] || parts[1] === 'session') && ['bash', 'localbash', 'runshell'].includes(name)
+    && (name !== 'bash' || !registered.executor);
 }
 
 function shellAutoAllowed(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): boolean {
@@ -310,8 +331,9 @@ function shellAutoAllowed(registered: RegisteredPolicy, toolName: string, input:
     || typeof input.command !== 'string' || !input.command.trim() || input.command.includes('\0')
     || (input.cwd !== undefined && typeof input.cwd !== 'string')) return false;
   // A safe command name is not proof of the host executable it resolves to (PATH/cwd hijacking).
-  if (registered.policy.actionGates && (!registered.executor || name !== 'bash')) return false;
-  if (registered.policy.fullControl === true && !registered.policy.actionGates) return true;
+  if (registered.policy.fullControl === true) return !registered.policy.actionGates || !registered.executor || name === 'bash';
+  // Every command outside the sandbox needs explicit user consent, including inspections.
+  if (hostProgram(registered, toolName)) return false;
   if (registered.policy.role !== 'worker' || (!registered.policy.readFiles && !registered.policy.fullControl) || input.run_in_background || input.background) return false;
   // Do not silently move a sandbox inspection onto the host or client.
   if (registered.executor && name !== 'bash') return false;
@@ -408,7 +430,9 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   if (!input || typeof input !== 'object' || Array.isArray(input)) return checked;
   const policy = registered.policy!;
   const ceiling = checkPolicyRules(registered, toolName, input, cwd);
-  if (!ceiling.allowed) return ceiling;
+  const fileScope = !ceiling.allowed ? permissionScope(registered, toolName, input, cwd) : undefined;
+  const fileAccess = fileScope?.kind === 'file_read' || fileScope?.kind === 'file_write';
+  if (!ceiling.allowed && (!fileAccess || !checkPolicyRules(registered, toolName, input, cwd, true).allowed)) return ceiling;
   const rules = policy.safety?.customRules.filter(rule => rule.toolName.toLowerCase() === toolName.toLowerCase()) ?? [];
   if (rules.some(rule => rule.effect === 'deny')) return checked;
   if (!invocationId || invocationId.length > 300 || registered.gates?.has(invocationId) || !registered.requestPermission) return checked;
@@ -416,9 +440,9 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   const key = operationKey(policy, toolName, input, cwd);
   const pathIdentity = operationPathIdentity(policy, toolName, input, cwd);
   if (pathIdentity === undefined) return deny('the operation path cannot be verified');
-  const category = classifyActionGate(toolName, input) ?? 'unknown';
+  const category = hostProgram(registered, toolName) ? 'unknown' : classifyActionGate(toolName, input) ?? 'unknown';
   const expiresAt = Date.now() + 10 * 60_000;
-  const lease = { key, pathIdentity, generation: registered.generation, expiresAt, dispatched: true };
+  const lease = { key, pathIdentity, generation: registered.generation, expiresAt, dispatched: true, approved: false, fileAccess, target: '' };
   registered.gates ??= new Map();
   registered.gates.set(invocationId, lease); // Pending/denied IDs cannot be replayed or raced.
   const normalized = JSON.parse(canonicalJson(operationInput(policy, toolName, input, cwd))) as Record<string, unknown>;
@@ -426,14 +450,16 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   const scope: SessionPolicyPermissionScope = {
     kind: WRITE_TOOLS.has(name.replace(/_/g, '')) ? 'file_write' : READ_TOOLS.has(name) ? 'file_read'
       : ['bash', 'localbash', 'runshell'].includes(name.replace(/_/g, '')) ? 'program' : name === 'browser_tool' ? 'browser' : 'source',
-    target: String(normalized.file_path ?? normalized.path ?? normalized.cwd ?? toolName),
-    toolName, operation: canonicalJson(normalized), boundary: toolName.startsWith('mcp__') && !toolName.startsWith('mcp__session__') ? 'source' : 'environment',
+    target: fileScope?.target ?? String(normalized.file_path ?? normalized.path ?? normalized.cwd ?? toolName),
+    toolName, operation: canonicalJson(normalized), boundary: fileScope?.boundary ?? (hostProgram(registered, toolName)
+      ? name.replace(/_/g, '') === 'localbash' ? 'client' : 'host'
+      : toolName.startsWith('mcp__') && !toolName.startsWith('mcp__session__') ? 'source' : 'environment'),
     expiresAt, actionGate: { invocationId, category },
   };
   const current = () => policies.get(sessionId) === registered && registered.policy === policy && registered.generation === lease.generation
     && registered.gates?.get(invocationId) === lease && expiresAt > Date.now()
     && key === operationKey(policy, toolName, input, cwd) && pathIdentity === operationPathIdentity(policy, toolName, input, cwd)
-    && checkPolicyRules(registered, toolName, input, cwd).allowed;
+    && checkPolicyRules(registered, toolName, input, cwd, fileAccess).allowed;
   if (policy.safety?.autoReview) {
     let review: ActionReview = { verdict: 'unavailable', reason: 'Independent reviewer is unavailable; human review is required.' };
     try { if (registered.reviewAction) review = await registered.reviewAction({ toolName, operation: scope.operation, category, userIntent: policy.userIntent ?? '', customRules: policy.safety.customRules }); } catch { /* Human review remains mandatory. */ }
@@ -445,10 +471,12 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   }
   let approved = false;
   try { approved = await registered.requestPermission({ toolName, input: normalized,
-    reason: `Action Gate (${category}): human approval is required for this invocation.${rules.map(rule => ` ${rule.reason}`).join('')}${scope.actionGate!.review ? ` Independent review: ${scope.actionGate!.review.reason}` : ''}`, scope }); } catch { /* Fail closed. */ }
+    reason: `Action Gate (${category}): human approval is required for this invocation.${!ceiling.allowed ? ` ${ceiling.reason}` : ''}${rules.map(rule => ` ${rule.reason}`).join('')}${scope.actionGate!.review ? ` Independent review: ${scope.actionGate!.review.reason}` : ''}`, scope }); } catch { /* Fail closed. */ }
   if (approved && hasSessionFullControl(sessionId)) return checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
   if (!approved) return deny('Action Gate was denied, cancelled or expired');
   if (!current()) return deny('the operation or node policy changed while awaiting approval; request again');
+  lease.approved = true;
+  lease.target = scope.target;
   lease.dispatched = false;
   return checkSessionExecutionPolicy(sessionId, toolName, input, cwd, invocationId);
 }
@@ -474,7 +502,7 @@ export function claimSessionActionGateDispatch(sessionId: string, toolName: stri
   if (!lease.dispatched || lease.executed || lease.expiresAt <= Date.now() || lease.generation !== registered.generation
     || lease.key !== operationKey(registered.policy, toolName, input, cwd)
     || lease.pathIdentity !== operationPathIdentity(registered.policy, toolName, input, cwd)) return deny('Action Gate dispatch is missing, changed or already consumed');
-  const ceiling = checkPolicyRules(registered, toolName, input, cwd);
+  const ceiling = checkPolicyRules(registered, toolName, input, cwd, lease.fileAccess);
   if (!ceiling.allowed) return ceiling;
   lease.executed = true;
   return { allowed: true };
@@ -488,24 +516,25 @@ export function checkSessionExecutionPolicy(sessionId: string, toolName: string,
   if (!policy) return deny('the persisted execution policy is invalid; configure the node again');
   if (!input || typeof input !== 'object' || Array.isArray(input)) return deny('tool input must be an object');
   if (policy.actionGates) {
-    const ceiling = checkPolicyRules(registered, toolName, input, cwd);
+    const lease = invocationId ? registered.gates?.get(invocationId) : undefined;
+    const approved = !!lease && !lease.dispatched && lease.expiresAt > Date.now() && lease.generation === registered.generation
+      && lease.key === operationKey(policy, toolName, input, cwd) && lease.pathIdentity === operationPathIdentity(policy, toolName, input, cwd);
+    const ceiling = checkPolicyRules(registered, toolName, input, cwd, approved && lease?.fileAccess);
     if (!ceiling.allowed) return ceiling;
     const rule = policy.safety?.customRules.find(rule => rule.toolName.toLowerCase() === toolName.toLowerCase() && rule.effect === 'deny');
     if (rule) return deny(`custom rule: ${rule.reason}`);
     // Full control skips every approval and review, while keeping execution boundaries.
     if (policy.fullControl) return { allowed: true };
-    const category = classifyActionGate(toolName, input);
+    const category = hostProgram(registered, toolName) ? 'unknown' : classifyActionGate(toolName, input);
     if (category === undefined && !policy.safety?.customRules.some(rule => rule.toolName.toLowerCase() === toolName.toLowerCase())) return { allowed: true };
-    const lease = invocationId ? registered.gates?.get(invocationId) : undefined;
-    if (!lease || lease.dispatched || lease.expiresAt <= Date.now() || lease.generation !== registered.generation
-      || lease.key !== operationKey(policy, toolName, input, cwd) || lease.pathIdentity !== operationPathIdentity(policy, toolName, input, cwd)) return deny('Action Gate requires approval for this exact invocation');
+    if (!approved) return deny('Action Gate requires approval for this exact invocation');
     return { allowed: true };
   }
   if (getOperationGrant(sessionId, toolName, input, cwd)) return { allowed: true };
   return checkPolicyRules(registered, toolName, input, cwd);
 }
 
-function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): SessionPolicyToolResult {
+function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string, fileAccess = false): SessionPolicyToolResult {
   const policy = registered.policy!;
   const parts = toolName.split('__');
   const name = parts[parts.length - 1]!.toLowerCase().replace(/_/g, '');
@@ -532,6 +561,15 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   if (canonical === 'super_agent_task') {
     if (slug !== 'session') return deny('use the session continuity tool');
     return policy.role === 'worker' || input.action === 'get' ? { allowed: true } : deny('only workers may update task checkpoints or artifacts');
+  }
+  if (canonical === 'super_agent_library') {
+    if (slug !== 'session') return deny('use the session library tool');
+    if (input.type === 'library-list' || input.type === 'library-get') return { allowed: true };
+    if (policy.role !== 'worker') return deny('only workers may write libraries or restore archives');
+    if (input.type === 'memory-upsert' || input.type === 'memory-delete') return { allowed: true };
+    if (input.type === 'archive-create') return policy.readFiles || policy.fullControl ? { allowed: true } : deny('archive creation requires file read permission');
+    if (input.type === 'archive-restore') return policy.writeFiles || policy.fullControl ? { allowed: true } : deny('archive restore requires file write permission');
+    return deny('unknown library operation');
   }
   if (policy.role !== 'worker') return deny('the main agent only understands user needs and communicates; assign reading, research, execution and verification to workers');
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return deny('each node uses one model process; spawning, delegation and additional model calls are disabled');
@@ -565,22 +603,23 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
         return registered.referenceFiles?.has(path) && !lstatSync(path).isSymbolicLink() && realpathSync(path) === path;
       } catch { return false; }
     })) return { allowed: true };
-    if (!(policy.fullControl || (writing ? policy.writeFiles : policy.readFiles))) return deny(`${writing ? 'file writing' : 'file reading'} is disabled for this node`);
+    if (!(policy.fullControl || fileAccess || (writing ? policy.writeFiles : policy.readFiles))) return deny(`${writing ? 'file writing' : 'file reading'} is disabled for this node`);
     for (const path of suppliedPaths.length ? suppliedPaths : [cwd || policy.rootPath]) {
       const error = checkSessionPolicyPath(policy, path as string, cwd, search);
-      if (error) return deny(error);
+      if (error && !fileAccess) return deny(error);
     }
     // Glob patterns can carry their own base path independently of input.path.
     const pattern = input.pattern;
     if (name === 'glob' && typeof pattern === 'string' && (isAbsolute(pattern) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(pattern))) return deny('use a relative glob pattern inside the node environment');
     return { allowed: true };
   }
-  if (name === 'bash') {
+  if (['bash', 'localbash', 'runshell'].includes(name) && (!slug || slug === 'session')) {
     if (!policy.runPrograms && !policy.fullControl) return deny('running programs is disabled for this node');
-    if (!registered.executor) return deny('running programs requires a verified sandbox executor; a working folder does not isolate host programs');
     if (typeof input.command !== 'string' || !input.command.trim() || input.command.includes('\0')) return deny('a valid program command is required');
     if (input.run_in_background || input.background) return deny('background program execution is disabled');
     if (input.cwd !== undefined && (typeof input.cwd !== 'string' || checkSessionPolicyPath(policy, input.cwd, cwd))) return deny('program working directory is outside the node environment');
+    if (registered.executor && name !== 'bash') return deny('use Bash to run programs in the configured sandbox');
+    if (!registered.executor && !policy.actionGates) return deny('host program execution requires explicit user approval for this operation; a working folder does not isolate host programs');
     return { allowed: true };
   }
   if (canonical === 'browser_tool' || canonical.startsWith('browser_') || name === 'websearch' || name === 'webfetch') {
@@ -629,16 +668,19 @@ export function normalizeSessionPolicyInput(sessionId: string, toolName: string,
 }
 
 /** Final transform: the model's command becomes one literal argument inside the container. */
-export function wrapSessionProgramInput(sessionId: string, toolName: string, input: Record<string, unknown>): Record<string, unknown> | undefined {
+export function wrapSessionProgramInput(sessionId: string, toolName: string, input: Record<string, unknown>, cwd?: string, invocationId?: string): Record<string, unknown> | undefined {
   const registered = policies.get(sessionId);
   if (!registered || toolName.toLowerCase() !== 'bash') return undefined;
   const executor = registered.executor;
   if (!executor) {
-    if (registered.policy?.actionGates) throw new Error('Action Gate: a verified container is required for all shell execution');
+    const lease = invocationId ? registered.gates?.get(invocationId) : undefined;
+    const approved = !!lease && lease.approved === true && !lease.executed && lease.expiresAt > Date.now() && lease.generation === registered.generation
+      && lease.key === operationKey(registered.policy!, toolName, input, cwd) && lease.pathIdentity === operationPathIdentity(registered.policy!, toolName, input, cwd);
+    if (registered.policy?.actionGates && !hasSessionFullControl(sessionId) && !approved) throw new Error('Action Gate: explicit user approval is required for host shell execution');
     if (!(hasSessionFullControl(sessionId) || isSessionPolicyShellAutoAllowed(sessionId, toolName, input)
-      || hasSessionPolicyToolGrant(sessionId, toolName, input)) || typeof input.command !== 'string') throw new Error('Verified sandbox program executor is unavailable');
+      || approved || hasSessionPolicyToolGrant(sessionId, toolName, input, cwd)) || typeof input.command !== 'string') throw new Error('Host shell execution requires explicit user approval');
     // Full control, verified inspections and exact grants may use the host shell.
-    const directory = operationInput(registered.policy!, toolName, input).cwd as string;
+    const directory = operationInput(registered.policy!, toolName, input, cwd).cwd as string;
     return { ...input, command: `cd -- ${quotePosix(process.platform === 'win32' ? directory.replace(/\\/g, '/') : directory)} && /bin/bash -c ${quotePosix(input.command)}` };
   }
   if (typeof input.command !== 'string') throw new Error('Verified sandbox program executor is unavailable');

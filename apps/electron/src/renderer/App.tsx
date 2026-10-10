@@ -11,6 +11,7 @@ import { generateMessageId } from '../shared/types'
 import { useEventProcessor } from './event-processor'
 import type { AgentEvent, Effect } from './event-processor'
 import { AppShell } from '@/components/app-shell/AppShell'
+import { StudioPagePanel, StudioPageLoading } from '@/components/app-shell/StudioPagePanel'
 import type { AppShellContextType } from '@/context/AppShellContext'
 import { OnboardingWizard, ReauthScreen } from '@/components/onboarding'
 import { WorkspacePicker } from '@/components/workspace'
@@ -40,6 +41,7 @@ import { stripMarkdown } from './utils/text'
 import { coerceInputText } from './lib/input-text'
 import { getSessionsToRefreshAfterStaleReconnect } from './lib/reconnect-recovery'
 import { createSessionListRequestGuard, formatSessionLoadFailure, retrySessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
+import { reconcileSessionPermissionModes } from './lib/session-permission-reconciliation'
 import { extractWorkspaceSlugFromPath } from '@craft-agent/shared/utils/workspace-slug'
 import { DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 import { initRendererPerf } from './lib/perf'
@@ -628,10 +630,10 @@ export default function App() {
     })
   }, [])
 
-  const reconcilePermissionModeState = useCallback(async (sessionId: string) => {
+  const reconcilePermissionModeState = useCallback(async (sessionId: string, isCurrent: () => boolean = () => true) => {
     try {
       const state = await window.electronAPI.getSessionPermissionModeState(sessionId)
-      if (!state) return
+      if (!state || !isCurrent()) return
       applyPermissionModeState(sessionId, state, 'reconcile')
     } catch (error) {
       window.electronAPI.debugLog('[ModeSync] Failed to reconcile permission mode', {
@@ -722,12 +724,11 @@ export default function App() {
       }
       setSessionOptions(optionsMap)
 
-      await Promise.allSettled(
-        loadedSessions.map((s) => reconcilePermissionModeState(s.id))
-      )
-      if (!isCurrent()) return
-
       setSessionsLoaded(true)
+      // Permission version checks are background work. Leave room for opening
+      // the selected conversation and stop scheduling reads for an old refresh.
+      void reconcileSessionPermissionModes(loadedSessions,
+        id => reconcilePermissionModeState(id, isCurrent), isCurrent)
 
       if (initialSessionId && windowWorkspaceId) {
         const session = loadedSessions.find(s => s.id === initialSessionId)
@@ -829,7 +830,8 @@ export default function App() {
       for (const session of sessions) {
         syncSessionOptionsFromSession(session)
       }
-      await Promise.allSettled(sessions.map(s => reconcilePermissionModeState(s.id)))
+      void reconcileSessionPermissionModes(sessions,
+        id => reconcilePermissionModeState(id, isCurrent), isCurrent)
 
       return isCurrent() ? nextMetaMap : null
     } catch (err) {
@@ -2410,25 +2412,25 @@ export default function App() {
                   studioContent={(
                     <>
                       {studioVisited.canvas && (
-                        <div className={studioMode === 'canvas' ? 'h-full' : 'hidden'}>
-                          <React.Suspense fallback={null}><StudioCanvas active={studioMode === 'canvas'} onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }} /></React.Suspense>
-                        </div>
+                        <StudioPagePanel active={studioMode === 'canvas'} className="h-full">
+                          <React.Suspense fallback={<StudioPageLoading />}><StudioCanvas active={studioMode === 'canvas'} onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }} /></React.Suspense>
+                        </StudioPagePanel>
                       )}
                       {studioVisited.mindmap && (
-                        <div className={studioMode === 'mindmap' ? 'h-full' : 'hidden'}>
-                          <React.Suspense fallback={null}><StudioMindMap /></React.Suspense>
-                        </div>
+                        <StudioPagePanel active={studioMode === 'mindmap'} className="h-full">
+                          <React.Suspense fallback={<StudioPageLoading />}><StudioMindMap /></React.Suspense>
+                        </StudioPagePanel>
                       )}
                       {studioVisited['super-agent'] && (
-                        <div className={studioMode === 'super-agent' ? 'h-full' : 'hidden'}>
-                          <React.Suspense fallback={null}>
+                        <StudioPagePanel active={studioMode === 'super-agent'} className="h-full">
+                          <React.Suspense fallback={<StudioPageLoading />}>
                             <SuperAgentPage
                               active={studioMode === 'super-agent'}
                               onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }}
                               onOpenSession={id => { setStudioMode('agent'); navigate(routes.view.allSessions(id)) }}
                             />
                           </React.Suspense>
-                        </div>
+                        </StudioPagePanel>
                       )}
                     </>
                   )}

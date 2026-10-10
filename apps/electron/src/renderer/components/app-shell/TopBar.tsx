@@ -23,7 +23,8 @@ import {
 } from "@/components/ui/styled-dropdown"
 import type { SettingsMenuItem } from "../../../shared/menu-schema"
 import { SquarePenRounded } from "../icons/SquarePenRounded"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
+import { LayoutGroup, motion, useReducedMotion } from "motion/react"
 import { BrowserTabStrip } from "../browser/BrowserTabStrip"
 import type { Workspace } from "../../../shared/types"
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher"
@@ -48,17 +49,20 @@ function StudioModeSwitcher({ value, onChange, compact = false }: {
   onChange: (mode: StudioMode) => void
   compact?: boolean
 }) {
-  return <div role="group" aria-label="功能切换" className="titlebar-no-drag inline-flex h-9 shrink-0 items-center gap-0.5 rounded-xl border border-border/70 bg-muted/60 p-1">
+  const layoutId = useId()
+  const reduceMotion = useReducedMotion()
+  return <LayoutGroup id={layoutId}><div role="group" aria-label="功能切换" className="titlebar-no-drag inline-flex h-9 shrink-0 items-center gap-0.5 rounded-xl border border-border/70 bg-muted/60 p-1">
     {STUDIO_MODES.map(({ value: mode, label, Icon }) => {
       const active = value === mode
       return <button key={mode} type="button" aria-label={label} aria-pressed={active} title={label}
         onClick={() => onChange(mode)}
-        className={cn('inline-flex h-7 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
-          active ? 'bg-background text-foreground shadow-xs ring-1 ring-border/70' : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+        className={cn('relative inline-flex h-7 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
+          active ? 'text-foreground' : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
           compact && 'px-2')}
-      ><Icon className={cn('size-3.5 shrink-0', active && 'text-primary')} strokeWidth={1.8} /><span className={compact ? 'sr-only' : ''}>{label}</span></button>
+      >{active && <motion.span layoutId="studio-mode-highlight" className="pointer-events-none absolute inset-0 rounded-lg bg-background shadow-xs ring-1 ring-border/70" transition={{ duration: reduceMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }} />}
+        <Icon className={cn('relative size-3.5 shrink-0', active && 'text-primary')} strokeWidth={1.8} /><span className={compact ? 'sr-only' : 'relative'}>{label}</span></button>
     })}
-  </div>
+  </div></LayoutGroup>
 }
 
 interface TopBarProps {

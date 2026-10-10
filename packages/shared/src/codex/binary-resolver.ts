@@ -4,10 +4,11 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { delimiter, extname, isAbsolute, join } from 'node:path';
 import { getConfigDir } from '../config/paths.ts';
+import { loadBackendFrameworkConfiguration } from '../agent-plugins/framework-storage.ts';
 
 export interface NativeCodexBinary {
   path: string;
-  source: 'CRAFT_CODEX_PATH' | 'CODEX_PATH' | 'bundled' | 'managed' | 'PATH';
+  source: 'CRAFT_CODEX_PATH' | 'CODEX_PATH' | 'bundled' | 'managed' | 'PATH' | 'configured';
   version: string;
   testedProtocol: boolean;
 }
@@ -15,6 +16,7 @@ export interface NativeCodexBinary {
 const TESTED_VERSION = /^0\.154\./;
 export const MANAGED_CODEX_VERSION = '0.154.0';
 let cached: NativeCodexBinary | null | undefined;
+let cachedConfiguredPath: string | undefined;
 let configuredResourcesPath: string | undefined;
 let managedInstall: Promise<ManagedCodexInstallResult> | null = null;
 
@@ -84,7 +86,9 @@ export function resolveNativeCodexBinary(options: {
   resourcesPath?: string;
   useCache?: boolean;
 } = {}): NativeCodexBinary | null {
-  if (options.useCache !== false && cached !== undefined) return cached;
+  const configuredPath = loadBackendFrameworkConfiguration('codex')?.executablePath;
+  if (options.useCache !== false && cached !== undefined && cachedConfiguredPath === configuredPath) return cached;
+  cachedConfiguredPath = configuredPath;
   const env = options.env ?? process.env;
   const resourcesPath = options.resourcesPath ?? configuredResourcesPath;
   const bundled = resourcesPath ? [
@@ -100,7 +104,7 @@ export function resolveNativeCodexBinary(options: {
     ...pathCandidates(env).map(path => ({ path: existsSync(path) ? path : null, source: 'PATH' as const })),
   ];
 
-  for (const candidate of candidates) {
+  for (const candidate of configuredPath ? [{ path: configuredPath, source: 'configured' as const }] : candidates) {
     if (!candidate.path) continue;
     const version = readVersion(candidate.path);
     if (!version) continue;

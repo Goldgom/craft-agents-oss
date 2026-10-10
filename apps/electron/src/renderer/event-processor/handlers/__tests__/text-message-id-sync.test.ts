@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { handleTextComplete } from '../text'
+import { handleTextComplete, handleTextDelta } from '../text'
+import { handleInterrupted } from '../session'
 import type { SessionState, TextCompleteEvent } from '../../types'
 
 function makeState(messages: any[]): SessionState {
@@ -14,6 +15,29 @@ function makeState(messages: any[]): SessionState {
 }
 
 describe('handleTextComplete messageId synchronization', () => {
+  for (const turnId of ['stopped-turn', undefined]) {
+    it(`keeps the authoritative partial reply ID after interruption (${turnId ?? 'no turn ID'})`, () => {
+      const streaming = handleTextDelta(makeState([]), {
+        type: 'text_delta', sessionId: 'session-1', delta: 'partial reply', turnId,
+      })
+      const temporaryId = streaming.session.messages[0]!.id
+      const finalized = handleTextComplete(streaming, {
+        type: 'text_complete', sessionId: 'session-1', text: 'partial reply',
+        messageId: 'persisted-partial', turnId, timestamp: 200,
+      })
+      const stopped = handleInterrupted(finalized, {
+        type: 'interrupted', sessionId: 'session-1',
+        message: { id: 'stop-marker', role: 'info', content: 'Response interrupted', timestamp: 201 },
+      }).state
+      expect(stopped.session.messages).toHaveLength(2)
+      expect(stopped.session.messages[0]).toMatchObject({
+        id: 'persisted-partial', content: 'partial reply', isStreaming: false, isPending: false,
+      })
+      expect(stopped.session.messages[0]!.id).not.toBe(temporaryId)
+      expect(stopped.streaming).toBeNull()
+    })
+  }
+
   it('overwrites existing streaming message id with authoritative messageId', () => {
     const state = makeState([
       {

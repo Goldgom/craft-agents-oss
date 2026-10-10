@@ -1,10 +1,13 @@
 #!/usr/bin/env bun
 import { join } from 'node:path'
 import { startCloudServer } from './server'
-import { DEFAULT_CLOUD_URL, normalizeCloudUrl } from '../../shared/src/cloud/types'
+import { DEFAULT_CLOUD_URL, normalizeCloudUrl, DEFAULT_CLOUD_ICE_SERVERS, validateCloudIceServers } from '../../shared/src/cloud/types'
 
 const tokenNestUrl = normalizeCloudUrl(process.env.TOKENNEST_URL ?? 'https://openai.goldgom.top')
 const serviceKey = process.env.TOKENBIRD_CLOUD_SERVICE_KEY
+const iceServers: unknown = process.env.TOKENBIRD_CLOUD_STUN_SERVERS ? JSON.parse(process.env.TOKENBIRD_CLOUD_STUN_SERVERS) : DEFAULT_CLOUD_ICE_SERVERS
+if (!validateCloudIceServers(iceServers)) throw new Error('TOKENBIRD_CLOUD_STUN_SERVERS must be a JSON array of STUN server objects')
+if (process.env.TOKENBIRD_CLOUD_DIRECT_ENABLED && !['true', 'false'].includes(process.env.TOKENBIRD_CLOUD_DIRECT_ENABLED)) throw new Error('TOKENBIRD_CLOUD_DIRECT_ENABLED must be true or false')
 if (!serviceKey || serviceKey.length < 32 || serviceKey.trim() !== serviceKey || /[\r\n]/.test(serviceKey)) throw new Error('TOKENBIRD_CLOUD_SERVICE_KEY must contain at least 32 characters; configure the same key on TokenNest')
 async function tokenNest(path: string, body: unknown) {
   const response = await fetch(tokenNestUrl + path, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${serviceKey}` }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) })
@@ -22,6 +25,8 @@ const cloud = startCloudServer({
   webuiDir: process.env.TOKENBIRD_CLOUD_WEBUI_DIR ?? './webui',
   serviceKey,
   adminKey: process.env.TOKENBIRD_CLOUD_ADMIN_KEY,
+  directEnabled: process.env.TOKENBIRD_CLOUD_DIRECT_ENABLED !== 'false',
+  iceServers,
   authenticate: async accessToken => {
     const result = await tokenNest('/api/internal/tokenbird/identity', { access_token: accessToken }) as { subject: string; expires_at: number }
     return { subject: result.subject, expiresAt: result.expires_at }

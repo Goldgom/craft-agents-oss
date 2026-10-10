@@ -357,6 +357,19 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
 
   // llmConnections — LLM config lives on server running workspace
   RPC_CHANNELS.llmConnections.LIST,
+  RPC_CHANNELS.agentPlugins.LIST,
+  RPC_CHANNELS.agentPlugins.LIST_FRAMEWORKS,
+  RPC_CHANNELS.agentPlugins.SAVE_FRAMEWORK,
+  RPC_CHANNELS.agentPlugins.TEST_FRAMEWORK,
+  RPC_CHANNELS.agentPlugins.INSTALL_FRAMEWORK,
+  RPC_CHANNELS.agentPlugins.CANCEL_INSTALL,
+  RPC_CHANNELS.agentPlugins.INSTALL_PROGRESS,
+  RPC_CHANNELS.agentPlugins.SET_ENABLED,
+  RPC_CHANNELS.agentPlugins.SAVE,
+  RPC_CHANNELS.agentPlugins.DELETE,
+  RPC_CHANNELS.agentPlugins.EXPORT_PROFILE,
+  RPC_CHANNELS.agentPlugins.IMPORT_PROFILE,
+  RPC_CHANNELS.agentPlugins.CHANGED,
   RPC_CHANNELS.llmConnections.LIST_WITH_STATUS,
   RPC_CHANNELS.llmConnections.GET,
   RPC_CHANNELS.llmConnections.GET_API_KEY,
@@ -395,7 +408,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
   RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
-  RPC_CHANNELS.tokennest.GET_PRICING,
+  RPC_CHANNELS.llmConnections.GET_PRICING,
   RPC_CHANNELS.tokennest.GET_RECHARGE_URL,
 
   // copilot — OAuth via capability passthrough

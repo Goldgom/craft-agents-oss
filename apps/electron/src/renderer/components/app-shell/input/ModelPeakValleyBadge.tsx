@@ -2,16 +2,19 @@ import { useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { LlmConnection } from '@config/llm-connections'
 import { EntityListBadge } from '@/components/ui/entity-list-badge'
-import { getPeakValleyPeriod, getPricingSnapshot, subscribePricing, supportsTokenNestPricing } from '@/lib/tokennest-pricing'
+import { getPeakValleyPeriod, getPricingSnapshot, getDeepSeekPricingSnapshot, subscribePricing, subscribeDeepSeekPricing, getModelPricingSource, type PricingSource } from '@/lib/tokennest-pricing'
 
 export function ModelPeakValleyBadge(props: { connection?: LlmConnection | null; modelId: string }) {
-  if (!supportsTokenNestPricing(props.connection, props.modelId)) return null
-  return <TokenNestPeakValleyBadge modelId={props.modelId.replace(/^pi\//, '')} />
+  const source = getModelPricingSource(props.connection, props.modelId)
+  if (!source) return null
+  return <ProviderPeakValleyBadge source={source} modelId={props.modelId.replace(/^pi\//, '')} />
 }
 
-function TokenNestPeakValleyBadge(props: { modelId: string }) {
+function ProviderPeakValleyBadge(props: { source: PricingSource; modelId: string }) {
   const { t } = useTranslation()
-  const pricing = useSyncExternalStore(subscribePricing, getPricingSnapshot, getPricingSnapshot)
+  const subscribe = props.source === 'deepseek' ? subscribeDeepSeekPricing : subscribePricing
+  const getSnapshot = props.source === 'deepseek' ? getDeepSeekPricingSnapshot : getPricingSnapshot
+  const pricing = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   const schedule = pricing.schedules[props.modelId]
   if (!schedule) return null
   const offPeak = getPeakValleyPeriod(schedule, pricing.at) === 'off-peak'
@@ -19,7 +22,9 @@ function TokenNestPeakValleyBadge(props: { modelId: string }) {
     <EntityListBadge
       className="inline-flex"
       colorClass={offPeak ? 'bg-success/10 text-success' : 'bg-info/10 text-info'}
-      tooltip={t('chat.modelPicker.peakValleySchedule', { ...schedule })}
+      tooltip={schedule.mode === 'china_business_hours'
+        ? t('chat.modelPicker.deepSeekPeakValleySchedule')
+        : t('chat.modelPicker.peakValleySchedule', { ...schedule })}
     >
       {offPeak ? t('chat.modelPicker.offPeak') : t('chat.modelPicker.peak')}
     </EntityListBadge>

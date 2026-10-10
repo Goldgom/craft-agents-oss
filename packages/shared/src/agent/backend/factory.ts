@@ -2,15 +2,15 @@
  * Agent Factory
  *
  * Creates the appropriate AI agent based on configuration.
- * Supports two agents:
- * - ClaudeAgent (Anthropic) - Default, using @anthropic-ai/claude-agent-sdk
- * - PiAgent (Pi) - Using @earendil-works/pi-ai SDK
+ * Selects Pi, Claude Code, Codex, or an independent native agent bridge.
+ * Bundled bridges include Hermes and DeepSeek Harness (DSH).
  *
  * All agents implement AgentBackend directly.
  *
  * LLM Connections:
  * - Backends can be created from LLM connection configs
- * - providerType determines SDK selection and credential routing
+ * - agentRuntime selects the agent architecture
+ * - providerType selects model transport and credential routing
  * - authType determines how credentials are retrieved
  */
 
@@ -48,6 +48,7 @@ import type { ModelFetchResult } from '../../config/model-fetcher.ts';
 // Model resolution utilities
 import { getModelProvider, DEFAULT_MODEL, normalizeDeprecatedModelId } from '../../config/models.ts';
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getCredentialManager } from '../../credentials/index.ts';
@@ -66,6 +67,13 @@ import {
 } from './internal/runtime-resolver.ts';
 import { anthropicDriver } from './internal/drivers/anthropic.ts';
 import { piDriver } from './internal/drivers/pi.ts';
+import { PluginAgent } from '../../agent-plugins/plugin-agent.ts';
+import { getAgentPluginManifest, refreshAgentPluginCatalog } from '../../agent-plugins/storage.ts';
+import { getAgentPluginDescriptor } from '../../agent-plugins/catalog.ts';
+import { loadBackendFrameworkConfiguration, getBackendFrameworkFingerprint } from '../../agent-plugins/framework-storage.ts';
+import { configureFrameworkAgent } from '../../agent-plugins/framework-runtime.ts';
+import { setPathToClaudeCodeExecutable } from '../options.ts';
+import type { BuiltinAgentRuntime } from '../../agent-plugins/types.ts';
 
 const DRIVER_REGISTRY: Record<AgentProvider, ProviderDriver> = {
   anthropic: anthropicDriver,
@@ -137,24 +145,60 @@ export function detectProvider(authType: string): AgentProvider {
  * ```
  */
 export function createBackend(config: BackendConfig): AgentBackend {
-  if (config.agentRuntime === 'codex') {
-    return createCodexBackend(config);
+  if (!['anthropic', 'pi'].includes(config.provider)) throw new Error(`Unknown provider: ${config.provider}`);
+  const runtime = config.agentRuntime ?? (config.provider === 'anthropic' ? 'claude-code' : 'pi');
+  const settings = loadBackendFrameworkConfiguration(runtime);
+  if (settings && !config.session) {
+    const now = Date.now();
+    config = { ...config, session: { id: randomUUID(), workspaceRootPath: config.workspace.rootPath, createdAt: now, lastUsedAt: now } };
   }
-
-  switch (config.provider) {
-    case 'anthropic':
-      // ClaudeAgent implements AgentBackend directly
-      return new ClaudeAgent(config);
-
-    case 'pi':
-      // PiAgent implements AgentBackend directly
-      // Auth is API key based via Pi's AuthStorage
-      return new PiAgent(config);
-
-    default:
-      throw new Error(`Unknown provider: ${config.provider}`);
+  config = applyFrameworkRuntimeLocation(config);
+  const recoverHistory = settings?.features.history === 'host' && getAgentPluginDescriptor(runtime)?.capabilities.includes('resume')
+    ? config.getRecoveryMessages ?? (() => []) : undefined;
+  if (settings?.features.history === 'host') {
+    if (config.session?.sdkSessionId) config.onSdkSessionIdCleared?.();
+    config = { ...config, session: config.session ? { ...config.session, sdkSessionId: undefined,
+      branchFromSdkSessionId: undefined, branchFromSdkCwd: undefined, branchFromSdkTurnId: undefined } : undefined,
+      onSdkSessionIdUpdate: undefined, ...(recoverHistory ? { getRecoveryMessages: undefined } : {}) };
   }
+  let agent: AgentBackend;
+  if (runtime.startsWith('plugin:')) agent = new PluginAgent(config, getAgentPluginManifest(runtime));
+  else {
+    const create = AGENT_CREATORS[runtime as BuiltinAgentRuntime];
+    if (!create) throw new Error(`No agent plugin registered for runtime: ${runtime}`);
+    agent = create(config);
+  }
+  return settings ? configureFrameworkAgent(agent, settings, config, () => createModelUtilityBackend(config), recoverHistory) : agent;
 }
+
+function applyFrameworkRuntimeLocation(config: BackendConfig): BackendConfig {
+  const runtime = config.agentRuntime ?? (config.provider === 'anthropic' ? 'claude-code' : 'pi');
+  const settings = loadBackendFrameworkConfiguration(runtime);
+  if (runtime === 'claude-code' && settings?.executablePath) setPathToClaudeCodeExecutable(settings.executablePath);
+  if (runtime !== 'pi' || !settings) return config;
+  const payload = getBackendRuntime(config);
+  return { ...config, runtime: { ...payload, paths: { ...payload.paths,
+    ...(settings.executablePath ? { node: settings.executablePath } : {}),
+    ...(settings.entrypointPath ? { piServer: settings.entrypointPath } : {}) } } };
+}
+
+/** Shared titles, summaries and call_llm use the model transport without feature recursion. */
+export function createModelUtilityBackend(config: BackendConfig): AgentBackend {
+  const runtime = config.provider === 'anthropic' ? 'claude-code' : 'pi';
+  const utilityConfig = applyFrameworkRuntimeLocation({ ...config, agentRuntime: runtime, isHeadless: true,
+    systemPromptPreset: 'mini', agentPrompt: undefined,
+    session: config.session ? { ...config.session, id: `${config.session.id}-utility`, sdkSessionId: undefined, sdkSessionRuntime: undefined } : undefined,
+    mcpPool: undefined, poolServerUrl: undefined, initialSources: undefined, onSdkSessionIdUpdate: undefined,
+    onSdkSessionIdCleared: undefined, getRecoveryMessages: undefined, getAgentRuntimeMigrationContext: undefined,
+    markAgentRuntimeMigrationApplied: undefined });
+  return AGENT_CREATORS[runtime](utilityConfig);
+}
+
+const AGENT_CREATORS: Record<BuiltinAgentRuntime, (config: BackendConfig) => AgentBackend> = {
+  pi: config => new PiAgent(config),
+  'claude-code': config => new ClaudeAgent(config),
+  codex: config => createCodexBackend(config),
+};
 
 /**
  * Create the appropriate agent based on configuration.
@@ -217,6 +261,11 @@ export function initializeBackendHostRuntime(args: {
     const { driver, resolvedPaths } = resolveDriverRuntime(provider, hostRuntime);
     driver.initializeHostRuntime?.({ hostRuntime, resolvedPaths });
   }
+}
+
+/** Refresh the detected locations on the host serving the configuration UI. */
+export function refreshBackendFrameworkLocations(hostRuntime: BackendHostRuntimeContext): void {
+  resolveBackendRuntimePaths(hostRuntime);
 }
 
 /**
@@ -286,6 +335,9 @@ export function createCodexBackend(
   config: BackendConfig,
   nativeBinary = resolveNativeCodexBinary(),
 ): AgentBackend {
+  if (loadBackendFrameworkConfiguration('codex')?.executablePath && !nativeBinary) {
+    throw new Error('The configured Codex executable is unavailable or unsupported; test its location in backend framework settings.');
+  }
   if (config.session?.id && hasSessionExecutionPolicy(config.session.id)) {
     if (config.authType === 'none') throw new Error('Super Agent nodes require configured Codex API or OAuth credentials for the policy-enforced compatibility runtime.');
     return new CodexCompatibilityAgent(config);
@@ -310,7 +362,8 @@ export function createCodexBackend(
 }
 
 /** Map an explicit runtime protocol to the concrete backend implementation. */
-export function agentRuntimeToAgentProvider(runtime: AgentRuntimeProtocol): AgentProvider {
+export function agentRuntimeToAgentProvider(runtime: AgentRuntimeProtocol, providerType?: LlmProviderType): AgentProvider {
+  if (runtime.startsWith('plugin:') && providerType) return providerTypeToAgentProvider(providerType);
   return runtime === 'claude-code' ? 'anthropic' : 'pi';
 }
 
@@ -392,7 +445,7 @@ export function resolveSessionConnection(
 /**
  * Provider-agnostic resolution result used by session/ipc orchestration.
  */
-export interface ResolvedBackendContext extends BackendResolutionContext {}
+export interface ResolvedBackendContext extends BackendResolutionContext { agentPluginFingerprint?: string }
 
 /**
  * Resolve connection + provider/auth/model/capabilities in one call.
@@ -403,13 +456,14 @@ export function resolveBackendContext(args: {
   workspaceDefaultConnectionSlug?: string;
   managedModel?: string;
 }): ResolvedBackendContext {
+  refreshAgentPluginCatalog();
   const connection = resolveSessionConnection(
     args.sessionConnectionSlug,
     args.workspaceDefaultConnectionSlug
   );
 
   const agentRuntime = connection ? resolveAgentRuntime(connection) : 'claude-code';
-  const provider = agentRuntimeToAgentProvider(agentRuntime);
+  const provider = agentRuntimeToAgentProvider(agentRuntime, connection?.providerType);
 
   const authType = connection
     ? connectionAuthTypeToBackendAuthType(connection.authType)
@@ -421,6 +475,7 @@ export function resolveBackendContext(args: {
     connection,
     provider,
     agentRuntime,
+    agentPluginFingerprint: getBackendFrameworkFingerprint(agentRuntime),
     authType,
     resolvedModel,
     capabilities: BACKEND_CAPABILITIES[provider],
@@ -550,10 +605,11 @@ export function createConfigFromConnection(
   connection: LlmConnection,
   baseConfig: Omit<BackendConfig, 'provider' | 'authType' | 'providerType'>
 ): BackendConfig {
+  refreshAgentPluginCatalog();
   // Use new providerType if available, fall back to legacy type
   const providerType = connection.providerType || (connection.type ? connectionTypeToProvider(connection.type) as unknown as LlmProviderType : 'anthropic');
   const agentRuntime = resolveAgentRuntime(connection);
-  const provider = agentRuntimeToAgentProvider(agentRuntime);
+  const provider = agentRuntimeToAgentProvider(agentRuntime, providerType);
 
   return {
     ...baseConfig,
@@ -597,8 +653,9 @@ export function createBackendFromConnection(
     );
   }
 
+  refreshAgentPluginCatalog();
   const agentRuntime = resolveAgentRuntime(connection);
-  const provider = agentRuntimeToAgentProvider(agentRuntime);
+  const provider = agentRuntimeToAgentProvider(agentRuntime, connection.providerType);
   const context: ResolvedBackendContext = {
     connection,
     provider,

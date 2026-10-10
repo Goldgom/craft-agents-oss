@@ -6,17 +6,9 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { PanelHeader } from '@/components/app-shell/PanelHeader'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings'
-import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import { isMac } from '@/lib/platform'
 import { actionsByCategory, useActionLabel, type ActionId } from '@/actions'
-
-export const meta: DetailsPageMeta = {
-  navigator: 'settings',
-  slug: 'shortcuts',
-}
 
 interface ShortcutItem {
   keys: string[]
@@ -29,7 +21,7 @@ interface ShortcutSection {
 }
 
 // Component-specific shortcuts that aren't in the centralized registry
-function useComponentSpecificSections(): ShortcutSection[] {
+function useComponentSpecificSections(sendMessageKey: 'enter' | 'cmd-enter'): ShortcutSection[] {
   const { t } = useTranslation()
   return [
     {
@@ -51,7 +43,7 @@ function useComponentSpecificSections(): ShortcutSection[] {
     {
       title: t('shortcuts.chatInput'),
       shortcuts: [
-        { keys: ['Enter'], description: t('shortcuts.sendMessage') },
+        { keys: sendMessageKey === 'cmd-enter' ? [isMac ? '⌘' : 'Ctrl', 'Enter'] : ['Enter'], description: t('shortcuts.sendMessage') },
         { keys: ['Shift', 'Enter'], description: t('shortcuts.newLine') },
         { keys: ['Esc'], description: t('shortcuts.closeDialogBlur') },
       ],
@@ -124,45 +116,41 @@ function ActionShortcutRow({ actionId }: { actionId: ActionId }) {
   )
 }
 
-export default function ShortcutsPage() {
+export function KeyboardShortcutsSection({ sendMessageKey, defaultOpen = false }: { sendMessageKey: 'enter' | 'cmd-enter'; defaultOpen?: boolean }) {
   const { t } = useTranslation()
-  const componentSpecificSections = useComponentSpecificSections()
+  const componentSpecificSections = useComponentSpecificSections(sendMessageKey)
   return (
-    <div className="h-full flex flex-col">
-      <PanelHeader title={t("settings.shortcuts.title")} />
-      <div className="flex-1 min-h-0 mask-fade-y">
-        <ScrollArea className="h-full">
-          <div className="px-5 py-7 max-w-3xl mx-auto space-y-8">
-            {/* Registry-driven sections */}
-            {Object.entries(actionsByCategory).map(([category, actions]) => (
-              <SettingsSection key={category} title={t(`shortcuts.category.${category.toLowerCase()}`)}>
-                <SettingsCard>
-                  {actions.map(action => (
-                    <ActionShortcutRow key={action.id} actionId={action.id as ActionId} />
-                  ))}
-                </SettingsCard>
-              </SettingsSection>
-            ))}
+    <details className="space-y-4" open={defaultOpen || undefined}>
+      <summary className="cursor-pointer text-base font-semibold">{t('settings.shortcuts.title')}</summary>
+      <div className="space-y-8">
+        {/* Registry-driven sections */}
+        {Object.entries(actionsByCategory).map(([category, actions]) => (
+          <SettingsSection key={category} title={t(`shortcuts.category.${category.toLowerCase()}`)}>
+            <SettingsCard>
+              {actions.map(action => (
+                <ActionShortcutRow key={action.id} actionId={action.id as ActionId} />
+              ))}
+            </SettingsCard>
+          </SettingsSection>
+        ))}
 
-            {/* Component-specific sections */}
-            {componentSpecificSections.map((section) => (
-              <SettingsSection key={section.title} title={section.title}>
-                <SettingsCard>
-                  {section.shortcuts.map((shortcut, index) => (
-                    <SettingsRow key={index} label={shortcut.description}>
-                      <div className="flex items-center gap-1">
-                        {shortcut.keys.map((key, keyIndex) => (
-                          <Kbd key={keyIndex}>{key}</Kbd>
-                        ))}
-                      </div>
-                    </SettingsRow>
-                  ))}
-                </SettingsCard>
-              </SettingsSection>
-            ))}
-          </div>
-        </ScrollArea>
+        {/* Component-specific sections */}
+        {componentSpecificSections.map((section) => (
+          <SettingsSection key={section.title} title={section.title}>
+            <SettingsCard>
+              {section.shortcuts.map((shortcut, index) => (
+                <SettingsRow key={index} label={shortcut.description}>
+                  <div className="flex items-center gap-1">
+                    {shortcut.keys.map((key, keyIndex) => (
+                      <Kbd key={keyIndex}>{key}</Kbd>
+                    ))}
+                  </div>
+                </SettingsRow>
+              ))}
+            </SettingsCard>
+          </SettingsSection>
+        ))}
       </div>
-    </div>
+    </details>
   )
 }

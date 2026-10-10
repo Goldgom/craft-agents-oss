@@ -492,8 +492,20 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   })
 
   server.handle(RPC_CHANNELS.codex.INSTALL, async () => {
-    const { installManagedNativeCodex } = await import('@craft-agent/shared/agent')
-    return installManagedNativeCodex()
+    const { installBackendFramework } = await import('@craft-agent/shared/agent-plugins/framework-installer')
+    const { getNativeCodexStatus } = await import('@craft-agent/shared/codex/binary-resolver')
+    const { buildBackendHostRuntimeContext } = await import('../utils')
+    const result = await installBackendFramework('codex', buildBackendHostRuntimeContext(deps.platform), progress => {
+      server.push(RPC_CHANNELS.agentPlugins.INSTALL_PROGRESS, { to: 'all' }, progress)
+    })
+    if (result.success) {
+      const { getLlmConnections } = await import('@craft-agent/shared/config')
+      for (const connection of getLlmConnections()) {
+        if (connection.agentRuntime === 'codex') await deps.sessionManager.refreshConnectionRuntime(connection.slug)
+      }
+      server.push(RPC_CHANNELS.agentPlugins.CHANGED, { to: 'all' })
+    }
+    return { ...getNativeCodexStatus({ forceRecheck: true }), success: result.success, error: result.error }
   })
 
   // ============================================================

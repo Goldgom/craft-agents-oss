@@ -1,6 +1,7 @@
 import { RPC_CHANNELS, type LlmConnectionSetup, type ListCustomModelsParams, type ListCustomModelsResult, type TokenNestUsagePoint, type TokenNestUsageRecordDto, type TokenNestUsageSnapshot } from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, isImageGenerationModelId, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId, deriveBedrockRegionPrefix } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
+import { fetchDeepSeekPricing } from '../../services/deepseek-pricing'
 import { setSetupDeferred } from '@craft-agent/shared/config/storage'
 import {
   resolveSetupTestConnectionHint,
@@ -10,6 +11,8 @@ import {
 import { getModelRefreshService } from '@craft-agent/server-core/model-fetchers'
 import { parseTestConnectionError, createBuiltInConnection, validateModelList, piAuthProviderDisplayName, validateSetupTestInput, setupTestRequiresApiKey, resolveCustomEndpointSetup } from '@craft-agent/server-core/domain'
 import { getWorkspaceOrThrow, buildBackendHostRuntimeContext } from '@craft-agent/server-core/handlers'
+import { refreshAgentPluginCatalog } from '@craft-agent/shared/agent-plugins'
+import { getCompatibleAgentRuntimes } from '@craft-agent/shared/config'
 import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { randomUUID } from 'node:crypto'
@@ -159,7 +162,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.tokennest.CANCEL_OAUTH,
   RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
-  RPC_CHANNELS.tokennest.GET_PRICING,
+  RPC_CHANNELS.llmConnections.GET_PRICING,
   RPC_CHANNELS.tokennest.GET_RECHARGE_URL,
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
@@ -702,6 +705,10 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   // If connection.slug exists and is found, updates it; otherwise creates new
   server.handle(RPC_CHANNELS.llmConnections.SAVE, async (_ctx, connection: LlmConnection): Promise<{ success: boolean; error?: string }> => {
     try {
+      refreshAgentPluginCatalog()
+      if (connection.agentRuntime?.startsWith('plugin:') && !getCompatibleAgentRuntimes(connection).includes(connection.agentRuntime)) {
+        return { success: false, error: 'Agent plugin is missing, disabled, or incompatible with this connection' }
+      }
       // Check if this is an update or create
       const existing = getLlmConnection(connection.slug)
       if (existing) {
@@ -875,7 +882,9 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   })
 
   // Fetch public pricing on the server: the catalog does not allow browser CORS.
-  server.handle(RPC_CHANNELS.tokennest.GET_PRICING, async (): Promise<unknown> => {
+  server.handle(RPC_CHANNELS.llmConnections.GET_PRICING, async (_ctx, source: 'tokennest' | 'deepseek'): Promise<unknown> => {
+    if (source === 'deepseek') return fetchDeepSeekPricing()
+    if (source !== 'tokennest') throw new Error('Unsupported pricing source')
     const response = await fetch(new URL('/api/pricing', TOKENNEST_RECHARGE_URL), {
       credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(10_000),
     })

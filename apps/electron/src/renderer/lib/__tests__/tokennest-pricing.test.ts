@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import type { LlmConnection } from '@craft-agent/shared/config/llm-connections'
 import {
-  getPeakValleyPeriod, getPricingSnapshot, parsePeakValleyPricing, subscribePricing, supportsTokenNestPricing,
+  getPeakValleyPeriod, getPricingSnapshot, parsePeakValleyPricing, subscribePricing, getModelPricingSource,
 } from '../tokennest-pricing'
 
 const schedule = { timezone: 'Asia/Shanghai', start: '00:30', end: '08:30', multiplier: 0.5 }
@@ -31,12 +31,13 @@ describe('Live DeepSeek pricing periods', () => {
   })
 
   test('only annotates DeepSeek on the actual TokenNest connection', () => {
-    expect(supportsTokenNestPricing(connection, 'deepseek-flash')).toBe(true)
-    expect(supportsTokenNestPricing({ ...connection, baseUrl: undefined, authType: 'oauth', oauthProvider: 'tokennest' }, 'pi/deepseek-v4-pro')).toBe(true)
-    expect(supportsTokenNestPricing(connection, 'gpt-6-sol')).toBe(false)
-    expect(supportsTokenNestPricing({ ...connection, baseUrl: 'https://api.deepseek.com/v1' }, 'deepseek-flash')).toBe(false)
-    expect(supportsTokenNestPricing({ ...connection, baseUrl: 'https://third-party.example/v1' }, 'deepseek-flash')).toBe(false)
-    expect(supportsTokenNestPricing(null, 'deepseek-flash')).toBe(false)
+    expect(getModelPricingSource(connection, 'deepseek-flash')).toBe('tokennest')
+    expect(getModelPricingSource({ ...connection, baseUrl: undefined, authType: 'oauth', oauthProvider: 'tokennest' }, 'pi/deepseek-v4-pro')).toBe('tokennest')
+    expect(getModelPricingSource(connection, 'gpt-6-sol')).toBeUndefined()
+    expect(getModelPricingSource({ ...connection, baseUrl: 'https://api.deepseek.com/v1' }, 'deepseek-flash')).toBe('deepseek')
+    expect(getModelPricingSource({ ...connection, baseUrl: undefined, providerType: 'pi', piAuthProvider: 'deepseek' }, 'deepseek-v4-pro')).toBe('deepseek')
+    expect(getModelPricingSource({ ...connection, baseUrl: 'https://third-party.example/v1' }, 'deepseek-flash')).toBeUndefined()
+    expect(getModelPricingSource(null, 'deepseek-flash')).toBeUndefined()
   })
 
   test('uses exact opted-in model IDs and rejects unusable schedules', () => {
@@ -57,7 +58,7 @@ describe('Live DeepSeek pricing periods', () => {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
     const events = new EventTarget()
     const getPricing = mock(async () => catalog)
-    Object.assign(events, { electronAPI: { getTokenNestPricing: getPricing } })
+    Object.assign(events, { electronAPI: { getModelPeakValleyPricing: getPricing } })
     Object.defineProperty(globalThis, 'window', { configurable: true, value: events })
     const clock = spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-09T00:29:00Z'))
     let resolveUpdate: (() => void) | undefined
@@ -70,6 +71,7 @@ describe('Live DeepSeek pricing periods', () => {
     try {
       await loaded
       expect(getPricing).toHaveBeenCalledTimes(1)
+      expect(getPricing).toHaveBeenCalledWith('tokennest')
       expect(getPeakValleyPeriod(schedule, getPricingSnapshot().at)).toBe('off-peak')
       clock.mockReturnValue(Date.parse('2026-10-09T00:30:00Z'))
       events.dispatchEvent(new Event('focus'))
@@ -91,6 +93,39 @@ describe('Live DeepSeek pricing periods', () => {
       unsubscribeSecond()
       if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
       else Reflect.deleteProperty(globalThis, 'window')
+    }
+  })
+
+  test.each([
+    ['2026-10-09T08:59:59+08:00', 'off-peak'],
+    ['2026-10-09T09:00:00+08:00', 'peak'],
+    ['2026-10-09T11:59:59+08:00', 'peak'],
+    ['2026-10-09T12:00:00+08:00', 'off-peak'],
+    ['2026-10-09T13:59:59+08:00', 'off-peak'],
+    ['2026-10-09T14:00:00+08:00', 'peak'],
+    ['2026-10-09T17:59:59+08:00', 'peak'],
+    ['2026-10-09T18:00:00+08:00', 'off-peak'],
+    ['2026-10-10T10:00:00+08:00', 'off-peak'],
+    ['2026-10-11T15:00:00+08:00', 'off-peak'],
+    ['2026-10-01T10:00:00+08:00', 'off-peak'],
+    ['2026-10-07T15:00:00+08:00', 'off-peak'],
+    ['2026-10-08T10:00:00+08:00', 'peak'],
+    ['2026-09-25T15:00:00+08:00', 'off-peak'],
+    ['2028-10-09T10:00:00+08:00', 'off-peak'],
+  ] as const)('DeepSeek business period at %s is %s', (time, expected) => {
+    const businessSchedule = { mode: 'china_business_hours' as const, timezone: 'Asia/Shanghai', multiplier: 0.5,
+      holiday_year: 2026, holidays: ['2026-10-01', '2026-10-07', '2026-09-25'] }
+    expect(getPeakValleyPeriod(businessSchedule, Date.parse(time))).toBe(expected)
+  })
+
+  test('accepts the business schedule contract and rejects an invalid holiday calendar', () => {
+    const business = { mode: 'china_business_hours' as const, timezone: 'Asia/Shanghai', multiplier: 0.5,
+      holiday_year: 2026, holidays: ['2026-10-01'] }
+    expect(parsePeakValleyPricing({ success: true, data: [{ model_name: 'deepseek-flash', peak_valley_pricing: business }] }))
+      .toEqual({ 'deepseek-flash': business })
+    for (const invalid of [{ timezone: 'UTC' }, { multiplier: 0.25 }, { holidays: ['2026-02-30'] },
+      { holidays: ['2027-10-01'] }, { holiday_year: '2026' }, { mode: 'unknown' }]) {
+      expect(parsePeakValleyPricing({ success: true, data: [{ model_name: 'deepseek-flash', peak_valley_pricing: { ...business, ...invalid } }] })).toEqual({})
     }
   })
 })

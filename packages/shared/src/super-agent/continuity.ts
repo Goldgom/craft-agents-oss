@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { THINKING_LEVEL_IDS } from '../agent/thinking-levels'
 
 const id = z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9_-]*$/)
 export const WaitConditionSchema = z.discriminatedUnion('kind', [
@@ -13,6 +14,7 @@ export const CheckpointSchema = z.object({
   nextStep: z.string().min(1).max(4000), note: z.string().max(4000), updatedAt: z.number().finite().min(0),
 }).strict()
 export const ContinuityTaskFields = {
+  thinkingLevel: z.enum(THINKING_LEVEL_IDS).optional(),
   goalId: id.optional(), goalRevision: z.number().int().min(1).optional(),
   goalCriteria: z.array(z.number().int().min(0).max(15)).max(16).optional(),
   requiredCapabilities: z.array(z.string().min(1).max(100)).max(32).optional(),
@@ -53,3 +55,13 @@ export type SuperAgentCheckpoint = z.infer<typeof CheckpointSchema>
 export type SuperAgentArtifact = z.infer<typeof ArtifactSchema>
 export type SuperAgentOperation = z.infer<typeof OperationSchema>
 export type SuperAgentMetrics = z.infer<typeof MetricsSchema>
+
+export const StatisticsSchema = z.object({
+  since: z.number().min(0),
+  nodes: z.array(z.object({ nodeId: id, name: z.string(), role: z.enum(['coordinator', 'orchestrator', 'worker']), model: z.string(),
+    turns: z.number().int().min(0), toolCalls: z.number().int().min(0), failures: z.number().int().min(0),
+    executionMs: z.number().min(0), outputTokens: z.number().min(0), costUsd: z.number().min(0),
+    usageObservations: z.number().int().min(0), costObservations: z.number().int().min(0),
+  }).strict()).max(1024),
+}).strict()
+export type SuperAgentStatistics = z.infer<typeof StatisticsSchema>

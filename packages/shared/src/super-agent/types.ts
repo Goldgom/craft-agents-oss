@@ -1,7 +1,8 @@
 import type { ThinkingLevel } from '../agent/thinking-levels'
+import type { SuperAgentArchive, SuperAgentMemory, SuperAgentLibraryCommand } from './library'
 import type { PermissionMode } from '../agent/mode-types'
 import type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
-import type { SuperAgentCheckpoint, SuperAgentWaitCondition, SuperAgentArtifact, SuperAgentOperation, SuperAgentMetrics } from './continuity'
+import type { SuperAgentCheckpoint, SuperAgentWaitCondition, SuperAgentArtifact, SuperAgentOperation, SuperAgentMetrics, SuperAgentStatistics } from './continuity'
 
 export type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
 
@@ -23,6 +24,10 @@ export interface SuperAgentNode {
   sourceSlugs: string[]
   abilityProfileIds: string[]
   capabilities?: string[]
+  /** Stable preset responsibility; never infer resource ownership from array order. */
+  presetProfile?: string
+  /** Missing legacy values allow task overrides. */
+  thinkingMode?: 'fixed' | 'task'
 }
 
 export interface SuperAgentEnvironment {
@@ -86,6 +91,7 @@ export interface SuperAgentConfig {
     stallMinutes: number
     maxResumeAttempts: number
   }
+  requirements?: { programs: string[]; browser: boolean }
   environment: SuperAgentEnvironment
   /** Sources available for assignment; individual nodes need their own binding. */
   sourceSlugs: string[]
@@ -106,6 +112,7 @@ export interface SuperAgentActionReceipt {
 }
 
 export interface SuperAgentTask {
+  thinkingLevel?: ThinkingLevel
   id: string
   /** Durable dependency and exclusive resource contracts, enforced before dispatch. */
   dependsOn?: string[]
@@ -239,11 +246,15 @@ export interface SuperAgentState {
   tasks: SuperAgentTask[]
   messages: SuperAgentMessage[]
   board: SuperAgentBoardItem[]
+  /** Workspace libraries survive runtime history cleanup and node session replacement. */
+  memories?: SuperAgentMemory[]
+  archives?: SuperAgentArchive[]
   plans: SuperAgentPlanItem[]
   intents?: SuperAgentIntent[]
   artifacts?: SuperAgentArtifact[]
   operations?: SuperAgentOperation[]
   metrics?: SuperAgentMetrics
+  statistics?: SuperAgentStatistics
   connectionStarts?: Array<{ connection: string; at: number }>
   scripts: SuperAgentScriptRuntime[]
   permissionGrants?: SuperAgentPermissionGrant[]
@@ -266,6 +277,7 @@ export interface SuperAgentIntent {
 }
 
 export interface SuperAgentTaskContract {
+  thinkingLevel?: ThinkingLevel
   id?: string
   goalId?: string
   requiredCapabilities?: string[]
@@ -289,6 +301,7 @@ export interface SuperAgentEnvironmentStatus {
 }
 
 export interface SuperAgentSnapshot {
+  readiness?: SuperAgentReadiness
   config: SuperAgentConfig | null
   state: SuperAgentState
   environment: SuperAgentEnvironmentStatus
@@ -296,6 +309,12 @@ export interface SuperAgentSnapshot {
   activity?: SuperAgentNodeActivity[]
   permissionRequests?: SuperAgentPermissionRequest[]
   historyCleanup?: SuperAgentHistoryCleanupResult
+}
+
+export interface SuperAgentReadiness {
+  ready: boolean
+  checkedAt: number
+  checks: Array<{ id: string; ok: boolean; detail: string }>
 }
 
 export interface SuperAgentHistoryCleanupResult {
@@ -359,6 +378,9 @@ export interface SuperAgentPermissionGrant {
 
 /** Model output uses the same bounded operations as the user-facing control API. */
 export type SuperAgentCommand =
+  | SuperAgentLibraryCommand
+  | { type: 'reset'; confirmed: true }
+  | { type: 'environment-check'; config: SuperAgentConfig }
   | { type: 'chat'; text: string }
   | ({ type: 'task' } & SuperAgentTaskContract)
   | { type: 'continuous-work'; enabled: boolean }

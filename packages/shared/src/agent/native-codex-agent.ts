@@ -44,7 +44,7 @@ import type { BackendConfig, ChatOptions, PostInitResult, SdkMcpServerConfig } f
 import { AbortReason } from './backend/types.ts';
 import { BaseAgent } from './base-agent.ts';
 import { EventQueue } from './backend/event-queue.ts';
-import { getSessionToolProxyDefs, SESSION_TOOL_NAMES } from './backend/pi/session-tool-defs.ts';
+import { getSessionToolProxyDefs, SESSION_TOOL_NAMES } from './backend/session-tool-defs.ts';
 import { createClaudeContext, type SessionToolContext } from './claude-context.ts';
 import { attachSessionSelfManagementBindings } from './session-self-management-bindings.ts';
 import { getSessionScopedToolCallbacks, setLastPlanFilePath } from './session-scoped-tools.ts';

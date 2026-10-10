@@ -118,6 +118,7 @@ import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labe
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
+import { migrateAgentSessionRuntime } from './agent-runtime-migration'
 import { validateArchiveTarget } from './archive-guards'
 import { CollaborationConflictError, CollaborationManager, MAX_COLLABORATION_FILE_BYTES } from '../collaboration/CollaborationManager'
 import { buildCollaborationPrompt } from '../collaboration/prompt'
@@ -791,6 +792,8 @@ interface ManagedSession {
   poolServer?: McpPoolServer
   // SDK session ID for conversation continuity
   sdkSessionId?: string
+  sdkSessionRuntime?: import('@craft-agent/shared/config').AgentRuntimeProtocol
+  agentRuntimeMigrationContext?: string
   // Token usage for display
   tokenUsage?: {
     inputTokens: number
@@ -1651,6 +1654,10 @@ export class SessionManager implements ISessionManager {
     return fallback
   }
 
+  hasSuperAgentBrowserSupport(workspaceId: string): boolean {
+    return !!this.browserPaneManager || !!this.rpcServer?.findClientsWithCapability(CLIENT_BROWSER_INVOKE, { workspaceId }).length
+  }
+
   /**
    * Find a connected client for the session's workspace that advertises
    * `client:runShell` — powers the `localbash` tool in remote mode. Returns
@@ -1864,8 +1871,9 @@ export class SessionManager implements ISessionManager {
         description: `${request.scope.actionGate ? 'Action Gate · ' : ''}Node ${managed.executionPolicy!.nodeId} requests ${request.scope.kind}: ${request.scope.target}`,
         command: typeof request.input.command === 'string' ? request.input.command : undefined,
         reason: request.reason,
-        impact: request.scope.actionGate ? 'Approve this invocation once. It cannot be remembered, shared with other nodes, or expand filesystem, source, network or sandbox permissions.' : request.scope.kind === 'program' && request.scope.boundary !== 'environment'
-          ? `Runs this complete command on the ${request.scope.boundary} machine with cwd ${request.input.cwd}. A working folder does not isolate shell access. The exception is limited to this exact operation in the current turn.`
+        impact: request.scope.kind === 'program' && request.scope.boundary !== 'environment'
+          ? `Runs this complete command on the ${request.scope.boundary} machine with cwd ${request.input.cwd}. There is no sandbox isolation for this command. Approval is limited to this exact invocation and cannot be remembered or shared.`
+          : request.scope.actionGate ? 'Approve this invocation once. It cannot be remembered, shared with other nodes, or expand filesystem, source, network or sandbox permissions.'
           : 'Temporarily permits this exact operation in the current node turn. Other operations remain subject to the node policy.',
         policyScope: { ...request.scope },
       } }, managed.workspace.id)
@@ -2941,6 +2949,13 @@ export class SessionManager implements ISessionManager {
       .sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0))
   }
 
+  /** Includes retired nodes whose persisted execution policy still identifies ownership. */
+  getSuperAgentSessionIds(workspaceId: string): string[] {
+    return Array.from(this.sessions.values())
+      .filter(session => session.workspace.id === workspaceId && !!session.executionPolicy)
+      .map(session => session.id)
+  }
+
   /**
    * Aggregate unread state across all workspaces.
    * Excludes hidden and archived sessions from counts/indicators.
@@ -4002,6 +4017,7 @@ export class SessionManager implements ISessionManager {
       connection,
       provider: backendContext.provider,
       agentRuntime: backendContext.agentRuntime,
+      agentPluginFingerprint: backendContext.agentPluginFingerprint,
       authType: backendContext.authType,
       resolvedModel: backendContext.resolvedModel,
       miniModel: connection ? resolveMiniModel(connection, workspaceConfig?.defaults?.miniModel) : undefined,
@@ -4181,6 +4197,7 @@ export class SessionManager implements ISessionManager {
       connection,
       provider: backendContext.provider,
       agentRuntime: backendContext.agentRuntime,
+      agentPluginFingerprint: backendContext.agentPluginFingerprint,
       authType: backendContext.authType,
       resolvedModel: backendContext.resolvedModel,
       miniModel: connection ? resolveMiniModel(connection, workspaceConfig?.defaults?.miniModel) : undefined,
@@ -4284,10 +4301,12 @@ export class SessionManager implements ISessionManager {
       // Common session + callback config (identical for all backends)
       // ============================================================
 
+      if (migrateAgentSessionRuntime(managed, backendContext.agentRuntime)) this.persistSession(managed)
       const sessionConfig = {
         id: managed.id,
         workspaceRootPath: managed.workspace.rootPath,
         sdkSessionId: managed.sdkSessionId,
+        sdkSessionRuntime: managed.sdkSessionRuntime,
         branchFromSdkSessionId: managed.branchContextStrategy === 'sdk-fork' ? managed.branchFromSdkSessionId : undefined,
         branchFromSessionPath: managed.branchContextStrategy === 'sdk-fork' ? managed.branchFromSessionPath : undefined,
         branchFromSdkCwd: managed.branchContextStrategy === 'sdk-fork' ? managed.branchFromSdkCwd : undefined,
@@ -4306,6 +4325,7 @@ export class SessionManager implements ISessionManager {
 
       const onSdkSessionIdUpdate = (sdkSessionId: string) => {
         managed.sdkSessionId = sdkSessionId
+        managed.sdkSessionRuntime = backendContext.agentRuntime
         // Retire branch-only fork metadata now that child session is established
         if (managed.branchFromSdkSessionId) {
           sessionLog.info(`Branch fork established for ${managed.id}: child=${sdkSessionId}, retiring parent fork metadata (parent=${managed.branchFromSdkSessionId})`)
@@ -4406,6 +4426,8 @@ export class SessionManager implements ISessionManager {
         onSdkSessionIdCleared,
         onBranchForkInvalidated,
         getRecoveryMessages,
+        getAgentRuntimeMigrationContext: () => managed.agentRuntimeMigrationContext,
+        markAgentRuntimeMigrationApplied: () => { managed.agentRuntimeMigrationContext = undefined; this.persistSession(managed) },
         getBranchFallbackMessages,
         getBranchSeedMessages,
         markBranchSeedApplied,
@@ -5411,6 +5433,10 @@ export class SessionManager implements ISessionManager {
         superAgentTaskFn: async args => {
           if (!managed.executionPolicy) throw new Error('This is not a Super Agent node')
           return getSuperAgentService(this).updateNodeTask(managed.workspace.id, managed.id, args)
+        },
+        superAgentLibraryFn: async args => {
+          if (!managed.executionPolicy) throw new Error('This is not a Super Agent node')
+          return getSuperAgentService(this).accessNodeLibrary(managed.workspace.id, managed.id, args)
         },
         getCollaborationFn: async query => {
           if (managed.executionPolicy) return getSuperAgentService(this).getNodeSharedData(managed.workspace.id, managed.id, query)
@@ -6795,7 +6821,7 @@ export class SessionManager implements ISessionManager {
     this.sendEvent({ type: 'message_annotations_updated', sessionId, messageId, annotations: message.annotations }, managed.workspace.id)
   }
 
-  async deleteSession(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true }): Promise<void> {
+  async deleteSession(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true; superAgentReset?: true }): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) {
       if (guard) throw new Error('Session no longer exists; refresh the session list')
@@ -6804,9 +6830,9 @@ export class SessionManager implements ISessionManager {
     }
 
     if (guard && (managed.workspace.id !== guard.workspaceId || managed.lastMessageAt !== guard.lastMessageAt
-      || managed.isProcessing || managed.messageQueue.length || managed.isFlagged || managed.isAsyncOperationOngoing
-      || managed.taskSlug || managed.taskRunId || managed.parentSessionId || managed.collaboration
-      || !(managed.isArchived || ['done', 'cancelled'].includes(managed.sessionStatus ?? '')))) {
+      || managed.isProcessing || managed.messageQueue.length || managed.isAsyncOperationOngoing
+      || (!guard.superAgentReset && (managed.isFlagged || managed.taskSlug || managed.taskRunId || managed.parentSessionId || managed.collaboration
+        || !(managed.isArchived || ['done', 'cancelled'].includes(managed.sessionStatus ?? '')))))) {
       throw new Error('Session changed or is no longer eligible for history cleanup')
     }
 
@@ -7646,6 +7672,32 @@ export class SessionManager implements ISessionManager {
     // telling the LLM the previous response was cut short
     managed.wasInterrupted = true
 
+    // A stopped stream never receives the provider's text_complete. Preserve
+    // the visible partial reply and replace the renderer's temporary message ID
+    // before interruption makes it available for history edits and branches.
+    // Do not register a provider turn anchor for an unfinished response.
+    this.flushDelta(sessionId, managed.workspace.id)
+    if (managed.streamingText) {
+      const partialReply: Message = {
+        id: generateMessageId(),
+        role: 'assistant',
+        content: managed.streamingText,
+        timestamp: this.monotonic(),
+        turnId: managed.streamingTurnId,
+      }
+      managed.messages.push(partialReply)
+      managed.streamingText = ''
+      managed.streamingTurnId = undefined
+      this.sendEvent({
+        type: 'text_complete',
+        sessionId,
+        text: partialReply.content,
+        messageId: partialReply.id,
+        timestamp: partialReply.timestamp,
+        turnId: partialReply.turnId,
+      }, managed.workspace.id)
+    }
+
     // Abort the active provider request.
     if (managed.agent) {
       managed.agent.forceAbort(AbortReason.UserStop)
@@ -7674,6 +7726,8 @@ export class SessionManager implements ISessionManager {
         sessionId,
       }, managed.workspace.id)
     }
+
+    this.persistSession(managed)
 
     // A provider iterator can remain blocked despite abort. Release the
     // session promptly so the next message is not stuck behind that iterator.
@@ -10332,6 +10386,8 @@ export class SessionManager implements ISessionManager {
       id: sessionId,
       workspaceRootPath,
       sdkSessionId: header.sdkSessionId, // Preserved initially; fork logic below may clear it
+      sdkSessionRuntime: header.sdkSessionRuntime,
+      agentRuntimeMigrationContext: header.agentRuntimeMigrationContext,
       // Always regenerate sdkCwd for the target workspace.
       // The source sdkCwd points to a path on the originating server
       // which doesn't exist here (cross-server transfer).

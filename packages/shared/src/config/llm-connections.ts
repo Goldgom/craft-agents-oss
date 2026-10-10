@@ -17,6 +17,8 @@ import {
   normalizeDeprecatedModelId,
 } from './models';
 import type { CredentialManager } from '../credentials/manager.ts';
+import { getAgentPluginCatalog, isAgentPluginCompatible } from '../agent-plugins/catalog.ts';
+import type { AgentPluginRuntime } from '../agent-plugins/types.ts';
 
 // ============================================================
 // Pi Model Resolver (dependency injection to avoid Pi SDK in renderer)
@@ -61,7 +63,7 @@ export type LlmProviderType =
  * - `codex`: Codex Responses compatibility profile hosted by the Pi runtime
  * - `claude-code`: native Claude Agent SDK / Claude Code runtime
  */
-export type AgentRuntimeProtocol = 'pi' | 'codex' | 'claude-code';
+export type AgentRuntimeProtocol = AgentPluginRuntime;
 
 export const AGENT_RUNTIME_PROTOCOLS: readonly AgentRuntimeProtocol[] = [
   'pi',
@@ -290,7 +292,7 @@ export interface LlmConnectionWithStatus extends LlmConnection {
 
 /** Return the runtime protocols that can safely host this connection. */
 export function getCompatibleAgentRuntimes(
-  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint'>,
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint'> & Partial<Pick<LlmConnection, 'authType'>>,
 ): AgentRuntimeProtocol[] {
   const compatible: AgentRuntimeProtocol[] = ['pi'];
 
@@ -307,6 +309,8 @@ export function getCompatibleAgentRuntimes(
     compatible.push('codex');
   }
 
+  compatible.push(...getAgentPluginCatalog().filter(plugin => !plugin.builtin && isAgentPluginCompatible(plugin, connection)).map(plugin => plugin.id));
+
   return compatible;
 }
 
@@ -318,6 +322,8 @@ export function resolveAgentRuntime(
     ? 'claude-code'
     : 'pi';
   const requested = connection.agentRuntime ?? fallback;
+  // Missing/disabled plugins must be reported, never silently replaced by Pi.
+  if (requested.startsWith('plugin:')) return requested;
   return getCompatibleAgentRuntimes(connection).includes(requested) ? requested : fallback;
 }
 

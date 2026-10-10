@@ -11,7 +11,7 @@ export function BirdAvatar({ mood }: { mood: BirdMood }) {
   const id = useId().replaceAll(':', '')
   const talking = mood !== 'idle'
   return (
-    <svg className={`bird-avatar bird-avatar--${mood} ${talking ? 'bird-avatar--talking' : ''}`} viewBox="0 0 512 512" aria-hidden="true">
+    <svg className={`bird-avatar bird-avatar--${mood} ${talking ? 'bird-avatar--talking' : ''}`} viewBox="0 52 512 396" aria-hidden="true">
       <defs>
         <mask id={`${id}-body`} maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
           <rect width="512" height="512" fill="white" />

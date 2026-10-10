@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { SuperAgentLibraryCommandSchemas } from './library'
 import { THINKING_LEVEL_IDS } from '../agent/thinking-levels'
 import type { SuperAgentCommand, SuperAgentConfig, SuperAgentState } from './types'
 
@@ -25,11 +26,13 @@ const ConfigSchema = z.object({
     sourceSlugs: list,
     abilityProfileIds: z.array(id).max(100),
     capabilities: z.array(slug).max(32).optional(),
+    presetProfile: slug.optional(), thinkingMode: z.enum(['fixed', 'task']).optional(),
   }).strict()).min(2).max(32),
   idleInspectionMinutes: z.number().finite().int().min(1).max(1_440),
   workflow: z.object({ pattern: z.enum(['lightweight', 'development', 'research', 'deliverables', 'incident']),
     maxParallelTasks: z.number().int().min(1).max(30), independentReview: z.boolean() }).strict().optional(),
   continuousWork: z.boolean().default(true),
+  requirements: z.object({ programs: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$/)).max(32), browser: z.boolean() }).strict().optional(),
   execution: z.object({ connectionConcurrency: z.number().int().min(1).max(30), connectionCallsPerMinute: z.number().int().min(1).max(600),
     stallMinutes: z.number().int().min(1).max(1440), maxResumeAttempts: z.number().int().min(0).max(20) }).strict().optional(),
   environment: z.object({
@@ -87,8 +90,12 @@ export function validateSuperAgentConfig(value: unknown): SuperAgentConfig {
 }
 
 const CommandSchema = z.discriminatedUnion('type', [
+  ...SuperAgentLibraryCommandSchemas,
+  z.object({ type: z.literal('reset'), confirmed: z.literal(true) }).strict(),
+  z.object({ type: z.literal('environment-check'), config: ConfigSchema }).strict(),
   z.object({ type: z.literal('chat'), text }).strict(),
   z.object({ type: z.literal('task'), id: id.optional(), title: name, instructions: text, nodeId: id.optional(), planId: id.optional(),
+    thinkingLevel: z.enum(THINKING_LEVEL_IDS).optional(),
     goalId: id.optional(), requiredCapabilities: z.array(slug).max(32).optional(),
     goalCriteria: z.array(z.number().int().min(0).max(15)).max(16).optional(),
     dependsOn: z.array(id).max(32).optional(), resources: z.array(slug).max(32).optional(),

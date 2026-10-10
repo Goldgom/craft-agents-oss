@@ -19,7 +19,8 @@
     "./handlers/rpc/*": "./src/handlers/rpc/*.ts",
     "./sessions": "./src/sessions/index.ts",
     "./tasks": "./src/tasks/index.ts",
-    "./webui": "./src/webui/index.ts"
+    "./webui": "./src/webui/index.ts",
+    "./cloud/peer-node": "./src/cloud/peer-node.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -27,10 +28,12 @@
   "dependencies": {
     "@craft-agent/core": "workspace:*",
     "@craft-agent/shared": "workspace:*",
+    "@earendil-works/pi-ai": "0.85.1",
     "jose": "^6.0.0",
-    "ws": "^8.19.0",
+    "reflect-metadata": "0.2.2",
     "sharp": "0.34.5",
-    "@earendil-works/pi-ai": "0.85.1"
+    "werift": "0.25.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "typescript": "^5.8.2",

@@ -177,6 +177,9 @@ export const CLIENT_HEARTBEAT_TIMEOUT_MS = 15_000
 
 /** Default request timeout in ms. */
 export const REQUEST_TIMEOUT_MS = 30_000
+/** Local framework startup can take longer than a normal settings request. */
+export const FRAMEWORK_TEST_REQUEST_TIMEOUT_MS = 90_000
+export const FRAMEWORK_INSTALL_REQUEST_TIMEOUT_MS = 25 * 60_000
 
 /** Image generation can take minutes; keep each layer longer than the one below it. */
 export const STUDIO_IMAGE_PROVIDER_TIMEOUT_MS = 300_000

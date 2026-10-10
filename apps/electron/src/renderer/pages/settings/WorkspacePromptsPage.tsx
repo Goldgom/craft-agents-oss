@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ListTree, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -27,7 +27,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useAppShellContext } from '@/context/AppShellContext'
-import { navigate, routes } from '@/lib/navigate'
+import { routes } from '@/lib/navigate'
+import { SystemPromptSections } from './SystemPromptSections'
 import { cn } from '@/lib/utils'
 import {
   SettingsSection,
@@ -49,13 +50,14 @@ interface GeneratedPrompt {
   content: string
 }
 
-export default function WorkspacePromptsPage() {
+export default function WorkspacePromptsPage({ showOverview = false }: { showOverview?: boolean }) {
   const { t } = useTranslation()
   const appShellContext = useAppShellContext()
   const activeWorkspaceId = appShellContext.activeWorkspaceId
 
   const [prompts, setPrompts] = useState<WorkspacePrompt[]>([])
   const [loading, setLoading] = useState(true)
+  const [promptRevision, setPromptRevision] = useState(0)
 
   // Manual editor state
   const [editorOpen, setEditorOpen] = useState(false)
@@ -71,24 +73,21 @@ export default function WorkspacePromptsPage() {
   const [generated, setGenerated] = useState<GeneratedPrompt | null>(null)
   const [applying, setApplying] = useState(false)
 
-  const loadPrompts = React.useCallback(async () => {
-    if (!window.electronAPI || !activeWorkspaceId) {
-      setLoading(false)
-      return
-    }
-    try {
-      const list = await window.electronAPI.getWorkspacePrompts(activeWorkspaceId)
-      setPrompts(list)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('settings.prompts.errors.load'))
-    } finally {
-      setLoading(false)
-    }
-  }, [activeWorkspaceId, t])
-
   useEffect(() => {
-    void loadPrompts()
-  }, [loadPrompts])
+    let cancelled = false
+    setPrompts([])
+    if (!activeWorkspaceId) { setLoading(false); return }
+    setLoading(true)
+    void window.electronAPI.getWorkspacePrompts(activeWorkspaceId).then(list => {
+      if (!cancelled) {
+        setPrompts(list)
+        setPromptRevision(revision => revision + 1)
+      }
+    }).catch(error => {
+      if (!cancelled) toast.error(error instanceof Error ? error.message : t('settings.prompts.errors.load'))
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [activeWorkspaceId, t])
 
   const openEditor = (prompt: WorkspacePrompt | null) => {
     setEditing(prompt)
@@ -115,6 +114,7 @@ export default function WorkspacePromptsPage() {
         const next = prev.filter(p => p.id !== saved.id)
         return [...next, saved]
       })
+      setPromptRevision(revision => revision + 1)
       toast.success(t('settings.prompts.toasts.saved'))
       setEditorOpen(false)
     } catch (err) {
@@ -130,6 +130,7 @@ export default function WorkspacePromptsPage() {
     setPrompts(prev => prev.map(p => (p.id === prompt.id ? { ...p, enabled } : p)))
     try {
       await window.electronAPI.saveWorkspacePrompt(activeWorkspaceId, { ...prompt, enabled })
+      setPromptRevision(revision => revision + 1)
     } catch (err) {
       // Roll back on failure
       setPrompts(prev => prev.map(p => (p.id === prompt.id ? { ...p, enabled: !enabled } : p)))
@@ -142,6 +143,7 @@ export default function WorkspacePromptsPage() {
     try {
       await window.electronAPI.deleteWorkspacePrompt(activeWorkspaceId, prompt.id)
       setPrompts(prev => prev.filter(p => p.id !== prompt.id))
+      setPromptRevision(revision => revision + 1)
       toast.success(t('settings.prompts.toasts.deleted'))
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('settings.prompts.errors.delete'))
@@ -178,6 +180,7 @@ export default function WorkspacePromptsPage() {
         source: 'ai',
       })
       setPrompts(prev => [...prev, saved])
+      setPromptRevision(revision => revision + 1)
       toast.success(t('settings.prompts.toasts.applied'))
       setGenerateOpen(false)
     } catch (err) {
@@ -195,15 +198,11 @@ export default function WorkspacePromptsPage() {
         title={t('settings.prompts.title')}
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => navigate(routes.view.settings('promptOverview'))}>
-              <ListTree className="h-3.5 w-3.5 mr-1.5" />
-              {t('settings.prompts.totalPrompt')}
-            </Button>
-            <Button variant="outline" size="sm" onClick={openGenerator}>
+            <Button variant="outline" size="sm" disabled={!activeWorkspaceId} onClick={openGenerator}>
               <Sparkles className="h-3.5 w-3.5 mr-1.5" />
               {t('settings.prompts.aiGenerate')}
             </Button>
-            <Button variant="default" size="sm" onClick={() => openEditor(null)}>
+            <Button variant="default" size="sm" disabled={!activeWorkspaceId} onClick={() => openEditor(null)}>
               <Plus className="h-3.5 w-3.5 mr-1.5" />
               {t('settings.prompts.add')}
             </Button>
@@ -283,6 +282,7 @@ export default function WorkspacePromptsPage() {
                 )}
               </SettingsCard>
             </SettingsSection>
+            <SystemPromptSections key={activeWorkspaceId ?? ''} revision={promptRevision} defaultOpen={showOverview} />
           </div>
         </ScrollArea>
       </div>

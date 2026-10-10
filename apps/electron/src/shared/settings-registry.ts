@@ -64,6 +64,19 @@ export const SETTINGS_PAGES = [
  */
 export type SettingsSubpage = (typeof SETTINGS_PAGES)[number]['id']
 
+/** Old deep links remain valid after their pages are merged. */
+export const SETTINGS_PAGE_ALIASES = {
+  promptOverview: 'prompts',
+  shortcuts: 'input',
+} as const satisfies Partial<Record<SettingsSubpage, SettingsSubpage>>
+
+export function resolveSettingsSubpage(subpage: SettingsSubpage): SettingsSubpage {
+  return SETTINGS_PAGE_ALIASES[subpage as keyof typeof SETTINGS_PAGE_ALIASES] ?? subpage
+}
+
+/** Menu entries exclude pages that now belong to another settings page. */
+export const SETTINGS_MENU_PAGES = SETTINGS_PAGES.filter(page => resolveSettingsSubpage(page.id) === page.id)
+
 /**
  * Array of valid settings subpage IDs - for runtime validation
  */

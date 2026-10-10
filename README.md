@@ -1,10 +1,12 @@
 # TokenBird（词元鸟）
 
-TokenBird（中文名：词元鸟）是一个与 TokenNest 深度绑定的开源 Agent 工作平台。首次启动可直接登录 TokenNest，自动同步可用模型与账户余额；也可以在“其他选项”中连接 Codex、Claude、GitHub Copilot、API Key 或本地模型。
+TokenBird（中文名：词元鸟）是开源的智能体插件宿主与统一工作台。它在保留现有数据源、页面、会话和工具能力的基础上，提供统一的后端适配层，首批接入 Codex、Pi、Claude Code、Hermes 和 DeepSeek Harness（DSH）；共享用户偏好、工作空间和任务编排。
 
 它把大模型、工具、资料和长期会话放在同一个工作区中，让你可以用自然语言完成研究、写作、编程、资料整理和自动化操作。
 
-项目以 **Claude Code 式的 Agent 体验** 为基础，同时集成 Claude Agent SDK 与 Pi SDK。你可以在桌面应用中管理多个会话，也可以把 Agent 部署到远程服务器，通过 Web、命令行或消息平台使用。
+每个智能体后端保留自己的推理循环和原生能力。词元鸟通过版本化插件协议补充共享工具、MCP、审批、技能、偏好迁移与会话管理。你可以在桌面应用中管理多个会话，也可以部署到远程服务器，通过 Web、命令行或消息平台使用。TokenNest 提供集成登录、模型发现与账户信息，也可使用其他模型连接。
+
+架构与迁移设计见 [智能体插件迁移方案](docs/agent-plugin-migration.md)，插件协议、Hermes / DSH 接入与偏好迁移见 [接入指南](docs/agent-plugins/README.md)。
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 

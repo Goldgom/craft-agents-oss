@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { AgentAvatar, AvatarEditor, EnvironmentEditor, FormField, NodeEditor } from './SuperAgentForms'
 import { SuperAgentPresetPicker } from './SuperAgentPresetPicker'
+import { SuperAgentReadiness } from './SuperAgentReadiness'
 import { Switch } from '@/components/ui/switch'
 import { applyPreset, configError, createConfig, createNode, nodeModels, useSuperAgentText, type SuperAgentPreset } from './super-agent-ui'
 
@@ -130,7 +131,10 @@ export function SuperAgentSetup({ connections, defaultConnection, onSave, onOpen
           <div className="flex items-start justify-between gap-4"><label htmlFor="setup-continuous-work" className="text-sm">{text('continuousWork')}<span className="mt-1 block text-xs leading-5 text-muted-foreground">{text('continuousWorkHint')}</span></label>
             <Switch id="setup-continuous-work" type="button" checked={config.continuousWork === true} onCheckedChange={continuousWork => setConfig(current => ({ ...current, continuousWork }))} /></div>
         </>}
-        {step === 2 && <EnvironmentEditor environment={config.environment} onChange={environment => setConfig(current => ({ ...current, environment }))} />}
+        {step === 2 && <>
+          <EnvironmentEditor environment={config.environment} onChange={environment => setConfig(current => ({ ...current, environment }))} />
+          <SuperAgentReadiness config={config} onChange={requirements => setConfig(current => ({ ...current, requirements }))} />
+        </>}
         {step === 3 && <div className="space-y-5 rounded-2xl border border-border/70 p-6">
           <div className="flex items-center gap-4"><AgentAvatar avatar={config.avatar} name={config.name} className="size-14 rounded-2xl text-3xl" />
             <div><h2 className="text-lg font-semibold">{config.name}</h2><p className="mt-1 text-xs text-muted-foreground">{text('setupSummary', { workers: config.nodes.filter(node => node.role === 'worker').length, minutes: config.idleInspectionMinutes })}</p></div>

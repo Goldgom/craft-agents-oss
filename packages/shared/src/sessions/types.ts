@@ -25,7 +25,7 @@ import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthSt
  */
 export const SESSION_PERSISTENT_FIELDS = [
   // Identity
-  'id', 'workspaceRootPath', 'sdkSessionId', 'sdkCwd',
+  'id', 'workspaceRootPath', 'sdkSessionId', 'sdkSessionRuntime', 'agentRuntimeMigrationContext', 'sdkCwd',
   // Timestamps
   'createdAt', 'lastUsedAt', 'lastMessageAt',
   // Display
@@ -118,6 +118,8 @@ export type { StoredMessage } from '@craft-agent/core/types';
  * Session configuration (persisted metadata)
  */
 export interface SessionConfig {
+  sdkSessionRuntime?: import('../config/llm-connections.ts').AgentRuntimeProtocol;
+  agentRuntimeMigrationContext?: string;
   /** Explicit instructions for an independent node, retained across runtime recreation/restart. */
   agentSystemPrompt?: string;
   /** Durable node capability limits; missing container executors fail closed after restart. */
@@ -257,6 +259,8 @@ export interface StoredSession extends SessionConfig {
  * This enables fast session listing without parsing message content.
  */
 export interface SessionHeader {
+  sdkSessionRuntime?: import('../config/llm-connections.ts').AgentRuntimeProtocol;
+  agentRuntimeMigrationContext?: string;
   agentSystemPrompt?: string;
   executionPolicy?: import('../agent/core/session-execution-policy.ts').SessionExecutionPolicy;
   id: string;

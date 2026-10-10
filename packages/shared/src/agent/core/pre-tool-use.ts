@@ -49,6 +49,7 @@ import { evaluateApiEndpointPolicy, evaluateMcpToolPolicy } from '../source-poli
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
+import { frameworkToolBlockReason } from '../../agent-plugins/framework-tool-policy.ts';
 import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, consumeSessionActionGate, recordSessionPolicyOperation, requiresSessionOperationRecording, getSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionFullControl, hasSessionPolicyToolGrant, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
 
 // ============================================================
@@ -225,6 +226,9 @@ export function qualifySkillName(
 ): SkillQualificationResult {
   const skill = input.skill as string | undefined;
   if (!skill) return { modified: false, input };
+  if (skill.includes(':') && ![workspaceSlug, AGENTS_PLUGIN_NAME].includes(skill.split(':')[0]!)) {
+    return { modified: false, input };
+  }
 
   // Extract the bare slug — strip any existing qualifier (e.g. "CraftAgentWS:commit" → "commit")
   const bareSlug = skill.includes(':') ? skill.split(':').pop()! : skill;
@@ -240,6 +244,9 @@ export function qualifySkillName(
 
   // Resolve which plugin tier contains this skill by checking SKILL.md existence
   const resolvedSkill = resolveSkillPlugin(bareSlug, workspaceSlug, workspaceRootPath, workingDirectory);
+  // Native Claude skills and plugin-qualified names retain their SDK namespace
+  // when no shared skill with this slug exists.
+  if (!resolvedSkill) return { modified: false, input };
 
   if (resolvedSkill === skill) {
     // Already correctly qualified
@@ -262,7 +269,7 @@ function resolveSkillPlugin(
   workspaceSlug: string,
   workspaceRootPath: string,
   workingDirectory?: string,
-): string {
+): string | undefined {
   // Priority order matches loadAllSkills: project (highest) > workspace > global (lowest)
 
   // 1. Project: {workingDir}/.agents/skills/{slug}/SKILL.md
@@ -280,8 +287,7 @@ function resolveSkillPlugin(
     return `${AGENTS_PLUGIN_NAME}:${bareSlug}`;
   }
 
-  // Fallback: assume workspace plugin (original behavior)
-  return `${workspaceSlug}:${bareSlug}`;
+  return undefined;
 }
 
 // ============================================================
@@ -703,6 +709,8 @@ function withPermissionModeContext(reason: string, sessionId: string, effectiveM
 
 /** Keep the original tool call suspended while a missing node permission is reviewed. */
 export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): Promise<PreToolUseCheckResult> {
+  const frameworkBlock = frameworkToolBlockReason(ctx.sessionId, ctx.toolName);
+  if (frameworkBlock) return { type: 'block', reason: frameworkBlock };
   const policy = await authorizeSessionPolicyTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory, undefined, ctx.invocationId);
   if (!policy.allowed) return { type: 'block', reason: policy.reason };
   if (hasSessionExecutionPolicy(ctx.sessionId) && !getSessionExecutionPolicy(ctx.sessionId)?.actionGates && !hasSessionFullControl(ctx.sessionId)
@@ -726,6 +734,8 @@ export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): 
 }
 
 export function runPreToolUseChecks(ctx: PreToolUseInput, deferDispatch?: (input: Record<string, unknown>) => void): PreToolUseCheckResult {
+  const frameworkBlock = frameworkToolBlockReason(ctx.sessionId, ctx.toolName);
+  if (frameworkBlock) return { type: 'block', reason: frameworkBlock };
   const {
     toolName,
     input,
@@ -921,7 +931,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput, deferDispatch?: (input
   if (deferDispatch) deferDispatch(currentInput);
   const dispatched = deferDispatch ? finalPolicy : consumeSessionActionGate(sessionId, toolName, currentInput, workingDirectory, ctx.invocationId);
   if (!dispatched.allowed) return { type: 'block', reason: dispatched.reason };
-  const isolatedInput = wrapSessionProgramInput(sessionId, toolName, currentInput);
+  const isolatedInput = wrapSessionProgramInput(sessionId, toolName, currentInput, workingDirectory, ctx.invocationId);
   if (isolatedInput) {
     currentInput = isolatedInput;
     wasModified = true;

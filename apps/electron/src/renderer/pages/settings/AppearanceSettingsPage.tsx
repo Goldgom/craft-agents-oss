@@ -244,16 +244,6 @@ export default function AppearanceSettingsPage() {
     [sessionStatuses, t]
   )
 
-  // Rich tool descriptions toggle (persisted in config.json, read by SDK subprocess)
-  const [richToolDescriptions, setRichToolDescriptions] = useState(true)
-  useEffect(() => {
-    window.electronAPI?.getRichToolDescriptions?.().then(setRichToolDescriptions)
-  }, [])
-  const handleRichToolDescriptionsChange = useCallback(async (checked: boolean) => {
-    setRichToolDescriptions(checked)
-    await window.electronAPI?.setRichToolDescriptions?.(checked)
-  }, [])
-
   // "Background session finished" chip toggle (renderer-only appearance pref,
   // persisted in localStorage via atomWithStorage — read by App.tsx + ChatPage).
   const [showBackgroundFinishedChip, setShowBackgroundFinishedChip] = useAtom(showBackgroundFinishedChipAtom)
@@ -599,12 +589,6 @@ export default function AppearanceSettingsPage() {
                     description={t("settings.appearance.connectionIconsDesc")}
                     checked={showConnectionIcons}
                     onCheckedChange={handleConnectionIconsChange}
-                  />
-                  <SettingsToggle
-                    label={t("settings.appearance.richToolDescriptions")}
-                    description={t("settings.appearance.richToolDescriptionsDesc")}
-                    checked={richToolDescriptions}
-                    onCheckedChange={handleRichToolDescriptionsChange}
                   />
                   <SettingsToggle
                     label={t("settings.appearance.backgroundFinishedChip")}

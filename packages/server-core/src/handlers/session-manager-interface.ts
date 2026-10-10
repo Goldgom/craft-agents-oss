@@ -44,6 +44,7 @@ export interface ISessionManager {
   // ---------------------------------------------------------------------------
 
   getSessions(workspaceId?: string): Session[]
+  getSuperAgentSessionIds?(workspaceId: string): string[]
   getSession(sessionId: string): Promise<Session | null>
   /** Creates a session and (unless `internal.emitCreatedEvent === false`) announces it to the
    *  renderer so it hydrates full metadata instead of fabricating a "New Chat" placeholder. */
@@ -55,7 +56,7 @@ export interface ISessionManager {
   /** Resolved working directory of a live session (Tasks Conductor uses it so children inherit
    *  the orchestrator's cwd). */
   getSessionWorkingDirectory(sessionId: string): string | undefined
-  deleteSession(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true }): Promise<void>
+  deleteSession(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true; superAgentReset?: true }): Promise<void>
   notifySessionCreated?(workspaceId: string, sessionId: string): void
 
   // ---------------------------------------------------------------------------
@@ -86,6 +87,7 @@ export interface ISessionManager {
   clearSuperAgentPermissionGrants(workspaceId: string): void
   ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void>
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
+  hasSuperAgentBrowserSupport?(workspaceId: string): boolean
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void

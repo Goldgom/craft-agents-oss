@@ -2,7 +2,7 @@
   "name": "tokenbird",
   "version": "26.10.9",
   "license": "Apache-2.0",
-  "description": "TokenBird AI agent workspace, deeply integrated with TokenNest",
+  "description": "TokenBird agent plugin host and unified workspace with portable preferences and shared capabilities",
   "type": "module",
   "private": true,
   "trustedDependencies": [

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, ChevronDown, Circle, LoaderCircle, ShieldCheck, Sparkles, Square } from 'lucide-react'
-import { canShareSuperAgentPermission, type SuperAgentCommand, type SuperAgentConfig, type SuperAgentSnapshot } from '@craft-agent/shared/super-agent'
+import { AlertCircle, ArrowUp, ChevronDown, Circle, LoaderCircle, ShieldCheck, Sparkles, Square } from 'lucide-react'
+import { canShareSuperAgentPermission, superAgentTaskBlocker, type SuperAgentCommand, type SuperAgentConfig, type SuperAgentSnapshot } from '@craft-agent/shared/super-agent'
 import type { PermissionRequest } from '../../../shared/types'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { Button } from '@/components/ui/button'
@@ -41,6 +41,12 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
   const sessionIds = new Set(state.nodes.map(node => node.sessionId).filter((id): id is string => !!id))
   const ordinary = ordinaryPermissionHeads(sessionIds, pendingPermissions, inbox)
   const approvalCount = approvals.length + ordinary.length
+  const blockers = state.tasks.filter(task => task.status === 'queued').flatMap(task => {
+    const blocker = superAgentTaskBlocker(state, task)
+    return blocker ? [{ id: task.id, title: task.title, reason: text(blocker.code, { detail: blocker.detail }) }] : []
+  })
+  const blockedPlans = state.plans.filter(plan => plan.status === 'blocked'
+    && !state.tasks.some(task => task.planId === plan.id && task.status === 'running'))
   useEffect(() => {
     if (active && followRef.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages.length, approvalCount, busy, active])
@@ -84,14 +90,36 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
           if (notices.get(message.id)) return null
           const user = message.fromNodeId === 'user'
           const sender = config.nodes.find(node => node.id === message.fromNodeId) ?? coordinator
+          const errorSummary = message.kind === 'error' ? text(
+            message.body.includes('"status":"partially_applied"') ? 'conversationErrorPartial'
+              : /Shared board changed|Plan .+ changed \(revision|revision conflict/i.test(message.body) ? 'conversationErrorConflict'
+                : /JSON|super_agent_actions|validation error/i.test(message.body) ? 'conversationErrorFormat'
+                  : 'conversationErrorGeneral') : undefined
           return <article key={message.id} className={cn('flex items-start gap-3', user && 'flex-row-reverse')}>
             {!user && <AgentAvatar avatar={sender.avatar} name={sender.name} className="mt-0.5 size-8 rounded-lg text-base" />}
             <div className={cn('min-w-0 max-w-[88%]', user ? 'rounded-2xl bg-foreground/5 px-4 py-3' : 'flex-1')}>
               {!user && <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground"><span className="font-medium">{nodeLabel(config, message.fromNodeId, text)}</span><span>{formatTimestamp(message.createdAt)}</span></div>}
-              <div className={cn('break-words text-sm leading-6', message.kind === 'error' && 'text-destructive')}>{user ? <p className="whitespace-pre-wrap">{message.body}</p> : <Markdown>{visibleActivityText(message.body)}</Markdown>}</div>
+              {errorSummary ? <details className="group min-w-0 rounded-2xl border border-destructive/25 bg-destructive/10 text-destructive">
+                <summary className="flex cursor-pointer list-none items-center gap-2 rounded-2xl px-4 py-3 text-sm leading-6 outline-none focus-visible:ring-2 focus-visible:ring-destructive/50 [&::-webkit-details-marker]:hidden">
+                  <AlertCircle aria-hidden="true" className="size-4 shrink-0" />
+                  <span className="min-w-0 flex-1 break-words">{errorSummary}</span>
+                  <span className="shrink-0 text-xs">{text('conversationErrorDetails')}</span>
+                  <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="border-t border-destructive/15 px-4 py-3">
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5">{message.body}</pre>
+                </div>
+              </details> : <div className="break-words text-sm leading-6">{user ? <p className="whitespace-pre-wrap">{message.body}</p> : <Markdown>{visibleActivityText(message.body)}</Markdown>}</div>}
             </div>
           </article>
         })}
+        {(blockers.length > 0 || blockedPlans.length > 0) && <aside role="status" className="space-y-3 rounded-2xl border border-amber-500/25 bg-amber-500/5 p-4 text-sm">
+          <h2 className="font-medium text-amber-700 dark:text-amber-400">{text('queueBlocked')}</h2>
+          <ul className="space-y-2 text-xs leading-5">{blockers.map(item => <li key={item.id}><strong>{item.title}</strong><p>{item.reason}</p></li>)}
+            {blockedPlans.map(plan => <li key={plan.id}><strong>{plan.title}</strong><p className="whitespace-pre-wrap">{plan.note || text('planBlocked', { detail: plan.title })}</p></li>)}</ul>
+          <p className="text-xs leading-5 text-muted-foreground">{text('queueNextStep')}</p>
+          <Button size="sm" variant="outline" disabled={busy || requestPending || !snapshot.environment.available} onClick={onInspect}>{text('queueInspect')}</Button>
+        </aside>}
         {approvalCount > 0 && <div ref={approvalRef} className="space-y-3" aria-label={text('permissionInbox')}>
           <h2 className="flex items-center gap-2 text-xs font-semibold"><ShieldCheck className="size-3.5 text-amber-600 dark:text-amber-400" />{text('permissionInbox')}<span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{approvalCount}</span></h2>
           {approvals.map(request => <ApprovalCard key={request.sessionId + ':' + request.id} owner={nodeLabel(config, request.nodeId, text)} request={request}
