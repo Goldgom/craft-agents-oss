@@ -2,8 +2,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
+import { win7Css } from '../../scripts/win7-css'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const win7 = mode === 'win7' || mode === 'win7-local'
+  return ({
   plugins: [
     react({
       babel: {
@@ -14,19 +17,20 @@ export default defineConfig({
       },
     }),
     tailwindcss(),
+    ...(win7 ? [win7Css()] : []),
   ],
   root: resolve(__dirname, 'src'),
   publicDir: resolve(__dirname, '../studio-assets'),
   base: './',
   build: {
-    outDir: resolve(__dirname, 'dist'),
+    outDir: resolve(__dirname, mode === 'win7-local' ? '../win7-local/dist/app/webui' : mode === 'win7' ? '../win7-client/dist/app/webui' : 'dist'),
     // Android 8 devices often retain their factory WebView. Vite's modern
     // default target can emit syntax those WebViews cannot parse even though
     // the native shell itself supports API 26. Chrome 67 matches the original
     // Android 8.1 WebView generation while remaining compatible with current
     // browsers.
-    target: 'chrome67',
-    cssTarget: 'chrome67',
+    target: win7 ? 'chrome108' : 'chrome67',
+    cssTarget: win7 ? 'chrome108' : 'chrome67',
     // Remove previous hashed chunks before every build. The Android packager
     // copies dist wholesale, so the old misspelled option caused the APK to
     // grow on every build.
@@ -91,7 +95,8 @@ export default defineConfig({
   },
   define: {
     // Flag to detect web UI context in shared code
-    'import.meta.env.IS_WEBUI': 'true',
+    'import.meta.env.IS_WEBUI': JSON.stringify(mode !== 'win7-local'),
+    'import.meta.env.IS_WIN7_CLIENT': JSON.stringify(win7),
   },
   optimizeDeps: {
     include: ['react', 'react-dom', 'jotai'],
@@ -123,4 +128,5 @@ export default defineConfig({
       }
     })(),
   },
+  })
 })

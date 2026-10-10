@@ -83,6 +83,8 @@ credentials.enc
 .build-all
 /release/
 /apps/electron/release-test/
-
 # Local Electron installer builds and diagnostics
 /apps/electron/release-*/
+/apps/win7-client/release/
+/apps/win7-local/release/
+/win7_dependencies/

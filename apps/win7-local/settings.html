@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TokenBird Win7 Local</title><link rel="stylesheet" href="settings.css"></head>
+<body><main><h1>TokenBird Win7 Local</h1><p>Agent 和文件操作在本机运行，不需要远程 TokenBird 服务器。云模型 API 仍需要联网。</p>
+<p class="warning">实验版本，尚未在真实 Win7 上验证。仅支持 Pi API 后端；不含 Claude Code、Python、Git Bash。默认使用 Ask 权限模式，请先用测试目录。</p>
+<form id="form">
+<label>API 协议<select id="api"><option value="openai-completions">OpenAI-compatible Chat Completions</option><option value="anthropic-messages">Anthropic-compatible Messages</option></select></label>
+<label>API Base URL<input id="baseUrl" type="text" required placeholder="https://api.openai.com/v1"></label>
+<label>模型 ID<input id="model" type="text" required placeholder="填写服务商提供的完整模型 ID"></label>
+<label>API Key<input id="apiKey" type="password" autocomplete="off" spellcheck="false"><span class="note">通过 Windows 安全存储加密保存，不会写入 URL。已有 Key 时留空表示保留。</span></label>
+<label>本地工作目录<input id="workingDirectory" type="text" required></label><button id="choose" type="button">选择目录</button>
+<p id="error" role="alert"></p><button id="save" type="submit">保存并进入本地工作区</button></form>
+<footer>切换模型后建议新建会话。执行命令需要自行安装 Win7 兼容的 Git Bash；搜索工具需要兼容的 rg/fd，自动工具下载已关闭。此版本使用停止维护的 Electron 22，仅建议在受控环境中试用。</footer>
+</main><script src="settings.js"></script></body></html>

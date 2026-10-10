@@ -1,0 +1,30 @@
+appId: top.goldgom.tokenbird.win7local
+productName: TokenBird Win7 Local
+electronVersion: "22.3.27"
+npmRebuild: false
+asar: true
+asarUnpack:
+  - "runtime/**/*"
+directories:
+  app: dist/app
+  output: release
+files:
+  - "**/*"
+  - "!**/*.map"
+  - "!**/node_modules/**"
+  - "!settings.*"
+win:
+  executableName: TokenBird-Win7-Local
+  icon: ../electron/resources/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: "TokenBird-Win7-Local-OriginalUI-Tools-${version}-${arch}-Setup.${ext}"
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  allowElevation: false
+  include: installer/dependencies.nsh
+  deleteAppDataOnUninstall: false
+  installerLanguages: [zh_CN, en_US]

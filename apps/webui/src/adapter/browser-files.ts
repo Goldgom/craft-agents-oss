@@ -53,6 +53,10 @@ export async function pickedAttachment(path: string): Promise<FileAttachment | n
 }
 
 export async function saveBlob(blob: Blob, name: string): Promise<{ canceled?: boolean; path?: string }> {
+  if (window.TokenBirdDesktop) {
+    if (blob.size > 64 * 1024 * 1024) throw new Error('文件超过 64 MB，请分段导出')
+    return window.TokenBirdDesktop.invoke('client:saveBlob', name, await blobBase64(blob))
+  }
   const bridge = window.CraftAgentAndroid
   if (bridge?.saveFile) {
     if (blob.size > 64 * 1024 * 1024) throw new Error('文件超过 64 MB，请通过服务器文件管理下载')

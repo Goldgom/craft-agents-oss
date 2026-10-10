@@ -1,0 +1,15 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #f3f4f8; color: #242331; font: 15px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
+main { width: 620px; max-width: calc(100% - 48px); margin: 32px auto; padding: 28px; background: white; border: 1px solid #dedee8; border-radius: 12px; }
+h1 { margin: 0; font-size: 26px; }
+p, footer { color: #646173; }
+label { display: block; margin: 14px 0; }
+input, select { display: block; width: 100%; margin-top: 6px; padding: 9px 12px; font: inherit; border: 1px solid #b6b5c4; border-radius: 6px; }
+input:focus, select:focus { outline: 2px solid #7663b0; outline-offset: 1px; }
+.note, footer { font-size: 13px; }
+.warning { padding: 10px; background: #fff3d5; color: #725512; font-size: 13px; }
+#error { color: #b52835; white-space: pre-wrap; }
+button { width: 100%; padding: 10px; border: 0; border-radius: 6px; background: #6951aa; color: white; font: inherit; cursor: pointer; }
+#choose { width: auto; background: #e8e6f0; color: #383049; }
+button:disabled { opacity: .6; cursor: wait; }
+footer { margin-top: 24px; border-top: 1px solid #e6e5ed; padding-top: 18px; }
