@@ -1,5 +1,9 @@
 import type { EventSink, RpcServer } from '@craft-agent/server-core/transport'
-import { CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_CANVAS_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
+import { TurnClientContexts, type TurnClientContext } from './turn-client-context'
+import { saveClientFiles } from './client-files'
+import { MessageBranchGate, editedBranchMessages, branchSeedMessages, copyBranchAttachmentFiles } from './message-branching'
+import { CLIENT_FILE_TIMEOUT_MS, validateClientFileRequest, type ClientFileSelection } from '@craft-agent/core/types'
+import { CLIENT_REQUEST_FILES, CLIENT_ANDROID_ADB, CLIENT_ANDROID_PERMISSION, CLIENT_BROWSER_INVOKE, CLIENT_CANVAS_INVOKE, CLIENT_RUN_SHELL, CLIENT_SFTP_TRANSFER, type ClientShellResult, type ClientSftpTransferResult } from '@craft-agent/server-core/transport'
 import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type ShellExecArgs, type SftpTransferArgs } from '@craft-agent/session-tools-core'
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@craft-agent/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
@@ -11,7 +15,9 @@ import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
-import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, checkSessionExecutionPolicy, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
+import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, setSessionActionReviewer, checkSessionExecutionPolicy, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@craft-agent/shared/agent'
+import { reviewActionGate, type ActionReviewRequest } from '@craft-agent/shared/agent'
+import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import type { SuperAgentSessionPolicy } from '@craft-agent/shared/super-agent'
 import { cleanupSuperAgents, getSuperAgentService } from '../super-agent/registry'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@craft-agent/shared/agent'
@@ -92,6 +98,8 @@ import { toolMetadataStore, getLastApiError } from '@craft-agent/shared/intercep
 import { isParentTaskTool } from '@craft-agent/shared/utils/toolNames'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
+import { runSavedCredentialOperation, saveRequestedCredential } from './saved-credentials'
+import { getSessionScopedToolCallbacks } from '@craft-agent/shared/agent'
 import { CraftMcpClient, McpClientPool, McpPoolServer, getProcessRssBytes, mcpRuntimeLimiter, resolveMcpRuntimeLimits, type McpRuntimeLimits } from '@craft-agent/shared/mcp'
 import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type PerformanceSnapshot, type MemoryLeakCheckResult, type MemoryLeakCheckSample, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
@@ -398,7 +406,7 @@ async function buildServersFromSources(
 /** Apply an Agent's independent MCP/API source switches. Ordinary sessions
  * have no policy and retain the workspace behaviour unchanged. */
 function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'agentSessionSettings' | 'executionPolicy'>): LoadedSource[] {
-  if (managed?.executionPolicy && !managed.executionPolicy.fullControl) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
+  if (managed?.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
   const settings = managed?.agentSessionSettings
   if (!settings) return sources
   const mcp = settings.mcpSourceSlugs ? new Set(settings.mcpSourceSlugs) : null
@@ -875,6 +883,7 @@ interface ManagedSession {
     storedAttachments?: StoredAttachment[]
     options?: SendMessageOptions
     messageId?: string  // Pre-generated ID for matching with UI
+    rpcContext?: TurnClientContext
     optimisticMessageId?: string  // Frontend's ID for reliable event matching
   }>
   // Map of shellId -> command for killing background shells
@@ -909,6 +918,7 @@ interface ManagedSession {
   // Whether this session is hidden from session list (e.g., mini edit sessions)
   hidden?: boolean
   branchFromMessageId?: string
+  branchFromSessionId?: string
   // Branch context strategy:
   // - sdk-fork: provider-level fork from parent SDK session
   // - seeded-fresh-session: fresh backend session seeded with transcript up to branch cutoff
@@ -1075,6 +1085,7 @@ export function createManagedSession(
   if (managed.executionPolicy) {
     managed.permissionMode = 'allow-all'
     setPermissionMode(managed.id, 'allow-all', { changedBy: 'restore' })
+    managed.executionPolicy = { ...managed.executionPolicy, actionGates: true, protectedRoots: [CONFIG_DIR, managed.workspace.rootPath] }
     try { managed.executionPolicy = setSessionExecutionPolicy(managed.id, managed.executionPolicy) }
     catch (error) { sessionLog.error(`Invalid restored node policy for session ${managed.id}:`, error) }
   }
@@ -1215,6 +1226,7 @@ export class SessionManager implements ISessionManager {
   /** Serializes LRU eviction so concurrent turn completions cannot over-evict. */
   private warmRuntimeEviction: Promise<void> = Promise.resolve()
   private sessions: Map<string, ManagedSession> = new Map()
+  private messageBranchGate = new MessageBranchGate()
   /** One coordinator instance is shared by RPC handlers and agent tools so
    * every mutation participates in the same queue and file-lock discipline. */
   private readonly collaborationManager = new CollaborationManager(workspaceId => {
@@ -1237,6 +1249,9 @@ export class SessionManager implements ISessionManager {
   private automationSystems: Map<string, AutomationSystem> = new Map()
   // Pending credential request resolvers (keyed by requestId)
   private pendingCredentialResolvers: Map<string, (response: import('@craft-agent/shared/protocol').CredentialResponse) => void> = new Map()
+  private localCredentialAccessEnabled = false
+  /** Enabled only by the embedded desktop host after configuring its local vault. */
+  setLocalCredentialAccessEnabled(enabled: boolean): void { this.localCredentialAccessEnabled = enabled }
   // Permission request metadata tracking (keyed by requestId)
   private pendingPermissionRequests: Map<string, {
     sessionId: string
@@ -1502,6 +1517,7 @@ export class SessionManager implements ISessionManager {
 
   private browserPaneManager: IBrowserPaneManager | null = null
   private enqueuePageThumbnailFn?: (req: { workspaceId: string; workspaceRootPath: string; slug: string }) => void
+  private turnClients = new TurnClientContexts()
   private rpcServer: RpcServer | null = null
   private remoteBpms = new Map<string, RemoteBrowserPaneManager>()
   /** Pinned desktop client per session for `client:browser:invoke` routing. */
@@ -1644,6 +1660,9 @@ export class SessionManager implements ISessionManager {
     if (!this.rpcServer) return null
     const session = this.sessions.get(sid)
     if (!session) return null
+    if (this.turnClients.get(sid)?.remoteAccess) {
+      return this.turnClients.requireClient(this.rpcServer, sid, session.workspace.id, CLIENT_RUN_SHELL)
+    }
     const candidates = this.rpcServer.findClientsWithCapability(
       CLIENT_RUN_SHELL,
       { workspaceId: session.workspace.id },
@@ -1677,6 +1696,7 @@ export class SessionManager implements ISessionManager {
       )) as ClientShellResult
       return result
     }
+    if (this.turnClients.get(managed.id)?.remoteAccess) throw new Error('The accessing device does not support local shell execution')
     return await executeShell(args)
   }
 
@@ -1784,6 +1804,32 @@ export class SessionManager implements ISessionManager {
   private attachNodePermissionHandler(managed: ManagedSession): void {
     if (!managed.executionPolicy) return
     setSessionPolicyPermissionHandler(managed.id, request => this.requestNodePermission(managed, request))
+    setSessionActionReviewer(managed.id, request => this.reviewNodeAction(managed, request))
+  }
+
+  private async reviewNodeAction(managed: ManagedSession, request: ActionReviewRequest) {
+    // A separate runtime, no chat transcript, tools, inherited grants or worker instructions.
+    const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+    const resolvedContext = resolveBackendContext({ sessionConnectionSlug: managed.llmConnection,
+      workspaceDefaultConnectionSlug: wsConfig?.defaults?.defaultLlmConnection, managedModel: managed.model })
+    // Native Codex utility sessions retain built-in tools. Use its existing Pi transport for review.
+    const context = resolvedContext.agentRuntime === 'codex' ? { ...resolvedContext, agentRuntime: 'pi' as const } : resolvedContext
+    const miniModel = context.connection ? resolveMiniModel(context.connection, wsConfig?.defaults?.miniModel) : undefined
+    const reviewerId = `${managed.id}-guardian-${randomUUID()}`
+    setSessionExecutionPolicy(reviewerId, { nodeId: 'guardian', role: 'coordinator', rootPath: managed.workingDirectory || managed.workspace.rootPath,
+      actionGates: true, readFiles: false, writeFiles: false, runPrograms: false, browser: false, allowSources: [], allowSubagents: false })
+    try {
+      const reviewer = createBackendFromResolvedContext({ context, hostRuntime: buildBackendHostRuntimeContext(), coreConfig: {
+        workspace: managed.workspace, miniModel, isHeadless: true,
+        session: { id: reviewerId, workspaceRootPath: managed.workspace.rootPath,
+          createdAt: Date.now(), lastUsedAt: Date.now(), workingDirectory: managed.workingDirectory,
+          model: managed.model, llmConnection: managed.llmConnection, permissionMode: 'safe' },
+      }, providerOptions: { piAuthProvider: context.connection?.piAuthProvider } })
+      try {
+        if (!reviewer.queryLlm) return { verdict: 'unavailable' as const, reason: 'This runtime has no tool-free independent review interface; human review is required.' }
+        return await reviewActionGate(request, reviewer.queryLlm.bind(reviewer))
+      } finally { reviewer.destroy() }
+    } finally { clearSessionExecutionPolicy(reviewerId) }
   }
 
   private requestNodePermission(managed: ManagedSession, request: SessionPolicyPermissionRequest): Promise<boolean> {
@@ -1815,10 +1861,10 @@ export class SessionManager implements ISessionManager {
       this.sendEvent({ type: 'permission_request', sessionId: managed.id, request: {
         requestId, sessionId: managed.id, toolName: request.toolName,
         type: request.scope.kind === 'program' ? 'bash' : request.scope.kind === 'file_write' ? 'file_write' : 'mcp_mutation',
-        description: `Node ${managed.executionPolicy!.nodeId} requests ${request.scope.kind}: ${request.scope.target}`,
+        description: `${request.scope.actionGate ? 'Action Gate · ' : ''}Node ${managed.executionPolicy!.nodeId} requests ${request.scope.kind}: ${request.scope.target}`,
         command: typeof request.input.command === 'string' ? request.input.command : undefined,
         reason: request.reason,
-        impact: request.scope.kind === 'program' && request.scope.boundary !== 'environment'
+        impact: request.scope.actionGate ? 'Approve this invocation once. It cannot be remembered, shared with other nodes, or expand filesystem, source, network or sandbox permissions.' : request.scope.kind === 'program' && request.scope.boundary !== 'environment'
           ? `Runs this complete command on the ${request.scope.boundary} machine with cwd ${request.input.cwd}. A working folder does not isolate shell access. The exception is limited to this exact operation in the current turn.`
           : 'Temporarily permits this exact operation in the current node turn. Other operations remain subject to the node policy.',
         policyScope: { ...request.scope },
@@ -2635,6 +2681,7 @@ export class SessionManager implements ISessionManager {
       return
     }
 
+    const isSavedCredential = managed.pendingAuthRequest?.type === 'credential' && !!managed.pendingAuthRequest.savedCredentialName
     // Find and update the pending auth-request message
     const authMessage = managed.messages.find(m =>
       m.role === 'auth-request' &&
@@ -2668,7 +2715,7 @@ export class SessionManager implements ISessionManager {
     managed.pendingAuthRequest = undefined
 
     // Auto-enable the source in the session after successful auth
-    if (result.success && result.sourceSlug) {
+    if (result.success && result.sourceSlug && !isSavedCredential) {
       const slugSet = new Set(managed.enabledSourceSlugs || [])
       if (!slugSet.has(result.sourceSlug)) {
         slugSet.add(result.sourceSlug)
@@ -2684,7 +2731,7 @@ export class SessionManager implements ISessionManager {
     this.persistSession(managed)
 
     // Update bridge-mcp-server config/credentials for backends that need it
-    if (result.success && result.sourceSlug && managed.agent) {
+    if (result.success && result.sourceSlug && managed.agent && !isSavedCredential) {
       const workspaceRootPath = managed.workspace.rootPath
       const sessionPath = getSessionStoragePath(workspaceRootPath, managed.id)
       const enabledSlugs = managed.enabledSourceSlugs || []
@@ -2723,6 +2770,23 @@ export class SessionManager implements ISessionManager {
     const request = managed.pendingAuthRequest as CredentialAuthRequest
     if (request.requestId !== requestId) {
       sessionLog.warn(`Credential request ID mismatch: expected ${request.requestId}, got ${requestId}`)
+      return
+    }
+
+    if (request.type !== 'credential') return
+    if (request.savedCredentialName) {
+      if (!this.localCredentialAccessEnabled) throw new Error('Local desktop credentials are unavailable')
+      if (response.cancelled) {
+        await this.completeAuthRequest(sessionId, { requestId, sourceSlug: request.savedCredentialName, success: false, cancelled: true })
+        return
+      }
+      try {
+        await saveRequestedCredential(managed.workspace.id, request, response)
+      } catch {
+        // Keep the request pending so the user can correct/retry without losing it.
+        throw new Error('Could not save credential. Check the account, password/key and local storage, then retry.')
+      }
+      await this.completeAuthRequest(sessionId, { requestId, sourceSlug: request.savedCredentialName, success: true })
       return
     }
 
@@ -3038,11 +3102,41 @@ export class SessionManager implements ISessionManager {
   async createSession(
     workspaceId: string,
     options?: import('@craft-agent/shared/protocol').CreateSessionOptions,
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
+  ): Promise<Session> {
+    if (options?.editedMessageContent !== undefined && (!options.branchFromMessageId || !options.branchFromSessionId)) {
+      throw new Error('Editing a historical message requires a branch point.')
+    }
+    if (!options?.branchFromMessageId) return this.createSessionInternal(workspaceId, options, internal)
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error(`Workspace ${workspaceId} not found`)
+    if (options.editedMessageContent !== undefined && options.branchFromSessionId) {
+      const source = this.sessions.get(options.branchFromSessionId) ?? loadStoredSession(workspace.rootPath, options.branchFromSessionId)
+      if (source) options = {
+        llmConnection: source.llmConnection, model: source.model,
+        permissionMode: source.permissionMode, workingDirectory: source.workingDirectory,
+        enabledSourceSlugs: source.enabledSourceSlugs, thinkingLevel: source.thinkingLevel,
+        agentId: source.agentId, agentSystemPrompt: source.agentSystemPrompt, projectId: source.projectId,
+        ...options,
+      }
+    }
+    const branchOptions = options
+    return this.messageBranchGate.run(`${workspace.rootPath}:${branchOptions.branchFromMessageId}`, () =>
+      new Set([
+        ...listStoredSessions(workspace.rootPath).filter(s => s.branchFromMessageId === branchOptions.branchFromMessageId).map(s => s.id),
+        ...[...this.sessions.values()].filter(s => s.workspace.rootPath === workspace.rootPath && s.branchFromMessageId === branchOptions.branchFromMessageId).map(s => s.id),
+      ]).size,
+      () => this.createSessionInternal(workspaceId, branchOptions, internal))
+  }
+
+  private async createSessionInternal(
+    workspaceId: string,
+    options?: import('@craft-agent/shared/protocol').CreateSessionOptions,
     // Transport concern, deliberately NOT on the wire DTO: by default every created session is
     // announced to the renderer (see notifySessionCreated). Callers that register the session
     // themselves — the `sessions:create` RPC adds it from the return value — pass
     // `{ emitCreatedEvent: false }` to avoid a redundant hydrate.
-    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
   ): Promise<Session> {
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
@@ -3247,9 +3341,13 @@ export class SessionManager implements ISessionManager {
         throw new Error(`Invalid branch request: message ${options.branchFromMessageId} not found in source session`)
       }
 
-      // New branches always use strict provider-level SDK fork semantics.
-      // Seeded mode remains only for legacy sessions created before strict fork was enforced.
-      const branchContextStrategy: 'sdk-fork' | 'seeded-fresh-session' = 'sdk-fork'
+      // An edited transcript must start fresh: an SDK fork still contains the old text.
+      const branchContextStrategy: 'sdk-fork' | 'seeded-fresh-session' = options.editedMessageContent !== undefined
+        ? 'seeded-fresh-session' : 'sdk-fork'
+      if (options.editedMessageContent !== undefined) {
+        editedBranchMessages(sourceSession.messages, branchIdx, options.editedMessageContent, generateMessageId())
+        if (sourceManaged?.isProcessing) throw new Error('Wait for the current response to finish before editing history.')
+      }
 
       const branchFromSdkSessionId = branchContextStrategy === 'sdk-fork'
         ? (sourceManaged?.sdkSessionId || sourceSession.sdkSessionId)
@@ -3376,64 +3474,75 @@ export class SessionManager implements ISessionManager {
 
     // Branch: copy messages from source session up to and including the branch point
     if (validatedBranch) {
-      const branchedStored = loadStoredSession(workspaceRootPath, storedSession.id)
-      if (!branchedStored) {
-        throw new Error(`Failed to load newly created session ${storedSession.id} for branch copy`)
-      }
-
-      const sourceMessages = validatedBranch.sourceSession.messages.slice(0, validatedBranch.branchIdx + 1)
-
-      // Re-map embedded paths: source messages were loaded with expandSessionPath(sourceDir),
-      // so they contain absolute paths to the *source* session directory. When saved to the
-      // branch session, makeSessionPathPortable uses the *branch* dir — which won't match.
-      // Fix: replace source dir paths with branch dir paths so tokenization works on save.
-      const sourceDir = normalizePath(getSessionStoragePath(workspaceRootPath, validatedBranch.sourceSessionId))
-      const branchDir = normalizePath(getSessionStoragePath(workspaceRootPath, storedSession.id))
-      if (sourceDir !== branchDir) {
-        branchedStored.messages = sourceMessages.map(m => {
-          const json = JSON.stringify(m)
-          if (!json.includes(sourceDir)) return m
-          return JSON.parse(json.replaceAll(sourceDir, branchDir)) as StoredMessage
-        })
-      } else {
-        branchedStored.messages = sourceMessages
-      }
-
-      branchedStored.branchFromMessageId = validatedBranch.sourceMessageId
-      if (validatedBranch.branchContextStrategy === 'sdk-fork') {
-        branchedStored.branchFromSdkSessionId = validatedBranch.branchFromSdkSessionId
-        branchedStored.branchFromSessionPath = validatedBranch.branchFromSessionPath
-        branchedStored.branchFromSdkCwd = validatedBranch.branchFromSdkCwd
-        branchedStored.branchFromSdkTurnId = validatedBranch.branchFromSdkTurnId
-      } else {
-        delete branchedStored.branchFromSdkSessionId
-        delete branchedStored.branchFromSessionPath
-        delete branchedStored.branchFromSdkCwd
-        delete branchedStored.branchFromSdkTurnId
-      }
-      await saveStoredSession(branchedStored)
-
-      // Propagate the Pi turn-anchor sidecar into the branch so a downstream
-      // branch can still resolve anchors for messages copied here from the
-      // source. Without this step, branch-of-branch silently falls back to
-      // full-history fork — see craft-agents-oss#782.
-      if (
-        validatedBranch.branchContextStrategy === 'sdk-fork' &&
-        validatedBranch.sourceProvider === 'pi'
-      ) {
-        try {
-          await copyPiTurnAnchorsForBranch(
-            sourceDir,
-            branchDir,
-            branchedStored.messages.map((m) => m.id),
-          )
-        } catch (err) {
-          sessionLog.warn('Failed to copy Pi turn-anchors sidecar to branch', {
-            err,
-            sourceSessionId: validatedBranch.sourceSessionId,
-            branchSessionId: storedSession.id,
-          })
+      try {
+        const branchedStored = loadStoredSession(workspaceRootPath, storedSession.id)
+        if (!branchedStored) {
+          throw new Error(`Failed to load newly created session ${storedSession.id} for branch copy`)
         }
+
+        const sourceMessages = options?.editedMessageContent !== undefined
+          ? editedBranchMessages(validatedBranch.sourceSession.messages, validatedBranch.branchIdx, options.editedMessageContent, generateMessageId())
+          : validatedBranch.sourceSession.messages.slice(0, validatedBranch.branchIdx + 1)
+
+        // Re-map embedded paths: source messages were loaded with expandSessionPath(sourceDir),
+        // so they contain absolute paths to the *source* session directory. When saved to the
+        // branch session, makeSessionPathPortable uses the *branch* dir — which won't match.
+        // Fix: replace source dir paths with branch dir paths so tokenization works on save.
+        const sourceDir = normalizePath(getSessionStoragePath(workspaceRootPath, validatedBranch.sourceSessionId))
+        const branchDir = normalizePath(getSessionStoragePath(workspaceRootPath, storedSession.id))
+        // Retain attached files independently of the parent session's lifetime.
+        await copyBranchAttachmentFiles(sourceMessages, sourceDir, branchDir)
+        if (sourceDir !== branchDir) {
+          branchedStored.messages = sourceMessages.map(m => {
+            const json = JSON.stringify(m)
+            if (!json.includes(sourceDir)) return m
+            return JSON.parse(json.replaceAll(sourceDir, branchDir)) as StoredMessage
+          })
+        } else {
+          branchedStored.messages = sourceMessages
+        }
+
+        branchedStored.branchFromMessageId = validatedBranch.sourceMessageId
+        branchedStored.branchFromSessionId = validatedBranch.sourceSessionId
+        if (validatedBranch.branchContextStrategy === 'sdk-fork') {
+          branchedStored.branchFromSdkSessionId = validatedBranch.branchFromSdkSessionId
+          branchedStored.branchFromSessionPath = validatedBranch.branchFromSessionPath
+          branchedStored.branchFromSdkCwd = validatedBranch.branchFromSdkCwd
+          branchedStored.branchFromSdkTurnId = validatedBranch.branchFromSdkTurnId
+        } else {
+          delete branchedStored.branchFromSdkSessionId
+          delete branchedStored.branchFromSessionPath
+          delete branchedStored.branchFromSdkCwd
+          delete branchedStored.branchFromSdkTurnId
+        }
+        await saveStoredSession(branchedStored)
+
+        // Propagate the Pi turn-anchor sidecar into the branch so a downstream
+        // branch can still resolve anchors for messages copied here from the
+        // source. Without this step, branch-of-branch silently falls back to
+        // full-history fork — see craft-agents-oss#782.
+        if (
+          validatedBranch.branchContextStrategy === 'sdk-fork' &&
+          validatedBranch.sourceProvider === 'pi'
+        ) {
+          try {
+            await copyPiTurnAnchorsForBranch(
+              sourceDir,
+              branchDir,
+              branchedStored.messages.map((m) => m.id),
+            )
+          } catch (err) {
+            sessionLog.warn('Failed to copy Pi turn-anchors sidecar to branch', {
+              err,
+              sourceSessionId: validatedBranch.sourceSessionId,
+              branchSessionId: storedSession.id,
+            })
+          }
+        }
+      } catch (error) {
+        // Failed copies must not leave an empty child session or consume a branch slot.
+        deleteStoredSession(workspaceRootPath, storedSession.id)
+        throw error
       }
     }
 
@@ -3461,6 +3570,7 @@ export class SessionManager implements ISessionManager {
       agentSessionSettings: agentSettings,
       enabledSourceSlugs: defaultEnabledSourceSlugs,
       branchFromMessageId: validatedBranch?.sourceMessageId,
+      branchFromSessionId: validatedBranch?.sourceSessionId,
       branchContextStrategy: validatedBranch?.branchContextStrategy,
       branchFromSdkSessionId: validatedBranch?.branchFromSdkSessionId,
       branchFromSessionPath: validatedBranch?.branchFromSessionPath,
@@ -3474,6 +3584,9 @@ export class SessionManager implements ISessionManager {
     // conversation immediately (needed for scroll-to-bottom on panel open)
     if (isBranch) {
       await this.ensureMessagesLoaded(managed)
+      if (options?.editedMessageContent !== undefined && internal?.callerClientId) {
+        for (const queued of managed.messageQueue) queued.rpcContext = { callerClientId: internal.callerClientId }
+      }
 
       const requiresBranchPreflight = managed.branchContextStrategy === 'sdk-fork'
       if (requiresBranchPreflight) {
@@ -3586,7 +3699,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) throw new Error(`Session ${sessionId} not found`)
     if (managed.isProcessing) throw new Error('Stop the node before changing its execution policy')
     const previous = JSON.stringify(managed.executionPolicy)
-    const policy = setSessionExecutionPolicy(sessionId, input)
+    const policy = setSessionExecutionPolicy(sessionId, input.actionGates ? { ...input, protectedRoots: [CONFIG_DIR, managed.workspace.rootPath] } : input)
     setSessionProgramExecutor(sessionId, input.containerExecutor)
     managed.executionPolicy = policy
     managed.workingDirectory = policy.rootPath
@@ -3664,6 +3777,12 @@ export class SessionManager implements ISessionManager {
         .map(item => this.setSuperAgentSessionFullControl(item.managed.id, false)))
     }
     throw failed.reason
+  }
+
+  clearSuperAgentPermissionGrants(workspaceId: string): void {
+    for (const managed of this.sessions.values()) {
+      if (managed.workspace.id === workspaceId && managed.executionPolicy) clearSessionPolicyGrants(managed.id)
+    }
   }
 
   /** Reuse a node's conversation while updating the effective prompt and Execute mode. */
@@ -4243,14 +4362,7 @@ export class SessionManager implements ISessionManager {
         if (managed.branchContextStrategy !== 'seeded-fresh-session') return []
         if (managed.branchSeedApplied) return []
 
-        const seedMessages = managed.messages
-          .filter(m => m.role === 'user' || m.role === 'assistant')
-          .filter(m => !m.isIntermediate)
-
-        return seedMessages.map(m => ({
-          type: m.role as 'user' | 'assistant',
-          content: m.content,
-        }))
+        return branchSeedMessages(managed.messages)
       }
 
       const markBranchSeedApplied = () => {
@@ -4512,9 +4624,9 @@ export class SessionManager implements ISessionManager {
               const instanceId = await resolveSessionBrowserInstance('browser_drag')
               return bpm.drag(instanceId, x1, y1, x2, y2)
             },
-            fill: async (ref, value) => {
+            fill: async (ref, value, protection) => {
               const instanceId = await resolveSessionBrowserInstance('browser_fill')
-              return bpm.fillElement(instanceId, ref, value)
+              return bpm.fillElement(instanceId, ref, value, protection)
             },
             type: async (text) => {
               const instanceId = await resolveSessionBrowserInstance('browser_type')
@@ -4926,6 +5038,8 @@ export class SessionManager implements ISessionManager {
             authHeaderNames: request.headerNames,
             authSourceUrl: request.sourceUrl,
             authPasswordRequired: request.passwordRequired,
+            authSavedCredentialName: request.savedCredentialName,
+            authSavedCredentialKind: request.savedCredentialKind,
           }),
         }
 
@@ -5028,6 +5142,14 @@ export class SessionManager implements ISessionManager {
 
       // Wire up session self-management tools (set_session_labels, set_session_status, etc.)
       mergeSessionScopedToolCallbacks(managed.id, {
+        savedCredentialsFn: async (args) => {
+          if (!this.localCredentialAccessEnabled) throw new Error('Local desktop credentials are unavailable')
+          if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) throw new Error('Node policy does not permit credential access')
+          return runSavedCredentialOperation(managed.workspace.id, args, {
+            browser: args.action === 'fill' ? getSessionScopedToolCallbacks(managed.id)?.browserPaneFns : undefined,
+            workingDirectory: managed.workingDirectory ?? managed.workspace.rootPath,
+          })
+        },
         canvasToolFn: async (args: Record<string, unknown>): Promise<unknown> => {
           if (args.action === 'list_image_connections' || args.action === 'generate_image') {
             return runStudioImageToolAction(managed.workspace.rootPath, managed.id, args)
@@ -5042,6 +5164,17 @@ export class SessionManager implements ISessionManager {
         // is connected (remote mode). Falls back to this host (embedded/local
         // server shares the client's machine) so local sessions keep working.
         runLocalShellFn: (args: ShellExecArgs): Promise<ClientShellResult> => this.runSessionLocalShell(managed, args),
+        requestClientFilesFn: async (input) => {
+          // Restricted nodes cannot acquire files outside their assigned environment.
+          if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) throw new Error('This node policy does not permit requesting client files')
+          const request = validateClientFileRequest(input)
+          const clientId = this.turnClients.requireClient(this.rpcServer, managed.id, managed.workspace.id, CLIENT_REQUEST_FILES)
+          const requestContext = this.turnClients.get(managed.id)
+          const result = await this.rpcServer!.invokeClientWithTimeout!(clientId, CLIENT_REQUEST_FILES, CLIENT_FILE_TIMEOUT_MS, request) as ClientFileSelection
+          if (this.sessions.get(managed.id) !== managed || managed.persistenceRetired || managed.stopRequested || !managed.isProcessing || this.turnClients.get(managed.id) !== requestContext) throw new Error('The requesting session has changed')
+          if (!request.allowMultiple && result?.files?.length > 1) throw new Error('Only one file was requested')
+          return await saveClientFiles(join(getSessionStoragePath(managed.workspace.rootPath, managed.id), 'data', 'client-files'), result)
+        },
         transferSftpFileFn: async (args: SftpTransferArgs): Promise<ClientSftpTransferResult> => {
           const clientId = this.getSftpTransferClient(managed.id)
           if (!clientId || !this.rpcServer) {
@@ -5275,7 +5408,12 @@ export class SessionManager implements ISessionManager {
 
           return { resolved: null, available }
         },
-        getCollaborationFn: async () => {
+        superAgentTaskFn: async args => {
+          if (!managed.executionPolicy) throw new Error('This is not a Super Agent node')
+          return getSuperAgentService(this).updateNodeTask(managed.workspace.id, managed.id, args)
+        },
+        getCollaborationFn: async query => {
+          if (managed.executionPolicy) return getSuperAgentService(this).getNodeSharedData(managed.workspace.id, managed.id, query)
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
           if (collaboration.relay) return this.getCollaborationRelayManager().readForSession(managed.id)
@@ -5290,6 +5428,7 @@ export class SessionManager implements ISessionManager {
           return group
         },
         updateCollaborationBoardFn: async (itemId: string, value: unknown) => {
+          if (managed.executionPolicy) throw new Error('Super Agent board writes use the final super_agent_actions board array with expectedRevision')
           const collaboration = managed.collaboration
           if (!collaboration) throw new Error('This session is not a member of a collaboration')
           if (collaboration.relay) return this.getCollaborationRelayManager().perform(managed.id, { kind: 'board', itemId, value })
@@ -5374,10 +5513,10 @@ export class SessionManager implements ISessionManager {
           const result = await this.getCollaborationRelayManager().perform(managed.id, { kind: 'message', targetMemberId, message }) as { delivery: 'queued-for-relay'; operationId: string }
           return { ...result, targetBusy: false }
         },
-        sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>) => {
+        sendAgentMessageFn: async (sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>, originalMessage?: string) => {
           if (managed.executionPolicy) {
             if (attachments?.length) throw new Error('Super Agent messages must reference shared files instead of attachments')
-            return getSuperAgentService(this).sendNodeMessage(managed.workspace.id, managed.id, sessionId, message)
+            return getSuperAgentService(this).sendNodeMessage(managed.workspace.id, managed.id, sessionId, originalMessage ?? message)
           }
           if (managed.collaboration?.relay) throw new Error('Use targetMemberId for multi-server collaboration; bare session IDs are ambiguous')
           // Collaboration request/report events are the durable outbox. They
@@ -5934,7 +6073,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session not found: ${sessionId}`)
     }
-    if (managed.executionPolicy && !managed.executionPolicy.fullControl && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
+    if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates) && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
       throw new Error('Super Agent policy: data source is not assigned to this node')
     }
 
@@ -6713,6 +6852,7 @@ export class SessionManager implements ISessionManager {
     // Drop the per-session remote bridge + host-client pin on destroy.
     this.remoteBpms.delete(sessionId)
     this.browserHostByCanvas.delete(sessionId)
+    this.turnClients.delete(sessionId)
 
     // Runtime construction/refresh can outlive the caller that started it.
     // Wait for those operations before disposal so they cannot attach a new
@@ -6790,7 +6930,7 @@ export class SessionManager implements ISessionManager {
      * that should host this session's browser tools. Pass undefined when calling
      * directly (tests, intra-server flows) to leave the existing pin in place.
      */
-    rpcContext?: { callerClientId?: string },
+    rpcContext?: TurnClientContext,
   ): Promise<void> {
     if (this.nodeSettingsLocks?.has(sessionId)) await this.waitForNodeSettings(sessionId)
     const managed = this.sessions.get(sessionId)
@@ -6798,13 +6938,13 @@ export class SessionManager implements ISessionManager {
       throw new Error(`Session ${sessionId} not found`)
     }
     if (managed.persistenceRetired) throw new Error('Session is being deleted and cannot accept new messages')
-    this.setLastMessageClientId(sessionId, rpcContext?.callerClientId)
+    const turnContext = this.turnClients.capture(this.rpcServer, rpcContext)
     if (managed.executionPolicy) {
       this.setSessionPermissionMode(sessionId, 'allow-all')
       setSessionExecutionPolicy(sessionId, managed.executionPolicy)
       for (const attachment of attachments ?? []) {
         const path = attachment.path
-        if (!managed.executionPolicy.fullControl && (!managed.executionPolicy.readFiles || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory)))) {
+        if ((!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates) && ((!managed.executionPolicy.readFiles && !managed.executionPolicy.fullControl) || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory)))) {
           throw new Error('Super Agent policy: attachment is outside the node environment or file reading is disabled')
         }
       }
@@ -6909,7 +7049,7 @@ export class SessionManager implements ISessionManager {
         // for both queue-direct (current turn still running) and
         // queue-after-abort (backend already aborted) — the replay path in
         // processNextQueuedMessage is identical.
-        managed.messageQueue.push({ message, attachments, storedAttachments, options, messageId: userMessage.id, optimisticMessageId: options?.optimisticMessageId })
+        managed.messageQueue.push({ message, attachments, storedAttachments, options, rpcContext: turnContext, messageId: userMessage.id, optimisticMessageId: options?.optimisticMessageId })
         // Only claim interruption when a steer attempt actually aborted the
         // in-flight turn. In 'queue' mode the current turn runs to natural
         // completion, so the replayed turn must NOT inject the "previous response
@@ -6926,6 +7066,9 @@ export class SessionManager implements ISessionManager {
       onAck?.(userMessage.id)
       return
     }
+
+    this.turnClients.bind(sessionId, turnContext)
+    this.setLastMessageClientId(sessionId, turnContext?.callerClientId)
 
     // Add user message with stored attachments for persistence
     // Skip if existingMessageId is provided (message was already created when queued)
@@ -7210,8 +7353,13 @@ export class SessionManager implements ISessionManager {
       // rather than part of the user's message content. The original message is stored
       // in session JSONL (line ~3952); this only affects the SDK's in-process context.
       let effectiveMessage = message
+      if (options?.superAgentContext && managed.executionPolicy) {
+        // Persisted messages and user_message events contain only the upstream input.
+        // Runtime state is transient model context, never a transcript bubble.
+        effectiveMessage += `\n\n<super_agent_context>\n${options.superAgentContext}\n</super_agent_context>`
+      }
       if (managed.wasInterrupted) {
-        effectiveMessage = `${message}\n\n<system-reminder>The previous assistant response was interrupted by the user and may be incomplete. Do not repeat or continue the interrupted response unless asked. Focus on the new message above.</system-reminder>`
+        effectiveMessage += '\n\n<system-reminder>The previous assistant response was interrupted by the user and may be incomplete. Do not repeat or continue the interrupted response unless asked. Focus on the new message above.</system-reminder>'
         managed.wasInterrupted = false
       }
 
@@ -7237,6 +7385,7 @@ export class SessionManager implements ISessionManager {
       }
 
       sendSpan.mark('chat.starting')
+      effectiveMessage += this.turnClients.reminder(this.rpcServer, sessionId)
       const chatIterator = agent.chat(effectiveMessage, modelInputAttachments.attachments)
       sessionLog.info('Got chat iterator, starting iteration...')
 
@@ -7882,14 +8031,25 @@ export class SessionManager implements ISessionManager {
 
     // Process message (use setImmediate to allow current stack to clear)
     setImmediate(() => {
-      this.sendMessage(
-        sessionId,
-        next.message,
-        next.attachments,
-        next.storedAttachments,
-        next.options,
-        next.messageId
-      ).catch(err => {
+      void (async () => {
+        const replayAttachments = next.attachments ?? (next.storedAttachments?.length ? await Promise.all(next.storedAttachments.map(async stored => {
+          const safePath = await validateFilePath(stored.storedPath, [...getWorkspaceAllowedDirs(managed.workspace.id), managed.workingDirectory].filter((path): path is string => !!path))
+          const attachment = readFileAttachment(safePath)
+          if (!attachment) throw new Error(`Attachment is unavailable: ${stored.name}`)
+          return { ...attachment, name: stored.name, storedPath: safePath, markdownPath: stored.markdownPath }
+        })) : undefined)
+        await this.sendMessage(
+          sessionId,
+          next.message,
+          replayAttachments,
+          next.storedAttachments,
+          next.options,
+          next.messageId,
+          undefined,
+          undefined,
+          next.rpcContext
+        )
+      })().catch(err => {
         sessionLog.error('replay failed', {
           sessionId,
           messageId: next.messageId,
@@ -8162,10 +8322,25 @@ export class SessionManager implements ISessionManager {
   async respondToCredential(sessionId: string, requestId: string, response: import('@craft-agent/shared/protocol').CredentialResponse): Promise<boolean> {
     // First, check if this is a new unified auth flow request
     const managed = this.sessions.get(sessionId)
+    // Named credential forms contain no secrets and survive app restarts.
+    if (managed && !managed.pendingAuthRequest && this.localCredentialAccessEnabled) {
+      await this.ensureMessagesLoaded(managed)
+      const message = managed.messages.find(item => item.role === 'auth-request' && item.authStatus === 'pending'
+        && item.authRequestId === requestId && item.authRequestType === 'credential' && item.authSavedCredentialName)
+      if (message?.authSavedCredentialName) {
+        managed.pendingAuthRequest = {
+          type: 'credential', requestId, sessionId, sourceSlug: message.authSavedCredentialName,
+          sourceName: message.authSavedCredentialName, savedCredentialName: message.authSavedCredentialName,
+          savedCredentialKind: message.authSavedCredentialKind,
+          mode: message.authCredentialMode ?? 'basic', sourceUrl: message.authSourceUrl,
+        }
+        managed.pendingAuthRequestId = requestId
+      }
+    }
     if (managed?.pendingAuthRequest && managed.pendingAuthRequest.requestId === requestId) {
       sessionLog.info(`Credential response (unified flow) for ${requestId}: cancelled=${response.cancelled}`)
       await this.handleCredentialInput(sessionId, requestId, response)
-      return true
+      return managed.pendingAuthRequest?.requestId !== requestId
     }
 
     // Fall back to legacy callback flow
@@ -10419,6 +10594,7 @@ export class SessionManager implements ISessionManager {
     this.sessionEventListeners.clear()
     this.remoteBpms.clear()
     this.browserHostByCanvas.clear()
+    this.turnClients.clear()
     this.automationBinder = undefined
     this.messagingToolBridge = null
     this.browserPaneManager = null

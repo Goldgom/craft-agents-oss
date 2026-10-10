@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useEffect, useMemo, useState } from 'react'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import { imageGroups, imageModels, isImageConnection, preferredImageGroup } from './image-connections'
@@ -13,6 +15,7 @@ function supportsMindMap(connection: LlmConnectionWithStatus): boolean {
 }
 
 export function useStudioConnections(options: { image?: boolean; assistant?: boolean } = {}) {
+  const { t } = useTranslation()
   const { workspaceDefaultLlmConnection } = useAppShellContext()
   const [connections, setConnections] = useState<LlmConnectionWithStatus[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -88,7 +91,7 @@ export function useStudioConnections(options: { image?: boolean; assistant?: boo
   async function refresh() {
     if (connection?.oauthProvider === 'tokennest') {
       const result = await window.electronAPI.refreshLlmConnectionModels(connection.slug)
-      if (!result.success) throw new Error(result.error || '刷新 TokenNest 模型和分组失败')
+      if (!result.success) throw new Error(result.error || t('studio.refreshModelsFailed'))
     }
     setConnections(await window.electronAPI.listLlmConnectionsWithStatus())
   }
@@ -108,22 +111,16 @@ export function StudioConnectionPicker({
   channelGroup?: string
   setChannelGroup?: (value: string) => void
 }) {
+  const { t } = useTranslation()
   const selected = connections.find(item => item.slug === connectionSlug)
   const suggested = selected ? image ? imageModels(selected, channelGroup) : mindMapTextModels(selected) : []
   const groups = image && selected ? imageGroups(selected) : []
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <select className="rounded border border-border bg-background px-2 py-1.5 text-sm" value={connectionSlug} onChange={event => { setConnectionSlug(event.target.value); setModel('') }} aria-label="AI connection">
-        <option value="">选择连接</option>
-        {connections.filter(item => image ? isImageConnection(item) : supportsMindMap(item)).map(item =>
-          <option value={item.slug} key={item.slug}>{item.name}{item.isAuthenticated ? '' : '（未登录）'}</option>)}
-      </select>
-      {groups.length > 0 && <select className="min-w-32 rounded border border-border bg-background px-2 py-1.5 text-sm" value={channelGroup} onChange={event => { setChannelGroup?.(event.target.value); setModel('') }} aria-label="图片生成分组">
-        {groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
-      </select>}
-      {suggested.length > 0 ? <select className="min-w-36 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" value={model} onChange={event => setModel(event.target.value)} aria-label={image ? '图像模型' : '文本模型'}>
-        {suggested.map(id => <option key={id} value={id}>{id}</option>)}
-      </select> : <input className="min-w-36 flex-1 rounded border border-border bg-background px-2 py-1.5 text-sm" value={model} onChange={event => setModel(event.target.value)} list={image ? 'studio-image-models' : 'studio-text-models'} placeholder={image ? '先在设置中配置图像模型' : '文本模型'} aria-label="Model" />}
+    <div className="grid min-w-0 grid-cols-1 gap-2">
+      <WorkbenchSelect value={connectionSlug} onValueChange={value => { setConnectionSlug(value); setModel('') }} aria-label={t('studio.chooseConnection')} options={[{ value: "", label: t('studio.chooseConnection') }, ...connections.filter(item => image ? isImageConnection(item) : supportsMindMap(item)).map(item =>
+          ({ value: item.slug, label: <>{item.name}{item.isAuthenticated ? '' : t('studio.notSignedIn')}</> }))]} />
+      {groups.length > 0 && <WorkbenchSelect className="w-full" value={channelGroup} onValueChange={value => { setChannelGroup?.(value); setModel('') }} aria-label={t('studio.imageGroup')} options={[...groups.map(group => ({ value: group.id, label: group.name }))]} />}
+      {suggested.length > 0 ? <WorkbenchSelect className="w-full" placeholder={t(image ? 'studio.imageModel' : 'studio.textModel')} value={model} onValueChange={value => setModel(value)} aria-label={image ? t('studio.imageModel') : t('studio.textModel')} options={[...suggested.map(id => ({ value: id, label: id }))]} /> : <input className="h-9 min-w-0 w-full rounded-lg border border-input bg-background px-3 text-xs shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" value={model} onChange={event => setModel(event.target.value)} list={image ? 'studio-image-models' : 'studio-text-models'} placeholder={image ? t('studio.configureImageModel') : t('studio.textModel')} aria-label={image ? t('studio.imageModel') : t('studio.textModel')} />}
       <datalist id={image ? 'studio-image-models' : 'studio-text-models'}>{suggested.map(id => <option key={id} value={id} />)}</datalist>
     </div>
   )

@@ -180,6 +180,38 @@ describe('RoutedClient', () => {
       expect(local.invoke).toHaveBeenCalledWith(REMOTE_CHANNEL)
     })
 
+    it('refreshes background progress when returning from remote to the still-running local host', async () => {
+      const local = stubClient()
+      const remote = stubClient()
+      const routed = new RoutedClient(local, local)
+      routed.setClientFactory(() => remote)
+      const refresh = mock(() => {})
+      routed.on('__transport:reconnected', refresh)
+
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'remote-stub', remoteServer: {
+        url: 'wss://remote.example.test', token: '', remoteWorkspaceId: 'remote-workspace',
+      } })
+      expect(local.destroy).not.toHaveBeenCalled()
+      expect(refresh).toHaveBeenCalledTimes(1)
+
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'local-workspace', remoteServer: null })
+      expect(local.destroy).not.toHaveBeenCalled()
+      expect(remote.destroy).toHaveBeenCalledTimes(1)
+      expect(refresh).toHaveBeenCalledTimes(2)
+      expect(refresh).toHaveBeenLastCalledWith(true)
+      expect(local.emitReconnected).toHaveBeenCalledWith(true)
+    })
+
+    it('refreshes sessions on a local workspace switch without replacing the local connection', async () => {
+      const local = stubClient()
+      const routed = new RoutedClient(local, local)
+      const refresh = mock(() => {})
+      routed.on('__transport:reconnected', refresh)
+      await routed.applyNativeWorkspaceSwitch({ workspaceId: 'another-local-workspace', remoteServer: null })
+      expect(local.destroy).not.toHaveBeenCalled()
+      expect(refresh).toHaveBeenCalledWith(true)
+    })
+
     it('re-subscribes REMOTE_ELIGIBLE listeners on swap (make-before-break)', async () => {
       const local = stubClient({
         invoke: mock(async () => ({

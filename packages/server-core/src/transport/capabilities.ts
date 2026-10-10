@@ -34,6 +34,9 @@ export const CLIENT_CANVAS_INVOKE = 'client:canvas:invoke'
  * Capability: run a shell command on the CLIENT machine on behalf of the
  * server (powers the `localbash` session tool in remote mode).
  */
+export const CLIENT_REMOTE_ACCESS = 'client:remoteAccess';
+export const CLIENT_REQUEST_FILES = 'client:requestFiles';
+
 export const CLIENT_RUN_SHELL = 'client:runShell'
 
 /** Capability: transfer a file between the client and its configured remote server over SFTP. */
@@ -114,6 +117,7 @@ export const LOCAL_CLIENT_CAPABILITIES: readonly string[] = [
   CLIENT_BROWSER_INVOKE,
   CLIENT_CANVAS_INVOKE,
   CLIENT_RUN_SHELL,
+  CLIENT_REQUEST_FILES,
   CLIENT_SFTP_TRANSFER,
 ]
 

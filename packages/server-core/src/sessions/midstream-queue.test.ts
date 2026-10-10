@@ -110,6 +110,7 @@ describe('mid-stream queue runtime invariants', () => {
       message: 'follow up',
       messageId: 'queued-user',
       optimisticMessageId: 'optimistic-user',
+      rpcContext: { callerClientId: 'remote-client', remoteAccess: true },
     })
 
     const events: any[] = []
@@ -132,5 +133,6 @@ describe('mid-stream queue runtime invariants', () => {
     expect(processingEvent?.message.timestamp).toBe(replayed?.timestamp)
     expect(processingEvent?.optimisticMessageId).toBe('optimistic-user')
     expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect((sendMessage.mock.calls[0] as unknown as unknown[])[8]).toEqual({ callerClientId: 'remote-client', remoteAccess: true })
   })
 })

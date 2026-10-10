@@ -18,7 +18,8 @@ describe('Super Agent control outcomes', () => {
       expect(result.state.tasks).toHaveLength(1)
       expect(result.state.tasks[0]!.title).toBe('Actual assignment')
       expect(result.state.messages.some(message => message.kind === 'error')).toBe(false)
-      expect(result.state.messages.find(message => message.toNodeId === 'user')!.body.length).toBeLessThanOrEqual(64_000)
+      expect(result.state.messages.filter(message => message.toNodeId === 'user')).toEqual([])
+      expect(result.state.messages.find(message => !!message.actionReceipt)!.body.length).toBeLessThanOrEqual(64_000)
       expect((await loadSuperAgentDocument(join(root, 'alpha'))).state.tasks).toHaveLength(1)
     }
   })
@@ -104,7 +105,7 @@ describe('Super Agent control outcomes', () => {
     await service.save('alpha', config)
     await service.command('alpha', { type: 'chat', text: 'Publish the verified result' })
     const active = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
-    host.complete(active.state.nodes[0]!.sessionId!, `Verified result.\n${block({ board: [{ id: '  verified  ', title: 'Evidence', content: 'Checked artifact', expectedRevision: 0 }] })}`)
+    host.complete(active.state.nodes[0]!.sessionId!, `Internal review.\n${block({ userReply: 'The worker verified the result.', board: [{ id: '  verified  ', title: 'Evidence', content: 'Checked artifact', expectedRevision: 0 }] })}`)
     const result = await until(() => service.get('alpha'), value => value.state.messages.some(message => !!message.actionReceipt))
     const message = result.state.messages.find(message => !!message.actionReceipt)!
     expect(result.state.board[0]!.id).toBe('verified')
@@ -125,6 +126,6 @@ describe('Super Agent control outcomes', () => {
     const packet = host.sends.at(-1)!.message
     expect(packet).toContain('Action receipt (actual host outcome)')
     expect(packet.indexOf('Action receipt')).toBeLessThan(packet.indexOf('x'.repeat(100)))
-    expect(packet).toContain('verify the goal before marking it completed')
+    expect(packet).toContain('use worker-provided verification evidence before marking it completed')
   })
 })

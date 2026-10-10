@@ -464,14 +464,16 @@ async function main(): Promise<void> {
   const mainCjsPath = join(DIST_DIR, "main.cjs");
   const preloadCjsPath = join(DIST_DIR, "bootstrap-preload.cjs");
   const toolbarPreloadCjsPath = join(DIST_DIR, "browser-toolbar-preload.cjs");
+  const birdPreloadCjsPath = join(DIST_DIR, "bird-companion-preload.cjs");
 
   // Remove old build files to ensure fresh build
   if (existsSync(mainCjsPath)) rmSync(mainCjsPath);
   if (existsSync(preloadCjsPath)) rmSync(preloadCjsPath);
   if (existsSync(toolbarPreloadCjsPath)) rmSync(toolbarPreloadCjsPath);
+  if (existsSync(birdPreloadCjsPath)) rmSync(birdPreloadCjsPath);
 
   // Build main and preload entries in parallel
-  const [mainResult, preloadResult, toolbarPreloadResult] = await Promise.all([
+  const [mainResult, preloadResult, toolbarPreloadResult, birdPreloadResult] = await Promise.all([
     runEsbuild(
       "apps/electron/src/main/index.ts",
       "apps/electron/dist/main.cjs",
@@ -486,6 +488,7 @@ async function main(): Promise<void> {
       "apps/electron/src/preload/browser-toolbar.ts",
       "apps/electron/dist/browser-toolbar-preload.cjs"
     ),
+    runEsbuild("apps/electron/src/preload/bird-companion.ts", "apps/electron/dist/bird-companion-preload.cjs"),
   ]);
 
   if (!mainResult.success) {
@@ -502,26 +505,32 @@ async function main(): Promise<void> {
     console.error("❌ Browser toolbar preload build failed:", toolbarPreloadResult.error);
     process.exit(1);
   }
+  if (!birdPreloadResult.success) {
+    console.error("❌ Bird companion preload build failed:", birdPreloadResult.error);
+    process.exit(1);
+  }
 
   // Wait for files to stabilize (filesystem flush)
   console.log("⏳ Waiting for build files to stabilize...");
-  const [mainStable, preloadStable, toolbarPreloadStable] = await Promise.all([
+  const [mainStable, preloadStable, toolbarPreloadStable, birdPreloadStable] = await Promise.all([
     waitForFileStable(mainCjsPath),
     waitForFileStable(preloadCjsPath),
     waitForFileStable(toolbarPreloadCjsPath),
+    waitForFileStable(birdPreloadCjsPath),
   ]);
 
-  if (!mainStable || !preloadStable || !toolbarPreloadStable) {
+  if (!mainStable || !preloadStable || !toolbarPreloadStable || !birdPreloadStable) {
     console.error("❌ Build files did not stabilize");
     process.exit(1);
   }
 
   // Verify the built files are valid JavaScript
   console.log("🔍 Verifying build output...");
-  const [mainValid, preloadValid, toolbarPreloadValid] = await Promise.all([
+  const [mainValid, preloadValid, toolbarPreloadValid, birdPreloadValid] = await Promise.all([
     verifyJsFile(mainCjsPath),
     verifyJsFile(preloadCjsPath),
     verifyJsFile(toolbarPreloadCjsPath),
+    verifyJsFile(birdPreloadCjsPath),
   ]);
 
   if (!mainValid.valid) {
@@ -536,6 +545,10 @@ async function main(): Promise<void> {
 
   if (!toolbarPreloadValid.valid) {
     console.error("❌ browser-toolbar-preload.cjs is invalid:", toolbarPreloadValid.error);
+    process.exit(1);
+  }
+  if (!birdPreloadValid.valid) {
+    console.error("❌ bird-companion-preload.cjs is invalid:", birdPreloadValid.error);
     process.exit(1);
   }
 
@@ -603,6 +616,13 @@ async function main(): Promise<void> {
   await toolbarPreloadContext.watch();
   esbuildContexts.push(toolbarPreloadContext);
   console.log("👀 Watching browser toolbar preload...");
+  const birdPreloadContext = await esbuild.context({
+    entryPoints: [join(ROOT_DIR, "apps/electron/src/preload/bird-companion.ts")],
+    bundle: true, platform: "node", format: "cjs", outfile: birdPreloadCjsPath,
+    external: ["electron"], logLevel: "info",
+  });
+  await birdPreloadContext.watch();
+  esbuildContexts.push(birdPreloadContext);
 
   // 5. Start Electron (build already verified)
   console.log("🚀 Starting Electron...\n");

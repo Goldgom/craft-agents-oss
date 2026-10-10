@@ -87,4 +87,5 @@ export type {
   PageThumbnailInfo,
   PageConfig,
 } from './page.ts';
+export * from './client-files.ts';
 

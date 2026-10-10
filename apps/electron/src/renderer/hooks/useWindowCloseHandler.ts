@@ -17,7 +17,7 @@ import type { WindowCloseRequest } from '../../shared/types'
  *
  * The main process starts a fallback timeout on each close request.
  * cancelCloseWindow() clears it (window stays open).
- * confirmCloseWindow() clears it and destroys the window.
+ * confirmCloseWindow() clears it and completes the close (main windows hide to tray).
  *
  * This hook should be called once at the app root level.
  */

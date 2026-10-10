@@ -27,6 +27,42 @@ const testTool = {
 };
 
 describe('PiAgent tool registration startup barrier', () => {
+  it('ends stalled startup, cleans up the child, and allows a fresh retry', async () => {
+    const agent = new PiAgent(createConfig());
+    const harness = agent as any;
+    let stopped = 0;
+    let starts = 0;
+    harness.killSubprocess = () => {
+      stopped++;
+      harness.subprocess = null;
+      harness.subprocessReady = null;
+    };
+    harness.spawnSubprocess = async () => {
+      starts++;
+      harness.subprocess = {};
+      harness.subprocessReady = starts === 1 ? new Promise(() => {}) : Promise.resolve();
+      await harness.waitForSubprocessReady(10);
+    };
+    try {
+      await expect(harness.ensureSubprocess()).rejects.toThrow('Pi runtime did not start');
+      expect(stopped).toBe(1);
+      expect(harness.subprocessStarting).toBeNull();
+      await harness.ensureSubprocess();
+      expect(starts).toBe(2);
+    } finally {
+      harness.subprocess = null;
+      agent.destroy();
+    }
+  });
+
+  it('propagates a startup failure without replacing it with a timeout', async () => {
+    const agent = new PiAgent(createConfig());
+    try {
+      (agent as any).subprocessReady = Promise.reject(new Error('native runtime exited'));
+      await expect((agent as any).waitForSubprocessReady(1000)).rejects.toThrow('native runtime exited');
+    } finally { agent.destroy(); }
+  });
+
   it('does not complete registration until the matching subprocess ACK arrives', async () => {
     const agent = new PiAgent(createConfig());
     const sent: Array<Record<string, unknown>> = [];

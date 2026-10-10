@@ -41,6 +41,8 @@ mock.module('../apps/electron/src/renderer/components/ui/scroll-area', () => ({ 
 const { createRoot } = await import('react-dom/client')
 const { act } = React
 const { NativeCredentialManager } = await import('../apps/electron/src/renderer/components/settings/NativeCredentialManager')
+mock.module('@craft-agent/ui', () => ({ Spinner: () => React.createElement('span') }))
+const { AuthRequestCard } = await import('../apps/electron/src/renderer/components/chat/AuthRequestCard')
 let root: ReturnType<typeof createRoot>
 let container: HTMLDivElement
 let api: any
@@ -63,6 +65,24 @@ async function change(target: HTMLInputElement | HTMLSelectElement | HTMLTextAre
 const field = (key: string) => element<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[aria-label="${prefix}${key}"]`)
 const body = () => document.body.textContent ?? ''
 const dialog = () => element('[role="dialog"]')
+
+test('AI credential form keeps exact passwords, shows a safe retry error, and clears the secret after success', async () => {
+  const response = mock(async () => { throw new Error(secret) })
+  const message = { id: 'auth', role: 'auth-request', timestamp: 1, content: '', authRequestId: 'request', authRequestType: 'credential', authStatus: 'pending', authSourceName: 'Work', authSourceSlug: 'Work', authCredentialMode: 'basic', authSavedCredentialName: 'Work', authSavedCredentialKind: 'password', authHint: 'credentialSave' } as any
+  await act(async () => root.render(React.createElement(AuthRequestCard, { message, sessionId: 'session', onRespondToCredential: response })))
+  await flush()
+  await change(element<HTMLInputElement>('#auth-username-request'), 'me@example.com')
+  await change(element<HTMLInputElement>('#auth-password-request'), `  ${secret}  `)
+  await click(button('Save'))
+  expect(body()).toContain(`${prefix}saveFailedRetry`)
+  expect(body()).not.toContain(secret)
+  expect(button('Save').disabled).toBe(false)
+  expect(response.mock.calls).toHaveLength(1)
+  response.mockImplementation(async () => {})
+  await click(button('Save'))
+  expect((element<HTMLInputElement>('#auth-password-request')).value).toBe('')
+  expect((response.mock.calls as any)[1][2].password).toBe(`  ${secret}  `)
+})
 
 beforeEach(async () => {
   workspace = 'w1'
@@ -258,10 +278,37 @@ describe('native credential Settings lifecycle', () => {
 
   test('adding a credential requires a new secret and sends only the chosen domain fields', async () => {
     await render(); await click(button(`${prefix}add`))
+    await change(field('credentialType'), 'llm_api_key')
     await change(field('identifier.connectionSlug'), 'new-provider'); await click(button(`${prefix}review`))
     expect(body()).toContain(`${prefix}invalidImport`); expect(api.applyNativeCredentialChanges).not.toHaveBeenCalled()
     await change(field('secretValue'), secret); await click(button(`${prefix}review`)); await click(button(`${prefix}apply`))
     expect(api.applyNativeCredentialChanges.mock.calls[0][0]).toEqual({ changes: [{ op: 'upsert', id: { type: 'llm_api_key', connectionSlug: 'new-provider' }, credential: { value: secret } }] })
+  })
+
+  test('named account is the default editor and the reviewed password stays hidden', async () => {
+    await render(); await click(button(`${prefix}add`))
+    expect((field('credentialType') as HTMLSelectElement).value).toBe('saved_credential')
+    await change(field('identifier.name'), '工作邮箱')
+    await change(field('username'), 'me@example.com')
+    await change(field('website'), 'https://example.com/login')
+    await change(field('secretValue'), `  ${secret}  `)
+    await click(button(`${prefix}review`))
+    expect(body()).not.toContain(secret)
+    await click(button(`${prefix}apply`))
+    expect(api.applyNativeCredentialChanges.mock.calls[0][0]).toEqual({ changes: [{ op: 'upsert', id: { type: 'saved_credential', workspaceId: workspace, name: '工作邮箱' }, credential: { value: `  ${secret}  `, credentialKind: 'password', username: 'me@example.com', credentialUrl: 'https://example.com/login' } }] })
+  })
+
+  test('named metadata is searchable and editable while the existing password remains unread', async () => {
+    api.listNativeCredentials = mock(async () => ok({ ...response(), entries: [{ id: { type: 'saved_credential', workspaceId: workspace, name: 'Work' }, username: 'me@example.com', credentialKind: 'password', credentialUrl: 'https://example.com', hasValue: true, presentFields: ['value', 'username'] }] }))
+    await render()
+    await change(field('search'), 'me@example.com')
+    expect(body()).toContain('Work')
+    await click(button(`${prefix}update`))
+    expect((field('username') as HTMLInputElement).value).toBe('me@example.com')
+    expect((field('secretValue') as HTMLInputElement).value).toBe('')
+    await change(field('username'), 'new@example.com')
+    await click(button(`${prefix}review`)); await click(button(`${prefix}apply`))
+    expect(api.applyNativeCredentialChanges.mock.calls[0][0].changes[0].credential).toEqual({ credentialKind: 'password', username: 'new@example.com', credentialUrl: 'https://example.com' })
   })
 
   test('an unavailable already-native vault stays fail-closed without a legacy or reauth fallback', async () => {

@@ -135,7 +135,7 @@ final class AdbClient {
                 break;
             }
         }
-        String outputText = captured.toString(StandardCharsets.UTF_8);
+        String outputText = new String(captured.toByteArray(), StandardCharsets.UTF_8);
         int exitCode = 0;
         int markerIndex = outputText.lastIndexOf("\n" + marker);
         if (markerIndex >= 0) {

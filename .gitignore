@@ -88,3 +88,13 @@ credentials.enc
 /apps/win7-client/release/
 /apps/win7-local/release/
 /win7_dependencies/
+
+# Local verification screenshots and build logs
+/artifacts/
+/.tmp/
+/apps/electron/.tmp/
+
+# Cloud build runtime cache and local deployment credentials/state
+/.bun-cache/
+/deploy/cloud/cloud.env
+/data/cloud.sqlite*

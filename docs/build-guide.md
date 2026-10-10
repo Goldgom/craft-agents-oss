@@ -1,6 +1,6 @@
 # TokenBird 编译指南（Build Guide）
 
-本文档介绍如何编译 TokenBird 的各端产物：**Windows / macOS / Linux 客户端** 与 **服务器端**。
+本文档介绍如何编译 TokenBird 的各端产物：**Windows / macOS / Linux 客户端**、**服务器端**与**云服务器端**。
 除特别注明外，命令均从仓库根目录执行。
 
 ## 全量编译与统一产物目录
@@ -21,7 +21,8 @@ bun run build:all win --force-download
 跨平台原生包缓存在 `.build/native-packages/`，构建产物目录清理时不会删除该缓存。
 WSL 构建会在 WSL 的 `~/.cache/tokenbird-wsl-build/` 保留 Bun、uv 和原生包缓存，供下次临时工作区复用。
 
-目标名称为 `win`、`linux`、`android`、`linux-headless`、`win-headless`、`mac-headless`。
+目标名称为 `win`、`linux`、`android`、`linux-headless`、`win-headless`、`mac-headless`、`cloud-server`。
+云服务器端单独使用 `bun run cloud-server:build`，输出到 `dist/cloud-server/`；部署步骤和 TokenNest 接口参见 [云服务器端](cloud-server.md)。
 桌面包必须在对应的构建环境中执行（Linux 桌面包在 Linux/WSL，Windows 包在 Windows）；
 无头服务支持交叉下载目标运行时。当前主机无法构建的目标会自动跳过；已开始的构建若发生实际错误则立即停止。
 
@@ -411,6 +412,9 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 
 ## 六、产物与版本速查
 
+GitHub Actions 构建并自动发布 Windows、macOS、Linux 安装包到 GitCode 的配置步骤见
+[GitCode 自动二进制发布](gitcode-release.md)。
+
 | 目标             | 命令                                                                               | 产物                                                               |
 | ---------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Windows 客户端   | `cd apps/electron && bun run dist:win`                                           | `apps/electron/release/TokenBird-x64.exe`                          |
@@ -420,7 +424,7 @@ bun run scripts/build-server.ts --platform=linux --arch=x64 --compress --skip-do
 | 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `tokenbird-server-<ver>-<platform>-<arch>.tar.gz` |
 | 服务器（Docker） | `docker buildx build -f Dockerfile.server -t craft-agent-server .`               | 容器镜像                                                           |
 
-版本号取自 `apps/electron/package.json`（当前 `26.10.4`），产物命名统一为
+版本号取自 `apps/electron/package.json`（当前 `26.10.9`），产物命名统一为
 `TokenBird-<arch>.<ext>` / `tokenbird-server-<version>-<platform>-<arch>.tar.gz`。
 
 ---

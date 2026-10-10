@@ -7,7 +7,7 @@
  *   the active workspace (local or remote). Workspace switches swap the
  *   workspace client transparently.
  *
- * Thin-client mode (CRAFT_SERVER_URL):
+ * Remote frontend mode (reported by main):
  *   Creates a single WsRpcClient connected to the remote server.
  *   All channels go to the remote server.
  *
@@ -39,6 +39,8 @@ import {
   CLIENT_BROWSER_INVOKE,
   CLIENT_CANVAS_INVOKE,
   CLIENT_RUN_SHELL,
+  CLIENT_REMOTE_ACCESS,
+  CLIENT_REQUEST_FILES,
   CLIENT_SFTP_TRANSFER,
   LOCAL_CLIENT_CAPABILITIES,
 } from '@craft-agent/server-core/transport'
@@ -47,6 +49,8 @@ import type { RpcClient } from '@craft-agent/server-core/transport'
 import type { RemoteServerConfig } from '@craft-agent/core/types'
 import type { ElectronAPI } from '../shared/types'
 import { TOKENNEST_RECHARGE_IPC } from '../shared/tokennest-recharge'
+import { canvasExportInfo } from '../shared/canvas-export'
+import { BIRD_COMPANION_IPC } from '../shared/bird-companion'
 import { NATIVE_CREDENTIAL_IPC } from '@craft-agent/shared/credentials/native-types'
 
 // ---------------------------------------------------------------------------
@@ -65,10 +69,12 @@ interface TransportClient extends RpcClient {
 // ---------------------------------------------------------------------------
 
 // ── Picker mode (startup server location = 无服务) ───────────────────────────
-// Checked FIRST: in picker mode the local service was NOT bootstrapped, so the
-// main process has no __get-ws-port/__get-web-contents-id listeners. Expose
+// Checked FIRST: a picker-only launch has no local service or transport IPC. Expose
 // only the minimal API the server picker page needs; no WS clients are created.
-const startupContext: { mode?: 'picker' | 'normal' } = ipcRenderer.sendSync('__get-startup-context')
+const startupContext: {
+  mode?: 'picker' | 'normal'
+  remote?: { url: string; profileId?: string; token?: string; workspaceId?: string }
+} = ipcRenderer.sendSync('__get-startup-context')
 const isPickerMode = startupContext?.mode === 'picker'
 
 if (isPickerMode) {
@@ -116,7 +122,9 @@ if (isPickerMode) {
 } else {
 
 const webContentsId: number = ipcRenderer.sendSync('__get-web-contents-id')
-const isClientOnly = !!process.env.CRAFT_SERVER_URL
+// Main owns the current connection. A renderer reload may retain the process
+// environment from before a server switch, so never infer routing from it.
+const isClientOnly = !!startupContext.remote
 
 let client: TransportClient
 let routedClient: RoutedClient | null = null
@@ -127,13 +135,13 @@ if (isClientOnly) {
   // Single WsRpcClient connected directly to the remote server.
   // No local server, no routing — all channels go to remote.
 
-  if (process.env.CRAFT_SERVER_PROFILE_ID) {
+  if (startupContext.remote?.profileId) {
     nativeThinClient = new NativeRemoteClient(ipcRenderer)
     nativeThinClient.connect()
     client = nativeThinClient
   } else {
-  const wsUrl = process.env.CRAFT_SERVER_URL!
-  const wsToken = process.env.CRAFT_SERVER_TOKEN ?? ''
+  const wsUrl = startupContext.remote!.url
+  const wsToken = startupContext.remote!.token ?? ''
 
   // Block unencrypted ws:// to non-localhost servers — tokens would be sent in cleartext
   const parsed = new URL(wsUrl)
@@ -147,7 +155,7 @@ if (isClientOnly) {
   }
 
   // Workspace ID is optional — if missing, renderer shows a workspace picker
-  const workspaceId = process.env.CRAFT_WORKSPACE_ID || ipcRenderer.sendSync('__get-workspace-id') || undefined
+  const workspaceId = startupContext.remote?.workspaceId || ipcRenderer.sendSync('__get-workspace-id') || undefined
 
   const wsClient = new WsRpcClient(wsUrl, {
     token: wsToken,
@@ -155,7 +163,7 @@ if (isClientOnly) {
     webContentsId,
     autoReconnect: true,
     mode: 'remote',
-    clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES],
+    clientCapabilities: [...LOCAL_CLIENT_CAPABILITIES, CLIENT_REMOTE_ACCESS],
   })
   wsClient.connect()
   client = wsClient
@@ -260,13 +268,13 @@ client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unk
     input.projectText = bytes.toString('utf8')
   }
   const result = await canvasRequestHandler(input) as Record<string, unknown>
-  if ((input.action === 'export_png' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
+  if ((input.action === 'export_image' || input.action === 'export_png' || input.action === 'export_selection_mask' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
     if (!isAbsolute(input.outputPath)) throw new Error('outputPath must be absolute')
     const extension = extname(input.outputPath).toLowerCase()
-    if (extension !== (input.action === 'save_project' ? '.tbcanvas' : '.png')) throw new Error('Output path has the wrong file extension')
+    if (!canvasExportInfo(input).extensions.includes(extension)) throw new Error('Output path has the wrong file extension')
     const bytes = Buffer.from(result.base64, 'base64')
     await writeFile(input.outputPath, bytes, { flag: 'wx' })
-    return { saved: true, outputPath: input.outputPath, bytes: bytes.length }
+    return { saved: true, outputPath: input.outputPath, bytes: bytes.length, mime: canvasExportInfo(input).mime, width: result.width, height: result.height }
   }
   return result
 })
@@ -275,6 +283,10 @@ client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unk
 // behalf of the agent (remote-mode local execution bridge).
 client.handleCapability(CLIENT_RUN_SHELL, async (req: { command: string; cwd?: string; timeoutMs?: number }) => {
   return await ipcRenderer.invoke('__shell:run', req)
+})
+
+client.handleCapability(CLIENT_REQUEST_FILES, async (req: import('@craft-agent/core/types').ClientFileRequest) => {
+  return await ipcRenderer.invoke('__client:request-files', req)
 })
 
 client.handleCapability(CLIENT_SFTP_TRANSFER, async (req: { direction: 'upload' | 'download'; localPath: string; remotePath: string }) => {
@@ -635,6 +647,9 @@ const invokeCurrentCollaboration = (nativeChannel: string, rpcChannel: string, .
 
 // i18n: sync language changes to main process (for native menus/dialogs)
 ;(api as ElectronAPI).changeLanguage = (lang: string) => ipcRenderer.invoke('i18n:changeLanguage', lang)
+;(api as ElectronAPI).getBirdCompanionPreferences = () => ipcRenderer.invoke(BIRD_COMPANION_IPC.getPreferences)
+;(api as ElectronAPI).setBirdCompanionPreferences = updates => ipcRenderer.invoke(BIRD_COMPANION_IPC.setPreferences, updates)
+;(api as ElectronAPI).observeBirdCompanionProgress = event => ipcRenderer.invoke(BIRD_COMPANION_IPC.observe, event)
 
 // webUtils.getPathForFile: returns the absolute OS path of a File object obtained
 // from <input type="file"> or OS drag-drop. Returns null for Files fabricated from

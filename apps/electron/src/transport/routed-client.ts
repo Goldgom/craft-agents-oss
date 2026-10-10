@@ -228,7 +228,7 @@ export class RoutedClient implements RpcClient {
       const newClient = this.clientFactory(result.remoteServer)
       newClient.connect()
       this.swapWorkspaceClient(newClient)
-    } else if (!result.remoteServer && this.workspaceClient !== this.localClient) {
+    } else if (!result.remoteServer) {
       // Switching to local workspace — clear mapping and revert to local client
       this.clearWorkspaceMapping()
       this.swapWorkspaceClient(this.localClient)
@@ -246,11 +246,13 @@ export class RoutedClient implements RpcClient {
 
     // Re-subscribe REMOTE_ELIGIBLE listeners (make-before-break:
     // subscribe on new first, then unsubscribe from old)
-    for (const [channel, entries] of this.remoteListeners) {
-      for (const entry of entries) {
-        const oldUnsub = entry.unsub
-        entry.unsub = newClient.on(channel, entry.routedCallback)
-        oldUnsub()
+    if (old !== newClient) {
+      for (const [channel, entries] of this.remoteListeners) {
+        for (const entry of entries) {
+          const oldUnsub = entry.unsub
+          entry.unsub = newClient.on(channel, entry.routedCallback)
+          oldUnsub()
+        }
       }
     }
 
@@ -262,26 +264,23 @@ export class RoutedClient implements RpcClient {
       old.destroy()
     }
 
-    // Emit synthetic stale reconnect once the new client connects.
-    // Workspace switches create a brand-new client (not a reconnect), so
-    // __transport:reconnected never fires naturally. This triggers the App's
-    // stale recovery logic to refresh sessions that changed while no client
-    // was watching this workspace.
-    if (newClient !== this.localClient) {
-      // onConnectionStateChanged immediately emits the current state. Record
-      // that synchronous path so the one-shot listener is still removed after
-      // its unsubscribe function becomes available.
-      let connectedSynchronously = false
-      let unsub: (() => void) | undefined
-      unsub = newClient.onConnectionStateChanged((state) => {
-        if (state.status === 'connected') {
-          if (unsub) unsub()
-          else connectedSynchronously = true
-          newClient.emitReconnected(true)
-        }
-      })
-      if (connectedSynchronously) unsub()
-    }
+    // Emit synthetic stale reconnect once the active client connects.
+    // A switch does not naturally emit __transport:reconnected, even when
+    // reusing the local client. Refresh progress missed while another
+    // workspace/server was visible.
+    // onConnectionStateChanged immediately emits the current state. Record
+    // that synchronous path so the one-shot listener is still removed after
+    // its unsubscribe function becomes available.
+    let connectedSynchronously = false
+    let unsub: (() => void) | undefined
+    unsub = newClient.onConnectionStateChanged((state) => {
+      if (state.status === 'connected') {
+        if (unsub) unsub()
+        else connectedSynchronously = true
+        newClient.emitReconnected(true)
+      }
+    })
+    if (connectedSynchronously) unsub()
   }
 
   private bindConnectionState(): void {

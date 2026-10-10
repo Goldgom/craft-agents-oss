@@ -78,7 +78,8 @@ import {
   type PreToolUseCheckResult,
   BUILT_IN_TOOLS,
 } from './core/pre-tool-use.ts';
-import { authorizeSessionPolicyTool, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
+import { authorizeSessionPolicyTool, getSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
+import { NATIVE_WEB_TOOL_NAMES } from './core/browser-tool-policy.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -1193,12 +1194,14 @@ export class ClaudeAgent extends BaseAgent {
       // Get centralized mini agent configuration (from BaseAgent)
       // This ensures Claude and Codex agents use the same detection and constants
       const miniConfig = this.getMiniAgentConfig();
+      const interactionOnly = ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(sessionId)?.role ?? '');
 
       // Block SDK tools that require UI we don't have:
       // - EnterPlanMode/ExitPlanMode: We use safe mode instead (user-controlled via UI)
       // - AskUserQuestion: Requires interactive UI to show question options to user
       // Note: Mini agents use a minimal tool list directly, so no additional blocking needed
       const disallowedTools: string[] = ['EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'Skill'];
+      if (hasSessionExecutionPolicy(sessionId)) disallowedTools.push(...NATIVE_WEB_TOOL_NAMES);
 
       // Build MCP servers config
       // Mini agents: only session tools (config_validate) to minimize token usage
@@ -1223,7 +1226,9 @@ export class ClaudeAgent extends BaseAgent {
 
       // Mini agents: filter to minimal set using centralized keys
       // Regular agents: use full set including docs and user sources
-      const mcpServers: Options['mcpServers'] = miniConfig.enabled
+      const mcpServers: Options['mcpServers'] = interactionOnly
+        ? { session: fullMcpServers.session! }
+        : miniConfig.enabled
         ? this.filterMcpServersForMiniAgent(fullMcpServers, miniConfig.mcpServerKeys)
         : fullMcpServers;
       
@@ -1403,7 +1408,7 @@ export class ClaudeAgent extends BaseAgent {
         // - Mini agents: minimal set for quick config edits (reduces token count ~70%)
         // - Regular agents: full Claude Code toolset
         tools: (() => {
-          const toolsValue = miniConfig.enabled
+          const toolsValue = interactionOnly ? [] : miniConfig.enabled
             ? [...miniConfig.tools]  // Use centralized tool list
             : { type: 'preset' as const, preset: 'claude_code' as const };
           debug('[ClaudeAgent] 🔧 Tools configuration:', JSON.stringify(toolsValue));
@@ -1437,7 +1442,7 @@ export class ClaudeAgent extends BaseAgent {
               const input = _hookInput as Required<Pick<typeof _hookInput, 'tool_name' | 'tool_use_id'>> & typeof _hookInput;
 
               // The image-resize fast path below reads host files before the usual pipeline.
-              const nodePolicy = await authorizeSessionPolicyTool(sessionId, input.tool_name, input.tool_input as Record<string, unknown>, this.config.session?.workingDirectory);
+              const nodePolicy = await authorizeSessionPolicyTool(sessionId, input.tool_name, input.tool_input as Record<string, unknown>, this.config.session?.workingDirectory, undefined, input.tool_use_id);
               if (!nodePolicy.allowed) return blockWithReason(nodePolicy.reason);
 
               // Track Read tool calls for prerequisite checking
@@ -1503,6 +1508,7 @@ export class ClaudeAgent extends BaseAgent {
 
               // Run centralized PreToolUse checks
               const checkResult = await runPreToolUseChecksWithPermissions({
+                invocationId: input.tool_use_id,
                 toolName: input.tool_name,
                 input: toolInput,
                 sessionId,
@@ -1868,7 +1874,7 @@ This is a branched conversation. All prior messages in this conversation are par
       this.eventAdapter.startTurn();
 
       // Process SDK messages and convert to AgentEvents
-      const summarizeCallback = this.getSummarizeCallback();
+      const summarizeCallback = hasSessionExecutionPolicy(sessionId) ? undefined : this.getSummarizeCallback();
       let receivedComplete = false;
       // Track whether we received any assistant content (for empty response detection)
       // When SDK returns empty response (e.g., failed resume), we need to detect and recover
@@ -3338,6 +3344,9 @@ This is a branched conversation. All prior messages in this conversation are par
       // Reasoning-model outputs (Opus extended thinking) can span multiple SDK-counted
       // turns even with no tools exposed. Tool surface here is empty, so no tool-use loop risk.
       maxTurns: 10,
+      tools: [],
+      mcpServers: {},
+      settingSources: [],
       systemPrompt: request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.',
       ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),

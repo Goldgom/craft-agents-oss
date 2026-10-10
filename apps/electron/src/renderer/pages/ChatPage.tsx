@@ -6,6 +6,7 @@
  */
 
 import * as React from 'react'
+import { CloudShareDialog } from '@/components/app-shell/CloudShareDialog'
 import { useTranslation } from 'react-i18next'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { AlertCircle, Download, FileImage, FileText, FileType2, Info, Pencil } from 'lucide-react'
@@ -281,6 +282,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   // `[]` is the safe default while hydration is in flight; FreeFormInput seeds its
   // local state from this prop and swaps in the restored list when ready.
   const [attachmentsValue, setAttachmentsValue] = React.useState<import('../../shared/types').FileAttachment[]>([])
+  const [cloudShareOpen, setCloudShareOpen] = React.useState(false)
+  const handleCloudShare = React.useCallback(() => setCloudShareOpen(true), [])
 
   React.useEffect(() => {
     let cancelled = false
@@ -677,6 +680,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       onSessionStatusChange={handleSessionStatusChange}
       onOpenInNewWindow={handleOpenInNewWindow}
       onDelete={handleDelete}
+      onCloudShare={handleCloudShare}
     />
   ) : null, [
     sessionMeta,
@@ -693,6 +697,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     handleSessionStatusChange,
     handleOpenInNewWindow,
     handleDelete,
+    handleCloudShare,
   ])
 
   const compactTitleMenu = React.useMemo(() => (sessionMeta && isCompactMode) ? (
@@ -712,6 +717,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       onSessionStatusChange={handleSessionStatusChange}
       onOpenInNewWindow={handleOpenInNewWindow}
       onDelete={handleDelete}
+      onCloudShare={handleCloudShare}
     />
   ) : null, [
     sessionMeta,
@@ -730,6 +736,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     handleSessionStatusChange,
     handleOpenInNewWindow,
     handleDelete,
+    handleCloudShare,
   ])
 
   // Handle missing session - loading or deleted
@@ -887,6 +894,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         onSubmit={handleRenameSubmit}
         placeholder={t('chat.enterSessionName')}
       />
+      <CloudShareDialog key={sessionId} sessionId={sessionId} open={cloudShareOpen} onOpenChange={setCloudShareOpen} />
     </>
   )
 })

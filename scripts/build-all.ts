@@ -14,7 +14,7 @@ const dist = join(root, 'dist');
 const runId = `${Date.now()}-${process.pid}`;
 const stagingRelative = `.build-all/runs/${runId}`;
 const staging = join(root, stagingRelative);
-const allTargets = ['win', 'linux', 'android', 'linux-headless', 'win-headless', 'mac-headless'] as const;
+const allTargets = ['win', 'linux', 'android', 'linux-headless', 'win-headless', 'mac-headless', 'cloud-server'] as const;
 type Target = typeof allTargets[number];
 
 const args = new Set(process.argv.slice(2));
@@ -150,8 +150,9 @@ async function main(): Promise<void> {
       skipped.push({ target, reason });
       continue;
     }
-    if (!target.endsWith('-headless')) removeTargetOutput(target);
-    if (target === 'win' || target === 'linux') await buildDesktop(target);
+    if (!target.endsWith('-headless') && target !== 'cloud-server') removeTargetOutput(target);
+    if (target === 'cloud-server') await run('bun', ['run', 'scripts/build-cloud-server.ts']);
+    else if (target === 'win' || target === 'linux') await buildDesktop(target);
     else if (target === 'android') {
       const androidArgs = ['-ExecutionPolicy', 'Bypass', '-File', 'apps/android/build.ps1'];
       if (release) androidArgs.push('-Release');

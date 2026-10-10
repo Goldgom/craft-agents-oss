@@ -23,6 +23,7 @@ import type { TokenNestAuthorizationIssue } from '@craft-agent/shared/auth'
 import { UpdatePrompt } from '@/components/UpdatePrompt'
 import { SplashScreen } from '@/components/SplashScreen'
 import { GettingStartedGuide } from '@/components/GettingStartedGuide'
+import { BirdCompanionBridge } from '@/components/BirdCompanionBridge'
 import { TooltipProvider } from '@craft-agent/ui'
 import { FocusProvider } from '@/context/FocusContext'
 import { ModalProvider } from '@/context/ModalContext'
@@ -38,7 +39,7 @@ import { attachmentFromContentRef, toDraftRef } from './lib/drafts'
 import { stripMarkdown } from './utils/text'
 import { coerceInputText } from './lib/input-text'
 import { getSessionsToRefreshAfterStaleReconnect } from './lib/reconnect-recovery'
-import { createSessionListRequestGuard, formatSessionLoadFailure, retryExpiredSessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
+import { createSessionListRequestGuard, formatSessionLoadFailure, retrySessionListRequest, shouldTreatSessionLoadFailureAsTransportFallback } from './lib/session-load'
 import { extractWorkspaceSlugFromPath } from '@craft-agent/shared/utils/workspace-slug'
 import { DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
 import { initRendererPerf } from './lib/perf'
@@ -695,8 +696,9 @@ export default function App() {
     setSessionLoadError(null)
 
     try {
-      const loadedSessions = await retryExpiredSessionListRequest(
+      const loadedSessions = await retrySessionListRequest(
         () => window.electronAPI.getSessions(), isCurrent,
+        () => window.electronAPI.getTransportConnectionState(),
       )
       if (!isCurrent()) return
       sessionListRecoveryPendingRef.current = false
@@ -783,8 +785,9 @@ export default function App() {
 
     try {
       if (!isCurrent()) return null
-      const sessions = await retryExpiredSessionListRequest(
+      const sessions = await retrySessionListRequest(
         () => window.electronAPI.getSessions(), isCurrent,
+        () => window.electronAPI.getTransportConnectionState(),
       )
       if (!isCurrent()) return null
       const returnedIds = new Set(sessions.map(s => s.id))
@@ -1996,9 +1999,9 @@ export default function App() {
         })
       }
     },
-    readFile: (path) => window.electronAPI.readFile(path),
-    readFileDataUrl: (path) => window.electronAPI.readFileDataUrl(path),
-    readFileBinary: (path) => window.electronAPI.readFileBinary(path),
+    readFile: (path) => window.electronAPI.readFile(path, { userInitiated: true }),
+    readFileDataUrl: (path) => window.electronAPI.readFileDataUrl(path, { userInitiated: true }),
+    readFileBinary: (path) => window.electronAPI.readFileBinary(path, { userInitiated: true }),
   })
 
   const connectionState = useTransportConnectionState()
@@ -2360,6 +2363,7 @@ export default function App() {
         >
           {/* Handle window close requests (X button, Cmd+W) - close modal first if open */}
           <WindowCloseHandler />
+          <BirdCompanionBridge />
 
           {/* Splash screen overlay - fades out when fully ready */}
           {showSplash && (
@@ -2578,6 +2582,8 @@ function FilePreviewRenderer({
           content={state.content ?? ''}
           filePath={state.filePath}
           variant={isPlanFile ? 'plan' : 'response'}
+          error={state.error}
+          errorLabel="Read Failed"
         />
       )
     }

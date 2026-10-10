@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { KeyRound, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { Button } from '@/components/ui/button'
@@ -21,7 +21,7 @@ import { credentialDomain, credentialIdentifierFields, nativeCredentialKey, pars
 
 const PREFIX = 'settings.credentials.'
 const selectClass = 'h-9 w-full rounded-md border border-input bg-background px-3 text-sm'
-const domains: CredentialDomain[] = ['global', 'llm', 'workspace', 'sources', 'messaging', 'pages', 'connections']
+const domains: CredentialDomain[] = ['saved', 'global', 'llm', 'workspace', 'sources', 'messaging', 'pages', 'connections']
 type DialogState = { kind: 'edit'; entry?: NativeCredentialMetadata } | { kind: 'import' } | { kind: 'confirm'; request: NativeCredentialApplyRequest } | { kind: 'migrate' } | null
 type Failure = NativeCredentialErrorCode | 'NATIVE_ONLY' | 'UNKNOWN'
 
@@ -90,7 +90,7 @@ export function NativeCredentialManager({ workspaceId }: { workspaceId: string |
   const openDialog = (next: DialogState) => { setAcknowledged(false); setDialog(next) }
   const entries = data?.entries ?? []
   const filtered = entries.filter(entry => (domain === 'all' || credentialDomain(entry.id.type) === domain)
-    && nativeCredentialKey(entry.id).toLowerCase().includes(query.trim().toLowerCase()))
+    && [nativeCredentialKey(entry.id), entry.username, entry.credentialUrl].join(' ').toLowerCase().includes(query.trim().toLowerCase()))
   const managedEntries = (data?.managedEntries ?? []).filter(entry => (domain === 'all' || domain === 'connections')
     && [entry.name, entry.id, entry.serverOrigin, ...entry.fields].join(' ').toLowerCase().includes(query.trim().toLowerCase()))
   const canApply = !!data?.status.canApply && !failure && !loading && !busy
@@ -172,9 +172,10 @@ export function NativeCredentialManager({ workspaceId }: { workspaceId: string |
             return <div key={key} className="flex items-start gap-3 px-4 py-3">
               <input type="checkbox" className="mt-1" aria-label={t(`${PREFIX}selectCredential`, { id: key })} checked={selected.has(key)} disabled={!canApply} onChange={event => setSelected(old => { const next = new Set(old); if (event.target.checked) next.add(key); else next.delete(key); return next })} />
               <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /><div className="min-w-0 flex-1 space-y-1">
-                <p className="break-all text-sm font-medium">{key}</p>
+                <p className="break-all text-sm font-medium">{entry.id.type === 'saved_credential' ? entry.id.name : key}</p>
+                {entry.id.type === 'saved_credential' && <p className="break-all text-xs text-muted-foreground">{t(`${PREFIX}kinds.${entry.credentialKind ?? 'secret'}`)}{entry.username ? ` · ${entry.username}` : ''}{entry.credentialUrl ? ` · ${entry.credentialUrl}` : ''}</p>}
                 <p className="text-xs text-muted-foreground">{t(`${PREFIX}${entry.hasValue ? 'valuePresent' : 'valueMissing'}`)}{entry.expiresAt != null ? ` · ${t(`${PREFIX}expires`, { date: new Date(entry.expiresAt).toLocaleString() })}` : ''}</p>
-                <p className="break-words text-xs text-muted-foreground">{t(`${PREFIX}storedFields`, { fields: entry.presentFields.join(', ') })}</p>
+                {entry.id.type !== 'saved_credential' && <p className="break-words text-xs text-muted-foreground">{t(`${PREFIX}storedFields`, { fields: entry.presentFields.join(', ') })}</p>}
               </div><Button size="sm" variant="outline" disabled={!canApply} onClick={() => openDialog({ kind: 'edit', entry })}>{t(`${PREFIX}update`)}</Button>
             </div>
           })}</div></SettingsCard>
@@ -218,7 +219,11 @@ function CredentialEditor({ entry, scope, inventory, onPreview, onCancel }: {
   onPreview: (request: NativeCredentialApplyRequest) => void; onCancel: () => void
 }) {
   const { t } = useTranslation()
-  const [type, setType] = React.useState<CredentialType>(entry?.id.type ?? 'llm_api_key')
+  const [type, setType] = React.useState<CredentialType>(entry?.id.type ?? 'saved_credential')
+  const [kind, setKind] = React.useState<'password' | 'api-key' | 'secret'>(entry?.credentialKind ?? (entry ? 'secret' : 'password'))
+  const [username, setUsername] = React.useState(entry?.username ?? '')
+  const [url, setUrl] = React.useState(entry?.credentialUrl ?? '')
+  const [showValue, setShowValue] = React.useState(false)
   const [identifiers, setIdentifiers] = React.useState<Record<string, string>>({
     connectionSlug: entry?.id.connectionSlug ?? '', sourceId: entry?.id.sourceId ?? '', name: entry?.id.name ?? '',
   })
@@ -232,6 +237,12 @@ function CredentialEditor({ entry, scope, inventory, onPreview, onCancel }: {
     for (const field of identifiersNeeded) id[field] = field === 'workspaceId' ? credentialWorkspaceId ?? '' : identifiers[field] ?? ''
     const credential: NativeCredentialPatch = {}
     if (value) credential.value = value
+    if (type === 'saved_credential') {
+      if (kind === 'password' && !username.trim()) { setInvalid(true); return }
+      credential.credentialKind = kind
+      credential.username = username.trim() || null
+      credential.credentialUrl = url.trim() || null
+    }
     for (const [field, fieldState] of Object.entries(optional)) {
       if (field === 'expiresAt' && fieldState.mode === 'set' && (!fieldState.value.trim() || !Number.isFinite(Number(fieldState.value)))) { setInvalid(true); return }
       const next = fieldState.mode === 'clear' ? null : field === 'expiresAt' ? Number(fieldState.value) : fieldState.value
@@ -241,14 +252,20 @@ function CredentialEditor({ entry, scope, inventory, onPreview, onCancel }: {
     catch { setInvalid(true) }
   }
   return <div className="space-y-4">
-    <label className="block space-y-1 text-sm"><span>{t(`${PREFIX}credentialType`)}</span><select className={selectClass} aria-label={t(`${PREFIX}credentialType`)} disabled={!!entry} value={type} onChange={event => { setType(event.target.value as CredentialType); setValue(''); setOptional({}); setInvalid(false) }}>{NATIVE_CREDENTIAL_TYPES.map(item => <option key={item} value={item} disabled={item.startsWith('source_') && scope.sourceScopeUnavailable}>{item}</option>)}</select></label>
+    <label className="block space-y-1 text-sm"><span>{t(`${PREFIX}credentialType`)}</span><select className={selectClass} aria-label={t(`${PREFIX}credentialType`)} disabled={!!entry} value={type} onChange={event => { setType(event.target.value as CredentialType); setValue(''); setOptional({}); setShowValue(false); setInvalid(false) }}>{NATIVE_CREDENTIAL_TYPES.map(item => <option key={item} value={item} disabled={item.startsWith('source_') && scope.sourceScopeUnavailable}>{item === 'saved_credential' ? t(`${PREFIX}domains.saved`) : item}</option>)}</select></label>
     {identifiersNeeded.map(field => <label key={field} className="block space-y-1 text-sm"><span>{t(`${PREFIX}identifier.${field}`)}</span><Input aria-label={t(`${PREFIX}identifier.${field}`)} value={field === 'workspaceId' ? credentialWorkspaceId ?? '' : identifiers[field] ?? ''} disabled={!!entry || field === 'workspaceId'} maxLength={NATIVE_CREDENTIAL_LIMITS.maxIdLength} onChange={event => setIdentifiers(old => ({ ...old, [field]: event.target.value }))} autoComplete="off" spellCheck={false} /></label>)}
-    <label className="block space-y-1 text-sm"><span>{t(`${PREFIX}${entry ? 'replaceValue' : 'newValue'}`)}</span><Input type="password" aria-label={t(`${PREFIX}secretValue`)} autoComplete="new-password" spellCheck={false} maxLength={NATIVE_CREDENTIAL_LIMITS.maxFieldBytes} value={value} onChange={event => setValue(event.target.value)} /></label>
-    <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">{t(`${PREFIX}optionalFields`)}</summary><p className="my-3 text-xs text-muted-foreground">{t(`${PREFIX}optionalHint`)}</p><div className="space-y-3">{NATIVE_CREDENTIAL_FIELDS.filter(field => field !== 'value').map(field => <div key={field} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_minmax(0,1.3fr)] sm:items-center">
+    {type === 'saved_credential' && <>
+      <p className="text-xs text-muted-foreground">{t(`${PREFIX}namedHint`)}</p>
+      <label className="block space-y-1 text-sm"><span>{t(`${PREFIX}kind`)}</span><select className={selectClass} aria-label={t(`${PREFIX}kind`)} value={kind} onChange={event => setKind(event.target.value as typeof kind)}>{(['password', 'api-key', 'secret'] as const).map(item => <option key={item} value={item}>{t(`${PREFIX}kinds.${item}`)}</option>)}</select></label>
+      <label className="block space-y-1 text-sm"><span>{t(`${PREFIX}username`)}</span><Input aria-label={t(`${PREFIX}username`)} autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} /></label>
+      <label className="block space-y-1 text-sm"><span>{t(`${PREFIX}website`)}</span><Input aria-label={t(`${PREFIX}website`)} type="url" placeholder="https://example.com" value={url} onChange={event => setUrl(event.target.value)} /></label>
+    </>}
+    <label className="block space-y-1 text-sm"><span>{t(`${PREFIX}${entry ? 'replaceValue' : 'newValue'}`)}</span><div className="flex gap-2"><Input type={showValue ? 'text' : 'password'} aria-label={t(`${PREFIX}secretValue`)} autoComplete="new-password" spellCheck={false} maxLength={NATIVE_CREDENTIAL_LIMITS.maxFieldBytes} value={value} onChange={event => setValue(event.target.value)} /><Button type="button" variant="outline" size="icon" aria-label={t(`${PREFIX}${showValue ? 'hideInput' : 'showInput'}`)} onClick={() => setShowValue(old => !old)}>{showValue ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</Button></div></label>
+    {type !== 'saved_credential' && <details className="rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">{t(`${PREFIX}optionalFields`)}</summary><p className="my-3 text-xs text-muted-foreground">{t(`${PREFIX}optionalHint`)}</p><div className="space-y-3">{NATIVE_CREDENTIAL_FIELDS.filter(field => !['value', 'username', 'credentialKind', 'credentialUrl'].includes(field)).map(field => <div key={field} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px_minmax(0,1.3fr)] sm:items-center">
       <label className="text-sm" htmlFor={`credential-field-${field}`}>{field}</label>
       <select className={selectClass} aria-label={t(`${PREFIX}fieldAction`, { field })} value={optional[field]?.mode ?? 'keep'} onChange={event => setOptional(old => { const next = { ...old }; if (event.target.value === 'keep') delete next[field]; else next[field] = { mode: event.target.value as 'set' | 'clear', value: old[field]?.value ?? '' }; return next })}><option value="keep">{t(`${PREFIX}keep`)}</option><option value="set">{t(`${PREFIX}set`)}</option><option value="clear">{t(`${PREFIX}clear`)}</option></select>
       {optional[field]?.mode === 'set' && (field === 'source' ? <select id={`credential-field-${field}`} className={selectClass} aria-label={field} value={optional[field].value} onChange={event => setOptional(old => ({ ...old, [field]: { mode: 'set', value: event.target.value } }))}><option value="">{t(`${PREFIX}choose`)}</option><option value="native">native</option><option value="cli">cli</option></select> : <Input id={`credential-field-${field}`} type={field === 'expiresAt' ? 'number' : 'password'} aria-label={field} min={field === 'expiresAt' ? 0 : undefined} step={field === 'expiresAt' ? 1 : undefined} placeholder={field === 'expiresAt' ? t(`${PREFIX}unixMilliseconds`) : undefined} autoComplete="new-password" spellCheck={false} value={optional[field].value} onChange={event => setOptional(old => ({ ...old, [field]: { mode: 'set', value: event.target.value } }))} />)}
-    </div>)}</div></details>
+    </div>)}</div></details>}
     {invalid && <p role="alert" className="text-sm text-destructive">{t(`${PREFIX}invalidImport`)}</p>}
     <DialogFooter><Button variant="outline" onClick={onCancel}>{t('common.cancel')}</Button><Button onClick={preview}>{t(`${PREFIX}review`)}</Button></DialogFooter>
   </div>

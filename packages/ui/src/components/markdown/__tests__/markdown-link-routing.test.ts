@@ -4,8 +4,16 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import { classifyMarkdownLinkTarget, resolveMarkdownLinkTarget } from '../link-target'
 import { markdownUrlTransform } from '../url-transform'
+import { preprocessLinks } from '../linkify'
 
 describe('resolveMarkdownLinkTarget', () => {
+  it('recognizes Windows absolute paths regardless of extension or preview support', () => {
+    for (const path of ['E:/AIProjects/sa/run-instruct-v2/heads.pt', 'E:\\Models\\weights.safetensors', '\\\\server\\share\\model.ckpt', 'E:/Models/LICENSE', 'E:/Models/']) {
+      expect(resolveMarkdownLinkTarget(path)).toEqual({ kind: 'file', path })
+      expect(resolveMarkdownLinkTarget(path.replace(/\\/g, '%5C'))).toEqual({ kind: 'file', path })
+    }
+  })
+
   it('preserves Windows drive and UNC paths, including encoded backslashes', () => {
     for (const path of ['E:/Projects/report.md', 'E:\\Projects\\report.md', '\\\\server\\share\\report.pdf', 'E:/My Documents/report.md']) {
       expect(resolveMarkdownLinkTarget(path)).toEqual({ kind: 'file', path })
@@ -102,6 +110,74 @@ describe('markdownUrlTransform', () => {
 })
 
 describe('ReactMarkdown anchor rendering with markdownUrlTransform', () => {
+  function parsedFileTarget(markdown: string) {
+    let target: ReturnType<typeof resolveMarkdownLinkTarget> | undefined
+    renderToStaticMarkup(React.createElement(ReactMarkdown, {
+      urlTransform: markdownUrlTransform,
+      components: {
+        a: ({ href, children }) => {
+          target = resolveMarkdownLinkTarget(href ?? '')
+          return React.createElement('span', null, children)
+        },
+      },
+      children: preprocessLinks(markdown),
+    }))
+    return target
+  }
+
+  it('preserves the hidden workspace separator in a live Windows report link', () => {
+    const path = String.raw`C:\Users\Goldgom\.tokenbird\workspaces\my-workspace\sessions\261008-gentle-crow\data\BugClose实验报告_图书馆全新数据版.docx`
+    expect(parsedFileTarget(`📄 **[下载《BugClose 实验报告—图书馆全新数据版》](${path})**`)).toEqual({ kind: 'file', path })
+  })
+
+  it('resolves live and reloaded history paths to the same file', () => {
+    const livePath = String.raw`C:\Users\Goldgom\.tokenbird\workspaces\my-workspace\sessions\261008-gentle-crow\data\report.docx`
+    // JSONL expansion normalizes the session directory to forward slashes.
+    const historyPath = livePath.replace(/\\/g, '/')
+    const live = parsedFileTarget(`[report](${livePath})`)
+    const history = parsedFileTarget(`[report](${historyPath})`)
+    expect(live?.kind).toBe('file')
+    expect(history?.kind).toBe('file')
+    if (live?.kind === 'file' && history?.kind === 'file') {
+      expect(live.path.replace(/\\/g, '/')).toBe(history.path)
+    }
+  })
+
+  it('preserves UNC shares and punctuation in Windows directory names', () => {
+    for (const path of [
+      String.raw`\\server\share\.outputs\report.docx`,
+      String.raw`C:\reports\(draft)\_v2\[final]\report.docx`,
+      String.raw`C:/Users/Goldgom/.tokenbird/sessions/abc\data\.outputs\report.docx`,
+    ]) {
+      expect(parsedFileTarget(`[report](${path})`)).toEqual({ kind: 'file', path })
+    }
+  })
+
+  it('preserves angle-bracket destinations, spaces and link titles', () => {
+    const path = String.raw`C:\My Reports\.outputs\report (final).docx`
+    expect(parsedFileTarget(`[report](<${path}> "Download report")`)).toEqual({ kind: 'file', path })
+  })
+
+  it('protects Windows reference definitions without nesting auto-links', () => {
+    const path = String.raw`C:\Users\Goldgom\.tokenbird\data\report.docx`
+    expect(parsedFileTarget(`[report][artifact]\n\n[artifact]: ${path} "Download report"`)).toEqual({ kind: 'file', path })
+  })
+
+  it('does not re-encode an already protected file link', () => {
+    const path = String.raw`C:\Users\Goldgom\.tokenbird\data\report.docx`
+    const once = preprocessLinks(`[report](${path})`)
+    expect(preprocessLinks(once)).toBe(once)
+    expect(parsedFileTarget(once)).toEqual({ kind: 'file', path })
+  })
+
+  it('keeps Windows links in inline and fenced code verbatim', () => {
+    const link = String.raw`[report](C:\Users\Goldgom\.tokenbird\report.docx)`
+    for (const input of ['`' + link + '`', '```md\n' + link + '\n```']) {
+      expect(preprocessLinks(input)).toBe(input)
+      expect(parsedFileTarget(input)).toBeUndefined()
+    }
+  })
+
   function render(markdown: string): string {
     return renderToStaticMarkup(React.createElement(ReactMarkdown, {
       urlTransform: markdownUrlTransform,

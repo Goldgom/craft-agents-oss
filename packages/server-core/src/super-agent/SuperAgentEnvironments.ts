@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, realpath, stat } from 'node:fs/promises'
+import { access, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { constants } from 'node:fs'
 import { delimiter, isAbsolute, join, relative, sep } from 'node:path'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
@@ -44,6 +45,7 @@ export class SuperAgentEnvironments {
   private readonly runtimes = new Map<string, string>()
   private readonly probes = new Map<string, { checkedAt: number; error?: string }>()
   private readonly containers = new Map<string, ContainerProgramExecutor>()
+  private readonly scriptSnapshots = new Map<string, string>()
   private readonly owners = new Map<string, string>()
   private readonly allowedContainers = new Map<string, Set<string>>()
   private readonly reconcileVersions = new Map<string, number>()
@@ -68,8 +70,8 @@ export class SuperAgentEnvironments {
     const root = await this.folder(environment.workingDirectory)
     if (environment.kind === 'folder') {
       return { workingDirectory: root, status: { available: true, isolation: 'host-folder', detail: environment.fullControl
-        ? '完全控制已开启：可直接操作工作目录外的文件、运行宿主程序和浏览器，无需工具审批。操作使用实际执行账号的权限。'
-        : '工作目录内按能力设置执行；内置说明与已验证的只读设备查询无需审批，其他超出范围的操作可申请单次授权。文件夹不提供系统隔离。' } }
+        ? '工作目录内启用工作节点能力；写入与外部副作用仍需行动门审批。任意程序需要容器。文件夹不提供系统隔离。'
+        : '工作目录内按能力设置使用受控文件与浏览器工具；只读操作自主执行，写入与外部副作用需行动门审批。所有壳命令需要容器；审批不能扩大权限。文件夹不提供系统隔离。' } }
     }
     if (environment.kind === 'vm') {
       const available = this.options.isVmHost === true && environment.vm?.workspaceId === workspaceId
@@ -172,7 +174,7 @@ export class SuperAgentEnvironments {
   }
 
   /** Scripts get a separate disposable container so stop/timeout terminates its entire process tree. */
-  async spawnScript(workspaceId: string, environment: SuperAgentEnvironment, path: string, args: string[]): Promise<{ child: ChildProcess; stop: () => Promise<void> }> {
+  async spawnScript(workspaceId: string, environment: SuperAgentEnvironment, path: string, args: string[], approvedContent?: Buffer): Promise<{ child: ChildProcess; stop: () => Promise<void> }> {
     const resolved = await this.resolve(workspaceId, environment)
     if (!resolved.status.available || environment.kind !== 'sandbox') throw new Error(resolved.status.detail)
     const childPath = relative(resolved.workingDirectory, await realpath(path))
@@ -185,6 +187,18 @@ export class SuperAgentEnvironments {
     const executable = await this.runtime(environment.sandbox!.runtime)
     const name = `tokenbird-super-${randomUUID()}`
     const launchArgs = sandboxArguments(name, resolved.workingDirectory, environment)
+    if (approvedContent) {
+      const snapshotDirectory = await mkdtemp(join(tmpdir(), 'tokenbird-approved-script-'))
+      const snapshotPath = join(snapshotDirectory, `approved${extension}`)
+      try {
+        const within = relative(resolved.workingDirectory, snapshotDirectory)
+        if (within === '' || (!isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`))) throw new Error('Script snapshots must be outside the worker mount')
+        if (snapshotPath.includes(',') || scriptPath.includes(',') || /[\r\n\x00]/.test(scriptPath)) throw new Error('Invalid approved script mount path')
+        await writeFile(snapshotPath, approvedContent, { flag: 'wx', mode: 0o400 })
+        launchArgs.splice(launchArgs.indexOf('--entrypoint'), 0, '--mount', `type=bind,source=${snapshotPath},target=${scriptPath},readonly`)
+        this.scriptSnapshots.set(name, snapshotDirectory)
+      } catch (error) { await rm(snapshotDirectory, { recursive: true, force: true }); throw error }
+    }
     launchArgs.splice(1, 0, '--rm')
     // Override the image's entrypoint using discrete arguments, with no shell interpolation.
     launchArgs[launchArgs.indexOf('--entrypoint') + 1] = interpreter[0]!
@@ -192,6 +206,7 @@ export class SuperAgentEnvironments {
     const executor = { runtimePath: executable, containerId: name, workingDirectory: '/workspace' }
     this.containers.set(name, executor)
     child.once('close', () => { void this.remove(executor).catch(() => undefined) })
+    child.once('error', () => { void this.remove(executor).catch(() => undefined) })
     return { child, stop: async () => { await this.remove(executor); child.kill() } }
   }
 
@@ -211,6 +226,8 @@ export class SuperAgentEnvironments {
       catch (error) { if (!/no such (container|object)|container .* does not exist/i.test(this.error(error))) throw error }
       this.containers.delete(executor.containerId)
       this.owners.delete(executor.containerId)
+      const snapshotDirectory = this.scriptSnapshots.get(executor.containerId)
+      if (snapshotDirectory) { await rm(snapshotDirectory, { recursive: true, force: true }); this.scriptSnapshots.delete(executor.containerId) }
     })()
     this.removing.set(executor.containerId, pending)
     try { await pending } finally { this.removing.delete(executor.containerId) }

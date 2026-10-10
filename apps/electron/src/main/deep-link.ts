@@ -312,6 +312,7 @@ export async function handleDeepLink(
     if (window.isMinimized()) {
       window.restore()
     }
+    window.show()
     window.focus()
   }
 

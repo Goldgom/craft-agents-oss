@@ -97,19 +97,29 @@ export function createSessionListRequestGuard() {
   }
 }
 
-/** A generation change cancels a read, not the underlying session data. */
-export async function retryExpiredSessionListRequest<T>(
+/** Recover reads that raced a switch or briefly timed out on a connected remote. */
+export async function retrySessionListRequest<T>(
   request: () => Promise<T>,
   isCurrent: () => boolean,
+  getTransportState?: () => Promise<TransportConnectionState | null>,
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await request()
     } catch (error) {
-      if (!isCurrent() || attempt >= 2
-        || formatSessionLoadFailure(error) !== 'Remote client generation expired') {
-        throw error
-      }
+      if (!isCurrent() || attempt >= 2) throw error
+      if (formatSessionLoadFailure(error) === 'Remote client generation expired') continue
+
+      const { code, kind } = (error ?? {}) as { code?: unknown; kind?: unknown }
+      const transient = code === 'TIMEOUT' || code === 'NETWORK' || code === 'REQUEST_TIMEOUT'
+        || kind === 'timeout' || kind === 'network'
+      if (!transient || !getTransportState) throw error
+      const state = await getTransportState().catch(() => null)
+      // Disconnected clients are recovered by the connection-state listener.
+      // Authentication, protocol and data errors must remain visible.
+      if (!isCurrent() || state?.mode !== 'remote' || state.status !== 'connected') throw error
+      await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 250 : 750))
+      if (!isCurrent()) throw error
     }
   }
 }

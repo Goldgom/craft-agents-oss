@@ -35,6 +35,14 @@ export function attachSessionSelfManagementBindings(
   context: SessionToolContext,
   sessionId: string,
 ): void {
+  Object.defineProperty(context, 'savedCredentialsFn', {
+    get() { return getSessionScopedToolCallbacks(sessionId)?.savedCredentialsFn; },
+    configurable: true, enumerable: true,
+  });
+  Object.defineProperty(context, 'superAgentTask', {
+    get() { return getSessionScopedToolCallbacks(sessionId)?.superAgentTaskFn; },
+    configurable: true, enumerable: true,
+  });
   // Direct pass-through bindings — signatures match, no wrapping needed.
   // Each getter resolves fresh from the registry on every access.
 
@@ -62,6 +70,11 @@ export function attachSessionSelfManagementBindings(
     },
     configurable: true,
     enumerable: true,
+  });
+
+  Object.defineProperty(context, 'requestClientFilesFn', {
+    get() { return getSessionScopedToolCallbacks(sessionId)?.requestClientFilesFn; },
+    configurable: true, enumerable: true,
   });
 
   Object.defineProperty(context, 'transferSftpFileFn', {

@@ -101,7 +101,7 @@ import { TokenNestRequestError } from '../auth/tokennest-oauth.ts';
 
 // Centralized PreToolUse pipeline
 import { runPreToolUseChecksWithPermissions, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
-import { checkSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
+import { checkSessionExecutionPolicy, claimSessionActionGateDispatch, getSessionExecutionPolicy, hasSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
 import { getRtkEnabled, getBrowserToolEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
@@ -670,6 +670,8 @@ export class PiAgent extends BaseAgent {
       workingDirectory,
       plansFolderPath,
       miniModel: this.config.miniModel,
+      browserToolOnly: hasSessionExecutionPolicy(sessionId),
+      interactionOnly: ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(sessionId)?.role ?? ''),
       providerType: this.config.providerType,
       authType: this.config.authType,
       oauthProvider: runtime.oauthProvider,
@@ -691,7 +693,7 @@ export class PiAgent extends BaseAgent {
     });
 
     // Wait for subprocess to report ready
-    await this.subprocessReady;
+    await this.waitForSubprocessReady();
     this.debug('Pi subprocess is ready');
 
     // Ensure auto-compaction is explicitly enabled for embedded sessions.
@@ -735,6 +737,22 @@ export class PiAgent extends BaseAgent {
 
     // If pool has source tools, register them with the subprocess.
     await this.registerPoolToolsWithSubprocess();
+  }
+
+  private async waitForSubprocessReady(timeoutMs = 45_000): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.subprocessReady,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(
+            `Pi runtime did not start within ${Math.ceil(timeoutMs / 1000)} seconds. Please retry or use server mode.`,
+          )), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
@@ -1548,7 +1566,7 @@ export class PiAgent extends BaseAgent {
     }
 
     // Fire PreToolUse automation event — await so automations run before tool executes
-    await this.emitAutomationEvent('PreToolUse', {
+    if (!getSessionExecutionPolicy(debugSessionId)?.actionGates) await this.emitAutomationEvent('PreToolUse', {
       hook_event_name: 'PreToolUse',
       tool_name: toolName,
       tool_input: input,
@@ -1571,6 +1589,7 @@ export class PiAgent extends BaseAgent {
       : undefined;
 
     const checkResult = await runPreToolUseChecksWithPermissions({
+      invocationId: toolCallId ?? requestId,
       toolName,
       input,
       sessionId,
@@ -1644,6 +1663,7 @@ export class PiAgent extends BaseAgent {
 
         // Re-run pipeline after activation
         const postResult = await runPreToolUseChecksWithPermissions({
+          invocationId: toolCallId ?? requestId,
           toolName,
           input,
           sessionId,
@@ -1746,6 +1766,7 @@ export class PiAgent extends BaseAgent {
    */
   private async handleToolExecuteRequest(request: {
     requestId: string;
+    toolCallId?: string;
     toolName: string;
     args: Record<string, unknown>;
   }): Promise<void> {
@@ -1761,7 +1782,8 @@ export class PiAgent extends BaseAgent {
     }
 
     try {
-      const result = await this.routeToolCall(request.toolName, request.args);
+      const nodePolicy = claimSessionActionGateDispatch(this._sessionId, request.toolName, request.args, this.workingDirectory, request.toolCallId);
+      const result = nodePolicy.allowed ? await this.routeToolCall(request.toolName, request.args, true) : { content: nodePolicy.reason, isError: true };
       this.send({
         type: 'tool_execute_response',
         requestId: request.requestId,
@@ -1791,8 +1813,9 @@ export class PiAgent extends BaseAgent {
    */
   private async routeToolCall(
     toolName: string,
-    args: Record<string, unknown>
-  ): Promise<{ content: string; isError: boolean }> {
+    args: Record<string, unknown>,
+    actionAuthorized = false,
+  ): Promise<{ content: string; isError: boolean; images?: import('@craft-agent/session-tools-core').ToolImage[] }> {
     // Session-scoped tools — strip mcp__session__ prefix added by the Pi SDK
     // registration (tools are registered as mcp__session__SubmitPlan, etc.)
     const strippedName = toolName.startsWith('mcp__session__')
@@ -1800,7 +1823,7 @@ export class PiAgent extends BaseAgent {
       : toolName;
 
     if (SESSION_TOOL_NAMES.has(strippedName)) {
-      return this.executeSessionTool(strippedName, args);
+      return this.executeSessionTool(strippedName, args, actionAuthorized);
     }
 
     // MCP source tools — route through centralized pool
@@ -1852,8 +1875,9 @@ export class PiAgent extends BaseAgent {
   private async executeSessionTool(
     toolName: string,
     args: Record<string, unknown>,
-  ): Promise<{ content: string; isError: boolean }> {
-    const nodePolicy = checkSessionExecutionPolicy(this._sessionId, `mcp__session__${toolName}`, args, this.workingDirectory);
+    actionAuthorized = false,
+  ): Promise<{ content: string; isError: boolean; images?: import('@craft-agent/session-tools-core').ToolImage[] }> {
+    const nodePolicy = actionAuthorized ? { allowed: true as const } : checkSessionExecutionPolicy(this._sessionId, `mcp__session__${toolName}`, args, this.workingDirectory);
     if (!nodePolicy.allowed) return { content: nodePolicy.reason, isError: true };
     try {
       // call_llm uses the shared pre-execution pipeline from BaseAgent
@@ -1946,7 +1970,7 @@ export class PiAgent extends BaseAgent {
 
       // Convert ToolResult to subprocess response format
       const text = result.content.map(c => c.text).join('\n');
-      return { content: text, isError: !!result.isError };
+      return { content: text, isError: !!result.isError, ...(result.images?.length ? { images: result.images } : {}) };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.debug(`Session tool ${toolName} failed: ${msg}`);
@@ -2319,6 +2343,8 @@ export class PiAgent extends BaseAgent {
         customModels: runtime.customModels,
         customHeaders: runtime.customHeaders,
         autoCompactionTokenLimit: update.autoCompactionTokenLimit,
+        browserToolOnly: hasSessionExecutionPolicy(this._sessionId),
+        interactionOnly: ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(this._sessionId)?.role ?? ''),
       });
     });
   }

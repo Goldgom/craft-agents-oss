@@ -26,7 +26,7 @@
  */
 
 import { join } from 'node:path'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs'
 import { version as packageVersion } from '../package.json'
 import { enableDebug } from '@craft-agent/shared/utils/debug'
 import { bootstrapServer, startHealthHttpServer, generateServerToken } from '@craft-agent/server-core/bootstrap'
@@ -324,6 +324,24 @@ if (messagingHandle !== null && !messagingDisabled) {
   }
 } else if (messagingDisabled) {
   console.log('[messaging] Disabled via CRAFT_DISABLE_MESSAGING — skipping workspace messaging init')
+}
+
+// Android's service tracks work even when the WebView is suspended or destroyed.
+// No credentials or message contents are written to this app-private status file.
+if (process.env.CRAFT_ANDROID === 'true') {
+  const statePath = join(process.env.CRAFT_APP_ROOT ?? process.cwd(), 'android-task-state.json')
+  let previousCount = -1
+  const updateAndroidTaskState = () => {
+    const processing = instance.sessionManager.getActiveSessionCount()
+    if (processing === previousCount) return
+    try {
+      writeFileSync(`${statePath}.tmp`, JSON.stringify({ processing }))
+      renameSync(`${statePath}.tmp`, statePath)
+      previousCount = processing
+    } catch (error) { console.error('[android] Unable to update task state:', error) }
+  }
+  updateAndroidTaskState()
+  setInterval(updateAndroidTaskState, 500).unref()
 }
 
 // Wire up the lazy health check now that the session manager is ready

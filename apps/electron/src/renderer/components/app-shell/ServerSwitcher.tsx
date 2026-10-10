@@ -2,8 +2,7 @@
  * ServerSwitcher — 当前运行服务端选择器 (menu-bar).
  *
  * Shows the currently running service (本机服务器 / remote server profile) and
- * lets the user switch services. Switching is restart-based: the choice is
- * persisted and the app relaunches pointing at the selected service.
+ * lets the user switch services while the local agent host keeps running.
  */
 
 import * as React from 'react'
@@ -47,7 +46,7 @@ export function ServerSwitcher() {
     if (switching) return
     setSwitching(true)
     try {
-      // Restart-based switch — the window closes on relaunch.
+      // Main reloads the frontend and keeps any running local agents alive.
       await window.electronAPI.switchServer(target)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('serverSwitcher.switchFailed'))

@@ -1,3 +1,4 @@
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, ArrowUp, ClipboardList, LoaderCircle, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { SuperAgentBoardItem, SuperAgentCommand, SuperAgentConfig, SuperAgentMessage } from '@craft-agent/shared/super-agent'
@@ -5,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Markdown } from '@/components/markdown'
-import { AgentAvatar, FormField, selectClass, textareaClass } from './SuperAgentForms'
+import { AgentAvatar, FormField, textareaClass } from './SuperAgentForms'
 import { formatTimestamp, useSuperAgentText, type SuperAgentText } from './super-agent-ui'
 
 export function nodeLabel(config: SuperAgentConfig, id: string, text: SuperAgentText): string {
@@ -93,10 +94,8 @@ export function NodeCommunication({ config, messages, onCommand }: {
     </div>
     <div className="shrink-0 border-t border-border/70 px-6 py-4">
       <div className="mx-auto max-w-3xl space-y-3">
-        <div className="grid grid-cols-2 gap-3"><FormField label={text('from')}><select className={selectClass} value={fromNodeId} onChange={event => { setFromNodeId(event.target.value); if (toNodeId === event.target.value) setToNodeId('all') }}>
-          {config.nodes.map(node => <option key={node.id} value={node.id}>{node.name}</option>)}</select></FormField>
-          <FormField label={text('to')}><select className={selectClass} value={toNodeId} onChange={event => setToNodeId(event.target.value)}><option value="all">{text('broadcast')}</option>
-            {config.nodes.filter(node => node.id !== fromNodeId).map(node => <option key={node.id} value={node.id}>{node.name}</option>)}</select></FormField></div>
+        <div className="grid grid-cols-2 gap-3"><FormField label={text('from')}><WorkbenchSelect value={fromNodeId} onValueChange={value => { setFromNodeId(value); if (toNodeId === value) setToNodeId('all') }} options={[...config.nodes.map(node => ({ value: node.id, label: node.name }))]} /></FormField>
+          <FormField label={text('to')}><WorkbenchSelect value={toNodeId} onValueChange={value => setToNodeId(value)} options={[{ value: "all", label: text('broadcast') }, ...config.nodes.filter(node => node.id !== fromNodeId).map(node => ({ value: node.id, label: node.name }))]} /></FormField></div>
         <div className="flex items-end gap-2"><textarea className={textareaClass + ' min-h-16 flex-1'} rows={2} value={body} placeholder={text('messageBody')} onChange={event => setBody(event.target.value)}
           onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
           <Button className="size-10 shrink-0 rounded-xl" size="icon" disabled={!body.trim() || pending} aria-label={text('send')} onClick={() => void send()}>{pending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}</Button></div>

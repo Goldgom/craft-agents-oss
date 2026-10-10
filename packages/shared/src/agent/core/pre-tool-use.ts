@@ -18,6 +18,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { isComputerUseTool, isComputerUseReadOnly } from '@craft-agent/session-tools-core';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { expandPath } from '../../utils/paths.ts';
@@ -48,7 +49,7 @@ import { evaluateApiEndpointPolicy, evaluateMcpToolPolicy } from '../source-poli
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
-import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionFullControl, hasSessionPolicyToolGrant, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, consumeSessionActionGate, recordSessionPolicyOperation, requiresSessionOperationRecording, getSessionExecutionPolicy, hasSessionExecutionPolicy, hasSessionFullControl, hasSessionPolicyToolGrant, isSessionPolicyShellAutoAllowed, normalizeSessionPolicyInput, wrapSessionProgramInput } from './session-execution-policy.ts';
 
 // ============================================================
 // TYPES
@@ -607,6 +608,8 @@ export type PreToolUseCheckResult =
  * hook input. All fields needed for the pipeline are normalized here.
  */
 export interface PreToolUseInput {
+  /** Provider-generated invocation identity; never read from model input. */
+  invocationId?: string;
   /** SDK-normalized tool name (PascalCase for built-in, mcp__server__tool for MCP) */
   toolName: string;
   /** Tool input object */
@@ -700,9 +703,9 @@ function withPermissionModeContext(reason: string, sessionId: string, effectiveM
 
 /** Keep the original tool call suspended while a missing node permission is reviewed. */
 export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): Promise<PreToolUseCheckResult> {
-  const policy = await authorizeSessionPolicyTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory);
+  const policy = await authorizeSessionPolicyTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory, undefined, ctx.invocationId);
   if (!policy.allowed) return { type: 'block', reason: policy.reason };
-  if (hasSessionExecutionPolicy(ctx.sessionId) && !hasSessionFullControl(ctx.sessionId)
+  if (hasSessionExecutionPolicy(ctx.sessionId) && !getSessionExecutionPolicy(ctx.sessionId)?.actionGates && !hasSessionFullControl(ctx.sessionId)
     && !isSessionPolicyShellAutoAllowed(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory)) {
     const modeResult = shouldAllowToolInMode(ctx.toolName, ctx.input, getPermissionModeDiagnostics(ctx.sessionId).permissionMode, {
       plansFolderPath: ctx.plansFolderPath, dataFolderPath: ctx.dataFolderPath,
@@ -713,10 +716,16 @@ export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): 
       if (!grant.allowed) return { type: 'block', reason: grant.reason };
     }
   }
-  return runPreToolUseChecks(ctx);
+  let dispatchInput: Record<string, unknown> | undefined;
+  const result = runPreToolUseChecks(ctx, input => { dispatchInput = input; });
+  if (!dispatchInput || !['allow', 'modify'].includes(result.type)) return result;
+  try { await recordSessionPolicyOperation(ctx.sessionId, ctx.toolName, dispatchInput, ctx.invocationId); }
+  catch (error) { return { type: 'block', reason: `Super Agent operation: ${error instanceof Error ? error.message : String(error)}` }; }
+  const dispatched = consumeSessionActionGate(ctx.sessionId, ctx.toolName, dispatchInput, ctx.workingDirectory, ctx.invocationId);
+  return dispatched.allowed ? result : { type: 'block', reason: dispatched.reason };
 }
 
-export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult {
+export function runPreToolUseChecks(ctx: PreToolUseInput, deferDispatch?: (input: Record<string, unknown>) => void): PreToolUseCheckResult {
   const {
     toolName,
     input,
@@ -736,7 +745,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     onDebug,
   } = ctx;
 
-  const executionPolicy = checkSessionExecutionPolicy(sessionId, toolName, input, workingDirectory);
+  const executionPolicy = checkSessionExecutionPolicy(sessionId, toolName, input, workingDirectory, ctx.invocationId);
   if (!executionPolicy.allowed) return { type: 'block', reason: executionPolicy.reason };
 
   // Build permissions context for custom permissions.json rules
@@ -749,7 +758,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // Keep incoming permissionMode only for mismatch diagnostics.
   const diagnostics = getPermissionModeDiagnostics(sessionId);
   const fullControl = hasSessionFullControl(sessionId);
-  const effectivePermissionMode = fullControl ? 'allow-all' : diagnostics.permissionMode;
+  const effectivePermissionMode = fullControl || getSessionExecutionPolicy(sessionId)?.actionGates ? 'allow-all' : diagnostics.permissionMode;
 
   if (permissionMode !== effectivePermissionMode) {
     onDebug?.(
@@ -768,7 +777,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     { plansFolderPath, dataFolderPath, permissionsContext }
   );
 
-  const explicitlyGranted = fullControl || isSessionPolicyShellAutoAllowed(sessionId, toolName, input, workingDirectory)
+  const explicitlyGranted = fullControl || getSessionExecutionPolicy(sessionId)?.actionGates === true || isSessionPolicyShellAutoAllowed(sessionId, toolName, input, workingDirectory)
     || hasSessionPolicyToolGrant(sessionId, toolName, input, workingDirectory);
   if (!modeResult.allowed && !explicitlyGranted) {
     const reasonWithContext = withPermissionModeContext(modeResult.reason, sessionId, effectivePermissionMode);
@@ -901,13 +910,17 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // 6. ASK MODE PROMPT DECISION
   // ============================================================
   // Apply isolation last, so RTK and model input cannot execute on the host.
-  const finalPolicy = checkSessionExecutionPolicy(sessionId, toolName, currentInput, workingDirectory);
+  const finalPolicy = checkSessionExecutionPolicy(sessionId, toolName, currentInput, workingDirectory, ctx.invocationId);
   if (!finalPolicy.allowed) return { type: 'block', reason: finalPolicy.reason };
   const pinnedInput = normalizeSessionPolicyInput(sessionId, toolName, currentInput, workingDirectory);
   if (pinnedInput) {
     currentInput = pinnedInput;
     wasModified = true;
   }
+  if (!deferDispatch && requiresSessionOperationRecording(sessionId, toolName, currentInput)) return { type: 'block', reason: 'Durable Super Agent operations require the asynchronous pre-tool pipeline' };
+  if (deferDispatch) deferDispatch(currentInput);
+  const dispatched = deferDispatch ? finalPolicy : consumeSessionActionGate(sessionId, toolName, currentInput, workingDirectory, ctx.invocationId);
+  if (!dispatched.allowed) return { type: 'block', reason: dispatched.reason };
   const isolatedInput = wrapSessionProgramInput(sessionId, toolName, currentInput);
   if (isolatedInput) {
     currentInput = isolatedInput;
@@ -1066,6 +1079,14 @@ export function shouldPromptInAskMode(
   plansFolderPath?: string,
   onDebug?: (message: string) => void,
 ): PromptInfo | null {
+  if (isComputerUseTool(toolName)) {
+    if (isComputerUseReadOnly(input) || permissionManager.isCommandWhitelisted(toolName)) return null;
+    return {
+      promptType: 'mcp_mutation',
+      description: `Control Windows desktop: ${String(input.action)}${input.windowId ? ` (window ${input.windowId})` : ''}`,
+      command: toolName,
+    };
+  }
 
   // --- File writes ---
   if (FILE_WRITE_TOOLS.has(toolName)) {

@@ -108,7 +108,9 @@ export function InputContainer({
     setExpandedDuringProcessing(true)
   }, [])
 
-  const isCollapsedInCompact = compactMode && isProcessing && !expandedDuringProcessing
+  // Keep the touch composer available on Android for follow-ups and stop.
+  const android = typeof document !== 'undefined' && document.documentElement.dataset.mobileApp === 'android'
+  const isCollapsedInCompact = compactMode && isProcessing && !expandedDuringProcessing && !android
 
   // Animate height when either isProcessing flips OR the user manually expands
   // / re-collapses the input during a thinking cycle.

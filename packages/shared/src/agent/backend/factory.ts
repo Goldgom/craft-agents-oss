@@ -810,7 +810,10 @@ export async function testBackendConnection(args: {
       context,
       coreConfig: {
         workspace: { id: '__test', name: 'Connection Test', slug: '__test', rootPath: cwd, createdAt: 0 },
-        session: { id: `test-${now}`, workspaceRootPath: cwd, createdAt: 0, lastUsedAt: 0 },
+        // This transient session has no directory on disk. Pi otherwise uses
+        // <workspace>/sessions/<id> as cwd, making spawn fail with ENOENT even
+        // when the bundled Bun executable exists.
+        session: { id: `test-${now}`, workspaceRootPath: cwd, workingDirectory: cwd, createdAt: 0, lastUsedAt: 0 },
         isHeadless: true,
         miniModel: testModel,
         envOverrides: args.provider === 'anthropic'

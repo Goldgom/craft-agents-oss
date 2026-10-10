@@ -38,6 +38,8 @@ export interface DocumentFormattedMarkdownOverlayProps {
   typeBadge?: OverlayTypeBadge
   /** Optional error message — renders a tinted error banner above the content card */
   error?: string
+  /** Operation responsible for the error. Defaults to Write Failed for tool output. */
+  errorLabel?: string
   /** Optional session id used for annotation payload source metadata */
   sessionId?: string
   /** Optional message id; when present with callbacks, overlay becomes annotatable */
@@ -68,6 +70,7 @@ export function DocumentFormattedMarkdownOverlay({
   filePath,
   typeBadge,
   error,
+  errorLabel = 'Write Failed',
   sessionId,
   messageId,
   annotations,
@@ -85,7 +88,7 @@ export function DocumentFormattedMarkdownOverlay({
       filePath={filePath}
       typeBadge={typeBadge}
       copyContent={content}
-      error={error ? { label: 'Write Failed', message: error } : undefined}
+      error={error ? { label: errorLabel, message: error } : undefined}
     >
       {/* Content wrapper — min-h-full for vertical centering within FullscreenOverlayBase's scroll container.
           Scrolling and gradient fade mask are handled by FullscreenOverlayBase. */}

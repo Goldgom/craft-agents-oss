@@ -5,6 +5,49 @@ import type { Session } from '../protocol/dto'
 import type { SuperAgentScriptRuntime } from './types'
 
 describe('history cleanup selection', () => {
+  test('archives delivered goals and settled records together while retaining unknown effects and artifact consumers', () => {
+    const state = emptySuperAgentState()
+    const task = { title: 'Work', instructions: 'Evidence', nodeId: 'worker', status: 'completed' as const, createdAt: 1, completedAt: 2 }
+    state.tasks = [{ ...task, id: 'old', goalId: 'delivered' }, { ...task, id: 'producer' },
+      { ...task, id: 'consumer', createdAt: 200, completedAt: 201, inputArtifacts: [{ id: 'shared', sha256: 'a'.repeat(64) }] },
+      { ...task, id: 'uncertain' }]
+    state.intents = [{ id: 'delivered', revision: 1, status: 'delivered', goal: 'Old goal', constraints: [], deliverables: [], acceptanceCriteria: [], createdAt: 1, sourceTurnId: 'turn' }]
+    state.artifacts = [{ id: 'shared', taskId: 'producer', path: 'shared.txt', sha256: 'a'.repeat(64), revision: 1, description: '', updatedAt: 1 }]
+    const operation = { key: 'b'.repeat(64), turnId: 'turn', nodeId: 'worker', sessionId: 'session', invocationId: 'call', toolName: 'Write', createdAt: 1, updatedAt: 2 }
+    state.operations = [{ ...operation, id: 'settled', taskId: 'old', status: 'completed' }, { ...operation, id: 'unknown', taskId: 'uncertain', status: 'unknown' }]
+    const cleanup = planSuperAgentHistoryCleanup(state, 100, 0)
+    expect(cleanup.removed.tasks.map(task => task.id)).toEqual(['old'])
+    expect(cleanup.removed.intents.map(goal => goal.id)).toEqual(['delivered'])
+    expect(cleanup.removed.operations.map(operation => operation.id)).toEqual(['settled'])
+    expect(cleanup.state.operations!.map(operation => operation.id)).toEqual(['unknown'])
+    expect(cleanup.state.artifacts).toEqual(state.artifacts)
+  })
+  test('cleans completed acceptance cycles together and retains evidence referenced by newer work', () => {
+    const state = emptySuperAgentState()
+    const base = { title: 'Artifact', instructions: 'Evidence', nodeId: 'worker', status: 'completed' as const, createdAt: 1, completedAt: 2 }
+    state.tasks = [
+      { ...base, id: 'build', acceptance: { status: 'accepted', evidenceTaskId: 'review', note: 'Verified', reviewedBy: 'orchestrator', reviewedAt: 3 } },
+      { ...base, id: 'review', dependsOn: ['build'], reviewOf: 'build' },
+      { ...base, id: 'self', acceptance: { status: 'accepted', evidenceTaskId: 'self', note: 'Self-check', reviewedBy: 'orchestrator', reviewedAt: 3 } },
+    ]
+    expect(planSuperAgentHistoryCleanup(state, 100, 0).removed.tasks.map(task => task.id)).toEqual(['build', 'review', 'self'])
+    state.tasks.push({ ...base, id: 'newer', createdAt: 200, completedAt: 201, dependsOn: ['build'] })
+    const cleanup = planSuperAgentHistoryCleanup(state, 100, 0)
+    expect(cleanup.removed.tasks.map(task => task.id)).toEqual(['self'])
+    expect(cleanup.state.tasks.map(task => task.id)).toEqual(['build', 'review', 'newer'])
+  })
+
+  test('protects cross-plan dependency and review sessions of active work', () => {
+    const state = emptySuperAgentState()
+    const base = { title: 'Evidence', instructions: 'Evidence', nodeId: 'worker', createdAt: 1 }
+    state.tasks = [
+      { ...base, id: 'evidence', status: 'completed', sessionId: 'evidence-session' },
+      { ...base, id: 'build', status: 'completed', sessionId: 'build-session', acceptance: { status: 'accepted', evidenceTaskId: 'evidence', note: 'Checked', reviewedBy: 'orchestrator', reviewedAt: 3 } },
+      { ...base, id: 'next', status: 'queued', dependsOn: ['build'] },
+    ]
+    expect(planSuperAgentHistoryCleanup(state, 100, 0).removed.tasks).toHaveLength(0)
+    expect(protectedHistorySessionIds(state)).toEqual(new Set(['build-session', 'evidence-session']))
+  })
   test('preserves unfinished goals, linked evidence, current work and shared artifacts', () => {
     const state = emptySuperAgentState()
     state.plans = [
@@ -60,7 +103,7 @@ describe('history cleanup selection', () => {
       state.messages = [{ id: 'evidence', fromNodeId: 'system', toNodeId: 'main', kind: 'script', body: 'Script result waiting for verification', taskId: 'script-task', createdAt: 2 }]
       state.scripts = [{ scriptId: 'check', taskId: 'script-task', status: 'completed', completedAt: 2, output: 'Required validation evidence', error: 'Diagnostic details', ...delivery }]
       const cleanup = planSuperAgentHistoryCleanup(state, 100, 0)
-      expect(cleanup.removed).toEqual({ tasks: [], messages: [], plans: [], scriptLogs: [] })
+      expect(cleanup.removed).toEqual({ tasks: [], messages: [], plans: [], scriptLogs: [], operations: [], artifacts: [], intents: [] })
       expect(cleanup.state.scripts[0]).toMatchObject({ output: 'Required validation evidence', error: 'Diagnostic details' })
       const protectedIds = protectedHistorySessionIds(state)
       expect(protectedIds).toEqual(new Set(['script-session', 'dependency-session']))

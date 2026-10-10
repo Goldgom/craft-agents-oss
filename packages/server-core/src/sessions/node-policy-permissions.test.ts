@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy,
-  getSessionPolicyGrantTarget, hasSessionPolicyToolGrant, setSessionExecutionPolicy,
+  getSessionPolicyGrantTarget, hasSessionPolicyToolGrant, setSessionExecutionPolicy, setSessionProgramExecutor,
   type SessionExecutionPolicy, type SessionPolicyPermissionRequest,
 } from '@craft-agent/shared/agent'
 import type { SessionEvent } from '@craft-agent/shared/protocol'
 import type { ShellExecArgs } from '@craft-agent/session-tools-core'
 import { CLIENT_RUN_SHELL, type ClientShellResult } from '../transport'
+import { TurnClientContexts } from './turn-client-context'
 import { SessionManager } from './SessionManager'
 
 type ManagedTestSession = {
@@ -25,6 +26,7 @@ type ManagedTestSession = {
 }
 type PermissionEvent = Extract<SessionEvent, { type: 'permission_request' }>
 type NodePermissionHarness = {
+  turnClients: TurnClientContexts
   sessions: Map<string, ManagedTestSession>
   pendingPermissionRequests: Map<string, { sessionId: string }>
   pendingNodePermissions: Map<string, {
@@ -42,6 +44,7 @@ type NodePermissionHarness = {
   autoRespondToNodeRuntimePermission(managed: ManagedTestSession, request: { requestId: string; toolName: string; command?: string; description: string; type?: 'admin_approval' | 'file_write' }): boolean
   clearPendingPermissionRequestsForSession(sessionId: string): void
   respondToPermission(sessionId: string, requestId: string, allowed: boolean, alwaysAllow: boolean): boolean
+  clearSuperAgentPermissionGrants(workspaceId: string): void
   runSessionLocalShell(managed: ManagedTestSession, args: ShellExecArgs): Promise<ClientShellResult>
   deleteSession(sessionId: string): Promise<void>
 }
@@ -74,6 +77,7 @@ beforeEach(() => {
   managed = { id: sessionId, workspace: { id: 'workspace', rootPath: root }, workingDirectory: root,
     executionPolicy: policy, isProcessing: true, stopRequested: false }
   manager = Object.create(SessionManager.prototype) as NodePermissionHarness
+  manager.turnClients = new TurnClientContexts()
   manager.sessions = new Map([
     [sessionId, managed], [otherSessionId, { ...managed, id: otherSessionId }],
   ])
@@ -120,6 +124,26 @@ async function approveLocalShell(args: ShellExecArgs) {
 }
 
 describe('node permission lifecycle in SessionManager', () => {
+  test('shared permission revocation clears real operation grants only for the matching workspace', async () => {
+    const input = { file_path: join(outside, 'requested.txt') }
+    const first = beginPermission('Read', input)
+    expect(manager.respondToPermission(sessionId, first.request.requestId, true, false)).toBe(true)
+    expect((await first.result).allowed).toBe(true)
+    const other = manager.sessions.get(otherSessionId)!
+    other.executionPolicy = setSessionExecutionPolicy(otherSessionId, { ...managed.executionPolicy! })
+    other.workspace = { ...other.workspace, id: 'different-workspace' }
+    manager.attachNodePermissionHandler(other)
+    const result = authorizeSessionPolicyTool(otherSessionId, 'Read', input, root)
+    const event = events.findLast((item): item is PermissionEvent => item.type === 'permission_request' && item.sessionId === otherSessionId)!
+    expect(manager.respondToPermission(otherSessionId, event.request.requestId, true, false)).toBe(true)
+    expect((await result).allowed).toBe(true)
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(true)
+    expect(hasSessionPolicyToolGrant(otherSessionId, 'Read', input, root)).toBe(true)
+    manager.clearSuperAgentPermissionGrants('workspace')
+    expect(hasSessionPolicyToolGrant(sessionId, 'Read', input, root)).toBe(false)
+    expect(hasSessionPolicyToolGrant(otherSessionId, 'Read', input, root)).toBe(true)
+  })
+
   test('full control runs localbash on the connected client without an approval record', async () => {
     managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: true });
     const args = { command: 'echo test', cwd: outside, timeoutMs: 1_000 };
@@ -350,5 +374,34 @@ describe('localbash approval binds the real execution destination', () => {
     expect((await manager.runSessionLocalShell(ordinary, args)).stdout).toBe('client-a')
     expect(invocations).toHaveLength(1)
     expect(events).toHaveLength(0)
+  })
+
+  test('full control bypasses gates and backend approval; disabling it restores one-time gates', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, actionGates: true, fullControl: true })
+    manager.attachNodePermissionHandler(managed)
+    const input = { file_path: join(root, 'approved.txt'), content: 'approved' }
+    expect((await authorizeSessionPolicyTool(sessionId, 'Write', input, root)).allowed).toBe(true)
+    expect(events).toHaveLength(0)
+    const responses: boolean[] = []
+    managed.agent = { forceAbort: () => {}, respondToPermission: (_id, allowed) => { responses.push(allowed) } }
+    const runtime = join(temp, 'docker.exe'); writeFileSync(runtime, 'test runtime')
+    setSessionProgramExecutor(sessionId, { runtimePath: runtime, containerId: 'test-container', workingDirectory: '/workspace' })
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'backend', toolName: 'Bash', command: 'echo direct', description: 'program' })).toBe(true)
+    expect(responses).toEqual([true])
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, fullControl: false })
+    manager.attachNodePermissionHandler(managed)
+    const pending = authorizeSessionPolicyTool(sessionId, 'Write', input, root, undefined, 'write-once')
+    const event = events.find((event): event is PermissionEvent => event.type === 'permission_request')!
+    expect(event).toBeDefined()
+    expect(event.request.policyScope?.actionGate?.invocationId).toBe('write-once')
+    expect(manager.respondToPermission(sessionId, event.request.requestId, true, true)).toBe(true)
+    expect((await pending).allowed).toBe(true)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+    expect(manager.autoRespondToNodeRuntimePermission(managed, { requestId: 'backend', toolName: 'Write', description: 'write' })).toBe(false)
+    const second = authorizeSessionPolicyTool(sessionId, 'Write', input, root, undefined, 'write-again')
+    const secondEvent = events.filter((event): event is PermissionEvent => event.type === 'permission_request').at(-1)!
+    expect(secondEvent.request.requestId).not.toBe(event.request.requestId)
+    manager.respondToPermission(sessionId, secondEvent.request.requestId, false, false)
+    expect((await second).allowed).toBe(false)
   })
 })

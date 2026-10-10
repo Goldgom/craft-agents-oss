@@ -34,7 +34,7 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # upgrades are explicit — must match the --target in scripts/build-wa-worker.ts.
 ARG NODE_MAJOR=20
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates git ripgrep curl gnupg && \
+    apt-get install -y --no-install-recommends ca-certificates git ripgrep curl gnupg python3 python3-venv && \
     curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
@@ -45,6 +45,12 @@ RUN groupadd -r craftagents && \
     useradd -r -g craftagents -m -d /home/craftagents -s /bin/bash craftagents
 
 WORKDIR /app
+
+# MAF orchestrates existing TokenBird node sessions without another model account.
+COPY deploy/agent-framework/requirements.txt /tmp/agent-framework-requirements.txt
+RUN python3 -m venv /opt/tokenbird-agent-framework && \
+    /opt/tokenbird-agent-framework/bin/pip install --no-cache-dir -r /tmp/agent-framework-requirements.txt
+ENV TOKENBIRD_AGENT_FRAMEWORK_PYTHON=/opt/tokenbird-agent-framework/bin/python
 
 # Copy dependency manifests first for layer caching.
 # `bunfig.toml` MUST be in the WORKDIR before `bun install` runs — it sets

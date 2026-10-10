@@ -62,6 +62,8 @@ export interface BaseAuthRequest {
  * Credential auth request - prompts for API key, bearer token, etc.
  */
 export interface CredentialAuthRequest extends BaseAuthRequest {
+  savedCredentialName?: string;
+  savedCredentialKind?: 'password' | 'api-key' | 'secret';
   type: 'credential';
   mode: CredentialInputMode;
   labels?: {
@@ -180,6 +182,8 @@ export interface TextContent {
  */
 export interface ToolResult {
   content: TextContent[];
+  /** Image blocks preserved by the backend adapters. */
+  images?: import('./computer-use.ts').ToolImage[];
   /**
    * Optional structured payload for MCP clients.
    * Keep this as an object (not null) for compatibility with strict tool_result parsers.

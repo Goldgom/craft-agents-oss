@@ -11,6 +11,7 @@ import {
   ChevronUp,
   AlertCircle,
   Image as ImageIcon,
+  Minimize2,
 } from 'lucide-react'
 import { Icon_Home, Spinner } from '@craft-agent/ui'
 
@@ -94,6 +95,7 @@ import {
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
 import { useModelVisionToggle } from './useModelVisionToggle'
+import { ModelPeakValleyBadge } from './ModelPeakValleyBadge'
 
 function formatFollowUpChipText(text: string, fallback: string, maxLength = 50): string {
   const normalized = text.replace(/\s+/g, ' ').trim()
@@ -1611,6 +1613,7 @@ export function FreeFormInput({
   // compact surface. EditPopover also uses compactMode, but keeps the original
   // single-row toolbar because its model picker is intentionally disabled.
   const mobileToolbarLayout = compactMode && enableCompactModelPicker
+  const android = typeof document !== 'undefined' && document.documentElement.dataset.mobileApp === 'android'
 
   return (
     <form onSubmit={handleSubmit}>
@@ -1832,7 +1835,7 @@ export function FreeFormInput({
             sessionId={sessionId}
           />
 
-          <div className={cn(
+          <div data-mobile-composer-toolbar={mobileToolbarLayout || undefined} className={cn(
             mobileToolbarLayout
               ? "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 px-2 py-2"
               : "flex items-center gap-1 px-2 py-2",
@@ -2139,6 +2142,7 @@ export function FreeFormInput({
                       <>
                         {effectiveConnectionDetails && llmConnections.length > 1 && storage.get(storage.KEYS.showConnectionIcons, true) && <ConnectionIcon connection={effectiveConnectionDetails} size={14} showTooltip />}
                         {currentModelDisplayName}
+                        <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={connectionDefaultModel ?? currentModel} />
                         {pickerMode !== 'locked-single' && <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />}
                       </>
                     )}
@@ -2174,7 +2178,10 @@ export function FreeFormInput({
                       className="flex items-center justify-between px-2 py-2 rounded-lg"
                     >
                       <div className="text-left">
-                        <div className="font-medium text-sm">{stripPiPrefixForDisplay(connectionDefaultModel)}</div>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-medium text-sm truncate">{stripPiPrefixForDisplay(connectionDefaultModel)}</span>
+                          <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={connectionDefaultModel} />
+                        </div>
                         <div className="text-xs text-muted-foreground">{t('chat.connectionDefault')}</div>
                       </div>
                       <div className="flex items-center gap-1 ml-3 shrink-0">
@@ -2274,7 +2281,10 @@ export function FreeFormInput({
                                     }}
                                     className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
                                   >
-                                    <div className="font-medium text-sm">{modelName}</div>
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="font-medium text-sm truncate">{modelName}</span>
+                                      <ModelPeakValleyBadge connection={conn} modelId={modelId} />
+                                    </div>
                                     <div className="flex items-center gap-1 ml-3 shrink-0">
                                       {showVisionToggle && (
                                         <Tooltip>
@@ -2360,7 +2370,10 @@ export function FreeFormInput({
                         className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
                       >
                         <div className="text-left">
-                          <div className="font-medium text-sm">{modelName}</div>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-medium text-sm truncate">{modelName}</span>
+                            <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={modelId} />
+                          </div>
                           {description && (
                             <div className="text-xs text-muted-foreground">{description}</div>
                           )}
@@ -2505,13 +2518,16 @@ export function FreeFormInput({
                     type="button"
                     onClick={handleCompactClick}
                     disabled={isProcessing}
+                    data-composer-action="compact"
+                    aria-label={contextStatus?.isCompacting ? t('chat.compacting') : t('chat.compact')}
                     className="inline-flex items-center h-6 px-2 text-[12px] font-medium bg-info/10 rounded-[6px] shadow-tinted select-none cursor-pointer hover:bg-info/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{
                       '--shadow-color': 'var(--info-rgb)',
                       color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
                     } as React.CSSProperties}
                   >
-                    {contextStatus?.isCompacting ? t('chat.compacting') : t('chat.compact')}{usagePercent !== null ? ` · ${usagePercent}%` : ''}
+                    {android && <Minimize2 className="android-compact-icon" aria-hidden="true" />}
+                    <span className="composer-compact-label">{contextStatus?.isCompacting ? t('chat.compacting') : t('chat.compact')}{usagePercent !== null ? ` · ${usagePercent}%` : ''}</span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">

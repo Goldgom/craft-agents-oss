@@ -93,7 +93,17 @@ export function SuperAgentConfiguration({ config, connections, sources, environm
                 ? () => { patch({ nodes: draft.nodes.filter(node => node.id !== selected.id), scripts: draft.scripts.map(script => script.nodeId === selected.id ? { ...script, nodeId: undefined } : script) }); setSelectedNodeId(draft.nodes[0].id) } : undefined} />
           </FormSection>
         </>}
-        {section === 'environment' && <EnvironmentEditor environment={draft.environment} status={environmentStatus} onChange={environment => patch({ environment })} />}
+        {section === 'environment' && <>
+          <EnvironmentEditor environment={draft.environment} status={environmentStatus} onChange={environment => patch({ environment })} />
+          <FormSection title={text('continuity')}><div className="grid gap-4 sm:grid-cols-2">
+            {(['connectionConcurrency', 'connectionCallsPerMinute', 'stallMinutes', 'maxResumeAttempts'] as const).map(key => {
+              const defaults = { connectionConcurrency: 4, connectionCallsPerMinute: 60, stallMinutes: 15, maxResumeAttempts: 3 }
+              const labels = { connectionConcurrency: 'connectionConcurrency', connectionCallsPerMinute: 'connectionRate', stallMinutes: 'stallMinutes', maxResumeAttempts: 'resumeAttempts' } as const
+              return <FormField key={key} label={text(labels[key])}><Input type="number" min={key === 'maxResumeAttempts' ? 0 : 1} max={key === 'connectionConcurrency' ? 30 : key === 'connectionCallsPerMinute' ? 600 : key === 'maxResumeAttempts' ? 20 : 1440}
+                value={draft.execution?.[key] ?? defaults[key]} onChange={event => patch({ execution: { ...defaults, ...draft.execution, [key]: Number(event.target.value) } })} /></FormField>
+            })}
+          </div></FormSection>
+        </>}
       </fieldset>
       {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       <div className="flex items-center justify-end gap-3 border-t border-border/70 pt-5">

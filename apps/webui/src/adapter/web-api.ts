@@ -10,6 +10,7 @@
 
 import i18n from 'i18next'
 import webuiPackage from '../../package.json'
+import { canvasExportInfo } from '../../../electron/src/shared/canvas-export'
 import { toast } from 'sonner'
 import { openExternalUrl } from '@craft-agent/ui'
 import { WsRpcClient } from '../../../electron/src/transport/client'
@@ -17,6 +18,7 @@ import { buildClientApi } from '../../../electron/src/transport/build-api'
 import { CHANNEL_MAP } from '../../../electron/src/transport/channel-map'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { blobBase64, getPickedFile, pickedAttachment, saveBlob, webFilePicker } from './browser-files'
+import { requestBrowserClientFiles } from './client-files'
 import { pickServerDirectory } from './directory-picker'
 import { exportWebChat } from './chat-export'
 import type { ElectronAPI, TransportConnectionState } from '../../../electron/src/shared/types'
@@ -25,6 +27,8 @@ import {
   CLIENT_ANDROID_ADB,
   CLIENT_ANDROID_PERMISSION,
   CLIENT_CANVAS_INVOKE,
+  CLIENT_REMOTE_ACCESS,
+  CLIENT_REQUEST_FILES,
   type AndroidAdbRequest,
   type AndroidPermissionRequest,
 } from '@craft-agent/server-core/transport'
@@ -128,9 +132,15 @@ export function createWebApi(options: WebApiOptions): {
     token,
     autoReconnect: true,
     mode: 'remote',
-    clientCapabilities: window.TokenBirdDesktop ? [...WIN7_DESKTOP_CAPABILITIES, CLIENT_CANVAS_INVOKE] : androidCapabilities,
+    clientCapabilities: [
+      ...(window.TokenBirdDesktop ? [...WIN7_DESKTOP_CAPABILITIES, CLIENT_CANVAS_INVOKE] : androidCapabilities),
+      CLIENT_REQUEST_FILES,
+      ...(connectionMode === 'local' ? [] : [CLIENT_REMOTE_ACCESS]),
+    ],
     // No token — auth is via session cookie sent on WebSocket upgrade
   })
+
+  client.handleCapability(CLIENT_REQUEST_FILES, requestBrowserClientFiles)
 
   if (androidBridge) {
     client.handleCapability(CLIENT_ANDROID_PERMISSION, async (request: AndroidPermissionRequest) => {
@@ -191,18 +201,18 @@ export function createWebApi(options: WebApiOptions): {
     }
     if (input.action === 'open_project' && typeof input.projectPath === 'string') input.projectText = await baseApi.readFile(input.projectPath)
     const result = await canvasHandler(input) as Record<string, unknown>
-    if (['export_png', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
-      const project = input.action === 'save_project'
-      const name = typeof input.outputPath === 'string' ? input.outputPath.split(/[\\/]/).pop()! : `TokenBird-canvas.${project ? 'tbcanvas' : 'png'}`
+    if (['export_image', 'export_png', 'export_selection_mask', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
+      const info = canvasExportInfo(input)
+      const name = typeof input.outputPath === 'string' ? input.outputPath.split(/[\\/]/).pop()! : `TokenBird-canvas.${info.extension}`
       const bytes = Uint8Array.from(atob(result.base64), char => char.charCodeAt(0))
-      const saved = await saveBlob(new Blob([bytes], { type: project ? 'application/json' : 'image/png' }), name)
+      const saved = await saveBlob(new Blob([bytes], { type: info.mime }), name)
       return { saved: !saved.canceled, canceled: Boolean(saved.canceled), outputPath: saved.path, bytes: bytes.length }
     }
     return result
   })
   const downloadServerFile = async (path: string) => {
     const file = getPickedFile(path)
-    const blob = file ?? new Blob([await baseApi.readFileBinary(path) as BlobPart], { type: 'application/octet-stream' })
+    const blob = file ?? new Blob([await baseApi.readFileBinary(path, { userInitiated: true }) as BlobPart], { type: 'application/octet-stream' })
     await saveBlob(blob, file?.name ?? path.split(/[\\/]/).pop() ?? 'TokenBird-file')
   }
 
@@ -246,11 +256,11 @@ export function createWebApi(options: WebApiOptions): {
     getFilePath: () => null, // browser File bytes are handled by the attachment input
     openFolderDialog: () => pickServerDirectory(),
     pickStudioMindMapDirectory: pickServerDirectory,
-    readFile: path => getPickedFile(path)?.text() ?? baseApi.readFile(path),
-    readFileBinary: async path => getPickedFile(path) ? new Uint8Array(await getPickedFile(path)!.arrayBuffer()) : baseApi.readFileBinary(path),
+    readFile: (path, options) => getPickedFile(path)?.text() ?? baseApi.readFile(path, options),
+    readFileBinary: async (path, options) => getPickedFile(path) ? new Uint8Array(await getPickedFile(path)!.arrayBuffer()) : baseApi.readFileBinary(path, options),
     readFileAttachment: path => getPickedFile(path) ? pickedAttachment(path) : baseApi.readFileAttachment(path),
     readUserAttachment: path => getPickedFile(path) ? pickedAttachment(path) : baseApi.readUserAttachment(path),
-    readFileDataUrl: async path => getPickedFile(path) ? `data:${getPickedFile(path)!.type};base64,${await blobBase64(getPickedFile(path)!)}` : baseApi.readFileDataUrl(path),
+    readFileDataUrl: async (path, options) => getPickedFile(path) ? `data:${getPickedFile(path)!.type};base64,${await blobBase64(getPickedFile(path)!)}` : baseApi.readFileDataUrl(path, options),
     exportAllData: async () => {
       const result = await client.invoke(RPC_CHANNELS.settings.EXPORT_ALL_DATA_BUNDLE)
       if (!result.success) return result
@@ -270,7 +280,10 @@ export function createWebApi(options: WebApiOptions): {
       if (file.size > 50 * 1024 * 1024) throw new Error('备份超过 50 MB，请在服务器端导入')
       return client.invoke(RPC_CHANNELS.settings.IMPORT_ALL_DATA_FROM_PAYLOAD, { bundleBase64: await blobBase64(file), fileName: 'backup.zip' })
     },
-    changeLanguage: async language => { await i18n.changeLanguage(language) },
+    changeLanguage: async language => {
+      await i18n.changeLanguage(language)
+      window.CraftAgentAndroid?.setLanguage?.(language)
+    },
 
     // System info
     getClientVersion: () => Promise.resolve(webuiPackage.version),

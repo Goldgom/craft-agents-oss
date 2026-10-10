@@ -124,6 +124,10 @@ function resolveBundledBun(ctx?: ResolveScriptRuntimeContext): string | null {
   const appRoot = resolveAppRoot(ctx);
 
   return firstExistingPath([
+    // Windows ships one Bun under resources/vendor, shared with the agent
+    // backend. resourcesBase/appRoot point at resources/app instead.
+    resourcesBase && process.platform === 'win32' && inferPackagedMode(ctx)
+      ? join(resourcesBase, '..', 'vendor', 'bun', binary) : '',
     resourcesBase ? join(resourcesBase, 'vendor', 'bun', binary) : '',
     appRoot ? join(appRoot, 'vendor', 'bun', binary) : '',
   ]);

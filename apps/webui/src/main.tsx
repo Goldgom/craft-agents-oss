@@ -12,8 +12,17 @@ import { useTranslation } from 'react-i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import './index.css'
 
+// Apply Android layout before the first render, including connection prompts.
+// Native bridge availability must not decide whether a dialog is fullscreen.
+if (new URLSearchParams(window.location.search).get('embedded') === 'android') {
+  document.documentElement.dataset.mobileApp = 'android'
+  document.body.dataset.mobileApp = 'android'
+}
+
 // Initialize i18n before any React rendering
-setupI18n([LanguageDetector, initReactI18next])
+const appI18n = setupI18n([LanguageDetector, initReactI18next])
+const savedLanguage = window.CraftAgentAndroid?.getLanguage?.()
+if (savedLanguage) void appI18n.changeLanguage(savedLanguage)
 
 function CrashFallback() {
   const { t } = useTranslation()

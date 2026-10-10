@@ -1,0 +1,23 @@
+[Unit]
+Description=TokenBird Cloud Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tokenbird
+Group=tokenbird
+WorkingDirectory=/opt/tokenbird-cloud
+EnvironmentFile=/opt/tokenbird-cloud/deploy/cloud.env
+ExecStart=/opt/tokenbird-cloud/tokenbird-cloud
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/tokenbird-cloud/data
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

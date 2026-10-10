@@ -15,7 +15,7 @@ function idFor(type: CredentialType, workspaceId = 'local-a'): CredentialId {
   return type.startsWith('llm_') ? { type, connectionSlug: 'dummy-provider' }
     : type.startsWith('source_') ? { type, workspaceId, sourceId: 'dummy-source' }
     : type === 'workspace_oauth' ? { type, workspaceId }
-    : type === 'messaging_bearer' || type === 'page_publish_token' ? { type, workspaceId, name: 'dummy-account' }
+    : type === 'messaging_bearer' || type === 'page_publish_token' || type === 'saved_credential' ? { type, workspaceId, name: 'dummy-account' }
     : { type };
 }
 async function fixture(onApplied?: import('./credentials-native').NativeCredentialHandlerDeps['onApplied']) {

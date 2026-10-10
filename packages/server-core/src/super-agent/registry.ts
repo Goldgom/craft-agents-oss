@@ -1,5 +1,6 @@
-import { join } from 'node:path'
-import { access } from 'node:fs/promises'
+import { isAbsolute, join, relative, sep } from 'node:path'
+import { access, realpath } from 'node:fs/promises'
+import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import { spawn } from 'node:child_process'
 import { getLlmConnection, getModelsForProviderType, getWorkspaceByNameOrId, isImageGenerationModelId } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
@@ -8,13 +9,29 @@ import type { SuperAgentConfig, SuperAgentEnvironment } from '@craft-agent/share
 import type { ISessionManager } from '../handlers/session-manager-interface'
 import { SuperAgentService } from './SuperAgentService'
 import { SuperAgentEnvironments } from './SuperAgentEnvironments'
+import { MicrosoftAgentWorkflow } from './MicrosoftAgentWorkflow'
+import { setSessionOperationRecorder } from '@craft-agent/shared/agent'
 
 const services = new WeakMap<ISessionManager, { service: SuperAgentService; environments: SuperAgentEnvironments }>()
 const closedHosts = new WeakSet<ISessionManager>()
 
+async function validateExecutionRoot(workspaceId: string, environment: SuperAgentEnvironment): Promise<void> {
+  const workspace = getWorkspaceByNameOrId(workspaceId)
+  if (!workspace) throw new Error('Workspace not found')
+  const root = await realpath(environment.workingDirectory)
+  const contains = (parent: string, child: string) => {
+    const rel = relative(parent, child)
+    return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`))
+  }
+  for (const protectedRoot of [await realpath(workspace.rootPath), await realpath(CONFIG_DIR)]) {
+    if (contains(root, protectedRoot) || contains(protectedRoot, root)) throw new Error('Choose a project folder separate from TokenBird configuration, credentials and coordination data')
+  }
+}
+
 export async function validateSuperAgentCatalog(workspaceId: string, config: SuperAgentConfig): Promise<void> {
   const workspace = getWorkspaceByNameOrId(workspaceId)
   if (!workspace) throw new Error('Workspace not found')
+  await validateExecutionRoot(workspaceId, config.environment)
   const sources = new Set(loadWorkspaceSources(workspace.rootPath).map(source => source.config.slug))
   const credentials = getCredentialManager()
   for (const node of config.nodes) {
@@ -45,12 +62,15 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
   const environments = new SuperAgentEnvironments({ isVmHost: process.env.TOKENBIRD_EXECUTION_HOST === 'vm' })
   const environmentConfigs = new Map<string, SuperAgentEnvironment>()
   const service = new SuperAgentService({
+    actionGates: true,
+    upgradeArchitecture: true,
+    workflow: new MicrosoftAgentWorkflow(),
     host: {
       createSession: (workspaceId, options) => host.createSession(workspaceId, options),
       getSession: sessionId => host.getSession(sessionId),
       getSessions: workspaceId => host.getSessions(workspaceId),
       deleteSession: (sessionId, guard) => host.deleteSession(sessionId, guard),
-      sendMessage: (sessionId, message) => host.sendMessage(sessionId, message),
+      sendMessage: (sessionId, message, context, hidden) => host.sendMessage(sessionId, message, undefined, undefined, { collaborationDispatch: true, superAgentContext: context, hidden }),
       cancelProcessing: (sessionId, silent) => host.cancelProcessing(sessionId, silent),
       onSessionComplete: listener => host.onSessionComplete(listener),
       onSessionEvent: listener => host.onSessionEvent(listener),
@@ -58,6 +78,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       getSessionFinalText: sessionId => host.getSessionFinalText(sessionId),
       ensureSuperAgentSessionSettings: (sessionId, settings) => host.ensureSuperAgentSessionSettings(sessionId, settings),
       setSuperAgentFullControl: (workspaceId, fullControl) => host.setSuperAgentFullControl(workspaceId, fullControl),
+      clearSuperAgentPermissionGrants: workspaceId => host.clearSuperAgentPermissionGrants(workspaceId),
       applySessionPolicy: async (sessionId, policy) => {
         if (!host.applySessionPolicy) throw new Error('This host does not support Super Agent execution policies')
         const session = await host.getSession(sessionId)
@@ -66,6 +87,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
         if (!environment) throw new Error('Node environment has not been validated')
         const executor = await environments.prepareSession(session.workspaceId, environment, policy)
         await host.applySessionPolicy(sessionId, { ...policy, containerExecutor: executor })
+        setSessionOperationRecorder(sessionId, request => service.prepareNodeOperation(session.workspaceId, sessionId, request))
       },
     },
     rootForWorkspace: workspaceId => {
@@ -80,11 +102,12 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       if (current) await environments.reconcile(workspaceId, current)
     },
     resolveEnvironment: async (workspaceId, environment) => {
+      await validateExecutionRoot(workspaceId, environment)
       environmentConfigs.set(workspaceId, environment)
       return environments.resolve(workspaceId, environment)
     },
-    spawnScript: async ({ workspaceId, environment, script, path }) => {
-      if (environment.kind === 'sandbox') return environments.spawnScript(workspaceId, environment, path, script.args)
+    spawnScript: async ({ workspaceId, environment, script, path, approvedContent }) => {
+      if (environment.kind === 'sandbox') return environments.spawnScript(workspaceId, environment, path, script.args, approvedContent)
       // A VM workspace's server is already inside the chosen VM. Reuse its OS
       // executor only after the environment adapter has verified that host mode.
       const resolved = await environments.resolve(workspaceId, environment)
@@ -130,7 +153,8 @@ export async function restoreSuperAgents(host: ISessionManager, onError: (error:
   if (closedHosts.has(host)) return
   const service = getSuperAgentService(host)
   for (const workspace of host.getWorkspaces()) {
-    try { await access(join(workspace.rootPath, 'super-agent', 'state.json')) } catch { continue }
+    try { await access(join(workspace.rootPath, 'super-agent', 'state.json')) }
+    catch { try { await access(join(workspace.rootPath, 'super-agent', 'commit.json')) } catch { continue } }
     try { await service.get(workspace.id) } catch (error) { onError(error) }
   }
 }

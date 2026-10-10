@@ -25,16 +25,14 @@ interface AddWorkspaceContainerProps {
  * AddWorkspaceContainer - Main container for workspace creation steps
  *
  * Provides:
- * - Fixed width (28rem)
- * - Background with rounded corners
- * - Strong shadow for elevation
- * - Consistent padding
+ * - Comfortable reading width
+ * - Quiet, unframed layout on the page background
+ * - Consistent spacing across steps
  */
 export function AddWorkspaceContainer({ children, className }: AddWorkspaceContainerProps) {
   return (
     <div className={cn(
-      "flex w-full max-w-[28rem] flex-col items-center",
-      "bg-background rounded-[20px] shadow-strong p-8",
+      "flex w-full max-w-[30rem] flex-col items-center py-4",
       className
     )}>
       {children}
@@ -57,7 +55,7 @@ interface AddWorkspaceStepHeaderProps {
 /**
  * AddWorkspaceStepHeader - Title and description for workspace steps
  *
- * Always center-aligned with tight spacing for visual consistency.
+ * Center-aligned with a clear title hierarchy and generous spacing.
  */
 export function AddWorkspaceStepHeader({
   title,
@@ -65,12 +63,12 @@ export function AddWorkspaceStepHeader({
   className
 }: AddWorkspaceStepHeaderProps) {
   return (
-    <div className={cn("text-center", className)}>
-      <h1 className="text-lg font-semibold tracking-tight">
+    <div className={cn("w-full text-center", className)}>
+      <h1 className="text-2xl font-semibold leading-tight tracking-tight sm:text-[30px]">
         {title}
       </h1>
       {description && (
-        <p className="mt-1 text-sm max-w-sm text-muted-foreground mx-auto">
+        <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-muted-foreground">
           {description}
         </p>
       )}

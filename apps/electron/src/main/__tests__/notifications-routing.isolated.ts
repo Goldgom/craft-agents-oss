@@ -48,6 +48,7 @@ describe('notification click routing', () => {
       isDestroyed: () => false,
       isMinimized: () => false,
       restore: () => {},
+      show: mock(() => {}),
       focus: () => {},
       webContents: {
         id: 101,
@@ -68,6 +69,7 @@ describe('notification click routing', () => {
     notifications.showNotification('Title', 'Body', 'ws-1', 'sess-1')
     expect(clickHandler).toBeTruthy()
     clickHandler?.()
+    expect(mockWindow.show).toHaveBeenCalledTimes(1)
 
     expect(pushed.length).toBe(1)
     expect(pushed[0]?.channel).toBe(RPC_CHANNELS.notification.NAVIGATE)
@@ -82,6 +84,7 @@ describe('notification click routing', () => {
       isDestroyed: () => false,
       isMinimized: () => false,
       restore: () => {},
+      show: mock(() => {}),
       focus: () => {},
       webContents: {
         id: 202,
@@ -102,6 +105,7 @@ describe('notification click routing', () => {
     notifications.showNotification('Title', 'Body', 'ws-2', 'sess-2')
     expect(clickHandler).toBeTruthy()
     clickHandler?.()
+    expect(mockWindow.show).toHaveBeenCalledTimes(1)
 
     expect(pushed.length).toBe(1)
     expect(pushed[0]?.target).toEqual({ to: 'workspace', workspaceId: 'ws-2' })

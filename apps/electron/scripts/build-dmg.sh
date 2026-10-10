@@ -256,10 +256,10 @@ echo "Packaging app with electron-builder..."
 cd "$ELECTRON_DIR"
 
 # Set up environment for electron-builder
-export CSC_IDENTITY_AUTO_DISCOVERY=true
+export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-true}"
 
 # Build electron-builder arguments
-BUILDER_ARGS=(--mac "--${ARCH}")
+BUILDER_ARGS=(--mac "--${ARCH}" --publish never)
 ELECTRON_DIST="$ROOT_DIR/node_modules/electron/dist"
 if [ "$FORCE_DOWNLOAD" = false ] && [ -f "$ELECTRON_DIST/version" ] && {
     { [ "$ARCH" = x64 ] && [ "$(uname -m)" = x86_64 ]; } ||

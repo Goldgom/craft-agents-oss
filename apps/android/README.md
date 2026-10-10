@@ -4,6 +4,10 @@ Android / Windows 功能对照与当前平台限制：[FEATURE_PARITY.md](FEATUR
 
 This is the Android client for TokenBird Community Edition. It starts a loopback-only HTTP service inside the APK and bundles the `apps/webui` frontend as local assets, so the APK does not depend on the remote server hosting HTML, JavaScript, CSS, or fonts. Agent RPC, sessions, automations, models, and messaging continue to run on the configured server over WebSocket/RPC.
 
+## Background work and display
+
+Local chat runs in an independent foreground service, so closing or recreating the activity does not terminate its backend. An app-private task counter lets a service worker keep the CPU awake only while work is active, including when the WebView is suspended. Settings provides a background execution authorization entry; on vivo/iQOO also allow **High background power usage** in the system background power controls. Display language is saved in native preferences and restored before the WebUI renders, even if its loopback port changes. Image messages can preview stored originals when Android cannot generate thumbnails, and image-only messages omit empty text bubbles.
+
 ## Build
 
 Requirements:
@@ -36,6 +40,12 @@ Release output is `dist/android/tokenbird-release-unsigned.apk`. Configure a pri
 The app starts a localhost-only HTTP server inside the APK and loads the bundled frontend from it. Every fresh launch opens **Local chat** directly on supported devices and starts a new conversation; reloading a page preserves its current conversation. The APK extracts and starts the bundled ARM64 Bun backend on an available loopback port and connects with a generated per-launch token. Use the left drawer's mode entry to switch to **Server mode** later; URL and token fields are shown only there. Remote credentials are retained locally, but do not change the next fresh launch's local default. Devices that cannot run the local backend open the mode picker instead.
 
 The Android interface starts with a light RGB palette compatible with older WebViews and retains a persistent light/dark switch in the drawer (Settings also supports following the system theme). The native configuration pages and system bars follow the selected theme. It has a persistent app bar, a left drawer with searchable recent and starred conversations, and a touch-sized composer. The app bar offers workspace selection and a new conversation action; additional tools and server configuration stay in the drawer.
+
+The chat composer stays available while a reply is running, with a stop button and compact context action that fit narrow phones. The Android Pi bundle disables the SDK's desktop native clipboard loader; Android clipboard access belongs to the WebView. Runtime startup has a 45-second deadline so a stalled child produces an error and can be retried instead of leaving a conversation busy indefinitely. System locale extensions (such as Android Bun's `en-US-u-va-posix`) are handled when formatting the prompt's language preference.
+
+App dialogs, including canvas and mind-map connection prompts, open as fullscreen pages on Android. Their height follows the visible viewport when the keyboard opens; long forms remain scrollable, and closing controls stay visible. App-owned native permission and ADB confirmations also use fullscreen windows. Android's system permission prompts and file pickers remain system-managed.
+
+On the canvas, pinch with two fingers to zoom (10–400%) and drag both fingers to pan, regardless of the selected tool. Single-finger input keeps using the selected tool; choose the hand tool for single-finger panning. Starting a two-finger gesture cancels the unfinished edit, and lifting one finger does not resume painting. Zoom buttons and Fit to content remain available.
 
 Drawer entries for skills, sources, projects, sessions, automations, and settings open their lists first. Sources show existing integrations in the active workspace, with API/MCP/local filters; selecting a row opens its details. Compact Back returns to the same list and preserves its filter. Standalone agent, script-monitor, and tool management pages render their controls in the visible content panel.
 

@@ -185,11 +185,11 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
   })
 
   // Create a new session
-  server.handle(RPC_CHANNELS.sessions.CREATE, async (_ctx, workspaceId: string, options?: import('@craft-agent/shared/protocol').CreateSessionOptions) => {
+  server.handle(RPC_CHANNELS.sessions.CREATE, async (ctx, workspaceId: string, options?: import('@craft-agent/shared/protocol').CreateSessionOptions) => {
     const end = perf.start('rpc.createSession', { workspaceId })
     // The renderer adds the session synchronously from this return value (App.tsx handleCreateSession),
     // so suppress the broadcast to avoid a redundant hydrate round-trip.
-    const session = await sessionManager.createSession(workspaceId, options, { emitCreatedEvent: false })
+    const session = await sessionManager.createSession(workspaceId, options, { emitCreatedEvent: false, callerClientId: ctx.clientId })
     end()
     return session
   })
@@ -213,6 +213,9 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
   //     event stream as today.
   // attachments: FileAttachment[] for Claude (has content), storedAttachments: StoredAttachment[] for persistence (has thumbnailBase64)
   server.handle(RPC_CHANNELS.sessions.SEND_MESSAGE, async (ctx, sessionId: string, message: string, attachments?: FileAttachment[], storedAttachments?: StoredAttachment[], options?: SendMessageOptions) => {
+    // Model-only team context is produced by the host's node dispatcher.
+    // Clients may submit visible messages but cannot inject this internal field.
+    const clientOptions = options ? { ...options, superAgentContext: undefined } : undefined
     // Capture the caller's clientId for error routing
     const callerClientId = ctx.clientId
 
@@ -226,7 +229,7 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
       }
 
       sessionManager
-        .sendMessage(sessionId, message, attachments, storedAttachments, options, undefined, undefined, onAck, { callerClientId })
+        .sendMessage(sessionId, message, attachments, storedAttachments, clientOptions, undefined, undefined, onAck, { callerClientId })
         .then(() => {
           // sendMessage finished without firing onAck — should not happen in
           // practice (every code path that creates a user message acks).

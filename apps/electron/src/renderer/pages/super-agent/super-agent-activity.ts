@@ -4,6 +4,13 @@ import type { PermissionRequest } from '../../../shared/types'
 export type SuperAgentActivity = NonNullable<SuperAgentSnapshot['activity']>[number]
 export type SuperAgentApproval = NonNullable<SuperAgentSnapshot['permissionRequests']>[number]
 
+/** Chat contains user interaction; live model activity belongs to worker progress. */
+export function conversationMessages(messages: SuperAgentMessage[]): SuperAgentMessage[] {
+  return messages.filter(message => (message.fromNodeId === 'user' || message.toNodeId === 'user')
+    && (message.kind !== 'inspection' || message.userFacing === true)
+    && !!visibleActivityText(message.body))
+}
+
 /** Hide the complete control block as well as a block still arriving in chunks. */
 export function visibleActivityText(value: string): string {
   let content = value

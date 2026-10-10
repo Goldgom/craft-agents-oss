@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next"
-import { FolderPlus, FolderOpen } from "lucide-react"
+import { ArrowRight, FolderPlus, FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { AddWorkspaceContainer, AddWorkspaceStepHeader } from "./primitives"
 
@@ -19,29 +19,33 @@ interface ChoiceCardProps {
 function ChoiceCard({ icon, title, description, onClick, variant = 'secondary' }: ChoiceCardProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={cn(
-        "flex items-center gap-4 w-full p-4 rounded-lg text-left",
-        "bg-background shadow-minimal",
-        "transition-all duration-150",
+        "group flex w-full items-center gap-4 rounded-xl border px-5 py-5 text-left sm:px-6 sm:py-6",
+        "transition-colors duration-150",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         variant === 'primary'
-          ? "hover:bg-accent/5"
-          : "hover:bg-foreground/5"
+          ? "border-foreground bg-foreground text-background hover:bg-foreground/90"
+          : "border-foreground/10 bg-transparent text-foreground hover:border-foreground/20 hover:bg-foreground/[0.03]"
       )}
     >
       <div className={cn(
-        "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+        "flex h-10 w-10 shrink-0 items-center justify-center",
         variant === 'primary'
-          ? "bg-accent/10 text-accent"
-          : "bg-foreground/5 text-foreground/70"
+          ? "text-background/80"
+          : "text-muted-foreground"
       )}>
         {icon}
       </div>
-      <div className="min-w-0">
-        <div className="font-medium text-[15px] text-foreground">{title}</div>
-        <div className="text-[12px] text-muted-foreground -mt-[1px]">{description}</div>
+      <div className="min-w-0 flex-1">
+        <div className="text-base font-medium leading-6">{title}</div>
+        <div className={cn(
+          "mt-1 text-sm leading-relaxed",
+          variant === 'primary' ? "text-background/65" : "text-muted-foreground"
+        )}>{description}</div>
       </div>
+      <ArrowRight aria-hidden="true" className="h-4 w-4 shrink-0 opacity-40 group-hover:opacity-80" />
     </button>
   )
 }
@@ -60,13 +64,12 @@ export function AddWorkspaceStep_Choice({
   const { t } = useTranslation()
   return (
     <AddWorkspaceContainer>
-      <div className="mt-2" />
       <AddWorkspaceStepHeader
         title={t("workspace.addWorkspace")}
         description={t("workspace.addWorkspaceDesc")}
       />
 
-      <div className="mt-8 w-full space-y-3">
+      <div className="mt-10 w-full space-y-3">
         <ChoiceCard
           icon={<FolderPlus className="h-5 w-5" />}
           title={t("workspace.createNew")}

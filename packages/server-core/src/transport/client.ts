@@ -226,7 +226,7 @@ export class WsRpcClient implements RpcClient {
         : this.requestTimeout
       const timeout = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Request timeout: ${channel} (${timeoutMs}ms)`))
+        reject(this.createConnectionError('timeout', `Request timeout: ${channel} (${timeoutMs}ms)`, 'REQUEST_TIMEOUT'))
       }, timeoutMs)
 
       this.pending.set(id, { resolve, reject, timeout })

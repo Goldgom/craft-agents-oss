@@ -34,4 +34,7 @@
     <string name="permission_request_deny">Not now</string>
     <string name="adb_command_title">Allow this network ADB command?</string>
     <string name="adb_command_warning">Network ADB can control sensitive parts of this device. Review every command carefully.</string>
+    <string name="background_channel">On-device chat</string>
+    <string name="background_processing">Processing your task in the background</string>
+    <string name="background_ready">On-device chat is ready</string>
 </resources>

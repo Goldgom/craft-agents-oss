@@ -16,7 +16,7 @@ import { homedir } from 'os';
 import { existsSync, realpathSync } from 'fs';
 import { debug } from '../utils/debug.ts';
 import { dirname, isAbsolute, relative, resolve } from 'path';
-import { getSessionSafeAllowedToolNames } from '@craft-agent/session-tools-core';
+import { getSessionSafeAllowedToolNames, isComputerUseTool, isComputerUseReadOnly } from '@craft-agent/session-tools-core';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
 import { isBrowserToolNameOrAlias } from './browser-tool-names.ts';
 import type { PermissionsContext, MergedPermissionsConfig } from './permissions-config.ts';
@@ -1851,6 +1851,11 @@ export function shouldAllowToolInMode(
   }
 
   // Safe mode: check against read-only allowlist
+  if (isComputerUseTool(toolName)) {
+    return isComputerUseReadOnly((toolInput ?? {}) as Record<string, unknown>)
+      ? { allowed: true }
+      : { allowed: false, reason: 'Desktop input is blocked in Explore mode. Switch to Ask or Allow All to control Windows applications.' };
+  }
 
   // Always-allowed tools (read-only by nature)
   if (ALWAYS_ALLOWED_TOOLS.has(toolName)) {

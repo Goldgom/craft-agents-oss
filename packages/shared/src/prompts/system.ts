@@ -374,7 +374,7 @@ const BUILTIN_PROMPT_SKILLS: readonly BuiltinPromptSkill[] = [
   { slug: 'messaging-and-collaboration', description: 'Work with messaging channels, shared collaboration boards, and collaboration files.' },
   { slug: 'resource-transfer', description: 'Export or import portable source and integration bundles.' },
   { slug: 'remote-operations', description: 'Run scoped local/remote shell commands and transfer files over SFTP.' },
-  { slug: 'windows-desktop-control', description: 'Operate the visible Windows desktop with screenshots, mouse input, and keyboard input.' },
+  { slug: 'windows-desktop-control', description: 'Use computer_use to observe and operate Windows applications: screenshots, UI elements, windows, mouse and keyboard.' },
   { slug: 'subagent-collaboration', description: 'Delegate bounded tool-using work and integrate verified results.', capability: 'subagents' },
 ] as const;
 
@@ -398,6 +398,7 @@ function formatBuiltinSkillEntries(skills: readonly BuiltinPromptSkill[], compac
 function formatBuiltinSkillsPrompt(compact = false): string {
   const capabilities = getSystemPromptSettings().capabilities;
   const visible = BUILTIN_PROMPT_SKILLS.filter(skill => {
+    if (skill.slug === 'windows-desktop-control' && process.platform !== 'win32') return false;
     if (skill.capability && capabilities[skill.capability] === false) return false;
     if (skill.capability === 'browserTools' && !getBrowserToolEnabled()) return false;
     return true;
@@ -989,6 +990,7 @@ The \`session\` MCP server provides tools for managing external sources:
 | \`source_slack_oauth_trigger\` | Slack OAuth |
 | \`source_microsoft_oauth_trigger\` | Microsoft OAuth (Outlook, Teams, OneDrive) |
 | \`source_credential_prompt\` | Prompt user for API key / bearer token |
+| \`saved_credentials\` | List named local accounts/keys, request secure user input, fill credentials on their saved website, or inject credentials into a shell process environment |
 
 **Source creation workflow:**
 1. Read \`${DOC_REFS.sources}\` for the full setup guide

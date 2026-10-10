@@ -1,3 +1,4 @@
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { Check, Settings2, Sparkles } from 'lucide-react'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import { cn } from '@/lib/utils'
@@ -19,9 +20,7 @@ export function SuperAgentPresetPicker({ connections, connectionSlug, onConnecti
     <p className="text-xs leading-5 text-muted-foreground">{text(available ? 'presetDescription' : 'presetUnavailable')}</p>
     {ready.length > 0 && <label className="flex flex-wrap items-center gap-3 text-xs">
       {text('selectConnection')}
-      <select className="max-w-full rounded-md border border-border bg-background px-3 py-2" value={connectionSlug} onChange={event => onConnectionChange(event.target.value)}>
-        {ready.map(item => <option key={item.slug} value={item.slug}>{item.name}</option>)}
-      </select>
+      <WorkbenchSelect className="max-w-full" value={connectionSlug} onValueChange={value => onConnectionChange(value)} options={[...ready.map(item => ({ value: item.slug, label: item.name }))]} />
     </label>}
     <div className="grid gap-3 sm:grid-cols-2">
       {[...SUPER_AGENT_PRESETS, 'custom' as const].map(value => {

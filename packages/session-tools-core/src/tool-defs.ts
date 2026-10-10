@@ -29,11 +29,13 @@ import {
   handleMicrosoftOAuthTrigger,
 } from './handlers/source-oauth.ts';
 import { handleCredentialPrompt } from './handlers/credential-prompt.ts';
+import { handleSavedCredentials } from './handlers/saved-credentials.ts';
 import { handleUpdatePreferences } from './handlers/update-preferences.ts';
 import { handleTransformData } from './handlers/transform-data.ts';
 import { handleScriptSandbox } from './handlers/script-sandbox.ts';
 import { handleRunShell, handleLocalBash } from './handlers/shell-tools.ts';
 import { handleAndroidPermission, handleAndroidAdb } from './handlers/android-device.ts';
+import { handleRequestClientFiles } from './handlers/request-client-files.ts';
 import { handleSftpTransfer } from './handlers/sftp-transfer.ts';
 import { handleRenderTemplate } from './handlers/render-template.ts';
 import { handleSendDeveloperFeedback } from './handlers/send-developer-feedback.ts';
@@ -54,18 +56,45 @@ import {
 import { handleArchiveSession } from './handlers/archive-session.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
 import { handleCollaborationBoard } from './handlers/collaboration-board.ts';
+import { handleSuperAgentTask } from './handlers/super-agent-task.ts';
 import { handleCollaborationFile } from './handlers/collaboration-file.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel, handleSendMessagingMedia, handleSendMessagingTemplateCard } from './handlers/messaging.ts';
 import { handleExportResources } from './handlers/export-resources.ts';
 import { handleImportResources } from './handlers/import-resources.ts';
 import { handleCanvasTool } from './handlers/canvas-tool.ts';
+import { handleComputerUse } from './handlers/computer-use.ts';
+import { ComputerUseSchema } from './computer-use.ts';
 
 // ============================================================
 // Canonical Zod Schemas
 // ============================================================
 
+export const RequestClientFilesSchema = z.object({
+  reason: z.string().trim().min(1).max(240).describe('Explain why these files are needed; shown to the user'),
+  allowMultiple: z.boolean().optional(),
+  extensions: z.array(z.string().regex(/^[a-zA-Z0-9]{1,16}$/)).max(20).optional().describe('Suggested file extensions without dots'),
+});
+
 export const SubmitPlanSchema = z.object({
   planPath: z.string().describe('Absolute path to the plan markdown file you wrote'),
+});
+
+const CredentialNameSchema = z.string().trim().min(1).max(256).refine(value => !value.includes('::') && !/[\u0000-\u001f\u007f]/.test(value));
+export const SavedCredentialsSchema = z.object({
+  action: z.enum(['list', 'request', 'fill', 'run']),
+  name: CredentialNameSchema.optional(),
+  kind: z.enum(['password', 'api-key', 'secret']).optional(),
+  url: z.string().url().refine(value => {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+  }).optional(),
+  description: z.string().max(1000).optional(),
+  field: z.enum(['username', 'secret']).optional(),
+  ref: z.string().min(1).max(128).optional(),
+  command: z.string().min(1).max(32000).optional(),
+  env: z.record(z.enum(['username', 'secret'])).refine(value => Object.keys(value).length <= 20 && Object.keys(value).every(key => /^TB_CRED_[A-Z0-9_]+$/.test(key))).optional(),
+  cwd: z.string().optional(),
+  timeoutMs: z.number().int().min(1000).max(600000).optional(),
 });
 
 export const ConfigValidateSchema = z.object({
@@ -84,10 +113,16 @@ export const CanvasToolSchema = z.object({
     'import_image', 'open_project', 'export_png', 'save_project', 'set_selection', 'clear_selection',
     'add_layer', 'duplicate_layer', 'remove_layer', 'move_layer', 'set_layer', 'transform_layer', 'merge_down',
     'paint', 'erase', 'extract_selection', 'clear_selection_pixels', 'cutout', 'adjust', 'set_parameters',
+    'list_tools', 'select_lasso', 'select_brush', 'select_ellipse', 'select_wand', 'invert_selection', 'export_selection_mask',
+    'delete_pixels', 'clone_stamp', 'sample_color', 'fill_region', 'draw_text', 'draw_shape', 'draw_gradient', 'crop_layer', 'pixelate', 'exposure_brush',
     'generate', 'choose_candidate', 'download_candidate', 'dismiss_candidates',
     'list_image_connections', 'generate_image',
     'list_history', 'add_history', 'delete_history', 'download_history', 'reuse_prompt',
     'ask_gpt', 'undo', 'redo', 'fit_view', 'zoom', 'set_view',
+    'set_document', 'resize_document', 'crop_document', 'select_all', 'modify_selection', 'select_polygon',
+    'set_layer_mask', 'paint_layer_mask', 'apply_layer_mask', 'group_layers', 'set_group', 'align_layers', 'flatten_layers',
+    'copy_pixels', 'cut_pixels', 'paste_pixels', 'add_text_layer', 'edit_text_layer', 'rasterize_layer',
+    'filter', 'export_image', 'set_guides', 'get_history', 'heal_stamp', 'retouch_brush', 'fill_selection', 'stroke_selection',
   ]).describe('Canvas operation to perform'),
   sessionId: z.string().optional().describe('Target drawing session ID; select it first when editing another session'),
   title: z.string().optional().describe('Session title for rename'),
@@ -97,15 +132,52 @@ export const CanvasToolSchema = z.object({
   projectPath: z.string().optional().describe('Canvas project path on the connected desktop client'),
   outputPath: z.string().optional().describe('Where to save an exported PNG or .tbcanvas on the connected desktop client'),
   layerId: z.string().optional(),
+  layerIds: z.array(z.string()).min(1).max(100).optional(),
+  blendMode: z.enum(['source-over','multiply','screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light','difference','exclusion','hue','saturation','color','luminosity']).optional(),
+  locked: z.boolean().optional(), alphaLocked: z.boolean().optional(), clipping: z.boolean().optional(),
+  group: z.string().max(80).optional(), alignment: z.enum(['left','center','right','top','middle','bottom']).optional(),
+  background: z.string().regex(/^(transparent|#[0-9a-f]{6})$/i).optional(), infinite: z.boolean().optional(), trim: z.boolean().optional(),
+  grid: z.boolean().optional(), snap: z.boolean().optional(),
+  guides: z.array(z.object({axis:z.enum(['x','y']),value:z.number().finite()})).max(100).optional(),
+  operation: z.enum(['feather','expand','contract','invert']).optional(), radius: z.number().finite().min(0).max(128).optional(),
+  retouchMode: z.enum(['blur','sharpen','smudge']).optional(),
+  maskMode: z.enum(['reveal','hide','selection','remove','enable','disable']).optional(), reveal: z.boolean().optional(),
+  hardness: z.number().finite().min(0).max(100).optional(), brushOpacity: z.number().finite().min(0).max(100).optional(),
+  filter: z.enum(['levels','curves','color-balance','invert','threshold','posterize','sharpen','noise','blur']).optional(),
+  amount: z.number().finite().min(0).max(255).optional(), black: z.number().finite().min(0).max(254).optional(), white: z.number().finite().min(1).max(255).optional(), gamma: z.number().finite().min(.1).max(10).optional(),
+  red: z.number().finite().min(-100).max(100).optional(), green: z.number().finite().min(-100).max(100).optional(), blue: z.number().finite().min(-100).max(100).optional(),
+  curve: z.array(z.object({x:z.number().finite().min(0).max(255),y:z.number().finite().min(0).max(255)})).min(2).max(32).optional(), seed: z.number().int().optional(),
+  format: z.enum(['png','jpeg','webp']).optional(), quality: z.number().finite().min(.1).max(1).optional(), selectionOnly: z.boolean().optional(),
   name: z.string().optional(),
   visible: z.boolean().optional(),
   opacity: z.number().min(0).max(100).optional().describe('Layer opacity percent'),
   direction: z.enum(['up', 'down']).optional(),
-  transform: z.enum(['flip-x', 'flip-y', 'rotate']).optional(),
+  transform: z.enum(['flip-x', 'flip-y', 'rotate', 'resize-rotate']).optional(),
   x: z.number().optional(), y: z.number().optional(), width: z.number().optional(), height: z.number().optional(),
   toX: z.number().optional(), toY: z.number().optional(),
+  sourceX: z.number().finite().optional().describe('Clone stamp source X in canvas coordinates; source is sampled at stroke start'),
+  sourceY: z.number().finite().optional().describe('Clone stamp source Y in canvas coordinates'),
+  selectionMode: z.enum(['replace', 'add', 'subtract', 'intersect']).optional().describe('Combine a new selection with the existing mask; default replace'),
   points: z.array(z.object({ x: z.number(), y: z.number() })).min(1).max(2000).optional().describe('Optional freehand stroke path in canvas coordinates'),
   color: z.string().optional(), brush: z.number().min(1).max(160).optional(),
+  targetWidth: z.number().finite().min(1).max(4096).optional().describe('Target layer content width before rotation'),
+  targetHeight: z.number().finite().min(1).max(4096).optional(),
+  skewX: z.number().finite().min(-75).max(75).optional(), skewY: z.number().finite().min(-75).max(75).optional(),
+  angle: z.number().finite().min(-360).max(360).optional().describe('Clockwise degrees for transform=resize-rotate; preserves content center'),
+  smoothing: z.boolean().optional().describe('False uses nearest-neighbor resampling'),
+  blockSize: z.number().int().min(2).max(128).optional().describe('World-aligned mosaic block size'),
+  exposureMode: z.enum(['dodge', 'burn']).optional(),
+  strength: z.number().finite().min(1).max(100).optional().describe('Local exposure strength percent'),
+  boundsX: z.number().finite().optional().describe('Fill scope origin; defaults to x when width/height supplied'),
+  boundsY: z.number().finite().optional(),
+  text: z.string().min(1).max(2000).optional().describe('Raster text, supports newlines; x/y is the top-left anchor'),
+  fontSize: z.number().min(8).max(512).optional(),
+  fontFamily: z.string().regex(/^[\p{L}\p{N} _-]{1,80}$/u).optional(),
+  bold: z.boolean().optional(),
+  shape: z.enum(['rectangle', 'ellipse', 'line', 'arrow']).optional(),
+  filled: z.boolean().optional().describe('Fill rectangle/ellipse instead of stroking'),
+  secondaryColor: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+  gradientKind: z.enum(['linear', 'radial']).optional(),
   tolerance: z.number().min(0).max(100).optional(),
   cut: z.boolean().optional(),
   zoom: z.number().min(0.1).max(4).optional(),
@@ -188,6 +260,7 @@ export const CallLlmSchema = z.object({
 export const UpdatePreferencesSchema = z.object({
   name: z.string().optional().describe("The user's preferred name or how they'd like to be addressed"),
   timezone: z.string().optional().describe("The user's timezone in IANA format (e.g., 'America/New_York', 'Europe/London')"),
+  preferredProxy: z.string().optional().describe('The network proxy URL the user explicitly prefers for network tools (HTTP or SOCKS). This does not configure application or model API networking. Use an empty string to clear the preference.'),
   city: z.string().optional().describe("The user's city"),
   region: z.string().optional().describe("The user's state/region/province"),
   country: z.string().optional().describe("The user's country"),
@@ -392,6 +465,17 @@ export const SendAgentMessageSchema = z.object({
 
 export const CollaborationBoardReadSchema = z.object({
   action: z.literal('get').describe('Read the members, current shared board, files, and activity history'),
+  goalId: z.string().max(64).optional(), taskId: z.string().max(64).optional(), itemIds: z.array(z.string().max(64)).max(100).optional(),
+  offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(),
+});
+export const SuperAgentTaskSchema = z.object({
+  action: z.enum(['get', 'checkpoint', 'wait', 'artifact', 'reconcile']), taskId: z.string().max(64).optional(),
+  expectedRevision: z.number().int().min(0).optional(), completedSteps: z.array(z.string().max(500)).max(100).optional(),
+  nextStep: z.string().max(4000).optional(), note: z.string().max(4000).optional(), reason: z.string().max(4000).optional(),
+  condition: z.object({ kind: z.enum(['time', 'board', 'task', 'file']), notBefore: z.number().optional(), itemId: z.string().optional(),
+    afterRevision: z.number().optional(), taskId: z.string().optional(), path: z.string().optional(), sha256: z.string().optional() }).optional(),
+  id: z.string().max(64).optional(), path: z.string().max(4096).optional(), description: z.string().max(4000).optional(),
+  operationId: z.string().max(64).optional(), evidenceTaskId: z.string().max(64).optional(), outcome: z.enum(['completed', 'not-executed']).optional(),
 });
 
 export const CollaborationBoardUpdateSchema = z.object({
@@ -455,7 +539,7 @@ export const ImportResourcesSchema = z.object({
 // ============================================================
 
 export const TOOL_DESCRIPTIONS = {
-  canvas_tool: `Operate TokenBird drawing sessions through the connected desktop client. Start with list_sessions or get_state. Use sessionId to target a specific drawing session; select_session switches the editor to it. Supports session CRUD, importing images/projects, PNG/project export, selections, layers, painting/erasing, cutout, color/style/blur adjustments, AI image generation, GPT canvas questions, undo/redo and view controls. Image/project/output paths refer to the connected desktop machine. Destructive delete_session requires confirm=true. For canvas AI generation, set image connection/model first with set_parameters; inpaint/outpaint require a selection. To generate a standalone GPT Image without opening the canvas, call list_image_connections then generate_image with a prompt; this requires a configured image connection or TokenNest image access and saves PNG files in the agent session.`,
+  canvas_tool: `Operate TokenBird drawing sessions through the connected desktop client. Start with list_sessions, get_state or list_tools (tools grouped by purpose). Use sessionId to target a specific drawing session; select_session switches the editor to it. Supports session CRUD, image/project import, PNG/JPEG/WebP/project export, layers, painting/erasing, cutout, color/style/blur adjustments, AI generation, GPT questions, undo/redo and view controls. Core editing: set_document changes the canvas frame with x/y/width/height (1-4096), background=transparent|#RRGGBB or infinite=true; resize_document resamples all unlocked layers using width/height, preserving relative positions; crop_document crops to the selection bounds or explicit frame, trim=false changes only the frame. set_guides sets guides=[{axis:x|y,value}], grid and snap. set_layer accepts blendMode (Canvas blend names), locked, alphaLocked and clipping. group_layers takes layerIds/group; set_group takes group/name/visible; align_layers takes layerIds/alignment=left|center|right|top|middle|bottom and aligns within selection or document; flatten_layers merges visible layers, retaining hidden layers. select_all selects the document or content; select_polygon takes at least 3 points; modify_selection uses operation=feather|expand|contract|invert and radius=0-128; invert uses document/content bounds. set_layer_mask uses maskMode=reveal|hide|selection|remove|enable|disable; paint_layer_mask uses points/brush/reveal; apply_layer_mask bakes the mask. copy_pixels/cut_pixels copy active-layer selected visible pixels; paste_pixels adds a new layer with optional x/y. add_text_layer creates editable text; edit_text_layer changes source text/font/color while preserving movement and transforms; rasterize_layer enables pixel editing. filter applies levels (black/white/gamma), curves (ordered curve points 0-255), color-balance (red/green/blue -100..100), invert, threshold (amount 0-255), posterize (amount 2-100), sharpen/noise (amount 0-100), blur (amount 0-24), to the selected active-layer pixels, optionally restricted by points/brush. retouch_brush uses points/brush, retouchMode=blur|sharpen|smudge and strength=1-100 for local retouch. heal_stamp uses sourceX/sourceY and points/brush to blend source texture with destination color. paint/erase support brushOpacity and hardness (0-100), with opacity applied once per stroke. export_image writes format=png|jpeg|webp, quality=.1-1, selectionOnly=true optionally, to outputPath. get_history returns undo/redo summaries. Every mutating editing command supports undo/redo; locks and editable text reject destructive pixel edits. Drawing tools: draw_text takes x/y/text/fontSize/fontFamily/bold/color; text is rasterized on the active layer. draw_shape takes x/y/toX/toY, shape=rectangle|ellipse|line|arrow, brush, color and filled. fill_region floods connected active-layer colors from x/y within the selection or content bounds; explicit scope uses boundsX/boundsY/width/height (required on an empty layer without a selection). draw_gradient takes x/y/toX/toY, color/secondaryColor and gradientKind=linear|radial; fills the selection or drag rectangle. New drawing colors use #RRGGBB, all four actions respect selection holes and support undo/redo; raster bounds must fit 4096 pixels per side. fill_selection fills every selected island with color; stroke_selection outlines all selection edges, including holes, with color and brush (1-128). Layer geometry: crop_layer keeps only the active layer selection (including mask holes), or an explicit x/y/width/height crop; it deletes pixels outside the crop while retaining world position. transform_layer with transform=resize-rotate uses targetWidth/targetHeight and angle (clockwise degrees), optional skewX/skewY (-75..75 degrees); transforms the whole active layer around its content center, ignoring selection; legacy flip-x/flip-y/rotate remain supported. Pixel tools: pixelate uses blockSize (2-128) on the selection, layer content, explicit x/y/width/height, or a points/brush stroke. exposure_brush uses points/brush, exposureMode=dodge|burn and strength (1-100), changing RGB while preserving alpha. Both pixel tools respect actual masks and use a frozen stroke source, supporting undo/redo. Retouch selections: select_lasso uses at least 3 points; select_brush uses points and brush; select_ellipse uses x/y/width/height; select_wand uses x/y/tolerance on the active layer. selectionMode is replace (default), add, subtract or intersect. invert_selection is an alias of modify_selection with operation=invert within document/content bounds; export_selection_mask writes a PNG with opaque selected pixels. delete_pixels deletes the selection, or erases a points/brush path if none. clone_stamp uses sourceX/sourceY and a destination points path, sampling a snapshot of the active layer at stroke start. sample_color returns merged visible color/alpha. Paint, erase, clone, extract, delete, adjust, export and AI edits respect the actual selection mask, including holes. Precision masks are limited to 4096 pixels per side; all coordinates are canvas world pixels. Image/project/output paths refer to the connected desktop machine. Destructive delete_session requires confirm=true. For canvas AI, set image connection/model with set_parameters; inpaint/outpaint require a selection; generate with mode=cutout creates a transparent subject on a new layer. To generate a standalone image without opening the canvas, use list_image_connections then generate_image; this requires a configured image connection or TokenNest image access and saves PNG files in the agent session.`,
   SubmitPlan: `Submit a plan for user review.
 
 Call this after you have written your plan to a markdown file using the Write tool.
@@ -626,6 +710,8 @@ Use action=status before assuming access. For action=request, provide one allowl
   android_adb: `Use the connected Android client's advanced network ADB bridge.
 
 Use action=status first. action=shell is available only after the user explicitly enables and configures network ADB in Android settings. Every command is displayed verbatim in a native confirmation and runs only after approval. Prefer normal app APIs and android_permission; use ADB only when the task genuinely requires device-level diagnostics or automation. Do not disable security controls, alter ADB authorization, or hide the purpose of a command.`,
+
+  request_client_files: `Ask the user on the device that initiated this turn to select files and upload them to the session host. Provide a short reason in the user's language. The user must explicitly choose files and can cancel. Up to 5 files, 8 MiB total. Returns saved host paths, never client paths. Use Read or file tools on the returned paths. Works in remote browser and desktop connections without SFTP. Never assume the client filesystem is the host filesystem; never retry a cancellation without the user's request.`,
 
   sftp_transfer: `Transfer a file between the CLIENT machine and the remote server over the configured SFTP connection.
 
@@ -893,6 +979,7 @@ export type SessionToolDef = RegistrySessionToolDef | BackendSessionToolDef;
 // ============================================================
 
 export const SESSION_TOOL_DEFS: SessionToolDef[] = [
+  { name: 'computer_use', description: 'Operate the visible Windows host desktop using the bundled component: status, screenshot, position, windows, snapshot (UI Automation), focus, move, click, drag, scroll, type, key and wait. Read the windows-desktop-control skill before first use. Screenshots return an actual image with left/top/scale metadata: physical x = left + imageX / scale, y = top + imageY / scale. Inspect before acting and verify afterwards. windowId comes from windows. Input affects the current foreground app. Explore allows observation only; Ask requires approval for input. This controls the host running the session, not a remote client, and cannot operate a locked desktop or bypass UAC.', inputSchema: ComputerUseSchema, executionMode: 'registry', safeMode: 'block', handler: handleComputerUse },
   { name: 'canvas_tool', description: TOOL_DESCRIPTIONS.canvas_tool, inputSchema: CanvasToolSchema, executionMode: 'registry', safeMode: 'allow', handler: handleCanvasTool },
   { name: 'SubmitPlan', description: TOOL_DESCRIPTIONS.SubmitPlan, inputSchema: SubmitPlanSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSubmitPlan },
   { name: 'config_validate', description: TOOL_DESCRIPTIONS.config_validate, inputSchema: ConfigValidateSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleConfigValidate },
@@ -904,6 +991,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'source_slack_oauth_trigger', description: TOOL_DESCRIPTIONS.source_slack_oauth_trigger, inputSchema: SourceOAuthTriggerSchema, executionMode: 'registry', safeMode: 'block', handler: handleSlackOAuthTrigger },
   { name: 'source_microsoft_oauth_trigger', description: TOOL_DESCRIPTIONS.source_microsoft_oauth_trigger, inputSchema: SourceOAuthTriggerSchema, executionMode: 'registry', safeMode: 'block', handler: handleMicrosoftOAuthTrigger },
   { name: 'source_credential_prompt', description: TOOL_DESCRIPTIONS.source_credential_prompt, inputSchema: CredentialPromptSchema, executionMode: 'registry', safeMode: 'block', handler: handleCredentialPrompt },
+  { name: 'saved_credentials', description: 'Manage user-named local credentials. list returns names/account metadata only. request pauses for secure user input and saves it; never ask users to paste passwords into chat. fill injects username or secret into a browser ref on the saved website origin (requires saved URL). run injects fields as environment variables named TB_CRED_* into a host shell command; refer to these variables in scripts, never embed secrets. run returns only exit status, no process output. Name matching is exact and workspace-scoped. Secrets are never returned to the model. Use request again to update an existing credential.', inputSchema: SavedCredentialsSchema, executionMode: 'registry', safeMode: 'block', handler: handleSavedCredentials },
   { name: 'update_user_preferences', description: TOOL_DESCRIPTIONS.update_user_preferences, inputSchema: UpdatePreferencesSchema, executionMode: 'registry', safeMode: 'block', handler: handleUpdatePreferences },
   { name: 'transform_data', description: TOOL_DESCRIPTIONS.transform_data, inputSchema: TransformDataSchema, executionMode: 'registry', safeMode: 'allow', handler: handleTransformData },
   { name: 'script_sandbox', description: TOOL_DESCRIPTIONS.script_sandbox, inputSchema: ScriptSandboxSchema, executionMode: 'registry', safeMode: 'allow', handler: handleScriptSandbox },
@@ -911,6 +999,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'localbash', description: TOOL_DESCRIPTIONS.localbash, inputSchema: LocalBashSchema, executionMode: 'registry', safeMode: 'block', handler: handleLocalBash },
   { name: 'android_permission', description: TOOL_DESCRIPTIONS.android_permission, inputSchema: AndroidPermissionSchema, executionMode: 'registry', safeMode: 'block', handler: handleAndroidPermission },
   { name: 'android_adb', description: TOOL_DESCRIPTIONS.android_adb, inputSchema: AndroidAdbSchema, executionMode: 'registry', safeMode: 'block', handler: handleAndroidAdb },
+  { name: 'request_client_files', description: TOOL_DESCRIPTIONS.request_client_files, inputSchema: RequestClientFilesSchema, executionMode: 'registry', safeMode: 'allow', handler: handleRequestClientFiles },
   { name: 'sftp_transfer', description: TOOL_DESCRIPTIONS.sftp_transfer, inputSchema: SftpTransferSchema, executionMode: 'registry', safeMode: 'block', handler: handleSftpTransfer },
   { name: 'render_template', description: TOOL_DESCRIPTIONS.render_template, inputSchema: RenderTemplateSchema, executionMode: 'registry', safeMode: 'allow', handler: handleRenderTemplate },
   { name: 'send_developer_feedback', description: TOOL_DESCRIPTIONS.send_developer_feedback, inputSchema: SendDeveloperFeedbackSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSendDeveloperFeedback },
@@ -937,6 +1026,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   // Inter-session messaging
   { name: 'send_agent_message', description: TOOL_DESCRIPTIONS.send_agent_message, inputSchema: SendAgentMessageSchema, executionMode: 'registry', safeMode: 'block', handler: handleSendAgentMessage },
   { name: 'collaboration_board', description: TOOL_DESCRIPTIONS.collaboration_board, inputSchema: CollaborationBoardReadSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleCollaborationBoard },
+  { name: 'super_agent_task', description: 'Persist Super Agent task checkpoints during execution, wait for a concrete condition, register versioned artifacts, or read task/operation state. Only the current task owner can write. Reconcile an unknown operation only with a completed verification task and its evidence. This tool grants no external permissions.', inputSchema: SuperAgentTaskSchema, executionMode: 'registry', safeMode: 'allow', handler: handleSuperAgentTask },
   { name: 'update_collaboration_board', description: TOOL_DESCRIPTIONS.update_collaboration_board, inputSchema: CollaborationBoardUpdateSchema, executionMode: 'registry', safeMode: 'block', handler: handleCollaborationBoard },
   { name: 'collaboration_file', description: TOOL_DESCRIPTIONS.collaboration_file, inputSchema: CollaborationFileSchema, executionMode: 'registry', safeMode: 'block', handler: handleCollaborationFile },
   // Messaging gateway tools
@@ -964,6 +1054,7 @@ export function getSessionToolDefs(options?: SessionToolFilterOptions): SessionT
   const includeDeveloperFeedback = options?.includeDeveloperFeedback ?? true;
 
   return SESSION_TOOL_DEFS.filter(def => {
+    if (def.name === 'computer_use' && process.platform !== 'win32') return false;
     if (!includeDeveloperFeedback && def.name === 'send_developer_feedback') {
       return false;
     }

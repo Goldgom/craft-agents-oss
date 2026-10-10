@@ -1,7 +1,7 @@
 /**
  * TopBar - Persistent top bar above all panels (Slack-style)
  *
- * Layout: [Sidebar] [Menu] [Server] [Studio mode] [Back] [Forward] [Workspace selector] ... [Browser strip] [+] [Help]
+ * Layout: [Sidebar] [Menu] [Server] [Studio mode] [Workspace selector] ... [Browser strip] [+] [Help]
  *
  * Fixed at top of window, 48px tall.
  * macOS: offset left to avoid stoplight controls.
@@ -14,7 +14,6 @@ import { PanelLeftRounded } from "../icons/PanelLeftRounded"
 import { TopBarButton } from "../ui/TopBarButton"
 import { cn } from "@/lib/utils"
 import { isAndroidEmbedded, isMac, isWebUI } from "@/lib/platform"
-import { useActionLabel } from "@/actions"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -78,10 +77,6 @@ interface TopBarProps {
   onOpenSettingsSubpage: (subpage: SettingsMenuItem['id']) => void
   onOpenKeyboardShortcuts: () => void
   onOpenStoredUserPreferences: () => void
-  onBack: () => void
-  onForward: () => void
-  canGoBack: boolean
-  canGoForward: boolean
   onToggleSidebar: () => void
   onToggleFocusMode: () => void
   onAddSessionPanel: () => void
@@ -106,10 +101,6 @@ export function TopBar({
   onOpenSettingsSubpage,
   onOpenKeyboardShortcuts,
   onOpenStoredUserPreferences,
-  onBack,
-  onForward,
-  canGoBack,
-  canGoForward,
   onToggleSidebar,
   onToggleFocusMode,
   onAddSessionPanel,
@@ -120,8 +111,6 @@ export function TopBar({
   const [maxVisibleBrowserBadges, setMaxVisibleBrowserBadges] = useState(3)
   const rightSlotRef = useRef<HTMLDivElement | null>(null)
 
-  const goBackHotkey = useActionLabel('nav.goBackAlt').hotkey
-  const goForwardHotkey = useActionLabel('nav.goForwardAlt').hotkey
   const androidEmbedded = isAndroidEmbedded()
 
   useEffect(() => {
@@ -172,7 +161,7 @@ export function TopBar({
       style={{ height: 'var(--topbar-height)' }}
     >
       <div className="flex h-full w-full items-center justify-between gap-2">
-      {/* === LEFT: Sidebar + Menu + Navigation + Workspace === */}
+      {/* === LEFT: Sidebar + Menu + Studio mode + Workspace === */}
       {/* Keep this container draggable. Only individual interactive controls should use titlebar-no-drag. */}
       {/* In compact mode the right slot is hidden, so we add right padding here
           so the workspace pill doesn't run flush against the viewport edge. */}
@@ -218,35 +207,8 @@ export function TopBar({
 
         <div className="ml-1"><StudioModeSwitcher value={studioMode} onChange={onStudioModeChange} compact={isCompact} /></div>
 
-        {/* Back / Forward / Workspace selector (moved from center).
-            In compact mode the back/forward buttons are dropped — the iOS-style
-            drill-in chevron in PanelHeader plus the browser's native back gesture
-            cover that affordance, and the freed width lets the workspace pill
-            actually fit on phone-width viewports. */}
-        {studioMode === 'agent' && (
+        {/* Keep workspace selection available across all studio modes. */}
         <div className={cn("ml-1 flex min-w-0 items-center gap-1", isCompact ? "flex-1" : "w-[clamp(220px,42vw,640px)]")}>
-          {!isCompact && (
-            <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <TopBarButton onClick={onBack} disabled={!canGoBack} aria-label={t("common.back")}>
-                    <Icons.ChevronLeft className="h-[18px] w-[18px] text-foreground/70" strokeWidth={1.5} />
-                  </TopBarButton>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t("common.back")} {goBackHotkey}</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <TopBarButton onClick={onForward} disabled={!canGoForward} aria-label={t("common.forward")}>
-                    <Icons.ChevronRight className="h-[18px] w-[18px] text-foreground/70" strokeWidth={1.5} />
-                  </TopBarButton>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{t("common.forward")} {goForwardHotkey}</TooltipContent>
-              </Tooltip>
-            </>
-          )}
-
           <div className="min-w-0 flex-1">
             {isCompact ? (
               <CompactWorkspaceSwitcher
@@ -270,7 +232,6 @@ export function TopBar({
             )}
           </div>
         </div>
-        )}
       </div>
 
       {/* === RIGHT: Browser strip + add + help === */}

@@ -47,22 +47,6 @@ const springTransition = { type: 'spring' as const, stiffness: 300, damping: 30 
 // Traffic lights positioned at x:18, ~52px wide = 70px + 14px gap
 const STOPLIGHT_PADDING = 84
 
-// Compact header controls are 44px touch targets with a 6px flex gap.
-// Reserve the real occupied width for the centered title so long titles truncate
-// before the right-side action cluster instead of rendering underneath it.
-const COMPACT_HEADER_SIDE_PADDING = 8
-const COMPACT_HEADER_BUTTON_SIZE = 44
-const COMPACT_HEADER_GAP = 6
-const COMPACT_HEADER_TITLE_GAP = 8
-
-function compactTitleInset(controlCount: number): number {
-  if (controlCount <= 0) return 16
-  return COMPACT_HEADER_SIDE_PADDING
-    + (controlCount * COMPACT_HEADER_BUTTON_SIZE)
-    + (controlCount * COMPACT_HEADER_GAP)
-    + COMPACT_HEADER_TITLE_GAP
-}
-
 export interface PanelHeaderProps {
   /** Header title (undefined hides with animation) */
   title?: string
@@ -145,7 +129,7 @@ export function PanelHeader({
       initial={false}
       animate={{ opacity: title ? 1 : 0 }}
       transition={{ duration: 0.15 }}
-      className="flex items-center gap-1"
+      className="flex items-center gap-1 min-w-0"
     >
       <h1 className={cn(
         "text-sm font-semibold truncate font-sans leading-tight",
@@ -188,18 +172,6 @@ export function PanelHeader({
 
   const titleNode = (isCompactMode && compactTitleMenu) ? compactTitleMenu : desktopTitleNode
 
-  // Compact (mobile) layout puts the title in an absolute-positioned overlay.
-  // The side insets are based on the actual number of control slots so a long
-  // title truncates before the right-side action cluster instead of overlapping it.
-  const compactLeadingControlCount = leadingAction ? 1 : 0
-  const compactTrailingControlCount = [centerButton, actions, rightSidebarButton].filter(Boolean).length
-  const compactTitleInsetStyle = isCompactMode
-    ? {
-        left: compactTitleInset(compactLeadingControlCount),
-        right: compactTitleInset(compactTrailingControlCount),
-      }
-    : undefined
-
   const content = isCompactMode ? (
     <>
       {leadingAction && (
@@ -207,7 +179,9 @@ export function PanelHeader({
           {leadingAction}
         </div>
       )}
-      <div className="flex-1" />
+      <div data-mobile-panel-title className="flex-1 min-w-0 flex items-center justify-center overflow-hidden">
+        <div className="min-w-0 max-w-full overflow-hidden">{titleNode}</div>
+      </div>
       {centerButton && (
         <div className="titlebar-no-drag shrink-0 z-[1]">
           {centerButton}
@@ -223,14 +197,6 @@ export function PanelHeader({
           {rightSidebarButton}
         </div>
       )}
-      <div
-        className="absolute inset-y-0 flex items-center justify-center pointer-events-none"
-        style={compactTitleInsetStyle}
-      >
-        <div className="max-w-full overflow-hidden pointer-events-auto">
-          {titleNode}
-        </div>
-      </div>
     </>
   ) : (
     <>

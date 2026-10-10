@@ -36,10 +36,9 @@ const plugins: import('esbuild').Plugin[] = [{
     }))
     build.onLoad({ filter: /agent[\\/]backend[\\/]factory\.ts$/ }, args => {
       const source = readFileSync(args.path, 'utf8')
-      const original = 'session: { id: `test-${now}`, workspaceRootPath: cwd, createdAt: 0, lastUsedAt: 0 },'
+      const original = 'session: { id: `test-${now}`, workspaceRootPath: cwd, workingDirectory: cwd, createdAt: 0, lastUsedAt: 0 },'
       if (!source.includes(original)) throw new Error('Connection-test compatibility patch needs review')
-      return { contents: source.replace('const cwd = homedir();', 'const cwd = process.env.TOKENBIRD_CONFIG_DIR!;')
-        .replace(original, 'session: { id: `test-${now}`, workspaceRootPath: cwd, workingDirectory: cwd, createdAt: 0, lastUsedAt: 0 },'), loader: 'ts' }
+      return { contents: source.replace('const cwd = homedir();', 'const cwd = process.env.TOKENBIRD_CONFIG_DIR!;'), loader: 'ts' }
     })
     build.onLoad({ filter: /main[\\/]chat-export\.ts$/ }, args => {
       const source = readFileSync(args.path, 'utf8')

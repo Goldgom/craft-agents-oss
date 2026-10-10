@@ -9,6 +9,7 @@
  */
 
 import { atom } from 'jotai'
+import { selectAtom } from 'jotai/utils'
 import type { Getter, Setter } from 'jotai/vanilla'
 import { atomFamily } from 'jotai-family'
 import type { Session, Message } from '../../shared/types'
@@ -19,6 +20,8 @@ import { visibleSessionIdsAtom } from './panel-stack'
  * Used by SessionList to avoid re-rendering on message changes
  */
 export interface SessionMeta {
+  branchFromMessageId?: string
+  branchFromSessionId?: string
   id: string
   name?: string
   /** Preview of first user message (for title fallback) */
@@ -149,6 +152,18 @@ export const sessionAtomFamily = atomFamily(
  * Only contains lightweight data needed for SessionList
  */
 export const sessionMetaMapAtom = atom<Map<string, SessionMeta>>(new Map())
+
+/** Message actions only observe branch structure; streaming in other chats stays isolated. */
+export const sessionBranchesAtom = selectAtom(sessionMetaMapAtom,
+  map => [...map.values()].filter(session => !!session.branchFromMessageId).map(session => ({
+    id: session.id, workspaceId: session.workspaceId, name: session.name,
+    branchFromMessageId: session.branchFromMessageId, createdAt: session.createdAt,
+  })).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id.localeCompare(b.id)),
+  (previous, next) => previous.length === next.length && previous.every((session, index) => {
+    const other = next[index]!
+    return session.id === other.id && session.workspaceId === other.workspaceId && session.name === other.name
+      && session.branchFromMessageId === other.branchFromMessageId && session.createdAt === other.createdAt
+  }))
 
 /**
  * Derived atom: ordered list of session IDs (for list ordering)

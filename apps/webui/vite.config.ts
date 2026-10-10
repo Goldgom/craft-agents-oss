@@ -3,11 +3,45 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 import { win7Css } from '../../scripts/win7-css'
+import { readFileSync, readdirSync } from 'node:fs'
+
+// Vite accepts one publicDir. The shared studio assets use it, so include
+// WebUI branding explicitly in both builds and the development server.
+const webuiPublicDir = resolve(__dirname, 'src/public')
+const webuiPublicFiles = readdirSync(webuiPublicDir, { withFileTypes: true })
+  .filter(entry => entry.isFile())
+  .map(entry => entry.name)
+const publicContentTypes: Record<string, string> = {
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8',
+}
 
 export default defineConfig(({ mode }) => {
   const win7 = mode === 'win7' || mode === 'win7-local'
   return ({
   plugins: [
+    {
+      name: 'webui-public-assets',
+      generateBundle() {
+        for (const fileName of webuiPublicFiles) {
+          this.emitFile({ type: 'asset', fileName, source: readFileSync(resolve(webuiPublicDir, fileName)) })
+        }
+      },
+      configureServer(server) {
+        server.middlewares.use((request, response, next) => {
+          const fileName = request.url?.split('?', 1)[0]?.slice(1)
+          if (!fileName || !webuiPublicFiles.includes(fileName) || !['GET', 'HEAD'].includes(request.method ?? '')) {
+            next()
+            return
+          }
+          const content = readFileSync(resolve(webuiPublicDir, fileName))
+          response.setHeader('Content-Type', publicContentTypes[fileName.slice(fileName.lastIndexOf('.'))] ?? 'application/octet-stream')
+          response.setHeader('Content-Length', content.length)
+          response.end(request.method === 'HEAD' ? undefined : content)
+        })
+      },
+    },
     react({
       babel: {
         plugins: [

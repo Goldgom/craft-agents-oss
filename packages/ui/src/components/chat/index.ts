@@ -12,6 +12,7 @@ export { InlineExecution, mapToolEventToActivity, type InlineExecutionProps, typ
 export { TurnCardActionsMenu, type TurnCardActionsMenuProps } from './TurnCardActionsMenu'
 export { SessionViewer, type SessionViewerProps, type SessionViewerMode } from './SessionViewer'
 export { UserMessageBubble, type UserMessageBubbleProps } from './UserMessageBubble'
+export { MessageHistoryActions } from './MessageHistoryActions'
 export { SystemMessage, type SystemMessageProps, type SystemMessageType } from './SystemMessage'
 
 // Attachment helpers

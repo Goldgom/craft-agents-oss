@@ -299,3 +299,19 @@ describe('Claude/Pi session self-management parity', () => {
     expect(listResult.content[0]!.text).toContain('not available in this context');
   });
 });
+
+
+describe('client file request binding', () => {
+  it('routes the registered tool through callbacks added after context creation and preserves cancellation', async () => {
+    const sessionId = 'client-file-binding';
+    const ctx = createBaseContext(sessionId);
+    attachSessionSelfManagementBindings(ctx, sessionId);
+    expect(ctx.requestClientFilesFn).toBeUndefined();
+    mergeSessionScopedToolCallbacks(sessionId, { requestClientFilesFn: async () => ({ canceled: true, files: [] }) });
+    try {
+      const result = await SESSION_TOOL_REGISTRY.get('request_client_files')!.handler!(ctx, { reason: 'Please choose a report' });
+      expect(result.isError).toBe(false);
+      expect(JSON.parse(result.content[0]!.text!)).toEqual({ canceled: true, files: [] });
+    } finally { unregisterSessionScopedToolCallbacks(sessionId); }
+  });
+});

@@ -15,6 +15,7 @@ import { successResponse, errorResponse } from '../response.ts';
 export interface UpdatePreferencesArgs {
   name?: string;
   timezone?: string;
+  preferredProxy?: string;
   city?: string;
   region?: string;
   country?: string;
@@ -44,6 +45,9 @@ export async function handleUpdatePreferences(
     }
     if (args.timezone && typeof args.timezone === 'string') {
       updates.timezone = args.timezone;
+    }
+    if (typeof args.preferredProxy === 'string') {
+      updates.preferredProxy = args.preferredProxy.trim();
     }
 
     // Handle location fields

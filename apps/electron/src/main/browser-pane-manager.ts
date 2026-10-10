@@ -995,11 +995,11 @@ export class BrowserPaneManager implements IBrowserPaneManager {
     }
   }
 
-  async fillElement(id: string, ref: string, value: string): Promise<void> {
+  async fillElement(id: string, ref: string, value: string, protection?: { expectedOrigin: string; sensitive: boolean }): Promise<void> {
     const instance = this.requireAliveInstance(id)
 
     try {
-      const geometry = await instance.cdp.fillElement(ref, value)
+      const geometry = await instance.cdp.fillElement(ref, value, protection)
       instance.lastAction = {
         tool: 'browser_fill',
         ref,
@@ -2678,9 +2678,9 @@ export class BrowserPaneManager implements IBrowserPaneManager {
         return this.drag(instanceId, x1, y1, x2, y2)
       }
       case 'fillElement': {
-        const [instanceId, ref, value] = args as [string, string, string]
+        const [instanceId, ref, value, protection] = args as [string, string, string, { expectedOrigin: string; sensitive: boolean } | undefined]
         this.requireOwnedInstance(instanceId, ownerKey)
-        return this.fillElement(instanceId, ref, value)
+        return this.fillElement(instanceId, ref, value, protection)
       }
       case 'typeText': {
         const [instanceId, text] = args as [string, string]

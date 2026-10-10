@@ -14,8 +14,8 @@ android {
         applicationId = "top.goldgom.tokenbird"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "26.10.4"
+        versionCode = 2
+        versionName = "26.10.9"
         manifestPlaceholders["appLabel"] = "@string/app_name"
 
         buildConfigField("String", "SERVER_URL", "\"${configuredServerUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")

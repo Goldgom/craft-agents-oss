@@ -21,11 +21,22 @@ describe('current turn completion', () => {
   })
   test('an empty completion cannot return the previous answer', () => {
     expect(resolveSessionTurnCompletion([oldAnswer, user], 'complete', 'old', 'old'))
-      .toEqual({ reason: 'error', finalText: 'Turn completed without a new final assistant response.' })
+      .toEqual({ reason: 'error', finalText: 'Turn completed without a new final assistant response.', errorCode: 'empty_response', canRetry: true })
+  })
+  test('blank new final answers are recoverable empty responses, not successful results', () => {
+    for (const content of ['', ' \n\t ']) {
+      expect(resolveSessionTurnCompletion([oldAnswer, user, { ...answer, content }], 'complete', 'old', 'new'))
+        .toEqual({ reason: 'error', finalText: 'Turn completed without a new final assistant response.', errorCode: 'empty_response', canRetry: true })
+    }
   })
   test('successful recovery after an error returns only the new final answer', () => {
     expect(resolveSessionTurnCompletion([oldAnswer, user, error, answer], 'complete', 'old', 'new'))
       .toEqual({ reason: 'complete', finalMessageId: 'new', finalText: answer.content })
+  })
+  test('an empty final answer cannot mask a preceding nonretryable error', () => {
+    const typed = { ...error, content: 'Invalid API key', errorCode: 'invalid_api_key', errorCanRetry: false }
+    expect(resolveSessionTurnCompletion([oldAnswer, user, typed, { ...answer, content: ' ' }], 'complete', 'old', 'new'))
+      .toEqual({ reason: 'error', finalText: typed.content, errorCode: typed.errorCode, canRetry: false })
   })
   test('an error after a new answer is still a failed turn', () => {
     expect(resolveSessionTurnCompletion([oldAnswer, user, answer, error], 'complete', 'old', 'new'))

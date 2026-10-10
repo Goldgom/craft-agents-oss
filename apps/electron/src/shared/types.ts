@@ -2,6 +2,7 @@
 // Protocol re-exports (channels, DTOs, events, wire types)
 // =============================================================================
 export * from '@craft-agent/shared/protocol'
+import type { FileReadOptions } from '@craft-agent/shared/protocol'
 
 // =============================================================================
 // Package re-exports (convenience for renderer imports)
@@ -345,6 +346,14 @@ export interface ElectronAPI {
   getRuntimeServerStatus(): Promise<import('@craft-agent/core/types').ServerStatus>
 
   // Server mode configuration
+  getCloudConfig(): Promise<import('../../../../packages/shared/src/cloud/types').CloudConfig>
+  setCloudConfig(config: import('../../../../packages/shared/src/cloud/types').CloudConfig): Promise<void>
+  getCloudStatus(): Promise<import('../../../../packages/shared/src/cloud/types').CloudStatus>
+  listCloudDevices(): Promise<import('../../../../packages/shared/src/cloud/types').CloudDevice[]>
+  connectCloudDevice(id: string): Promise<{ url: string; token: string; expiresAt: number }>
+  shareCloudChat(sessionId: string): Promise<import('../../../../packages/shared/src/cloud/types').CloudShare>
+  listCloudShares(): Promise<import('../../../../packages/shared/src/cloud/types').CloudShare[]>
+  revokeCloudShare(id: string): Promise<{ ok: boolean }>
   getServerConfig(): Promise<import('@craft-agent/shared/config/server-config').ServerConfig>
   setServerConfig(config: import('@craft-agent/shared/config/server-config').ServerConfig): Promise<void>
   getServerStatus(): Promise<import('@craft-agent/shared/config/server-config').ServerStatus>
@@ -407,14 +416,18 @@ export interface ElectronAPI {
 
   // Event listeners
   onSessionEvent(callback: (event: SessionEvent) => void): () => void
+  /** Client-local desktop companion; absent in the web frontend. */
+  getBirdCompanionPreferences?(): Promise<import('./bird-companion').BirdCompanionPreferences>
+  setBirdCompanionPreferences?(updates: Partial<import('./bird-companion').BirdCompanionPreferences>): Promise<import('./bird-companion').BirdCompanionPreferences>
+  observeBirdCompanionProgress?(event: import('./bird-companion').BirdProgressEvent): Promise<void>
   onUnreadSummaryChanged(callback: (summary: UnreadSummary) => void): () => void
 
   // File operations
-  readFile(path: string): Promise<string>
+  readFile(path: string, options?: FileReadOptions): Promise<string>
   /** Read a file as binary data (Uint8Array) */
-  readFileBinary(path: string): Promise<Uint8Array>
+  readFileBinary(path: string, options?: FileReadOptions): Promise<Uint8Array>
   /** Read a file as a data URL (data:{mime};base64,...) for binary preview (images, PDFs) */
-  readFileDataUrl(path: string): Promise<string>
+  readFileDataUrl(path: string, options?: FileReadOptions): Promise<string>
   /** Read an image file as a size-bounded preview data URL for lightweight thumbnail rendering. */
   readFilePreviewDataUrl(path: string, maxSize?: number): Promise<string>
   openFileDialog(): Promise<string[]>
@@ -467,7 +480,7 @@ export interface ElectronAPI {
   startupMode?: 'picker' | 'normal'
   /** Current server context: local embedded server, thin-client remote server, or picker. */
   getStartupContext(): Promise<StartupServerContext>
-  /** Switch the running service (restart-based): 'local', 'none', or a remote profile id. */
+  /** Switch the frontend service while retaining running local agents: 'local', 'none', or a remote profile id. */
   switchServer(target: string): Promise<{ success: boolean }>
   /** Alias for switchServer — used by the startup server picker page. */
   selectStartupServer(target: string): Promise<{ success: boolean }>
@@ -864,6 +877,7 @@ export interface ElectronAPI {
   getShowApiBalances(): Promise<boolean>
   setShowApiBalances(enabled: boolean): Promise<void>
   getTokenNestUsage(args: { connectionSlug: string; days?: number }): Promise<import('@craft-agent/shared/protocol').TokenNestUsageSnapshot>
+  getTokenNestPricing(): Promise<unknown>
 
   // Projects (workspace-scoped)
   getProjects(workspaceId: string): Promise<unknown>

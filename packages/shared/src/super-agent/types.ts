@@ -1,13 +1,14 @@
 import type { ThinkingLevel } from '../agent/thinking-levels'
 import type { PermissionMode } from '../agent/mode-types'
 import type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
+import type { SuperAgentCheckpoint, SuperAgentWaitCondition, SuperAgentArtifact, SuperAgentOperation, SuperAgentMetrics } from './continuity'
 
 export type { SessionPolicyPermissionScope } from '@craft-agent/core/types'
 
 /** One persistent model session, with no concurrent turn or delegated subprocess. */
 export interface SuperAgentNode {
   id: string
-  role: 'coordinator' | 'worker'
+  role: 'coordinator' | 'orchestrator' | 'worker'
   name: string
   avatar: string
   description: string
@@ -21,6 +22,7 @@ export interface SuperAgentNode {
   /** Explicit subset of the team's authorized source pool; empty grants none. */
   sourceSlugs: string[]
   abilityProfileIds: string[]
+  capabilities?: string[]
 }
 
 export interface SuperAgentEnvironment {
@@ -28,8 +30,13 @@ export interface SuperAgentEnvironment {
   workingDirectory: string
   /** Super Agent normalizes legacy modes to allow-all; capability grants are independent. */
   permissionMode: PermissionMode
-  /** Explicit opt-in to unrestricted tool access without per-operation approvals. */
+  /** Enable worker capabilities and skip all approvals/reviews within the fixed environment. */
   fullControl?: boolean
+  safety?: {
+    autoReview: boolean
+    /** Exact tool names; rules can only restrict the mandatory policy. */
+    customRules: Array<{ toolName: string; effect: 'deny' | 'require-human'; reason: string }>
+  }
   permissions: {
     readFiles: boolean
     writeFiles: boolean
@@ -63,10 +70,22 @@ export interface SuperAgentConfig {
   name: string
   avatar: string
   nodes: SuperAgentNode[]
+  workflow?: {
+    pattern: 'lightweight' | 'development' | 'research' | 'deliverables' | 'incident'
+    maxParallelTasks: number
+    /** Apply independent review to deliverable tasks with declared acceptance criteria. */
+    independentReview: boolean
+  }
   /** Idle inspection interval in minutes (1–1440), including continuous work reviews. */
   idleInspectionMinutes: number
   /** Wake after idleInspectionMinutes of complete team inactivity. Defaults to true. */
   continuousWork?: boolean
+  execution?: {
+    connectionConcurrency: number
+    connectionCallsPerMinute: number
+    stallMinutes: number
+    maxResumeAttempts: number
+  }
   environment: SuperAgentEnvironment
   /** Sources available for assignment; individual nodes need their own binding. */
   sourceSlugs: string[]
@@ -88,6 +107,27 @@ export interface SuperAgentActionReceipt {
 
 export interface SuperAgentTask {
   id: string
+  /** Durable dependency and exclusive resource contracts, enforced before dispatch. */
+  dependsOn?: string[]
+  resources?: string[]
+  acceptanceCriteria?: string[]
+  requiresIndependentReview?: boolean
+  /** An independent verifier may read a submitted result before acceptance. */
+  reviewOf?: string
+  acceptance?: { status: 'accepted' | 'rejected' | 'stale'; evidenceTaskId: string; note: string; reviewedBy: string; reviewedAt: number; artifactHashes?: Array<{ id: string; sha256: string }> }
+  goalId?: string
+  goalRevision?: number
+  requiredCapabilities?: string[]
+  goalCriteria?: number[]
+  phase?: 'executing' | 'waiting' | 'outcome-unknown' | 'submitted'
+  checkpoint?: SuperAgentCheckpoint
+  waiting?: { reason: string; condition: SuperAgentWaitCondition; since: number; resumeAttempts: number }
+  lastProgressAt?: number
+  lastResultHash?: string
+  stallNotifiedAt?: number
+  attempt?: number
+  artifactIds?: string[]
+  inputArtifacts?: Array<{ id: string; sha256: string }>
   planId?: string
   title: string
   instructions: string
@@ -110,6 +150,7 @@ export interface SuperAgentNodeRuntime {
   status: 'idle' | 'preparing' | 'working' | 'recovering' | 'error'
   retryAt?: number
   retryAttempt?: number
+  retryDeadline?: number
   activeTaskId?: string
   lastStartedAt?: number
   lastCompletedAt?: number
@@ -124,6 +165,8 @@ export interface SuperAgentMessage {
   body: string
   taskId?: string
   createdAt: number
+  /** Explicitly selected for the user, including useful background replies. */
+  userFacing?: boolean
   /** Actual host outcome of model control actions, independent of prose claims. */
   actionReceipt?: SuperAgentActionReceipt
   /** Durable display record; never used to restore or grant an approval. */
@@ -147,6 +190,8 @@ export interface SuperAgentBoardItem {
 
 export interface SuperAgentPlanItem {
   id: string
+  goalId?: string
+  goalRevision?: number
   title: string
   instructions: string
   status: 'planned' | 'active' | 'blocked' | 'completed' | 'cancelled'
@@ -181,6 +226,8 @@ export interface SuperAgentScriptRuntime {
   startedAt?: number
   completedAt?: number
   exitCode?: number | null
+  /** Signal termination has a null exit code on POSIX. */
+  exitSignal?: string
   output?: string
   error?: string
 }
@@ -193,10 +240,45 @@ export interface SuperAgentState {
   messages: SuperAgentMessage[]
   board: SuperAgentBoardItem[]
   plans: SuperAgentPlanItem[]
+  intents?: SuperAgentIntent[]
+  artifacts?: SuperAgentArtifact[]
+  operations?: SuperAgentOperation[]
+  metrics?: SuperAgentMetrics
+  connectionStarts?: Array<{ connection: string; at: number }>
   scripts: SuperAgentScriptRuntime[]
+  permissionGrants?: SuperAgentPermissionGrant[]
   lastUserActivityAt: number
   lastInspectionAt?: number
   allIdleSince?: number
+}
+
+/** User-facing intent is handed to planning without granting new authority. */
+export interface SuperAgentIntent {
+  id: string
+  revision?: number
+  status?: 'active' | 'delivered' | 'cancelled'
+  goal: string
+  constraints: string[]
+  deliverables: string[]
+  acceptanceCriteria: string[]
+  createdAt: number
+  sourceTurnId: string
+}
+
+export interface SuperAgentTaskContract {
+  id?: string
+  goalId?: string
+  requiredCapabilities?: string[]
+  goalCriteria?: number[]
+  title: string
+  instructions: string
+  nodeId?: string
+  planId?: string
+  dependsOn?: string[]
+  resources?: string[]
+  acceptanceCriteria?: string[]
+  requiresIndependentReview?: boolean
+  reviewOf?: string
 }
 
 export interface SuperAgentEnvironmentStatus {
@@ -266,23 +348,35 @@ export interface SuperAgentPermissionRequest {
   resolvedAt?: number
 }
 
+export interface SuperAgentPermissionGrant {
+  id: string
+  nodeId: string
+  description: string
+  scope: Omit<SessionPolicyPermissionScope, 'expiresAt'>
+  environmentKey: string
+  createdAt: number
+}
+
 /** Model output uses the same bounded operations as the user-facing control API. */
 export type SuperAgentCommand =
   | { type: 'chat'; text: string }
-  | { type: 'task'; title: string; instructions: string; nodeId?: string; planId?: string }
+  | ({ type: 'task' } & SuperAgentTaskContract)
   | { type: 'continuous-work'; enabled: boolean }
-  | { type: 'plan-upsert'; item: Pick<SuperAgentPlanItem, 'title' | 'instructions' | 'status' | 'priority' | 'note'> & { id?: string }; expectedRevision: number }
+  | { type: 'plan-upsert'; item: Pick<SuperAgentPlanItem, 'title' | 'instructions' | 'status' | 'priority' | 'note' | 'goalId'> & { id?: string }; expectedRevision: number }
+  | { type: 'task-resume'; taskId: string }
   | { type: 'plan-delete'; id: string; expectedRevision: number }
   | { type: 'cancel'; taskId?: string }
   | { type: 'inspect' }
+  | { type: 'node-refresh'; nodeId: string }
   | { type: 'history-cleanup'; before: number; keepRecentMessages: number; expectedRevision: number }
   | { type: 'history-compact'; nodeIds: string[]; expectedRevision: number }
   | { type: 'history-delete-sessions'; sessions: Array<{ id: string; lastMessageAt: number }>; before: number; expectedRevision: number }
-  | { type: 'permission-response'; requestId: string; allowed: boolean }
+  | { type: 'permission-response'; requestId: string; allowed: boolean; remember?: boolean }
+  | { type: 'permission-revoke'; grantId: string }
   | { type: 'message'; fromNodeId: string; toNodeId: string; body: string }
   | { type: 'board-upsert'; item: { id?: string; title: string; content: string }; expectedRevision?: number }
   | { type: 'board-delete'; id: string; expectedRevision?: number }
-  | { type: 'script-run'; scriptId: string }
+  | { type: 'script-run'; scriptId: string; approval?: { sha256: string; operation: string } }
   | { type: 'script-stop'; scriptId: string }
 
 /** The execution host must enforce this before model tools are dispatched. */
@@ -290,8 +384,15 @@ export interface SuperAgentSessionPolicy {
   nodeId: string
   role: SuperAgentNode['role']
   rootPath: string
-  /** Bypass tool capability and directory restrictions in the selected execution environment. */
+  /** Enable worker capabilities and skip all approvals/reviews within the fixed environment. */
   fullControl?: boolean
+  /** Host-enforced, never configurable by a model or delegation. */
+  actionGates?: true
+  safety?: SuperAgentEnvironment['safety']
+  /** Original user messages selected by the host, not model-written authorization. */
+  userIntent?: string
+  /** Host-owned control/credential directories, never mounted into worker code. */
+  protectedRoots?: string[]
   readFiles: boolean
   writeFiles: boolean
   runPrograms: boolean

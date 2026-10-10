@@ -49,6 +49,7 @@ export default defineConfig({
       },
       input: {
         main: resolve(__dirname, 'src/renderer/index.html'),
+        'bird-companion': resolve(__dirname, 'src/renderer/bird-companion.html'),
         // The design-system playground is served directly by Vite in development.
         // Bundling it as a production entry makes Rollup promote its large demo-only
         // dependency graph into shared chunks that the main window then preloads.

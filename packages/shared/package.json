@@ -1,6 +1,6 @@
 {
   "name": "@craft-agent/shared",
-  "version": "26.10.4",
+  "version": "26.10.9",
   "license": "Apache-2.0",
   "description": "Shared business logic for TokenBird - agent, auth, config, credentials, MCP integration",
   "type": "module",
@@ -12,6 +12,7 @@
     "sync:craft-agent-bash-patterns": "bun run src/config/sync-craft-agent-bash-patterns.ts"
   },
   "exports": {
+    "./cloud": "./src/cloud/types.ts",
     ".": "./src/index.ts",
     "./agent": "./src/agent/index.ts",
     "./agent/modes": "./src/agent/mode-types.ts",
@@ -40,7 +41,11 @@
     "./pages/data-store": "./src/pages/data-store.ts",
     "./sources": "./src/sources/index.ts",
     "./sources/types": "./src/sources/types.ts",
-    "./super-agent": "./src/super-agent/index.ts",
+    "./super-agent": {
+      "types": "./src/super-agent/index.ts",
+      "browser": "./src/super-agent/browser.ts",
+      "default": "./src/super-agent/index.ts"
+    },
     "./super-agent/history": "./src/super-agent/history.ts",
     "./skills": "./src/skills/index.ts",
     "./workspaces": "./src/workspaces/index.ts",

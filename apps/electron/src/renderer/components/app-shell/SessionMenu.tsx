@@ -76,6 +76,7 @@ export interface SessionMenuProps {
   onOpenInNewWindow: () => void
   onSendToWorkspace?: () => void
   onDelete: () => void
+  onCloudShare?: () => void
   onConfigureCollaboration?: () => void
 }
 
@@ -98,6 +99,7 @@ export function SessionMenu({
   onOpenInNewWindow,
   onSendToWorkspace,
   onDelete,
+  onCloudShare,
   onConfigureCollaboration,
   hasTransferTargets,
   projects = [],
@@ -120,6 +122,7 @@ export function SessionMenu({
 
   return (
     <>
+      {onCloudShare && <MenuItem onClick={onCloudShare}><Send className="h-3.5 w-3.5" /><span>{t('cloud.shareChat')}</span></MenuItem>}
       {/* Send to Workspace — visible when at least one other workspace exists */}
       {hasTransferTargets && onSendToWorkspace && (
         <MenuItem onClick={onSendToWorkspace}>

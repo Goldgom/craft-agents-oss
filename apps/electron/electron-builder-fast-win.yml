@@ -1,10 +1,6 @@
-# Windows test installer optimized for local installation speed.
-# ZIP extracts faster than the default differential-aware 7z package, at the
-# cost of a larger download and full-package updates for this test artifact.
+# Keep the alternate test artifact name; installation optimizations are also
+# applied by the normal Windows release configuration.
 extends: ./electron-builder.yml
-afterPack: ./scripts/prune-fast-win-resources.cjs
 
 nsis:
-  useZip: true
-  differentialPackage: false
   artifactName: TokenBird-fast-${arch}.${ext}

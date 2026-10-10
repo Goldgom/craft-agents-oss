@@ -191,6 +191,7 @@ export interface ValidatorInterface {
  * - Codex: createCodexContext() with callback IPC and limited capabilities
  */
 export interface SessionToolContext {
+  savedCredentialsFn?: (args: import('./handlers/saved-credentials.ts').SavedCredentialArgs) => Promise<unknown>;
   // ============================================================
   // Session Info
   // ============================================================
@@ -213,6 +214,8 @@ export interface SessionToolContext {
   canvasToolFn?: (args: Record<string, unknown>) => Promise<unknown>;
 
   /** Transfer files through the connected desktop client's configured SFTP profile. */
+  requestClientFilesFn?: (args: import('@craft-agent/core/types').ClientFileRequest) => Promise<import('@craft-agent/core/types').SavedClientFiles>;
+
   transferSftpFileFn?: (args: SftpTransferArgs) => Promise<SftpTransferResult>;
 
   /** Ask the connected Android client to report or request an allowlisted runtime permission. */
@@ -450,12 +453,13 @@ export interface SessionToolContext {
    * a truthful ack (delivered immediately vs. queued behind a busy turn) instead
    * of an unconditional "message sent".
    */
-  sendAgentMessage?(sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>): Promise<SendAgentMessageResult>;
+  sendAgentMessage?(sessionId: string, message: string, attachments?: Array<{ path: string; name?: string }>, originalMessage?: string): Promise<SendAgentMessageResult>;
 
   sendCollaborationMessage?(targetMemberId: string, message: string): Promise<SendAgentMessageResult>;
 
   /** Read the collaboration shared board and durable activity history for this session. */
-  getCollaboration?(): Promise<unknown>;
+  getCollaboration?(query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }): Promise<unknown>;
+  superAgentTask?(args: Record<string, unknown>): Promise<unknown>;
 
   /** Write one item to the collaboration shared board. */
   updateCollaborationBoard?(itemId: string, value: unknown): Promise<unknown>;

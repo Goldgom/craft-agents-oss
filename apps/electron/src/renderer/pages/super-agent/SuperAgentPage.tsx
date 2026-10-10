@@ -1,3 +1,4 @@
+import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -16,14 +17,17 @@ import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Markdown } from '@/components/markdown'
 import { cn } from '@/lib/utils'
-import { AgentAvatar, FormField, selectClass, textareaClass } from './SuperAgentForms'
+import { AgentAvatar, FormField, textareaClass } from './SuperAgentForms'
 import { SuperAgentSetup } from './SuperAgentSetup'
 import { SuperAgentConfiguration } from './SuperAgentConfiguration'
 import { SuperAgentResources, SuperAgentScripts } from './SuperAgentResources'
 import { NodeCommunication, SharedBoard } from './SuperAgentCollaboration'
 import { SuperAgentPlans } from './SuperAgentPlans'
 import { SuperAgentHistory } from './SuperAgentHistory'
+import { SuperAgentPermissions } from './SuperAgentPermissions'
+import { SuperAgentNodeRecovery } from './SuperAgentNodeRecovery'
 import { SuperAgentConversation, SuperAgentPermissionHistory } from './SuperAgentConversation'
+import { SuperAgentFileContext } from './SuperAgentFileContext'
 import { formatTimestamp, useSuperAgentText, withExecuteMode } from './super-agent-ui'
 import { recentActivityEntries, taskActivity, tasklessWorkerActivities, visibleActivityText, type SuperAgentActivity } from './super-agent-activity'
 
@@ -33,10 +37,11 @@ export interface SuperAgentPageProps {
   onOpenSession?: (sessionId: string) => void
 }
 
-type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts' | 'history'
+type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts' | 'history' | 'permissionManagement'
 const settingsSections: Array<{ id: SettingsSection; icon: typeof Bot }> = [
   { id: 'settings', icon: Settings2 }, { id: 'team', icon: Layers3 },
   { id: 'plans', icon: ClipboardList },
+  { id: 'permissionManagement', icon: ShieldCheck },
   { id: 'board', icon: ClipboardList }, { id: 'communication', icon: MessagesSquare },
   { id: 'resources', icon: BookOpen }, { id: 'scripts', icon: Code2 },
   { id: 'history', icon: Archive },
@@ -191,7 +196,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
       : <Button size="sm" variant="ghost" onClick={() => setView('home')}><ArrowLeft className="size-3.5" />{text('backToAssistant')}</Button>}
   </div> : undefined
 
-  return <div ref={pageRef} className="flex h-full min-h-0 flex-col bg-background">
+  return <SuperAgentFileContext workingDirectory={workDirectory}><div ref={pageRef} className="flex h-full min-h-0 flex-col bg-background">
     <PanelHeader title={view === 'settings' ? text('settingsTitle') : config?.name ?? text('title')} leadingAction={leadingAction} rightSidebarButton={rightSidebarButton} actions={headerActions} />
     {!activeWorkspaceId ? <PageNotice icon={FolderOpen} title={text('workspaceRequired')} description={text('workspaceRequiredDescription')} />
       : loading ? <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{text('loading')}</div>
@@ -220,9 +225,10 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
                   </nav>
                   <div className="min-h-0 min-w-0 flex-1">
                     {settingsSection === 'team' && <NodeTeam snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} pendingPermissions={pendingPermissions}
-                      onEdit={openNodeSettings} onOpenSession={onOpenSession} onTask={nodeId => setTaskDialogNode(nodeId)} busy={busy} />}
+                      onEdit={openNodeSettings} onOpenSession={onOpenSession} onTask={nodeId => setTaskDialogNode(nodeId)} onCommand={async value => { await command(value) }} busy={busy} />}
                     {settingsSection === 'board' && <SharedBoard config={config} items={snapshot.state.board} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'plans' && <SuperAgentPlans items={snapshot.state.plans} onCommand={async value => { await command(value) }} />}
+                    {settingsSection === 'permissionManagement' && <SuperAgentPermissions key={activeWorkspaceId!} snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} busy={busy} onCommand={command} />}
                     {settingsSection === 'history' && <SuperAgentHistory key={activeWorkspaceId!} workspaceId={activeWorkspaceId!} snapshot={snapshot} busy={busy} onCommand={command} />}
                     {settingsSection === 'communication' && <NodeCommunication config={config} messages={snapshot.state.messages} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'resources' && <SuperAgentResources config={config} sources={sources} skills={skills} onSave={async value => { await save(value) }} />}
@@ -235,7 +241,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
               </div>
               <TaskDialog config={config} nodeId={taskDialogNode} onClose={() => setTaskDialogNode(null)} onCommand={async value => { await command(value) }} />
             </>}
-  </div>
+  </div></SuperAgentFileContext>
 }
 
 function PageNotice({ icon: Icon, title, description, children }: { icon: typeof Bot; title: string; description: string; children?: ReactNode }) {
@@ -253,12 +259,21 @@ function WorkProgress({ snapshot, compact, busy, onCreateTask, onOpenPlans, onCo
 }) {
   const text = useSuperAgentText()
   const tasks = snapshot.state.tasks
-  const completed = tasks.filter(task => task.status === 'completed').length
+  const completed = tasks.filter(task => task.status === 'completed'
+    && (!snapshot.config.nodes.some(node => node.role === 'orchestrator') || task.acceptance?.status === 'accepted')).length
   const working = tasks.filter(task => task.status === 'running').length
   const queued = tasks.filter(task => task.status === 'queued').length
   const summary = <span className="text-[11px] text-muted-foreground">{text('progressSummary', { working, queued, completed })}</span>
   const tasklessActivities = tasklessWorkerActivities(snapshot)
   const list = <div className="space-y-5">
+    {snapshot.state.metrics && <p className="text-[10px] leading-5 text-muted-foreground">{text('continuityMetrics', { turns: snapshot.state.metrics.modelTurns, tools: snapshot.state.metrics.toolCalls, retries: snapshot.state.metrics.retries, resumes: snapshot.state.metrics.resumptions })}</p>}
+    {!!snapshot.state.intents?.length && <section aria-label={text('goals')} className="space-y-2">{snapshot.state.intents.filter(goal => goal.status !== 'cancelled').slice(-5).map(goal => <div key={goal.id} className="rounded-lg bg-foreground/5 p-3 text-xs"><p className="font-medium">{goal.goal}</p><p className="mt-1 text-[10px] text-muted-foreground">{goal.status === 'delivered' ? text('goalDelivered') : text('active')} · {text('revision', { revision: goal.revision ?? 1 })}</p></div>)}</section>}
+    {snapshot.state.nodes.filter(runtime => ['error', 'recovering'].includes(runtime.status)).map(runtime => <article key={runtime.nodeId} className="space-y-2 rounded-xl border border-amber-500/20 p-3">
+      <h3 className="text-xs font-medium">{snapshot.config.nodes.find(node => node.id === runtime.nodeId)?.name ?? runtime.nodeId} · {text(runtime.status)}</h3>
+      {runtime.error && <p className="break-words text-xs leading-5 text-destructive">{runtime.error}</p>}
+      <SuperAgentNodeRecovery runtime={runtime} busy={busy} onCommand={onCommand} />
+      {runtime.sessionId && onOpenSession && <Button size="sm" variant="ghost" onClick={() => onOpenSession(runtime.sessionId!)}>{text('openSession')}</Button>}
+    </article>)}
     <button type="button" onClick={onOpenPlans} className="flex w-full items-center justify-between rounded-lg border border-border/60 p-3 text-xs hover:bg-accent"><span className="flex items-center gap-2"><ClipboardList className="size-3.5" />{text('plans')}</span><span className="text-muted-foreground">{snapshot.state.plans.filter(plan => !['completed', 'cancelled'].includes(plan.status)).length}</span></button>
     {(tasks.length > 0 || !tasklessActivities.length) && <TaskList snapshot={snapshot} busy={busy} onCommand={onCommand} onOpenSession={onOpenSession} />}
     {tasklessActivities.length > 0 && <section className="space-y-3" aria-label={text('nodeActivity')}><h3 className="text-[11px] font-medium text-muted-foreground">{text('nodeActivity')}</h3>
@@ -288,12 +303,13 @@ function WorkProgress({ snapshot, compact, busy, onCreateTask, onOpenPlans, onCo
   </aside>
 }
 
-function NodeTeam({ snapshot, pendingPermissions, onEdit, onOpenSession, onTask, busy }: {
+function NodeTeam({ snapshot, pendingPermissions, onEdit, onOpenSession, onTask, onCommand, busy }: {
   snapshot: SuperAgentSnapshot & { config: SuperAgentConfig }
   pendingPermissions: ReturnType<typeof useAppShellContext>['pendingPermissions']
   onEdit: (nodeId: string) => void
   onOpenSession?: (sessionId: string) => void
   onTask: (nodeId: string) => void
+  onCommand: (command: SuperAgentCommand) => Promise<void>
   busy: boolean
 }) {
   const text = useSuperAgentText()
@@ -309,10 +325,10 @@ function NodeTeam({ snapshot, pendingPermissions, onEdit, onOpenSession, onTask,
         <div className="flex items-start gap-3"><AgentAvatar avatar={node.avatar} name={node.name} className="size-12 rounded-2xl text-2xl" /><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-semibold">{node.name}</h3><p className="mt-1 truncate text-xs text-muted-foreground">{node.model}</p></div>
           <span className={cn('rounded-full px-2 py-1 text-[10px]', runtime && ['working', 'preparing', 'recovering'].includes(runtime.status) ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : runtime?.status === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400')}>{text(runtime?.status ?? 'idle')}</span></div>
         <p className="text-xs leading-5 text-muted-foreground">{node.description}</p>
-        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground"><span className="rounded bg-foreground/5 px-2 py-1">{text(node.role === 'coordinator' ? 'coordinator' : 'worker')}</span><span className="text-amber-500">{'★'.repeat(node.intelligenceRating)}</span><span>{node.maxCallsPerMinute}/min</span><span>{t('thinking.' + node.thinkingLevel)}</span></div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground"><span className="rounded bg-foreground/5 px-2 py-1">{text(node.role)}</span><span className="text-amber-500">{'★'.repeat(node.intelligenceRating)}</span><span>{node.maxCallsPerMinute}/min</span><span>{t(`thinking.${node.thinkingLevel}`)}</span></div>
         {activeTask && <p className="rounded-lg bg-foreground/5 p-3 text-xs leading-5"><span className="font-medium">{text('tasks')}: </span>{activeTask.title}</p>}
         {runtime?.error && <p className="text-xs leading-5 text-destructive">{runtime.error}</p>}
-        {runtime?.status === 'recovering' && <p className="text-xs leading-5 text-amber-600 dark:text-amber-400">{text('recoveryNotice', { attempt: runtime.retryAttempt ?? 1 })}</p>}
+        {runtime && <SuperAgentNodeRecovery runtime={runtime} busy={busy} onCommand={onCommand} />}
         <div className="flex flex-wrap gap-2 border-t border-border/60 pt-3">
           <Button size="sm" variant="outline" onClick={() => onEdit(node.id)}><Settings2 className="size-3.5" />{text('editNode')}</Button>
           {runtime?.sessionId && onOpenSession && <Button size="sm" variant="outline" className={approvalCount ? 'border-amber-500/30 text-amber-600 dark:text-amber-400' : ''} onClick={() => onOpenSession(runtime.sessionId!)}><ExternalLink className="size-3.5" />{text('openSession')}{approvalCount > 0 && <span className="rounded-full bg-amber-500/10 px-1.5 text-[10px]">{approvalCount}</span>}</Button>}
@@ -337,11 +353,20 @@ function TaskList({ snapshot, busy, onCommand, onOpenSession }: {
     const node = config.nodes.find(item => item.id === task.nodeId)
     const sessionId = task.sessionId ?? state.nodes.find(item => item.nodeId === task.nodeId)?.sessionId
     const running = task.status === 'running' || task.status === 'queued'
+    const submitted = config.nodes.some(node => node.role === 'orchestrator') && task.status === 'completed'
+    const statusLabel = task.phase === 'waiting' ? 'taskWaiting' : task.phase === 'outcome-unknown' ? 'taskUnknown' : task.acceptance?.status === 'stale' ? 'taskStale'
+      : submitted ? task.acceptance?.status === 'accepted' ? 'taskAccepted' : task.acceptance?.status === 'rejected' ? 'taskRejected' : 'taskSubmitted' : task.status
     const activity = taskActivity(snapshot, task)
     return <article key={task.id} className="space-y-3 rounded-xl border border-border/60 p-3">
-      <div className="flex items-start gap-2"><h3 className="min-w-0 flex-1 break-words text-xs font-medium leading-5">{task.title}</h3><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', task.status === 'completed' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : task.status === 'failed' ? 'bg-destructive/10 text-destructive' : 'bg-foreground/5 text-muted-foreground')}>{text(task.status)}</span></div>
+      <div className="flex items-start gap-2"><h3 className="min-w-0 flex-1 break-words text-xs font-medium leading-5">{task.title}</h3><span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', task.acceptance?.status === 'accepted' || (!submitted && task.status === 'completed') ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : task.status === 'failed' || task.acceptance?.status === 'rejected' ? 'bg-destructive/10 text-destructive' : 'bg-foreground/5 text-muted-foreground')}>{text(statusLabel)}</span></div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">{node && <AgentAvatar avatar={node.avatar} name={node.name} className="size-5 rounded text-[10px]" />}<span className="min-w-0 flex-1 truncate">{node?.name ?? task.nodeId}</span><span>{formatTimestamp(task.createdAt)}</span></div>
       {task.error && <p className="text-[11px] leading-5 text-destructive">{task.error}</p>}
+      {task.checkpoint && <details className="text-[11px]"><summary className="cursor-pointer text-muted-foreground">{text('checkpoint')} · {task.checkpoint.completedSteps.length}</summary><p className="mt-2 whitespace-pre-wrap">{task.checkpoint.nextStep}</p><ul className="mt-2 list-inside list-disc text-muted-foreground">{task.checkpoint.completedSteps.map((step, index) => <li key={index}>{step}</li>)}</ul></details>}
+      {task.waiting && <p className="text-[11px] leading-5 text-muted-foreground">{task.waiting.reason}</p>}
+      {task.checkpoint && (task.status === 'failed' || task.status === 'queued' && task.phase === 'waiting') && task.phase !== 'outcome-unknown' && <Button size="sm" variant="outline" disabled={busy} onClick={() => { void onCommand({ type: 'task-resume', taskId: task.id }).catch(() => {}) }}>{text('resumeTask')}</Button>}
+      {state.artifacts?.filter(artifact => artifact.taskId === task.id).map(artifact => <p key={artifact.id} className="break-all text-[10px] text-muted-foreground">{artifact.path} · {artifact.sha256.slice(0, 12)}{artifact.missing ? ` · ${text('missing')}` : ''}</p>)}
+      {!!task.dependsOn?.length && <p className="text-[10px] leading-5 text-muted-foreground">{text('taskDependencies')}: {task.dependsOn.map(id => state.tasks.find(item => item.id === id)?.title ?? id).join(' · ')}</p>}
+      {task.acceptance && <p className="text-[11px] leading-5 text-muted-foreground">{task.acceptance.note}</p>}
       {activity && <WorkerActivity activity={activity} />}
       {task.output && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">{text('result')}</summary><div className="mt-2 max-h-80 overflow-y-auto text-xs leading-5"><Markdown>{task.output}</Markdown></div></details>}
       {(running || (sessionId && onOpenSession)) && <div className="flex flex-wrap gap-1.5">{sessionId && onOpenSession && <button type="button" className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => onOpenSession(sessionId)}><ExternalLink className="size-3" />{text('openSession')}</button>}
@@ -401,8 +426,7 @@ function TaskDialog({ config, nodeId, onClose, onCommand }: {
     <fieldset disabled={pending} className="min-w-0 space-y-4">
       <FormField label={text('taskTitle')}><Input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} /></FormField>
       <FormField label={text('taskInstructions')}><textarea className={textareaClass} rows={6} value={instructions} onChange={event => setInstructions(event.target.value)} /></FormField>
-      <FormField label={text('assignedNode')}><select className={selectClass} value={selected} onChange={event => setSelected(event.target.value)}><option value="">{text('automatic')}</option>
-        {config.nodes.filter(node => node.role === 'worker').map(node => <option key={node.id} value={node.id}>{node.name}</option>)}</select></FormField>
+      <FormField label={text('assignedNode')}><WorkbenchSelect value={selected} onValueChange={value => setSelected(value)} options={[{ value: "", label: text('automatic') }, ...config.nodes.filter(node => node.role === 'worker').map(node => ({ value: node.id, label: node.name }))]} /></FormField>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <DialogFooter><Button type="button" variant="outline" onClick={onClose}>{text('cancel')}</Button><Button type="button" disabled={!title.trim() || !instructions.trim()} onClick={() => void submit()}>{pending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}{text('createTask')}</Button></DialogFooter>
     </fieldset>

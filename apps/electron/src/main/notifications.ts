@@ -103,6 +103,7 @@ function handleNotificationClick(workspaceId: string, sessionId: string): void {
     if (window.isMinimized()) {
       window.restore()
     }
+    window.show()
     window.focus()
 
     // Send navigation event to renderer to open the session.

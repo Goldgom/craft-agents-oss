@@ -30,6 +30,109 @@ test('ordinary save atomically replaces a session and reloads its complete heade
   expect((await readdir(dirname(f.path))).filter(file => file.endsWith('.tmp'))).toEqual([])
 })
 
+test.each(['EPERM', 'EACCES', 'EBUSY'])('transient %s rename failure retries the same temp file before acknowledging persistence', async code => {
+  const sources: string[] = []
+  let completed = false
+  const f = await fixture({ ...real, rename: async (from, to) => {
+    sources.push(from)
+    if (sources.length === 1) throw Object.assign(new Error('Temporary session file lock'), { code })
+    expect(completed).toBe(false)
+    expect(await readFile(to, 'utf8')).toBe(f.original)
+    expect(await readFile(from, 'utf8')).toContain('Dummy persisted message')
+    await rename(from, to)
+  } })
+  f.queue.enqueue(f.snapshot())
+  await f.queue.flush(f.stored.id).then(() => { completed = true })
+  expect(completed).toBe(true)
+  expect(sources).toHaveLength(2)
+  expect(new Set(sources).size).toBe(1)
+  expect(loadSession(f.root, f.stored.id)!.messages[0]!.content).toBe('Dummy persisted message')
+  expect(f.queue.hasPending(f.stored.id)).toBe(false)
+  expect((await readdir(dirname(f.path))).filter(file => file.endsWith('.tmp'))).toEqual([])
+})
+
+test('persistent rename lock exhausts bounded retries, preserves the original, and allows a later flush', async () => {
+  const failure = Object.assign(new Error('Persistent session file lock'), { code: 'EPERM' })
+  let attempts = 0, locked = true
+  const f = await fixture({ ...real, rename: async (from, to) => {
+    attempts++
+    if (locked) throw failure
+    await rename(from, to)
+  } })
+  f.queue.enqueue(f.snapshot())
+  await expect(f.queue.flush(f.stored.id)).rejects.toBe(failure)
+  expect(attempts).toBe(6)
+  expect(await readFile(f.path, 'utf8')).toBe(f.original)
+  expect(f.queue.hasPending(f.stored.id)).toBe(true)
+  expect(f.queue.getLastWrittenSignature(f.stored.id)).toBeUndefined()
+  expect((await readdir(dirname(f.path))).filter(file => file.endsWith('.tmp'))).toEqual([])
+  locked = false
+  await f.queue.flush(f.stored.id)
+  expect(attempts).toBe(7)
+  expect(loadSession(f.root, f.stored.id)!.messages[0]!.content).toBe('Dummy persisted message')
+  expect(f.queue.hasPending(f.stored.id)).toBe(false)
+})
+
+test.each(['ENOENT', 'EIO', 'ENOSPC'])('non-lock %s rename failure is returned without retry', async code => {
+  const failure = Object.assign(new Error('Session publication failed'), { code })
+  let attempts = 0
+  const f = await fixture({ ...real, rename: async () => { attempts++; throw failure } })
+  f.queue.enqueue(f.snapshot())
+  await expect(f.queue.flush(f.stored.id)).rejects.toBe(failure)
+  expect(attempts).toBe(1)
+  expect(await readFile(f.path, 'utf8')).toBe(f.original)
+  expect(f.queue.hasPending(f.stored.id)).toBe(true)
+  expect((await readdir(dirname(f.path))).filter(file => file.endsWith('.tmp'))).toEqual([])
+})
+
+test('cancellation during rename retry prevents publication and cleans the owned temp file', async () => {
+  const started = deferred()
+  let attempts = 0
+  const f = await fixture({ ...real, rename: async (from, to) => {
+    attempts++
+    if (attempts === 1) {
+      started.resolve()
+      throw Object.assign(new Error('Temporary session file lock'), { code: 'EPERM' })
+    }
+    await rename(from, to)
+  } })
+  f.queue.enqueue(f.snapshot())
+  const writing = f.queue.flush(f.stored.id)
+  void writing.catch(() => {})
+  await started.promise
+  await f.queue.cancelAndWait(f.stored.id)
+  await expect(writing).rejects.toThrow('cancelled')
+  expect(attempts).toBe(1)
+  expect(await readFile(f.path, 'utf8')).toBe(f.original)
+  expect(f.queue.hasPending(f.stored.id)).toBe(false)
+  expect(f.queue.getLastWrittenSignature(f.stored.id)).toBeUndefined()
+  expect((await readdir(dirname(f.path))).filter(file => file.endsWith('.tmp'))).toEqual([])
+})
+
+test('rename retries keep concurrent flushes serialized and persist the newer snapshot', async () => {
+  const started = deferred()
+  let attempts = 0
+  const f = await fixture({ ...real, rename: async (from, to) => {
+    attempts++
+    if (attempts === 1) {
+      started.resolve()
+      throw Object.assign(new Error('Temporary session file lock'), { code: 'EBUSY' })
+    }
+    await rename(from, to)
+  } })
+  f.queue.enqueue(f.snapshot('first'))
+  const first = f.queue.flush(f.stored.id)
+  void first.catch(() => {})
+  await started.promise
+  f.queue.enqueue(f.snapshot('newer'))
+  const newer = f.queue.flush(f.stored.id)
+  await Promise.all([first, newer])
+  expect(attempts).toBe(3)
+  expect(loadSession(f.root, f.stored.id)!.messages[0]!.content).toBe('newer')
+  expect(f.queue.hasPending(f.stored.id)).toBe(false)
+  expect((await readdir(dirname(f.path))).filter(file => file.endsWith('.tmp'))).toEqual([])
+})
+
 posix('real permission-denied write preserves the old session, rejects flush, and stays dirty for retry', async () => {
   const f = await fixture(); await chmod(dirname(f.path), 0o500)
   f.queue.enqueue(f.snapshot())

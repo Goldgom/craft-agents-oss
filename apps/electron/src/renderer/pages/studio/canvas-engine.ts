@@ -3,7 +3,10 @@ export const MAX_RASTER_SIDE = 4096
 
 export type Point = { x: number; y: number }
 export type Rect = { x: number; y: number; width: number; height: number }
-export type CanvasTool = 'move' | 'hand' | 'select' | 'brush' | 'erase' | 'adjust' | 'ai' | 'assist'
+export const BLEND_MODES = ['source-over', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity'] as const
+export type LayerMask = { bounds: Rect; canvas: HTMLCanvasElement; outside: 0 | 1; enabled: boolean }
+export type TextSource = { text: string; x: number; y: number; fontSize: number; fontFamily: string; bold: boolean; color: string; matrix: [number, number, number, number, number, number] }
+export type CanvasTool = 'detail' | 'workspace' | 'polygon-lasso' | 'mask' | 'heal' | 'move' | 'hand' | 'crop' | 'transform' | 'select' | 'ellipse' | 'lasso' | 'select-brush' | 'wand' | 'brush' | 'text' | 'shape' | 'fill' | 'gradient' | 'erase' | 'mosaic' | 'exposure' | 'clone' | 'eyedropper' | 'cutout' | 'adjust' | 'ai' | 'assist'
 export type CanvasLayer = {
   id: string
   name: string
@@ -11,6 +14,14 @@ export type CanvasLayer = {
   opacity: number
   offset: Point
   tiles: Map<string, HTMLCanvasElement>
+  blendMode?: typeof BLEND_MODES[number]
+  locked?: boolean
+  alphaLocked?: boolean
+  group?: string
+  groupHidden?: boolean
+  clipping?: boolean
+  mask?: LayerMask
+  textSource?: TextSource
 }
 export type TileSnapshot = Map<string, ImageData | null>
 
@@ -68,13 +79,13 @@ export function layerPixelBounds(layer: CanvasLayer): Rect | null {
 }
 
 export function contentPixelBounds(layers: CanvasLayer[]): Rect | null {
-  return layers.reduce<Rect | null>((bounds, layer) => layer.visible
+  return layers.reduce<Rect | null>((bounds, layer) => layer.visible && !layer.groupHidden && layer.opacity > 0
     ? unionRects(bounds, layerPixelBounds(layer)) : bounds, null)
 }
 
 export function contentBounds(layers: CanvasLayer[], visibleOnly = true): Rect | null {
   return layers.reduce<Rect | null>((bounds, layer) =>
-    visibleOnly && !layer.visible ? bounds : unionRects(bounds, layerBounds(layer)), null)
+    visibleOnly && (!layer.visible || layer.groupHidden || layer.opacity === 0) ? bounds : unionRects(bounds, layerBounds(layer)), null)
 }
 
 export function getTile(layer: CanvasLayer, tx: number, ty: number): HTMLCanvasElement {
@@ -102,10 +113,45 @@ export function restoreTiles(layer: CanvasLayer, snapshots: TileSnapshot): void 
   }
 }
 
+export function assertPixelEditable(layer: CanvasLayer): void {
+  if (layer.locked) throw new Error('当前图层已锁定')
+  if (layer.textSource) throw new Error('请先栅格化文字图层再修改像素')
+}
+
+export function rawLayer(layer: CanvasLayer): CanvasLayer {
+  return { ...layer, visible: true, opacity: 1, blendMode: 'source-over', mask: undefined, locked: false, textSource: undefined, clipping: false, groupHidden: false }
+}
+
+export function layerMaskImage(layer: CanvasLayer, rect: Rect, width = Math.ceil(rect.width), height = Math.ceil(rect.height)): HTMLCanvasElement {
+  const result = document.createElement('canvas'); result.width = width; result.height = height
+  const ctx = result.getContext('2d')!, mask = layer.mask
+  if (!mask || !mask.enabled || mask.outside) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height) }
+  if (mask?.enabled) {
+    const b = { ...mask.bounds, x: mask.bounds.x + layer.offset.x, y: mask.bounds.y + layer.offset.y }
+    const x = (b.x - rect.x) / rect.width * width, y = (b.y - rect.y) / rect.height * height
+    ctx.clearRect(x, y, b.width / rect.width * width, b.height / rect.height * height)
+    ctx.drawImage(mask.canvas, x, y, b.width / rect.width * width, b.height / rect.height * height)
+  }
+  return result
+}
+
+export function displayedTile(layer: CanvasLayer, key: string): HTMLCanvasElement | undefined {
+  const tile = layer.tiles.get(key)
+  if (!tile || !layer.mask?.enabled) return tile
+  const [tx, ty] = key.split(',').map(Number)
+  const output = document.createElement('canvas'); output.width = output.height = TILE_SIZE
+  const ctx = output.getContext('2d')!; ctx.drawImage(tile, 0, 0)
+  ctx.globalCompositeOperation = 'destination-in'
+  ctx.drawImage(layerMaskImage(layer, { x: tx * TILE_SIZE + layer.offset.x, y: ty * TILE_SIZE + layer.offset.y, width: TILE_SIZE, height: TILE_SIZE }), 0, 0)
+  return output
+}
+
 export function paintSegment(
   layer: CanvasLayer, from: Point, to: Point, width: number, color: string, erase: boolean,
   before: TileSnapshot,
 ): void {
+  assertPixelEditable(layer)
+  if (erase && layer.alphaLocked) throw new Error('请先关闭透明像素锁定再删除像素')
   const a = { x: from.x - layer.offset.x, y: from.y - layer.offset.y }
   const b = { x: to.x - layer.offset.x, y: to.y - layer.offset.y }
   const margin = width / 2 + 2
@@ -136,6 +182,12 @@ export function paintSegment(
       ctx.fill()
     }
     ctx.restore()
+    if (layer.alphaLocked) {
+      const original = before.get(key)
+      const pixels = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE)
+      for (let i = 3; i < pixels.data.length; i += 4) pixels.data[i] = original?.data[i] ?? 0
+      ctx.putImageData(pixels, 0, 0)
+    }
   }
 }
 
@@ -151,6 +203,8 @@ export function drawImageOnLayer(layer: CanvasLayer, image: CanvasImageSource, r
 }
 
 export function clearLayerRect(layer: CanvasLayer, rect: Rect, before?: TileSnapshot): void {
+  assertPixelEditable(layer)
+  if (layer.alphaLocked) throw new Error('请先关闭透明像素锁定再删除像素')
   const local = { ...rect, x: rect.x - layer.offset.x, y: rect.y - layer.offset.y }
   const range = tileRange(local)
   for (let ty = range.top; ty <= range.bottom; ty++) for (let tx = range.left; tx <= range.right; tx++) {
@@ -163,14 +217,24 @@ export function clearLayerRect(layer: CanvasLayer, rect: Rect, before?: TileSnap
 }
 
 export function drawLayers(ctx: CanvasRenderingContext2D, layers: CanvasLayer[], viewport: Rect): void {
-  for (const layer of layers) {
-    if (!layer.visible || layer.opacity <= 0) continue
+  for (let index = 0; index < layers.length; index++) {
+    const layer = layers[index]
+    if (!layer.visible || layer.groupHidden || layer.opacity <= 0) continue
     ctx.save()
     ctx.globalAlpha = layer.opacity
+    ctx.globalCompositeOperation = layer.blendMode ?? 'source-over'
     const local = { ...viewport, x: viewport.x - layer.offset.x, y: viewport.y - layer.offset.y }
     const range = tileRange(local)
     for (let ty = range.top; ty <= range.bottom; ty++) for (let tx = range.left; tx <= range.right; tx++) {
-      const tile = layer.tiles.get(tileKey(tx, ty))
+      let tile = displayedTile(layer, tileKey(tx, ty))
+      if (tile && layer.clipping) {
+        const base = layers.slice(0, index).findLast(item => !item.clipping)
+        if (!base) continue
+        const copy = document.createElement('canvas'); copy.width = copy.height = TILE_SIZE
+        const context = copy.getContext('2d')!; context.drawImage(tile, 0, 0); context.globalCompositeOperation = 'destination-in'
+        context.drawImage(rasterizeRegion([base], { x: tx * TILE_SIZE + layer.offset.x, y: ty * TILE_SIZE + layer.offset.y, width: TILE_SIZE, height: TILE_SIZE }, TILE_SIZE, TILE_SIZE), 0, 0)
+        tile = copy
+      }
       if (tile) ctx.drawImage(tile, tx * TILE_SIZE + layer.offset.x, ty * TILE_SIZE + layer.offset.y)
     }
     ctx.restore()

@@ -10,6 +10,7 @@ import { join, delimiter, basename } from 'path'
 import { pathToFileURL } from 'node:url'
 import { createNativeWindowAuthority, type NativeAuthorityEvent } from './native-window-authority'
 import { registerNativeWorkspaceSwitch } from './handlers/workspace-native'
+import { createServerSwitcher } from './server-switch'
 import { configureElectronCredentialVault } from './credential-vault'
 import { registerNativeCredentialIpcHandlers } from './handlers/credentials-native'
 import { configureRemoteCredentialProtection, hasPendingRemoteCredentialMigration, listManagedRemoteCredentialMetadata, migrateRemoteCredentials, prepareRemoteWorkspaceConfig, resolveRemoteProfile, resolveRemoteWorkspace, saveRemoteProfile, type ResolvedRemoteProfile } from './remote-credentials'
@@ -26,6 +27,7 @@ import { getLocalizedProductName } from '@craft-agent/shared/branding'
 import { applyRuntimeToolEnvironment } from './runtime-toolchains'
 import { exportChatTranscript } from './chat-export'
 import { openTokenNestRechargeWindow } from './tokennest-recharge'
+import { BirdCompanionManager } from './bird-companion'
 import { TOKENNEST_RECHARGE_IPC } from '../shared/tokennest-recharge'
 import { deleteMindMapSession, mindMapWorkspaceContext, readMindMapSession, writeMindMapSession } from './studio-mindmap-files'
 
@@ -118,6 +120,7 @@ import { initModelRefreshService, getModelRefreshService, setFetcherPlatform } f
 import { setSearchPlatform, setImageProcessor } from '@craft-agent/server-core/services'
 import { createApplicationMenu } from './menu'
 import { WindowManager } from './window-manager'
+import { SystemTray } from './system-tray'
 import { loadWindowState, saveWindowState } from './window-state'
 import {
   getWorkspaces,
@@ -196,7 +199,10 @@ if (isDebugMode) {
   process.env.CRAFT_UV = bundledUvExists ? uvBinary : (fallbackUv ?? uvBinary)
 
   // Bun runtime (packaged builds should prefer bundled runtime over PATH)
-  const bunBinary = join(resourcesBase, 'vendor', 'bun', process.platform === 'win32' ? 'bun.exe' : 'bun')
+  const bunBase = app.isPackaged && process.platform === 'win32'
+    ? process.resourcesPath
+    : resourcesBase
+  const bunBinary = join(bunBase, 'vendor', 'bun', process.platform === 'win32' ? 'bun.exe' : 'bun')
   if (existsSync(bunBinary)) {
     process.env.CRAFT_BUN = bunBinary
   }
@@ -298,6 +304,7 @@ let nativeRemoteTransport: ReturnType<typeof registerNativeRemoteTransport> | nu
 let browserPaneManager: BrowserPaneManager | null = null
 let oauthFlowStore: OAuthFlowStore | null = null
 let moduleSink: EventSink | null = null
+let birdCompanionManager: BirdCompanionManager | null = null
 let moduleClientResolver: ((webContentsId: number) => string | undefined) | null = null
 
 // Messaging gateway: the bootstrap handle is created once sessionManager is
@@ -315,8 +322,8 @@ let pendingDeepLink: string | null = null
 //
 // Preference values: 'none' (picker only — no local service at startup),
 // 'local' (default: embedded local server), or a remote-server profile id.
-// Switching servers is restart-based: the choice is persisted and the app
-// relaunches with CRAFT_SERVER_URL/TOKEN set (thin-client mode) or unset.
+// Runtime switches reload the frontend while keeping the embedded agent host
+// alive. A restart is needed only when entering a local service not yet booted.
 // ---------------------------------------------------------------------------
 
 const STARTUP_LOCATION_NONE = 'none'
@@ -376,48 +383,51 @@ function getServerContext(): StartupServerContext {
   return { mode: 'local' }
 }
 
-async function relaunchWithServer(target: string, assertCurrent?: () => void): Promise<void> {
-  assertCurrent?.()
-  if (target === STARTUP_LOCATION_LOCAL || target === STARTUP_LOCATION_NONE) {
-    delete process.env.CRAFT_SERVER_URL
-    delete process.env.CRAFT_SERVER_TOKEN
-    delete process.env.CRAFT_SERVER_PROFILE_ID
-    delete process.env.CRAFT_SERVER_PROFILE_NAME
-    setStartupServerLocation(target)
-  } else {
-    const profile = await resolveRemoteProfile(target)
-    if (!profile) throw new Error('Remote server profile not found')
-    assertCurrent?.()
-    setStartupServerLocation(target)
-    process.env.CRAFT_SERVER_URL = profile.url
-    // Saved credentials stay in main, never inherited by a renderer/subprocess.
-    delete process.env.CRAFT_SERVER_TOKEN
-    process.env.CRAFT_SERVER_PROFILE_ID = profile.id
-    process.env.CRAFT_SERVER_PROFILE_NAME = profile.name
-  }
-
-  requestWorkspaceSelectionOnNextLaunch()
-  mainLog.info(`[server-switch] Relaunching with target=${target}`)
-
-  if (!app.isPackaged) {
-    // Dev: the electron-dev watcher owns Vite and respawns Electron when it
-    // exits with code 42 — a plain app.relaunch() would orphan the relaunched
-    // instance without the dev server. The persisted preference drives the
-    // next boot's server mode (resolveStartupRemoteProfile reads it).
-    mainLog.info('[server-switch] dev mode — exiting with restart code for the dev watcher')
-    app.exit(42)
-    return
-  }
-
-  app.relaunch()
-  app.exit(0)
-}
+const switchServer = createServerSwitcher({
+  env: process.env,
+  resolveProfile: resolveRemoteProfile,
+  persistLocation: setStartupServerLocation,
+  setContext: (target, profile) => {
+    if (!startupRemoteTarget) {
+      for (const { workspaceId } of windowManager?.getAllWindows() ?? []) {
+        if (workspaceId) sessionManager?.clearActiveViewingSession(workspaceId)
+      }
+    }
+    pickerMode = target === STARTUP_LOCATION_NONE
+    startupRemoteTarget = profile
+    mainLog.info(`[server-switch] Switching frontend to target=${target}`)
+  },
+  canReload: target => !!nativeRemoteTransport
+    && (target !== STARTUP_LOCATION_LOCAL || !!sessionManager),
+  reloadWindows: () => windowManager?.resetWindowsForServerSwitch(),
+  restart: () => {
+    // No embedded host exists in this path, so no local agents are interrupted.
+    requestWorkspaceSelectionOnNextLaunch()
+    if (!app.isPackaged) {
+      // The dev watcher respawns Electron with the persisted server selection.
+      mainLog.info('[server-switch] dev mode — exiting with restart code for the dev watcher')
+      app.exit(42)
+      return
+    }
+    app.relaunch()
+    app.exit(0)
+  },
+})
 
 // Client-local IPC used by both the startup picker and the menu-bar switcher.
 // Registered at module scope so they work even when the local service is not
 // bootstrapped (picker mode / thin-client remote mode).
 ipcMain.on('__get-startup-context', (e) => {
-  e.returnValue = { mode: pickerMode ? 'picker' : 'normal' }
+  e.returnValue = {
+    mode: pickerMode ? 'picker' : 'normal',
+    remote: process.env.CRAFT_SERVER_URL ? {
+      url: process.env.CRAFT_SERVER_URL,
+      profileId: process.env.CRAFT_SERVER_PROFILE_ID,
+      workspaceId: process.env.CRAFT_WORKSPACE_ID,
+      // Only legacy ad-hoc connections use a preload-owned bearer.
+      ...(!process.env.CRAFT_SERVER_PROFILE_ID && { token: process.env.CRAFT_SERVER_TOKEN ?? '' }),
+    } : undefined,
+  }
 })
 ipcMain.handle('__get-server-context', async () => {
   const ctx = getServerContext()
@@ -474,7 +484,7 @@ ipcMain.handle('__remote-servers:test', async (event, input: { id?: string; url?
 })
 ipcMain.handle('__select-startup-server', async (event, target: string) => {
   const assertCurrent = pinNativeApp(event)
-  await relaunchWithServer(target, assertCurrent)
+  await switchServer(target, assertCurrent)
   return { success: true }
 })
 ipcMain.handle('__get-startup-location', async () => getStartupServerLocation() ?? STARTUP_LOCATION_LOCAL)
@@ -707,19 +717,34 @@ if (!gotTheLock) {
         mainLog.error('Failed to handle deep link:', err)
       })
     } else if (windowManager) {
-      // No deep link - just focus the first window
-      const windows = windowManager.getAllWindows()
-      if (windows.length > 0) {
-        const win = windows[0].window
-        if (win.isMinimized()) win.restore()
-        win.focus()
-      }
+      showAppWindow()
     }
   })
 }
 
-// Helper to create initial windows on startup
-async function createInitialWindows(): Promise<void> {
+let systemTray: SystemTray | null = null
+
+function showAppWindow(): void {
+  if (isQuitting || process.env.CRAFT_HEADLESS || !windowManager) return
+  if (windowManager.showMainWindow()) return
+  if (!systemTray) return // Bootstrap has not created the UI yet.
+  const existing = windowManager.getLastActiveWindow()
+  if (existing) {
+    windowManager.createWindow({ workspaceId: windowManager.getWorkspaceForWindow(existing.webContents.id) ?? '' })
+    return
+  }
+  void createInitialWindows(false).catch(error => mainLog.error('Failed to restore app window:', error))
+}
+
+function initializeSystemTray(): void {
+  if (process.env.CRAFT_HEADLESS || !windowManager || systemTray) return
+  systemTray = new SystemTray(showAppWindow)
+  windowManager.setCloseToTrayEnabled(systemTray.isAvailable)
+}
+
+app.on('activate', showAppWindow)
+
+async function createInitialWindows(restoreSavedWindows = true): Promise<void> {
   if (!windowManager) return
 
   const selectWorkspaceFirst = consumeWorkspaceSelectionOnNextLaunch()
@@ -752,7 +777,7 @@ async function createInitialWindows(): Promise<void> {
 
   const validWorkspaceIds = workspaces.map(ws => ws.id)
 
-  if (savedState?.windows.length) {
+  if (restoreSavedWindows && savedState?.windows.length) {
     // Restore windows from saved state
     let restoredCount = 0
 
@@ -784,6 +809,10 @@ async function createInitialWindows(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // app.quit() is asynchronous: readiness can still fire in a second process.
+  // Only the single-instance lock owner may initialize the UI and local server.
+  if (!gotTheLock) return
+
   // Native protection is optional for existing vaults. This adapter preserves
   // full legacy read/write/refresh behavior until an explicit Settings upgrade.
   const credentialVault = configureElectronCredentialVault({ safeStorage, remoteMigration: {
@@ -894,6 +923,7 @@ app.whenReady().then(async () => {
       ...(process.env.VITE_DEV_SERVER_URL ? [process.env.VITE_DEV_SERVER_URL] : []),
     ], { allowUnboundWorkspace: true })
     nativeAppAuthority = assertNativeAppWindow
+    if (!process.env.CRAFT_HEADLESS) birdCompanionManager = new BirdCompanionManager(assertNativeAppWindow)
     registerNativeCredentialIpcHandlers(ipcMain, {
       vault: credentialVault,
       assertSender: assertNativeWindow,
@@ -920,6 +950,7 @@ app.whenReady().then(async () => {
     if (pickerMode) {
       mainLog.info('[picker] Startup server location is "none" — skipping local service bootstrap, showing server picker')
       await createInitialWindows()
+      initializeSystemTray()
       return
     }
 
@@ -932,7 +963,7 @@ app.whenReady().then(async () => {
     nativeRemoteTransport = registerNativeRemoteTransport(ipcMain, {
       assertSender: assertNativeAppWindow,
       resolveTarget: async authority => {
-        if (isClientOnly && startupRemoteTarget) {
+        if (process.env.CRAFT_SERVER_URL && startupRemoteTarget) {
           const current = await resolveRemoteProfile(startupRemoteTarget.profileId)
           // A stored edit invalidates this startup generation. Reopening the
           // saved server is explicit; never silently retarget an existing tab.
@@ -1086,9 +1117,28 @@ app.whenReady().then(async () => {
       return exportChatTranscript(win, request)
     })
 
-    // `localbash` bridge — the remote server asks THIS machine to run a shell
-    // command on behalf of the agent. Cwd defaults to the local process cwd;
-    // the caller (SessionManager) passes the session's working directory.
+    // Only user-selected files are sent to the requesting remote session.
+    ipcMain.handle('__client:request-files', async (event, input: import('@craft-agent/core/types').ClientFileRequest) => {
+      const assertCurrent = pinNativeApp(event)
+      const { validateClientFileRequest } = await import('@craft-agent/core/types')
+      const { readSelectedClientFiles } = await import('./client-files')
+      const request = validateClientFileRequest(input)
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) throw new Error('Requesting window is no longer available')
+      assertCurrent()
+      const result = await dialog.showOpenDialog(win, {
+        title: `${i18n.t('remoteFiles.title')}: ${request.reason}`,
+        message: request.reason,
+        buttonLabel: i18n.t('remoteFiles.choose'),
+        properties: request.allowMultiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        ...(request.extensions?.length ? { filters: [{ name: i18n.t('remoteFiles.files'), extensions: request.extensions }] } : {}),
+      })
+      assertCurrent()
+      if (result.canceled) return { canceled: true, files: [] }
+      return await readSelectedClientFiles(result.filePaths, assertCurrent)
+    })
+
+    // `localbash` executes on this client machine.
     ipcMain.handle('__shell:run', async (_event, req: { command: string; cwd?: string; timeoutMs?: number }) => {
       const { executeShell } = await import('@craft-agent/session-tools-core')
       return await executeShell({
@@ -1271,6 +1321,7 @@ app.whenReady().then(async () => {
         },
         createSessionManager: () => {
           const sm = new SessionManager()
+          sm.setLocalCredentialAccessEnabled(true)
           sm.setBrowserPaneManager(browserPaneManager!)
           // Page preview posters: offscreen capture is Electron-main-only. On
           // capture, nudge the watcher so the pages:changed push carries the
@@ -1377,20 +1428,9 @@ app.whenReady().then(async () => {
         oauthFlowStore: instance.oauthFlowStore,
         windowManager: windowManager ?? undefined,
       }, assertNativeWindow)
-      registerNativeWorkspaceSwitch(ipcMain, {
-        assertSender: assertNativeAppWindow,
-        getWorkspace: id => {
-          const workspace = getWorkspaceByNameOrId(id)
-          return workspace ? redactWorkspaceRemoteCredentials(workspace) : null
-        },
-        updateWindowWorkspace: (id, workspaceId) => windowManager?.updateWindowWorkspace(id, workspaceId) ?? false,
-        getAllWindowsForWorkspace: id => windowManager?.getAllWindowsForWorkspace(id) ?? [],
-        clearActiveViewingSession: id => instance.sessionManager.clearActiveViewingSession(id),
-        setupConfigWatcher: (rootPath, workspaceId) => instance.sessionManager.setupConfigWatcher(rootPath, workspaceId),
-      })
-
       // Capture module-level references for before-quit cleanup and deep-link handlers
       sessionManager = instance.sessionManager
+      instance.sessionManager.onSessionEvent((event, workspaceId) => birdCompanionManager?.observeSessionEvent(event, workspaceId))
       oauthFlowStore = instance.oauthFlowStore
       moduleSink = instance.wsServer.push.bind(instance.wsServer)
       moduleClientResolver = resolveClientId
@@ -1594,6 +1634,7 @@ app.whenReady().then(async () => {
           app.setName(getLocalizedProductName(code))
           windowManager?.refreshLocalizedAppName()
         }
+        systemTray?.refresh()
         mainLog.info('[i18n] changeLanguage IPC applied', {
           incoming: code,
           previousResolved,
@@ -1718,10 +1759,16 @@ app.whenReady().then(async () => {
       }
     }
 
-    if (isClientOnly && startupRemoteTarget) {
+    // Resolve against the current frontend server, including hot switches from
+    // an embedded local host to a saved remote profile and back.
+    if (!isClientOnly || startupRemoteTarget) {
       registerNativeWorkspaceSwitch(ipcMain, {
         assertSender: assertNativeAppWindow,
         getWorkspace: async id => {
+          if (!process.env.CRAFT_SERVER_URL) {
+            const workspace = getWorkspaceByNameOrId(id)
+            return workspace ? redactWorkspaceRemoteCredentials(workspace) : null
+          }
           const target = await freshStartupRemoteTarget()
           const connection = new WsRpcClient(validateNativeRemoteUrl(target.url), { token: target.token, autoReconnect: false,
             tlsRejectUnauthorized: true, useNodeWebSocket: true, requestTimeout: 10_000 })
@@ -1735,7 +1782,10 @@ app.whenReady().then(async () => {
         },
         updateWindowWorkspace: (id, workspaceId) => windowManager?.updateWindowWorkspace(id, workspaceId) ?? false,
         getAllWindowsForWorkspace: id => windowManager?.getAllWindowsForWorkspace(id) ?? [],
-        clearActiveViewingSession: () => {}, setupConfigWatcher: () => {},
+        clearActiveViewingSession: id => {
+          if (!process.env.CRAFT_SERVER_URL) sessionManager?.clearActiveViewingSession(id)
+        },
+        setupConfigWatcher: (rootPath, workspaceId) => sessionManager?.setupConfigWatcher(rootPath, workspaceId),
       })
     }
     // Multi-server relay is not registered in this release while its separate
@@ -1746,6 +1796,7 @@ app.whenReady().then(async () => {
     // In headless mode the server runs without any UI — skip window creation.
     if (!isHeadless) {
       await createInitialWindows()
+      initializeSystemTray()
     }
 
     // Run credential health check at startup to detect issues early
@@ -1871,28 +1922,11 @@ app.whenReady().then(async () => {
       if (app.isPackaged) app.quit()
     }
   }
-
-  // macOS: Re-create window when dock icon is clicked
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0 && windowManager) {
-      // Open first workspace or last focused
-      const workspaces = getWorkspaces()
-      if (workspaces.length > 0) {
-        const savedState = loadWindowState()
-        const wsId = savedState?.lastFocusedWorkspaceId || workspaces[0].id
-        // Verify workspace still exists
-        if (workspaces.some(ws => ws.id === wsId)) {
-          windowManager.createWindow({ workspaceId: wsId })
-        } else {
-          windowManager.createWindow({ workspaceId: workspaces[0].id })
-        }
-      }
-    }
-  })
 })
 
 app.on('window-all-closed', () => {
   if (process.env.CRAFT_HEADLESS) return  // headless server stays alive
+  if (!isQuitting && systemTray?.isAvailable) return
   // On macOS, apps typically stay active until explicitly quit
   if (process.platform !== 'darwin') {
     app.quit()
@@ -1936,6 +1970,10 @@ async function performQuitCleanup(): Promise<void> {
     return
   }
   quitCleanupRan = true
+  birdCompanionManager?.dispose()
+  birdCompanionManager = null
+  systemTray?.destroy()
+  systemTray = null
   nativeRemoteTransport?.dispose()
   nativeRemoteTransport = null
 
@@ -1994,6 +2032,8 @@ app.on('before-quit', async (event) => {
 
   // Ensure Cmd+Q/app quit bypasses layered window close interception (Cmd+W behavior).
   windowManager?.setAppQuitting(true)
+  systemTray?.destroy()
+  systemTray = null
 
   if (windowManager) {
     const windows = windowManager.getWindowStates()
