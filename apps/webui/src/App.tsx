@@ -63,9 +63,12 @@ function ErrorScreen({ message, onRetry, embedded }: { message: string; onRetry:
         >
           {t("common.retry")}
         </button>
-        {embedded && window.CraftAgentAndroid && (
+        {embedded && (window.CraftAgentAndroid || window.TokenBirdRemote) && (
           <button
-            onClick={() => window.CraftAgentAndroid?.configureServer()}
+            onClick={() => {
+              if (window.TokenBirdRemote) void window.TokenBirdRemote.configureServer()
+              else window.CraftAgentAndroid?.configureServer()
+            }}
             className="min-h-11 rounded-xl border border-border bg-background px-5 py-2 text-sm font-medium text-foreground"
           >
             {t("settings.server.title")}
@@ -98,7 +101,7 @@ export default function App() {
   const initRef = useRef(false)
   const initialParams = new URLSearchParams(window.location.search)
   const embeddedPlatform = initialParams.get('embedded')
-  const embedded = Boolean(cloudGrant || initialParams.get('ws')) || embeddedPlatform === 'android'
+  const embedded = Boolean(cloudGrant || initialParams.get('ws')) || embeddedPlatform === 'android' || embeddedPlatform === 'win7'
 
   const initialize = async () => {
     setPhase('loading')
@@ -110,6 +113,15 @@ export default function App() {
       let embeddedWsUrl = cloudGrant?.url ?? params.get('ws')
       let embeddedToken = cloudGrant?.token ?? params.get('token') ?? undefined
       let embeddedConnectionMode: 'local' | 'remote' | undefined = cloudGrant ? 'remote' : undefined
+      let desktopWorkspaceId: string | undefined
+      if (params.get('embedded') === 'win7') {
+        if (!window.TokenBirdRemote) throw new Error('Remote desktop bridge is unavailable')
+        const config = await window.TokenBirdRemote.getConnection()
+        embeddedWsUrl = config.serverUrl
+        embeddedToken = config.token
+        desktopWorkspaceId = config.workspaceId
+        embeddedConnectionMode = config.mode ?? 'remote'
+      }
       if (params.get('embedded') === 'android') {
         const mobileConfigResponse = await fetch('/api/mobile-config', {
           credentials: 'same-origin',
@@ -146,7 +158,7 @@ export default function App() {
       if (!wsUrl) throw new Error('No WebSocket server URL configured')
 
       // 2. Determine workspace — check URL params first
-      let workspaceId = params.get('workspace') ?? undefined
+      let workspaceId = params.get('workspace') ?? desktopWorkspaceId
 
       // If no workspace in URL, fetch the default from the server
       // so we can include it in the WebSocket handshake
@@ -218,7 +230,7 @@ export default function App() {
   return (
     <Suspense fallback={<LoadingScreen />}>
       <ElectronApp />
-      <MobileControls connectionMode={connectionMode} />
+      {!window.TokenBirdDesktop && <MobileControls connectionMode={connectionMode} />}
     </Suspense>
   )
 }

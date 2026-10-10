@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TokenBird Win7 Remote — 服务器设置</title>
+  <link rel="stylesheet" href="./settings.css">
+</head>
+<body>
+  <main>
+    <h1>TokenBird Win7 Remote</h1>
+    <p>Windows 7 x64 实验版 · 仅连接远程服务器</p>
+    <form id="connection">
+      <label>服务器地址（WebSocket）<input id="server" type="text" placeholder="wss://server.example.com/ws" required autocomplete="off" spellcheck="false"></label>
+      <label>服务器令牌<input id="token" type="password" autocomplete="off" spellcheck="false"></label>
+      <label>工作区 ID（可选）<input id="workspace" type="text" autocomplete="off" spellcheck="false"></label>
+      <label class="checkbox"><input id="remember" type="checkbox">使用 Windows 加密保护记住令牌</label>
+      <p class="note">令牌填写服务器的 CRAFT_SERVER_TOKEN，不是模型 API Key。留空工作区后可在界面选择服务器工作区。</p>
+      <p class="warning" id="warning" hidden>ws:// 不加密，仅用于可信局域网或 SSH 隧道。公网请使用 wss://。</p>
+      <p id="error" role="alert"></p>
+      <button id="connect" type="submit">连接服务器</button>
+    </form>
+    <footer>所有 Agent、文件和工具操作在服务器执行，不会启动本地 Agent。<br>按 Ctrl+Shift+S 返回服务器设置。此版本不自动更新。</footer>
+  </main>
+  <script src="./settings.js"></script>
+</body>
+</html>

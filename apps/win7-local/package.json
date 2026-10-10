@@ -1,0 +1,8 @@
+{
+  "name": "@tokenbird/win7-local",
+  "version": "26.10.8-interactive.2",
+  "private": true,
+  "description": "Experimental Windows 7 x64 local Pi agent desktop",
+  "license": "Apache-2.0",
+  "main": "main.cjs"
+}

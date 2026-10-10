@@ -22,6 +22,7 @@ import { requestBrowserClientFiles } from './client-files'
 import { pickServerDirectory } from './directory-picker'
 import { exportWebChat } from './chat-export'
 import type { ElectronAPI, TransportConnectionState } from '../../../electron/src/shared/types'
+import { createWin7DesktopApi, WIN7_DESKTOP_CAPABILITIES } from './win7-desktop-api'
 import {
   CLIENT_ANDROID_ADB,
   CLIENT_ANDROID_PERMISSION,
@@ -131,7 +132,11 @@ export function createWebApi(options: WebApiOptions): {
     token,
     autoReconnect: true,
     mode: 'remote',
-    clientCapabilities: [...androidCapabilities, CLIENT_REQUEST_FILES, ...(connectionMode === 'local' ? [] : [CLIENT_REMOTE_ACCESS])],
+    clientCapabilities: [
+      ...(window.TokenBirdDesktop ? [...WIN7_DESKTOP_CAPABILITIES, CLIENT_CANVAS_INVOKE] : androidCapabilities),
+      CLIENT_REQUEST_FILES,
+      ...(connectionMode === 'local' ? [] : [CLIENT_REMOTE_ACCESS]),
+    ],
     // No token — auth is via session cookie sent on WebSocket upgrade
   })
 
@@ -230,6 +235,7 @@ export function createWebApi(options: WebApiOptions): {
     },
     // Shell operations — use browser APIs
     openUrl: (url: string) => {
+      if (window.TokenBirdRemote) return window.TokenBirdRemote.openExternal(url)
       const result = openExternalUrl(url)
       if (!result.opened) {
         if (result.reason === 'dangerous') {
@@ -334,7 +340,9 @@ export function createWebApi(options: WebApiOptions): {
     },
     openSessionInNewWindow: async (_wsId: string, sessionId: string) => {
       // Open in new tab
-      window.open(`${window.location.origin}/?session=${sessionId}`, '_blank')
+      const url = new URL(window.TokenBirdRemote ? window.location.href : '/', window.location.origin)
+      url.searchParams.set('session', sessionId)
+      window.open(url.href, '_blank')
     },
 
     // Auto-update — not applicable to web (but expose server version for About page)
@@ -352,7 +360,6 @@ export function createWebApi(options: WebApiOptions): {
     onMenuToggleFocusMode: () => () => {},
     onMenuToggleSidebar: () => () => {},
     onDeepLinkNavigate: () => () => {},
-
     // Menu actions — no-ops (web has no native menu)
     menuQuit: () => Promise.resolve(),
     menuNewWindow: () => { window.open(window.location.href, '_blank'); return Promise.resolve() },
@@ -584,7 +591,9 @@ export function createWebApi(options: WebApiOptions): {
     },
   }
 
-  const api = { ...baseApi, ...webOverrides, ...oauthOverrides } as ElectronAPI
+  const api = { ...baseApi, ...webOverrides, ...oauthOverrides,
+    ...(window.TokenBirdDesktop ? createWin7DesktopApi(baseApi as ElectronAPI, client, workspaceId) : {}),
+  } as ElectronAPI
 
   return { api, client }
 }
