@@ -7,6 +7,7 @@
 import { afterEach, describe, test, expect } from 'bun:test';
 import { McpClientPool } from '../mcp-pool.ts';
 import type { PoolClient } from '../client.ts';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { SdkMcpServerConfig } from '../../agent/backend/types.ts';
 
 const pools: McpClientPool[] = [];
@@ -19,10 +20,11 @@ class TestPool extends McpClientPool {
   }
   connectCalls: Array<{ slug: string; config: SdkMcpServerConfig }> = [];
   closedSlugs: string[] = [];
+  tools: Tool[] = [];
 
   override async registerClient(slug: string, client: PoolClient): Promise<void> {
     this.connectCalls.push({ slug, config: this.activeConfigs.get(slug)! });
-    client.listTools = async () => [];
+    client.listTools = async () => this.tools;
     client.callTool = async () => ({ content: [] });
     client.close = async () => { this.closedSlugs.push(slug); };
     await super.registerClient(slug, client);
@@ -34,6 +36,21 @@ function httpConfig(token: string): SdkMcpServerConfig {
 }
 
 describe('McpClientPool.ensureConnected', () => {
+  test('publishes repaired schemas and isolates an invalid tool', async () => {
+    const pool = new TestPool();
+    pool.tools = [
+      { name: 'create_schedule', inputSchema: { type: 'object', properties: { actions: { type: 'array' } } } },
+      { name: 'broken', inputSchema: { type: 'object', properties: { actions: { type: 'array', items: null } } } },
+      { name: 'echo', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } },
+    ];
+    await pool.ensureConnected('automations', httpConfig('a'));
+    const defs = pool.getProxyToolDefs();
+    expect(defs.map(tool => tool.name)).toEqual(['mcp__automations__create_schedule', 'mcp__automations__echo']);
+    expect(defs[0]?.inputSchema).toMatchObject({ properties: { actions: { type: 'array', items: {} } } });
+    expect(pool.tools[0]?.inputSchema.properties?.actions).toEqual({ type: 'array' });
+    expect(await pool.callTool('mcp__automations__create_schedule', { actions: [{ name: 'example' }] })).toEqual({ content: '{"content":[]}', isError: false });
+  });
+
   test('connects an absent source once', async () => {
     const pool = new TestPool();
     await pool.ensureConnected('tokenbird', httpConfig('a'));

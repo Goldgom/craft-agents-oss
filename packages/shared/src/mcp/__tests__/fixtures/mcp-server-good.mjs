@@ -44,7 +44,7 @@ rl.on('line', (line) => {
           {
             name: 'echo',
             description: 'Echo input back',
-            inputSchema: {
+            inputSchema: process.env.MCP_TEST_INPUT_SCHEMA ? JSON.parse(process.env.MCP_TEST_INPUT_SCHEMA) : {
               type: 'object',
               properties: { text: { type: 'string' } },
               required: ['text'],

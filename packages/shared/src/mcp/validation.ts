@@ -7,8 +7,11 @@
  */
 
 import { TokenBirdMcpClient } from './client.js';
+import { normalizeMcpToolInputSchema } from './tool-schema.ts';
 import { sanitizeMcpConnectionError } from './connection-error.ts';
 import { debug } from '../utils/debug.ts';
+import { existsSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { normalizeMcpUrl } from '../sources/server-builder.ts';
 import type { McpTransport } from '../sources/types.ts';
 
@@ -130,6 +133,43 @@ function classifyConnectionError(err: unknown): McpValidationResult {
   return { success: false, error: message, errorType: needsAuth ? 'needs-auth' : 'failed' };
 }
 
+/** Apply the same repairs used at registration before checking provider constraints. */
+function validateToolSchemas(tools: { name: string; inputSchema?: unknown }[]): McpValidationResult {
+  const toolNames = tools.map(tool => tool.name);
+  const invalidProperties: InvalidProperty[] = [];
+  for (const tool of tools) {
+    let schema: Record<string, unknown>;
+    try {
+      const normalized = normalizeMcpToolInputSchema(tool.inputSchema);
+      schema = normalized.schema;
+      if (normalized.repairs.length > 0) {
+        debug(`Repaired MCP tool schema ${tool.name}: ${normalized.repairs.join(', ')}`);
+      }
+    } catch (error) {
+      return {
+        success: false,
+        errorType: 'invalid-schema',
+        error: `Invalid MCP tool ${tool.name}: ${error instanceof Error ? error.message : 'invalid input schema'}`,
+        tools: toolNames,
+      };
+    }
+    for (const prop of findInvalidProperties(schema)) {
+      invalidProperties.push({ toolName: tool.name, propertyPath: prop.path, propertyKey: prop.key });
+    }
+  }
+  if (invalidProperties.length > 0) {
+    const toolsWithIssues = [...new Set(invalidProperties.map(prop => prop.toolName))];
+    return {
+      success: false,
+      error: `Server has ${invalidProperties.length} invalid property name(s) in ${toolsWithIssues.length} tool(s): ${toolsWithIssues.join(', ')}. Property names must match ^[a-zA-Z0-9_.-]{1,64}$`,
+      errorType: 'invalid-schema',
+      invalidProperties,
+      tools: toolNames,
+    };
+  }
+  return { success: true, tools: toolNames };
+}
+
 /**
  * Validates an HTTP/SSE MCP connection by connecting via TokenBirdMcpClient and
  * listing tools. The internal `connect()` call performs a `listTools()` health
@@ -159,45 +199,7 @@ export async function validateMcpConnection(
     const serverInfo = mcpClient.getServerInfo();
 
     const tools = await mcpClient.listTools();
-    const toolNames = tools.map((t) => t.name);
-
-    debug(`Validating schemas for ${tools.length} tools`);
-
-    const allInvalidProperties: InvalidProperty[] = [];
-    for (const tool of tools) {
-      if (tool.inputSchema && typeof tool.inputSchema === 'object') {
-        const invalidProps = findInvalidProperties(
-          tool.inputSchema as Record<string, unknown>
-        );
-        for (const prop of invalidProps) {
-          allInvalidProperties.push({
-            toolName: tool.name,
-            propertyPath: prop.path,
-            propertyKey: prop.key,
-          });
-        }
-      }
-    }
-
-    if (allInvalidProperties.length > 0) {
-      const toolsWithIssues = [
-        ...new Set(allInvalidProperties.map((p) => p.toolName)),
-      ];
-      return {
-        success: false,
-        error: `Server has ${allInvalidProperties.length} invalid property name(s) in ${toolsWithIssues.length} tool(s): ${toolsWithIssues.join(', ')}. Property names must match ^[a-zA-Z0-9_.-]{1,64}$`,
-        errorType: 'invalid-schema',
-        serverInfo,
-        invalidProperties: allInvalidProperties,
-        tools: toolNames,
-      };
-    }
-
-    return {
-      success: true,
-      serverInfo,
-      tools: toolNames,
-    };
+    return { ...validateToolSchemas(tools), serverInfo };
   } catch (err) {
     debug('[mcp-validation] connection failed');
     return classifyConnectionError(err);
@@ -421,43 +423,8 @@ export async function validateStdioMcpConnection(
       'tools/list',
     );
     const tools = toolsResult.tools || [];
-    const toolNames = tools.map((t: { name: string }) => t.name);
-
-    debug(`[stdio-validation] Found ${tools.length} tools`);
-
-    // Validate tool schemas for property naming
-    const allInvalidProperties: InvalidProperty[] = [];
-    for (const tool of tools) {
-      if (tool.inputSchema && typeof tool.inputSchema === 'object') {
-        const invalidProps = findInvalidProperties(
-          tool.inputSchema as Record<string, unknown>
-        );
-        for (const prop of invalidProps) {
-          allInvalidProperties.push({
-            toolName: tool.name,
-            propertyPath: prop.path,
-            propertyKey: prop.key,
-          });
-        }
-      }
-    }
-
-    if (allInvalidProperties.length > 0) {
-      const toolsWithIssues = [
-        ...new Set(allInvalidProperties.map((p) => p.toolName)),
-      ];
-      return {
-        success: false,
-        error: `Server has ${allInvalidProperties.length} invalid property name(s) in ${toolsWithIssues.length} tool(s): ${toolsWithIssues.join(', ')}. Property names must match ^[a-zA-Z0-9_.-]{1,64}$`,
-        errorType: 'invalid-schema' as const,
-        invalidProperties: allInvalidProperties,
-        tools: toolNames,
-      };
-    }
-
     return {
-      success: true,
-      tools: toolNames,
+      ...validateToolSchemas(tools),
       serverInfo: {
         name: command,
         version: args.join(' '),
@@ -480,7 +447,12 @@ export async function validateStdioMcpConnection(
     const framingHint =
       'Check that the server speaks newline-delimited JSON-RPC (MCP stdio spec) on stdout, not LSP-style Content-Length framing.';
 
-    if (error.message.includes('ENOENT') || error.message.includes('not found')) {
+    // Windows can launch a missing absolute command through cmd.exe, hiding
+    // ENOENT behind a closed MCP connection. Check executable suffixes as well.
+    const missingWindowsCommand = process.platform === 'win32' && isAbsolute(command)
+      && ![command, ...(env.PATHEXT ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD')
+        .split(';').filter(Boolean).map(extension => `${command}${extension}`)].some(path => existsSync(path));
+    if (missingWindowsCommand || error.message.includes('ENOENT') || error.message.includes('not found')) {
       errorMessage = `Command not found: "${command}". Install the required dependency and try again.`;
     } else if (error.message.includes('EACCES') || error.message.includes('permission denied')) {
       errorMessage = `Permission denied running "${command}". Check file permissions.`;
