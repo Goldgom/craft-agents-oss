@@ -86,7 +86,7 @@ cd "$ROOT_DIR"
 DEPENDENCY_STAMP="$ROOT_DIR/node_modules/.tokenbird-build-linux-${ARCH}.sha256"
 DEPENDENCY_FINGERPRINT="$(sha256sum bun.lock package.json | sha256sum | cut -d ' ' -f1)"
 DEPENDENCIES_READY=false
-if [ -d node_modules/@anthropic-ai/claude-agent-sdk ] && [ -x node_modules/@vscode/ripgrep/bin/rg ] && [ -f node_modules/electron/dist/version ]; then
+if [ -d node_modules/@anthropic-ai/claude-agent-sdk ] && [ -x node_modules/@vscode/ripgrep/bin/rg ] && [ -f node_modules/electron/dist/version ] && [ -f "node_modules/@img/sharp-linux-${ARCH}/lib/sharp-linux-${ARCH}.node" ] && [ -f "node_modules/@img/sharp-libvips-linux-${ARCH}/lib/index.js" ]; then
     DEPENDENCIES_READY=true
 fi
 if [ "$FORCE_DOWNLOAD" = true ] || [ "$DEPENDENCIES_READY" = false ] || [ ! -f "$DEPENDENCY_STAMP" ] || [ "$(cat "$DEPENDENCY_STAMP")" != "$DEPENDENCY_FINGERPRINT" ]; then
@@ -97,6 +97,13 @@ else
     echo "Reusing installed dependencies from node_modules"
 fi
 printf '%s' "$DEPENDENCY_FINGERPRINT" > "$DEPENDENCY_STAMP"
+
+# sharp is bundled as JavaScript, but its addon and libvips remain native files.
+# Fail before the expensive app build if optional runtime dependencies are absent.
+require_path "$ROOT_DIR/node_modules/@img/sharp-linux-${ARCH}/lib/sharp-linux-${ARCH}.node" \
+    "sharp Linux native addon" "Run 'bun install --frozen-lockfile --force' with optional dependencies enabled."
+require_path "$ROOT_DIR/node_modules/@img/sharp-libvips-linux-${ARCH}/lib/index.js" \
+    "sharp Linux libvips package" "Run 'bun install --frozen-lockfile --force' with optional dependencies enabled."
 
 # 3. Download Bun binary with checksum verification
 mkdir -p "$ELECTRON_DIR/vendor/bun"
@@ -243,6 +250,14 @@ if [ "$FORCE_DOWNLOAD" = false ] && [ -f "$ELECTRON_DIST/version" ] && {
 else
     npx electron-builder --linux --${ARCH} --publish never
 fi
+
+# Verify native image processing assets survived packaging, not just installation.
+UNPACKED_DIR="$ELECTRON_DIR/release/linux-unpacked"
+if [ "$ARCH" != "x64" ]; then UNPACKED_DIR="$ELECTRON_DIR/release/linux-${ARCH}-unpacked"; fi
+require_path "$UNPACKED_DIR/resources/app/node_modules/@img/sharp-linux-${ARCH}/lib/sharp-linux-${ARCH}.node" \
+    "Packaged sharp Linux native addon" "Check linux.extraResources in electron-builder.yml."
+require_path "$UNPACKED_DIR/resources/app/node_modules/@img/sharp-libvips-linux-${ARCH}/lib/index.js" \
+    "Packaged sharp Linux libvips package" "Check linux.extraResources in electron-builder.yml."
 
 # 8. Verify the AppImage was built
 # electron-builder uses Linux-style arch names: x86_64 for x64, aarch64 for arm64
