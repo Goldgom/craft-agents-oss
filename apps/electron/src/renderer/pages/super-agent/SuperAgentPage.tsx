@@ -269,6 +269,11 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
                     {settingsSection === 'scripts' && <SuperAgentScripts snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} onSave={async value => { await save(value) }} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'settings' && <SuperAgentConfiguration key={activeWorkspaceId + ':' + (selectedNodeId ?? 'settings')} config={config} connections={llmConnections} sources={sources} skills={skills} environmentStatus={snapshot.environment}
                       onContinuousWork={async enabled => { await command({ type: 'continuous-work', enabled }) }}
+                      onClearData={async () => {
+                        const workspaceId = activeWorkspaceId
+                        await command({ type: 'reset', confirmed: true, preserveConfig: true })
+                        if (workspaceRef.current === workspaceId) { setView('home'); setSettingsSection('settings'); setSelectedNodeId(undefined); setTaskDialogNode(null) }
+                      }}
                       onReset={async () => {
                         const workspaceId = activeWorkspaceId
                         await command({ type: 'reset', confirmed: true })

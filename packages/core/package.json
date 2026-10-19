@@ -1,6 +1,6 @@
 {
   "name": "@tokenbird/core",
-  "version": "26.10.16",
+  "version": "26.10.19",
   "license": "Apache-2.0",
   "description": "Core types, storage, and agent logic for TokenBird",
   "type": "module",

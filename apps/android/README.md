@@ -74,10 +74,10 @@ Copy-Item apps/android/signing.properties.example apps/android/signing.propertie
 powershell -ExecutionPolicy Bypass -File apps/android/build.ps1 -Release -ValidateOnly
 
 # 可直接安装的签名 APK
-bun run android:release -- -VersionCode 5 -VersionName "26.10.16"
+bun run android:release -- -VersionCode 5 -VersionName "26.10.19"
 
 # 签名 APK 和用于应用商店的 AAB
-bun run android:bundle -- -VersionCode 5 -VersionName "26.10.16"
+bun run android:bundle -- -VersionCode 5 -VersionName "26.10.19"
 
 # 只生成 AAB，自定义服务器默认地址
 powershell -ExecutionPolicy Bypass -File apps/android/build.ps1 -Release -Artifact Aab -VersionCode 5 -ServerUrl "wss://your-agent-server.example:50003"

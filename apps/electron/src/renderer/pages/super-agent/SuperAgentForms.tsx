@@ -212,7 +212,7 @@ export function EnvironmentEditor({ environment, onChange, status }: {
     <FormSection title={text('permissions')}>
       <label className="flex cursor-pointer items-start justify-between gap-4 text-sm">
         <span>{text('credentialAccess')}<span className="mt-1 block text-xs leading-5 text-muted-foreground">{text('credentialAccessHint')}</span></span>
-        <input type="checkbox" className="mt-1 size-4 accent-primary" checked={environment.credentialAccess === true}
+        <input type="checkbox" className="mt-1 size-4 accent-primary" checked={environment.credentialAccess !== false}
           onChange={event => onChange({ ...environment, credentialAccess: event.target.checked })} />
       </label>
       <div className="flex items-start justify-between gap-5">

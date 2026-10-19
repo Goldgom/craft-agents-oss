@@ -28,6 +28,13 @@ export interface SuperAgentPendingTurn {
   emptyResponseRetryAttempt?: number
   /** One fresh-context retry for a degenerate model response; survives restart. */
   repetitionRecoveryAttempt?: number
+  /** Durable tool activity across this turn and its retries; absent in legacy records. */
+  hasToolActivity?: boolean
+  /** Visible assistant text from this attempt only, never session-wide history. */
+  responseText?: string
+  responseTurnId?: string
+  responseComplete?: boolean
+  pendingToolUseIds?: string[]
   toolCalls?: Array<{ requestId: string; fingerprint: string; receipt: SuperAgentActionReceipt; userReply?: string; userDelivery?: SuperAgentMessage['delivery']; suppressedMessageActions: number; resourceContinuation: boolean }>
   backgroundInspection?: boolean
   usageBaseline?: { outputTokens: number; costUsd: number }
@@ -95,7 +102,7 @@ const StateSchema = z.object({
   allIdleSince: number.optional(),
   plans: z.array(z.object({ id: string, goalId: string.optional(), goalRevision: number.int().min(1).optional(), title: string, instructions: string, status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: string, blocker: SuperAgentPlanBlockerSchema.optional(), revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256).default([]),
 }).strict()
-const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, taskId: string.optional(), scriptRunId: string.optional(), createdAt: number, startedAt: number.optional(), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), manualRecovery: z.boolean().optional(), recoveryError: string.optional(), emptyResponseRetryAttempt: number.int().optional(), repetitionRecoveryAttempt: number.int().max(1).optional(), backgroundInspection: z.boolean().optional(), toolCalls: z.array(z.object({ requestId: z.string().min(1).max(64), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), receipt: ActionReceiptSchema, userReply: z.string().max(32000).optional(), userDelivery: SuperAgentDeliverySchema.optional(), suppressedMessageActions: number.int(), resourceContinuation: z.boolean() }).strict()).max(16).optional(), usageBaseline: z.object({ outputTokens: number, costUsd: number }).strict().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
+const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, taskId: string.optional(), scriptRunId: string.optional(), createdAt: number, startedAt: number.optional(), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), manualRecovery: z.boolean().optional(), recoveryError: string.optional(), emptyResponseRetryAttempt: number.int().optional(), repetitionRecoveryAttempt: number.int().max(1).optional(), backgroundInspection: z.boolean().optional(), hasToolActivity: z.boolean().optional(), responseText: string.optional(), responseTurnId: string.optional(), responseComplete: z.boolean().optional(), pendingToolUseIds: z.array(string).max(2000).optional(), toolCalls: z.array(z.object({ requestId: z.string().min(1).max(64), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), receipt: ActionReceiptSchema, userReply: z.string().max(32000).optional(), userDelivery: SuperAgentDeliverySchema.optional(), suppressedMessageActions: number.int(), resourceContinuation: z.boolean() }).strict()).max(16).optional(), usageBaseline: z.object({ outputTokens: number, costUsd: number }).strict().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
 
 export async function loadSuperAgentDocument(workspaceRoot: string): Promise<SuperAgentDocument> {
   const candidates: SuperAgentDocument[] = []; const errors: unknown[] = []

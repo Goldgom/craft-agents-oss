@@ -20,6 +20,7 @@ export function createHeadlessCredentialHost(sessionManager: Pick<SessionManager
   const workspaces = options.workspaces ?? getWorkspaces;
   manager.configureBackend(backend);
   return {
+    accessPolicy: 'authenticated-connection',
     scope(workspaceId) {
       const registered = workspaces();
       if (!registered.some(workspace => workspace.id === workspaceId && !workspace.remoteServer)) return null;
@@ -60,9 +61,8 @@ export function createHeadlessCredentialHost(sessionManager: Pick<SessionManager
       const reloads = await Promise.allSettled(reconciled.workspaceIds.map(id => sessionManager.reloadMcpServers(id)));
       if (reconciled.failed || notified.sessionIdsNeedingRestart.length || reloads.some(result => result.status === 'rejected' || result.value.failures.length)) throw new Error('Runtime reconciliation pending');
     },
-    // A standalone server has no host window. An explicit request from a client
-    // authenticated with this server's token or login receives the normal 10-minute
-    // grant. The RPC layer still checks connection identity and workspace scope.
+    // Compatibility for callers requesting approval explicitly. The RPC layer
+    // uses verified authentication directly and rechecks workspace scope per call.
     approve: async request => Date.now() < request.expiresAt && (request.authenticatedBy === 'bearer' || request.authenticatedBy === 'cookie'),
   };
 }

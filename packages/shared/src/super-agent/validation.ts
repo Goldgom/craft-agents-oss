@@ -99,7 +99,7 @@ export function validateSuperAgentConfig(value: unknown): SuperAgentConfig {
 
 const CommandSchema = z.discriminatedUnion('type', [
   ...SuperAgentLibraryCommandSchemas,
-  z.object({ type: z.literal('reset'), confirmed: z.literal(true) }).strict(),
+  z.object({ type: z.literal('reset'), confirmed: z.literal(true), preserveConfig: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('environment-check'), config: ConfigSchema }).strict(),
   z.object({ type: z.literal('chat'), text }).strict(),
   z.object({ type: z.literal('task'), id: id.optional(), title: name, instructions: text, nodeId: id.optional(), planId: id.optional(),

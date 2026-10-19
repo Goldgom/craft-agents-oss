@@ -445,7 +445,7 @@ GitHub Actions 构建并自动发布 Windows、macOS、Linux 安装包到 GitCod
 | 服务器（原生）   | `bun run scripts/build-server.ts --platform=<platform> --arch=<arch> --compress` | `dist/server/` + `tokenbird-server-<ver>-<platform>-<arch>.tar.gz` |
 | 服务器（Docker） | `docker buildx build -f Dockerfile.server -t tokenbird-server .`               | 容器镜像                                                           |
 
-版本号取自 `apps/electron/package.json`（当前 `26.10.16`），产物命名统一为
+版本号取自 `apps/electron/package.json`（当前 `26.10.19`），产物命名统一为
 `TokenBird-<arch>.<ext>` / `tokenbird-server-<version>-<platform>-<arch>.tar.gz`。
 
 ---

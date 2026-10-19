@@ -13,7 +13,7 @@ import { applyPreset, configError, createNode, nodeModels, useSuperAgentText, wi
 import { SuperAgentPresetPicker } from './SuperAgentPresetPicker'
 import { SuperAgentReadiness } from './SuperAgentReadiness'
 
-export function SuperAgentConfiguration({ config, connections, sources, skills = [], environmentStatus, onSave, onContinuousWork, onReset, onOpenAiSettings, initialNodeId }: {
+export function SuperAgentConfiguration({ config, connections, sources, skills = [], environmentStatus, onSave, onContinuousWork, onReset, onClearData, onOpenAiSettings, initialNodeId }: {
   config: SuperAgentConfig
   connections: LlmConnectionWithStatus[]
   sources: LoadedSource[]
@@ -22,6 +22,7 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
   onSave: (config: SuperAgentConfig) => Promise<void>
   onContinuousWork: (enabled: boolean) => Promise<void>
   onReset?: () => Promise<void>
+  onClearData?: () => Promise<void>
   onOpenAiSettings?: () => void
   initialNodeId?: string
 }) {
@@ -31,6 +32,7 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
   const [section, setSection] = useState<'identity' | 'team' | 'environment'>(initialNodeId ? 'team' : 'identity')
   const [pending, setPending] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
+  const [preserveConfig, setPreserveConfig] = useState(false)
   const [resetPending, setResetPending] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
@@ -55,9 +57,10 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
     try { await onContinuousWork(enabled); patch({ continuousWork: enabled }) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setPending(false) }
   }
   async function reset() {
-    if (!onReset || pending) return
+    const action = preserveConfig ? onClearData : onReset
+    if (!action || pending) return
     setPending(true); setResetPending(true); setError('')
-    try { await onReset(); setResetOpen(false) }
+    try { await action(); setResetOpen(false) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setResetOpen(false) }
     finally { setPending(false); setResetPending(false) }
   }
@@ -125,19 +128,24 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
         {saved && <span role="status" className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400"><Check className="size-3.5" />{text('completed')}</span>}
         <Button disabled={pending} onClick={() => void save()}>{pending ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}{text('save')}</Button>
       </div>
+      {onClearData && <section className="space-y-3 rounded-xl border border-destructive/25 p-4">
+        <h3 className="text-sm font-medium">{text('clearData')}</h3>
+        <p className="text-xs leading-5 text-muted-foreground">{text('clearDataHint')}</p>
+        <Button variant="destructive" size="sm" disabled={pending} onClick={() => { setPreserveConfig(true); setResetOpen(true) }}><Trash2 className="size-3.5" />{text('clearData')}</Button>
+      </section>}
       {onReset && <section className="space-y-3 rounded-xl border border-destructive/25 p-4">
         <h3 className="text-sm font-medium">{text('reset')}</h3>
         <p className="text-xs leading-5 text-muted-foreground">{text('resetHint')}</p>
-        <Button variant="destructive" size="sm" disabled={pending} onClick={() => setResetOpen(true)}><Trash2 className="size-3.5" />{text('reset')}</Button>
+        <Button variant="destructive" size="sm" disabled={pending} onClick={() => { setPreserveConfig(false); setResetOpen(true) }}><Trash2 className="size-3.5" />{text('reset')}</Button>
       </section>}
     </div>
     <Dialog open={resetOpen} onOpenChange={open => { if (!resetPending) setResetOpen(open) }}>
       <DialogContent>
-        <DialogHeader><DialogTitle>{text('resetConfirm')}</DialogTitle><DialogDescription>{text('resetDescription')}</DialogDescription></DialogHeader>
-        <p className="text-sm text-muted-foreground">{text('resetPreserved')}</p>
+        <DialogHeader><DialogTitle>{text(preserveConfig ? 'clearDataConfirm' : 'resetConfirm')}</DialogTitle><DialogDescription>{text(preserveConfig ? 'clearDataDescription' : 'resetDescription')}</DialogDescription></DialogHeader>
+        <p className="text-sm text-muted-foreground">{text(preserveConfig ? 'clearDataPreserved' : 'resetPreserved')}</p>
         <DialogFooter>
           <Button variant="outline" disabled={resetPending} onClick={() => setResetOpen(false)}>{text('cancel')}</Button>
-          <Button variant="destructive" disabled={resetPending} onClick={() => void reset()}>{resetPending ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}{text(resetPending ? 'resetting' : 'reset')}</Button>
+          <Button variant="destructive" disabled={resetPending} onClick={() => void reset()}>{resetPending ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}{text(preserveConfig ? (resetPending ? 'clearingData' : 'clearData') : (resetPending ? 'resetting' : 'reset'))}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

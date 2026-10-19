@@ -90,7 +90,7 @@ describe('Super Agent manual node recovery', () => {
     const task = await start(context)
     context.host.loseCompletion(task.sessionId!)
     context.advance(11000); await context.service.tick()
-    context.advance(1000); await context.service.tick()
+    context.advance(5000); await context.service.tick()
     const saved = await loadSuperAgentDocument(join(context.root, 'alpha'))
     expect(saved.failedTurns?.some(turn => turn.nodeId === 'worker')).toBe(false)
     const refreshed = await context.service.command('alpha', { type: 'node-refresh', nodeId: 'worker' })

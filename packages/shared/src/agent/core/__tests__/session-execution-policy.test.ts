@@ -34,16 +34,20 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('explicit credential vault access', () => {
-  test('requires an explicit worker grant in either full control mode, including the host callback', async () => {
+  test('permits account metadata for granted roles while keeping credential use worker-only', async () => {
     for (const fullControl of [false, true]) {
       for (const role of ['worker', 'coordinator', 'orchestrator'] as const) {
         for (const credentialAccess of [undefined, false, true]) {
           setSessionExecutionPolicy(sessionId, { ...policy, role, fullControl, credentialAccess, actionGates: true });
-          const allowed = role === 'worker' && credentialAccess === true;
+          const allowed = credentialAccess === true;
           for (const toolName of ['saved_credentials', 'mcp__session__saved_credentials']) {
             expect(checkSessionExecutionPolicy(sessionId, toolName, { action: 'list' }).allowed).toBe(allowed);
           }
           expect(checkSessionCredentialAccess(sessionId, { action: 'list' }).allowed).toBe(allowed);
+          if (role !== 'worker') for (const action of ['request', 'fill', 'run']) {
+            expect(checkSessionCredentialAccess(sessionId, { action }).allowed).toBe(false);
+            expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__saved_credentials', { action }).allowed).toBe(false);
+          }
           if (allowed) {
             const result = await runPreToolUseChecksWithPermissions({ toolName: 'mcp__session__saved_credentials', input: { action: 'list' }, sessionId,
               permissionMode: 'allow-all', workspaceRootPath: root, workspaceId: 'workspace', workingDirectory: root,

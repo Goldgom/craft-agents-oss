@@ -7903,6 +7903,26 @@ export class SessionManager implements ISessionManager {
     }
   }
 
+  /** Auxiliary cleanup cannot delay or reject a turn's completion notification. */
+  private runAfterTurnCleanup(sessionId: string, label: string, action: () => void | Promise<void>): void {
+    const failed = (error: unknown) => sessionLog.warn(`Non-blocking ${label} failed for ${sessionId}:`, error)
+    try { void Promise.resolve(action()).catch(failed) } catch (error) { failed(error) }
+  }
+
+  private clearBrowserAfterTurn(managed: ManagedSession): void {
+    // Nodes with no browser permission do not need a desktop client for cleanup.
+    if (managed.executionPolicy && !managed.executionPolicy.browser) return
+    const generation = managed.processingGeneration
+    this.runAfterTurnCleanup(managed.id, 'browser cleanup', async () => {
+      const bpm = this.getBrowserPaneManagerForSession(managed.id)
+      if (!bpm) return
+      await bpm.clearVisualsForSession(managed.id)
+      // A delayed desktop reply must not unbind a newly started turn.
+      if (managed.processingGeneration === generation && !managed.isProcessing
+        && !managed.messageQueue.length && !managed.pendingAuthResume) bpm.unbindAllForSession(managed.id)
+    })
+  }
+
   /**
    * Central handler for when processing stops (any reason).
    * Single source of truth for cleanup and queue processing.
@@ -7954,16 +7974,7 @@ export class SessionManager implements ISessionManager {
     // Clear agent control overlay between turns. The session keeps browser
     // ownership (boundSessionId) — only the visual overlay is removed.
     // Full unbind happens below when the queue is empty (session truly done).
-    const turnBpm = this.getBrowserPaneManagerForSession(sessionId)
-    if (turnBpm) {
-      // Same guard as the queue-empty teardown below: a remote BPM throw on a
-      // headless server must not abort processing-stop handling.
-      try {
-        await turnBpm.clearVisualsForSession(sessionId)
-      } catch (err) {
-        sessionLog.warn(`Browser-pane visual clear failed for ${sessionId} (continuing):`, err)
-      }
-    }
+    this.clearBrowserAfterTurn(managed)
 
     // 2. Handle unread state based on whether user is viewing this session
     //    This is the explicit state machine for NEW badge:
@@ -7979,13 +7990,15 @@ export class SessionManager implements ISessionManager {
     if (reason === 'complete' && didReceiveNewFinalMessage) {
       if (isViewing) {
         // User is watching - mark as read immediately
-        await this.markSessionRead(sessionId)
+        this.runAfterTurnCleanup(sessionId, 'read-state update', () => this.markSessionRead(sessionId))
       } else {
         // User is not watching - mark as unread for NEW badge
         if (!managed.hasUnread) {
           managed.hasUnread = true
-          await updateSessionMetadata(managed.workspace.rootPath, sessionId, { hasUnread: true })
-          this.emitUnreadSummaryChanged()
+          this.runAfterTurnCleanup(sessionId, 'unread-state update', async () => {
+            await updateSessionMetadata(managed.workspace.rootPath, sessionId, { hasUnread: true })
+            this.emitUnreadSummaryChanged()
+          })
         }
       }
     }
@@ -7995,7 +8008,7 @@ export class SessionManager implements ISessionManager {
     //    and should automatically move to 'done' when finished
     if (reason === 'complete' && managed.systemPromptPreset === 'mini' && managed.sessionStatus !== 'done') {
       sessionLog.info(`Auto-completing mini agent session ${sessionId}`)
-      await this.setSessionStatus(sessionId, 'done')
+      this.runAfterTurnCleanup(sessionId, 'mini-session status', () => this.setSessionStatus(sessionId, 'done'))
     }
 
     // 4. Apply deferred external metadata updates captured while processing.
@@ -8003,7 +8016,7 @@ export class SessionManager implements ISessionManager {
       const pendingHeader = managed.pendingExternalMetadata
       managed.pendingExternalMetadata = undefined
       sessionLog.info(`Applying deferred external metadata for session ${sessionId} after processing stop`)
-      this.applyExternalSessionMetadata(managed, pendingHeader)
+      this.runAfterTurnCleanup(sessionId, 'external metadata', () => { this.applyExternalSessionMetadata(managed, pendingHeader) })
     }
 
     // Authentication is a pause, not a terminal task outcome. Keep queued
@@ -8038,23 +8051,6 @@ export class SessionManager implements ISessionManager {
       // Has queued messages - process next
       this.processNextQueuedMessage(sessionId)
     } else {
-      // Session is truly done — release browser ownership.
-      // The window stays alive (hidden) and becomes reusable by future sessions.
-      // On the next turn, getOrCreateForSession() will re-bind it.
-      const doneBpm = this.getBrowserPaneManagerForSession(sessionId)
-      if (doneBpm) {
-        // Teardown must never block completion. On a headless/WebUI server the BPM is
-        // remote and these calls throw (BROWSER_NO_CAPABLE_CLIENT) when no desktop
-        // browser client is connected — which previously aborted onProcessingStopped
-        // before emitSessionComplete, hanging the Tasks Conductor completion seam.
-        try {
-          await doneBpm.clearVisualsForSession(sessionId)
-          doneBpm.unbindAllForSession(sessionId)
-        } catch (err) {
-          sessionLog.warn(`Browser-pane teardown failed for ${sessionId} (continuing to completion):`, err)
-        }
-      }
-
       // No queue - emit complete to UI (include tokenUsage and hasUnread for state updates)
       this.sendEvent({
         type: 'complete',
@@ -8067,15 +8063,6 @@ export class SessionManager implements ISessionManager {
         // real `task_completed` will arrive when the agent actually finishes.
         backgroundTasksAlive: this.keepBackgroundTasksAlive,
       }, managed.workspace.id)
-
-      if (this.pendingMcpReloadSessionIds.delete(sessionId)) {
-        try {
-          await this.reloadSessionSources(managed, true)
-          sessionLog.info(`Completed deferred MCP reload for session ${sessionId}`)
-        } catch (error) {
-          sessionLog.error(`Deferred MCP reload failed for session ${sessionId}:`, error)
-        }
-      }
 
       // Tasks Conductor seam: signal true completion (queue empty) with the stop
       // reason + this turn's final assistant message, so the Conductor can advance
@@ -8090,6 +8077,16 @@ export class SessionManager implements ISessionManager {
         canRetry: completion.canRetry,
         tokenUsage: managed.tokenUsage,
       })
+
+      // Completion is published before source maintenance or cache eviction.
+      if (this.pendingMcpReloadSessionIds.delete(sessionId)) {
+        try {
+          await this.reloadSessionSources(managed, true)
+          sessionLog.info(`Completed deferred MCP reload for session ${sessionId}`)
+        } catch (error) {
+          sessionLog.error(`Deferred MCP reload failed for session ${sessionId}:`, error)
+        }
+      }
 
       // A completed, queue-empty session becomes a warm runtime candidate.
       // Keep only the configured LRU budget so MCP processes cannot accumulate

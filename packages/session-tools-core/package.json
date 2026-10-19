@@ -1,6 +1,6 @@
 {
   "name": "@tokenbird/session-tools-core",
-  "version": "26.10.16",
+  "version": "26.10.19",
   "license": "Apache-2.0",
   "description": "Shared utilities for session-scoped tools (Claude and Codex)",
   "type": "module",

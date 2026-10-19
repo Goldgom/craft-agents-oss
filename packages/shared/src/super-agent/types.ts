@@ -44,7 +44,7 @@ export interface SuperAgentEnvironment {
   permissionMode: PermissionMode
   /** Enable worker capabilities and skip all approvals/reviews within the fixed environment. */
   fullControl?: boolean
-  /** Explicit workspace vault grant, independent of full control. Defaults to disabled. */
+  /** Workspace vault access, independent of full control. Missing legacy values default to enabled; false explicitly disables it. */
   credentialAccess?: boolean
   safety?: {
     autoReview: boolean
@@ -401,7 +401,7 @@ export interface SuperAgentPermissionGrant {
 /** Model output uses the same bounded operations as the user-facing control API. */
 export type SuperAgentCommand =
   | SuperAgentLibraryCommand
-  | { type: 'reset'; confirmed: true }
+  | { type: 'reset'; confirmed: true; preserveConfig?: boolean }
   | { type: 'environment-check'; config: SuperAgentConfig }
   | { type: 'chat'; text: string }
   | ({ type: 'task' } & SuperAgentTaskContract)

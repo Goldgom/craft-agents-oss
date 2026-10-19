@@ -147,7 +147,7 @@ const MAX_ACTIVITY_TEXT = 8_000
 const MAX_PERMISSION_HISTORY = 100
 const MAX_PENDING_PERMISSIONS = 200
 const TURN_START_GRACE_MS = 10_000
-const STOPPED_TURN_CONFIRM_MS = 1_000
+const STOPPED_TURN_CONFIRM_MS = 5_000
 /** Bound optional history without silently turning a partial log into a full result. */
 function contextExcerpt(value: string | undefined, limit: number): string | undefined {
   if (!value || value.length <= limit) return value || undefined
@@ -282,7 +282,7 @@ export class SuperAgentService {
       if (!request.changes || !Object.keys(request.changes).length) throw new Error('Provide at least one setting to change')
       if ('version' in request.changes) throw new Error('The configuration format version cannot be edited')
       const config = validateSuperAgentConfig({ ...document.config, ...request.changes })
-      if (active && (config.environment.credentialAccess === true) !== (document.config.environment.credentialAccess === true)) {
+      if (active && (config.environment.credentialAccess !== false) !== (document.config.environment.credentialAccess !== false)) {
         throw new Error('Credential vault access must be changed by the user in Super Agent settings')
       }
       if (this.settingsUpdates.has(workspaceId)) throw new Error('A settings update is already pending; wait for completion')
@@ -403,7 +403,7 @@ export class SuperAgentService {
 
   async command(workspaceId: string, value: SuperAgentCommand): Promise<SuperAgentSnapshot> {
     const command = validateSuperAgentCommand(value)
-    if (command.type === 'reset') return this.reset(workspaceId)
+    if (command.type === 'reset') return this.reset(workspaceId, command.preserveConfig === true)
     if (command.type === 'environment-check') {
       const config = validateSuperAgentConfig(command.config)
       if (!this.deps.checkReadiness) throw new Error('This host cannot check execution requirements')
@@ -501,7 +501,7 @@ export class SuperAgentService {
     })
   }
 
-  private async reset(workspaceId: string): Promise<SuperAgentSnapshot> {
+  private async reset(workspaceId: string, preserveConfig = false): Promise<SuperAgentSnapshot> {
     if (this.resetting.has(workspaceId)) throw new Error('Super Agent reset is in progress')
     this.resetting.add(workspaceId)
     try {
@@ -516,7 +516,7 @@ export class SuperAgentService {
           const session = await this.deps.host.getSession(id)
           if (session && session.workspaceId !== workspaceId) throw new Error('Cannot reset a node session owned by another workspace')
         }
-        if (document.config) document.config.continuousWork = false
+        if (document.config && !preserveConfig) document.config.continuousWork = false
         // Fence queued work before waiting for preparation outside the lock.
         document.pendingTurns = []; document.failedTurns = []; document.chainCounts = {}
         for (const task of document.state.tasks) {
@@ -524,7 +524,7 @@ export class SuperAgentService {
           task.checkpoint = undefined; task.waiting = undefined
         }
         for (const runtime of document.state.nodes) if (runtime.sessionId) this.expireSessionPermissions(workspaceId, document, runtime.sessionId)
-        if (document.config?.environment.fullControl) {
+        if (!preserveConfig && document.config?.environment.fullControl) {
           if (!this.deps.host.setSuperAgentFullControl) throw new Error('This host cannot revoke Super Agent control permissions')
           await this.deps.host.setSuperAgentFullControl(workspaceId, false)
           document.config.environment.fullControl = false
@@ -563,7 +563,8 @@ export class SuperAgentService {
         }
         if (document.state.permissionGrants?.length && !this.deps.host.clearSuperAgentPermissionGrants) throw new Error('This host cannot revoke shared permissions')
         this.deps.host.clearSuperAgentPermissionGrants?.(workspaceId)
-        await this.deps.onReset?.(workspaceId)
+        // A data-only reset keeps the configured execution environment available.
+        if (!preserveConfig) await this.deps.onReset?.(workspaceId)
         for (const id of sessionIds) {
           const session = this.deps.host.getSessions!(workspaceId).find(item => item.id === id)
           if (!session) continue
@@ -575,14 +576,19 @@ export class SuperAgentService {
           this.scriptProcesses.delete(key)
         }
         await clearSuperAgentHistory(this.deps.rootForWorkspace(workspaceId))
-        const empty: SuperAgentDocument = { version: 1, config: null, state: emptySuperAgentState(this.now()), pendingTurns: [], failedTurns: [], chainCounts: {} }
+        const config = preserveConfig && document.config ? structuredClone(document.config) : null
+        const empty: SuperAgentDocument = { version: 1, config, state: emptySuperAgentState(this.now()), pendingTurns: [], failedTurns: [], chainCounts: {} }
+        if (config) {
+          empty.state.nodes = config.nodes.map(node => ({ nodeId: node.id, status: 'idle' }))
+          empty.state.scripts = config.scripts.map(script => ({ scriptId: script.id, status: 'idle' }))
+        }
         empty.state.revision = document.state.revision + 1
         try { await saveSuperAgentDocument(this.deps.rootForWorkspace(workspaceId), empty) }
         catch (error) {
           // commit.json can already be authoritative if updating state.json failed.
           // Reconcile the cache so an old in-memory team cannot overwrite that reset.
           const persisted = await loadSuperAgentDocument(this.deps.rootForWorkspace(workspaceId)).catch(() => null)
-          if (persisted?.config === null && persisted.state.revision >= empty.state.revision) this.documents.set(workspaceId, persisted)
+          if (persisted && persisted.state.revision >= empty.state.revision) this.documents.set(workspaceId, persisted)
           throw error
         }
         this.documents.set(workspaceId, empty)
@@ -603,7 +609,7 @@ export class SuperAgentService {
       await this.serial(workspaceId, async () => {
         const document = this.documents.get(workspaceId)
         if (!document?.config) return
-        document.config.continuousWork = false
+        if (!preserveConfig) document.config.continuousWork = false
         document.recoverySuspended = true
         document.pendingTurns = []; document.failedTurns = []
         this.pauseScriptResults(document)
@@ -1089,7 +1095,10 @@ export class SuperAgentService {
   }
 
   private recoverInternalBlockers(document: SuperAgentDocument): boolean {
+    // Preserve a planner's terminal checkpoint for explicit recovery; a new
+    // summary must not hide an authentication failure or expired result delivery.
     if (!document.config || document.recoverySuspended
+      || document.failedTurns?.some(turn => turn.nodeId === this.planner(document).id)
       || document.state.messages.some(message => message.permission?.status === 'pending')
       || document.pendingTurns.some(turn => turn.startedAt != null || this.taskReady(document, turn))
       || document.state.scripts.some(script => script.status === 'running')) return false
@@ -1197,6 +1206,15 @@ export class SuperAgentService {
       // A second short-cycle observation gives its event a chance to settle first.
       if (this.now() - firstObservedAt < STOPPED_TURN_CONFIRM_MS) continue
       this.stoppedTurnObservations.delete(turn)
+      // Recover only text observed in this attempt, never an earlier session answer.
+      const recoveredText = this.recoverableTurnText(document, turn)
+      if (session?.workspaceId === workspaceId && recoveredText && turn.kind !== 'compact') {
+        await this.finishTurn(workspaceId, document, turn, { sessionId: sessionId!, workspaceId,
+          reason: 'complete', finalText: recoveredText })
+        runtime.sessionId = undefined
+        await this.commit(workspaceId, document)
+        continue
+      }
       const state = !session ? 'is unavailable' : session.workspaceId !== workspaceId
         ? 'belongs to a different workspace' : 'has stopped processing'
       const notice = `Node session ${sessionId ?? '(missing)'} ${state}, but its turn completion notification was not received. The result is unknown. Review the original session and existing artifacts before deciding what remains; do not replay this turn or reuse an earlier answer as its result.`
@@ -1211,7 +1229,7 @@ export class SuperAgentService {
       if (!reviewQueued && !(node.role !== 'worker' && turn.kind === 'summary')) {
         if (document.pendingTurns.length < MAX_PENDING_TURNS) {
           // System diagnosis must still reach the coordinator at a task's chain boundary.
-          this.enqueue(document, coordinatorId, 'summary', `${notice}\nCheck the affected authorized goals, record blockers and report what requires verification. Do not automatically rerun potentially completed operations.`)
+          this.enqueuePlannerSummary(document, `${notice}\nCheck the affected authorized goals, record blockers and report what requires verification. Do not automatically rerun potentially completed operations.`)
         } else {
           // A pending script result may have taken the newly freed slot. Its
           // coordinator turn will also read this durable error in team context.
@@ -1410,7 +1428,13 @@ export class SuperAgentService {
           : activity.entries.findLast(item => item.kind === 'text' && item.status === 'running' && !item.turnId)
         const entry: SuperAgentActivityEntry = current ?? { id: event.turnId ? `text:${event.turnId}` : this.id('live-text'), kind: /__thinking\d+$/.test(event.turnId ?? '') ? 'thinking' : 'text',
           text: '', createdAt: now, updatedAt: now, status: 'running', turnId: event.turnId }
-        entry.text = `${entry.text}${this.visibleDelta(entry, event.delta)}`.slice(-MAX_ACTIVITY_TEXT)
+        const delta = this.visibleDelta(entry, event.delta)
+        entry.text = `${entry.text}${delta}`.slice(-MAX_ACTIVITY_TEXT)
+        if (entry.kind === 'text') {
+          turn.responseText = `${current ? turn.responseText ?? '' : ''}${delta}`.slice(0, MAX_OUTPUT)
+          turn.responseTurnId = event.turnId
+          turn.responseComplete = false
+        }
         entry.updatedAt = now
         this.activityEntry(activity, entry)
         break
@@ -1423,13 +1447,22 @@ export class SuperAgentService {
         const text = this.visibleText(event.text).slice(-MAX_ACTIVITY_TEXT)
         this.activityEntry(activity, { id: current?.id ?? (event.turnId ? `text:${event.turnId}` : event.messageId ?? this.id('live-text')),
           kind: event.isIntermediate ? 'thinking' : 'text', text, createdAt: current?.createdAt ?? now, updatedAt: now, status: 'completed', turnId: event.turnId })
+        turn.responseText = event.isIntermediate || /__thinking\d+$/.test(event.turnId ?? '') ? undefined : this.visibleText(event.text).slice(0, MAX_OUTPUT)
+        turn.responseTurnId = event.turnId
+        turn.responseComplete = !!turn.responseText?.trim()
+        await this.commit(workspaceId, document)
         break
       }
       case 'text_discard':
+        if (turn.responseTurnId === event.turnId) { turn.responseText = undefined; turn.responseTurnId = undefined; turn.responseComplete = false }
         activity.entries = activity.entries.filter(item => item.turnId !== event.turnId || !['text', 'thinking'].includes(item.kind))
         activity.updatedAt = now
+        await this.commit(workspaceId, document)
         break
       case 'tool_start':
+        turn.hasToolActivity = true
+        turn.responseComplete = false
+        turn.pendingToolUseIds = [...new Set([...(turn.pendingToolUseIds ?? []), event.toolUseId])]
         ;(document.state.metrics ??= emptyContinuityMetrics()).toolCalls++
         const statisticsNode = document.config?.nodes.find(node => node.id === turn.nodeId)
         if (statisticsNode) statisticsForNode(document, statisticsNode, now).toolCalls++
@@ -1441,6 +1474,8 @@ export class SuperAgentService {
           toolName: event.toolName, toolUseId: event.toolUseId, status: 'running', createdAt: now, updatedAt: now, turnId: event.turnId })
         break
       case 'tool_result': {
+        turn.hasToolActivity = true
+        turn.pendingToolUseIds = (turn.pendingToolUseIds ?? []).filter(id => id !== event.toolUseId)
         const hash = createHash('sha256').update(`${event.toolName}\n${event.result}`).digest('hex')
         for (const operation of document.state.operations ?? []) if (operation.sessionId === event.sessionId && operation.invocationId === event.toolUseId && ['prepared', 'running'].includes(operation.status)) {
           operation.status = event.isError && !terminalProgramResult(event.toolName, event.result) ? 'unknown' : 'completed'
@@ -2198,7 +2233,7 @@ export class SuperAgentService {
         await this.deps.host.applySessionPolicy(runtime.sessionId!, {
           nodeId, role: node.role, rootPath: environment.workingDirectory,
           fullControl: node.role === 'worker' && currentConfig.environment.fullControl === true,
-          credentialAccess: node.role === 'worker' && currentConfig.environment.credentialAccess === true,
+          credentialAccess: currentConfig.environment.credentialAccess !== false,
           actionGates: this.deps.actionGates,
           safety: currentConfig.environment.safety,
           userIntent: document.state.messages.filter(message => message.fromNodeId === 'user' && message.kind === 'chat').slice(-4).map(message => message.body).join('\n').slice(-64_000),
@@ -2234,6 +2269,10 @@ export class SuperAgentService {
         this.activities.get(workspaceId)?.delete(nodeId)
         this.activity(workspaceId, nodeId, runtime.sessionId!, turn.taskId, runtime.lastStartedAt)
         turn.startedAt = this.now()
+        if (turn.hasToolActivity == null && !turn.retryAttempt && !turn.manualRecovery && this.deps.host.onSessionEvent) turn.hasToolActivity = false
+        turn.responseText = undefined
+        turn.responseTurnId = undefined
+        turn.responseComplete = false
         turn.usageBaseline = { outputTokens: finiteUsage(session.tokenUsage?.outputTokens), costUsd: finiteUsage(session.tokenUsage?.costUsd) }
         turn.retryAt = undefined
         const task = document.state.tasks.find(task => task.id === turn.taskId)
@@ -2498,9 +2537,23 @@ export class SuperAgentService {
     return { receipt, userReply, userDelivery, suppressedMessageActions, resourceContinuation, error: undefined }
   }
 
+  private recoverableTurnText(document: SuperAgentDocument, turn: SuperAgentPendingTurn): string | undefined {
+    if (turn.pendingToolUseIds?.length || document.state.operations?.some(operation => operation.turnId === turn.id
+      && ['prepared', 'running', 'unknown'].includes(operation.status))) return
+    // Stream fragments remain usable for a text-only turn. With tools, require
+    // a completed answer after the last tool start, or an explicit delivery receipt.
+    if (turn.responseText?.trim() && (turn.responseComplete || (turn.hasToolActivity === false && !turn.toolCalls?.length))) return turn.responseText
+    return turn.toolCalls?.findLast(call => call.userReply?.trim() && call.receipt.status === 'applied')?.userReply
+  }
+
   private async finishTurn(workspaceId: string, document: SuperAgentDocument, turn: SuperAgentPendingTurn, event: SessionCompletionEvent): Promise<void> {
     const runtime = document.state.nodes.find(item => item.nodeId === turn.nodeId)!
     const node = this.configured(document).nodes.find(node => node.id === turn.nodeId)!
+    const recoveredText = this.recoverableTurnText(document, turn)
+    if (turn.kind !== 'compact' && recoveredText
+      && (event.errorCode === EMPTY_RESPONSE_ERROR_CODE || (event.reason === 'complete' && !event.finalText?.trim()))) {
+      event = { ...event, reason: 'complete', errorCode: undefined, canRetry: false, finalText: recoveredText }
+    }
     recordTurnStatistics(document, node, turn, event, this.now())
     const emptyResponseRetries = turn.emptyResponseRetryAttempt ?? 0
     const recoveryExpired = turn.retryDeadline != null && this.now() >= turn.retryDeadline
@@ -2892,7 +2945,7 @@ export class SuperAgentService {
         taskProgress: document.state.tasks.slice(-24).map(task => ({ id: task.id, title: task.title, status: task.status, acceptance: task.acceptance?.status })),
         artifacts: document.state.artifacts?.filter(artifact => turn.text.includes(artifact.id) || document.state.tasks.slice(-24).some(task => task.id === artifact.taskId)).slice(-32),
         communicationBudget: { remainingHops: Math.max(0, MAX_CHAIN_DEPTH - turn.depth), remainingTurns: Math.max(0, MAX_CHAIN_TURNS - (document.chainCounts[turn.chainId] ?? 0)) },
-        environment: { fullControl: config.environment.fullControl === true, credentialAccess: config.environment.credentialAccess === true, actionGates: this.deps.actionGates === true && config.environment.fullControl !== true, safety: config.environment.safety,
+        environment: { fullControl: config.environment.fullControl === true, credentialAccess: config.environment.credentialAccess !== false, actionGates: this.deps.actionGates === true && config.environment.fullControl !== true, safety: config.environment.safety,
           nodePermissions: superAgentNodePermissions(config.environment, recipient.role), workerPermissions: superAgentNodePermissions(config.environment, 'worker') },
         turn: { id: turn.id, kind: turn.kind },
       })
@@ -2944,7 +2997,7 @@ export class SuperAgentService {
         abilityProfiles: config.abilityProfiles.map(profile => ({ id: profile.id, name: profile.name, description: contextExcerpt(profile.description, 200) })) } : {}),
       environment: { kind: config.environment.kind, workingDirectory: config.environment.workingDirectory,
         actionGates: this.deps.actionGates === true && config.environment.fullControl !== true, safety: config.environment.safety,
-        fullControl: config.environment.fullControl === true, credentialAccess: config.environment.credentialAccess === true, sourceSlugs: recipient.sourceSlugs, skillSlugs: recipient.skillSlugs ?? [],
+        fullControl: config.environment.fullControl === true, credentialAccess: config.environment.credentialAccess !== false, sourceSlugs: recipient.sourceSlugs, skillSlugs: recipient.skillSlugs ?? [],
         permissionsRole: recipient.role, nodePermissions: superAgentNodePermissions(config.environment, recipient.role),
         ...(coordinator ? { workerPermissions: superAgentNodePermissions(config.environment, 'worker') } : {}) },
       runtime: document.state.nodes.filter(runtime => nodeIds.has(runtime.nodeId)).map(runtime => ({ nodeId: runtime.nodeId, sessionId: runtime.sessionId, status: runtime.status, activeTaskId: runtime.activeTaskId,

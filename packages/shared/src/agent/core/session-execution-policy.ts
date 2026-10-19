@@ -77,7 +77,7 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     role: input.role,
     rootPath,
     fullControl: input.role === 'worker' && input.fullControl === true,
-    ...(input.credentialAccess !== undefined ? { credentialAccess: input.role === 'worker' && input.credentialAccess === true } : {}),
+    ...(input.credentialAccess !== undefined ? { credentialAccess: input.credentialAccess === true } : {}),
     ...(input.actionGates ? { actionGates: true as const, userIntent: input.userIntent ?? '', safety: Object.freeze({
       autoReview: input.safety?.autoReview === true,
       customRules: Object.freeze((input.safety?.customRules ?? []).map(rule => Object.freeze({ ...rule }))) as unknown as NonNullable<SessionExecutionPolicy['safety']>['customRules'],
@@ -303,8 +303,11 @@ export function checkSessionCredentialAccess(sessionId: string, input: Record<st
 
 function checkCredentialAccess(registered: RegisteredPolicy, input: Record<string, unknown>, cwd?: string): SessionPolicyToolResult {
   const policy = registered.policy!;
-  if (policy.role !== 'worker' || policy.credentialAccess !== true) return deny('enable credential vault access in Super Agent settings');
+  if (policy.credentialAccess !== true) return deny('enable credential vault access in Super Agent settings');
   if (!input || typeof input.action !== 'string' || !['list', 'request', 'fill', 'run'].includes(input.action)) return deny('unknown credential operation');
+  // Management nodes can discover account metadata, while workers handle use.
+  if (input.action === 'list') return { allowed: true };
+  if (policy.role !== 'worker') return deny('assign credential input, browser filling and program injection to a worker');
   if (input.action === 'fill' && !policy.browser && !policy.fullControl) return deny('credential fill requires browser permission');
   if (input.action === 'run') {
     if (!policy.runPrograms && !policy.fullControl) return deny('credential injection requires program permission');

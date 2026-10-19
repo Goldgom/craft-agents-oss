@@ -5,20 +5,42 @@ import { SESSION_TOOL_REGISTRY, type SessionToolContext } from '@tokenbird/sessi
 import { filterSuperAgentTools } from '@tokenbird/shared/agent/core/browser-tool-policy'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
-async function configured() {
+async function configured(credentialAccess?: boolean) {
   const f = await superAgentFixture()
+  if (credentialAccess !== undefined) f.config.environment.credentialAccess = credentialAccess
   await f.service.save('alpha', f.config)
   const read = () => f.service.accessSettings('alpha', { action: 'get' }) as Promise<{ config: typeof f.config; revision: string; pending: boolean }>
   return { ...f, read }
 }
-async function interaction() {
-  const f = await configured()
+async function interaction(credentialAccess?: boolean) {
+  const f = await configured(credentialAccess)
   await f.service.command('alpha', { type: 'chat', text: 'Change my team settings' })
   const snapshot = await until(() => f.service.get('alpha'), s => s.state.nodes[0]?.status === 'working')
   return { ...f, sessionId: snapshot.state.nodes[0]!.sessionId! }
 }
 
 describe('AI Super Agent settings', () => {
+  for (const credentialAccess of [undefined, false, true]) {
+    for (const kind of ['chat', 'task'] as const) {
+      test(`${kind} reconciles legacy and explicit credential access ${credentialAccess}`, async () => {
+        const f = await configured(credentialAccess)
+        if (kind === 'chat') await f.service.command('alpha', { type: 'chat', text: 'Can you use saved accounts?' })
+        else await f.service.command('alpha', { type: 'task', nodeId: 'worker', title: 'List accounts', instructions: 'Check available accounts' })
+        await until(() => f.service.get('alpha'), () => f.host.sends.length === 1)
+        const sessionId = f.host.sends[0]!.sessionId
+        expect(f.host.policies.get(sessionId)?.credentialAccess).toBe(credentialAccess !== false)
+        expect(f.host.sends[0]!.context).toContain(`"credentialAccess":${credentialAccess !== false}`)
+      })
+    }
+  }
+
+  test('all node roles can discover the credential metadata tool', () => {
+    for (const role of ['worker', 'coordinator', 'orchestrator'] as const) {
+      const tools = filterSuperAgentTools([{ name: 'mcp__session__saved_credentials' }], role)
+      expect(tools.map(tool => tool.name)).toEqual(['mcp__session__saved_credentials'])
+    }
+  })
+
   test('persists user vault grants and passes them to worker sessions', async () => {
     const f = await configured();
     f.config.environment.credentialAccess = true;
@@ -32,7 +54,7 @@ describe('AI Super Agent settings', () => {
   });
 
   test('does not let a node grant itself credential vault access through settings', async () => {
-    const f = await interaction(); const before = await f.read();
+    const f = await interaction(false); const before = await f.read();
     await expect(f.service.accessSettings('alpha', { action: 'update', expectedRevision: before.revision,
       changes: { environment: { ...before.config.environment, credentialAccess: true } } }, f.sessionId)).rejects.toThrow('changed by the user');
     expect((await f.read()).config.environment.credentialAccess).not.toBe(true);
