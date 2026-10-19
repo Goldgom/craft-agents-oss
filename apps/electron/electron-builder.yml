@@ -264,6 +264,12 @@ linux:
       to: app/node_modules/@anthropic-ai/claude-agent-sdk-binary
     - from: node_modules/@vscode/ripgrep
       to: app/node_modules/@vscode/ripgrep
+    # sharp's JavaScript is bundled into dist/main.cjs, but the native addon
+    # and its sibling libvips package must retain their runtime package layout.
+    - from: ../../node_modules/@img/sharp-linux-${arch}
+      to: app/node_modules/@img/sharp-linux-${arch}
+    - from: ../../node_modules/@img/sharp-libvips-linux-${arch}
+      to: app/node_modules/@img/sharp-libvips-linux-${arch}
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
     - from: ../../packages/messaging-whatsapp-worker/dist/worker.cjs
       to: messaging-whatsapp-worker/worker.cjs
