@@ -1,4 +1,9 @@
 {
+  "serverPicker.repairAction": "修復憑據",
+  "serverPicker.repairTitle": "修復伺服器憑據",
+  "serverPicker.repairDescription": "儲存的憑據無法使用。請重新填寫伺服器 Token 和已儲存的 SSH 密碼或口令，儲存後再次選擇此伺服器。伺服器設定和聊天記錄均保留。",
+  "serverPicker.repairSaved": "憑據已儲存，請選擇伺服器重新連線。",
+  "serverPicker.enterSecret": "請重新填寫憑據",
   "activity.command": "命令",
   "activity.inputParams": "輸入引數",
   "apiSetup.authorizationCode": "授權碼",

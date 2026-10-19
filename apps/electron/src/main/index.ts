@@ -12,6 +12,8 @@ import { createNativeWindowAuthority, type NativeAuthorityEvent } from './native
 import { registerNativeWorkspaceSwitch } from './handlers/workspace-native'
 import { createServerSwitcher } from './server-switch'
 import { configureElectronCredentialVault } from './credential-vault'
+import { recoverStartupCredentials, type CredentialRecoveryChoice } from './credential-startup-recovery'
+import { RemoteCredentialUnavailableError } from './remote-credentials'
 import { registerNativeCredentialIpcHandlers } from './handlers/credentials-native'
 import { configureRemoteCredentialProtection, hasPendingRemoteCredentialMigration, listManagedRemoteCredentialMetadata, migrateRemoteCredentials, prepareRemoteWorkspaceConfig, resolveRemoteProfile, resolveRemoteWorkspace, saveRemoteProfile, type ResolvedRemoteProfile } from './remote-credentials'
 import { reconcileSourceCredentialChanges } from '@tokenbird/shared/sources/credential-runtime'
@@ -107,7 +109,7 @@ app.setName(process.env.TOKENBIRD_APP_NAME || getLocalizedProductName(persistedU
 const machineId = createHash('sha256').update(hostname() + homedir()).digest('hex').slice(0, 16)
 Sentry.setUser({ id: machineId })
 
-import { existsSync, readFileSync, statSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'fs'
 import { RPC_CHANNELS } from '@tokenbird/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@tokenbird/server-core/sessions'
 import { PageThumbnailer } from './page-thumbnailer'
@@ -485,10 +487,16 @@ ipcMain.handle('__remote-servers:test', async (event, input: { id?: string; url?
     client.destroy()
   }
 })
-ipcMain.handle('__select-startup-server', async (event, target: string) => {
+ipcMain.handle('__select-startup-server', async (event, target: string, recoverCredentials = false) => {
   const assertCurrent = pinNativeApp(event)
-  await switchServer(target, assertCurrent)
-  return { success: true }
+  try {
+    await switchServer(target, assertCurrent)
+    return { success: true }
+  } catch (error) {
+    assertCurrent()
+    if (recoverCredentials === true && error instanceof RemoteCredentialUnavailableError) return { success: false, needsCredentialRepair: true }
+    throw error
+  }
 })
 ipcMain.handle('__get-startup-location', async () => getStartupServerLocation() ?? STARTUP_LOCATION_LOCAL)
 ipcMain.handle('__set-startup-location', async (event, value: string) => {
@@ -825,7 +833,48 @@ app.whenReady().then(async () => {
     migrate: migrateRemoteCredentials,
   } })
   configureRemoteCredentialProtection(() => credentialVault.backend.getProtectionFormat() === 'native')
-  if (process.env.TOKENBIRD_SERVER_PROFILE_ID) {
+  if (!process.env.TOKENBIRD_HEADLESS && !pickerMode) {
+    const recovery = await recoverStartupCredentials({
+      status: () => credentialVault.status(),
+      reset: () => credentialVault.backend.resetUnreadableNativeVault(),
+      wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      report: (event, code) => {
+        // Production disables the normal log transport. Keep fixed, non-secret
+        // recovery diagnostics available even when no window can be created.
+        try {
+          const directory = join(CONFIG_DIR, 'logs')
+          mkdirSync(directory, { recursive: true, mode: 0o700 })
+          appendFileSync(join(directory, 'credential-startup.log'), JSON.stringify({
+            timestamp: new Date().toISOString(), event, ...(code ? { code } : {}),
+          }) + '\n', { mode: 0o600 })
+        } catch { /* A logging failure must not prevent the recovery dialog. */ }
+      },
+      prompt: async (status, resetFailed) => {
+        const canReset = status.protection === 'electron-safe-storage'
+          && ['VAULT_READ_FAILED', 'VAULT_CORRUPT'].includes(status.errorCode ?? '')
+        const choices: CredentialRecoveryChoice[] = ['retry', ...(canReset ? ['reconfigure' as const] : []), 'picker', 'quit']
+        const labels: Record<string, string> = {
+          retry: '重试 / Retry', reconfigure: '备份并重新配置 / Back up and reconfigure',
+          picker: '选择其他服务器 / Choose another server', quit: '退出 / Quit',
+        }
+        const result = await dialog.showMessageBox({
+          type: 'warning', title: 'TokenBird 凭据恢复 / Credential recovery',
+          message: '无法读取已保存的凭据 / Saved credentials are unavailable',
+          detail: `${resetFailed ? '恢复未完成，原凭据仍受保护。 / Recovery did not finish; original credentials remain protected.\n\n' : ''}已自动重试。原凭据和聊天记录均保留。可解锁系统凭据库后重试，或选择其他服务器。\n${canReset ? '选择“备份并重新配置”会先保存原始加密文件，再建立新的安全凭据库；需要重新填写 API Key、登录账号和服务器凭据。\n' : ''}\nAutomatic retries failed. Existing credentials and chats are preserved. Unlock the OS credential store and retry, or choose another server.${canReset ? ' Back up and reconfigure preserves the encrypted original, then creates a new protected vault. You must re-enter API keys, sign in again, and repair saved server credentials.' : ''}\n\n${status.errorCode ?? 'VAULT_READ_FAILED'}`,
+          buttons: choices.map(choice => labels[choice]!), defaultId: 0, cancelId: choices.length - 1,
+          noLink: true,
+        })
+        return choices[result.response] ?? 'quit'
+      },
+    })
+    if (recovery === 'quit') { app.quit(); return }
+    if (recovery === 'picker') {
+      pickerMode = true
+      startupRemoteTarget = undefined
+      for (const key of ['TOKENBIRD_SERVER_URL', 'TOKENBIRD_SERVER_TOKEN', 'TOKENBIRD_SERVER_PROFILE_ID', 'TOKENBIRD_SERVER_PROFILE_NAME']) delete process.env[key]
+    }
+  }
+  if (!pickerMode && process.env.TOKENBIRD_SERVER_PROFILE_ID) {
     try {
       const startupProfile = await resolveRemoteProfile(process.env.TOKENBIRD_SERVER_PROFILE_ID)
       if (!startupProfile) throw new Error('Unavailable saved startup connection')

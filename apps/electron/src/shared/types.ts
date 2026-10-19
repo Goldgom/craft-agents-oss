@@ -484,7 +484,7 @@ export interface ElectronAPI {
   /** Switch the frontend service while retaining running local agents: 'local', 'none', or a remote profile id. */
   switchServer(target: string): Promise<{ success: boolean }>
   /** Alias for switchServer — used by the startup server picker page. */
-  selectStartupServer(target: string): Promise<{ success: boolean }>
+  selectStartupServer(target: string): Promise<{ success: boolean; needsCredentialRepair?: boolean }>
   /** Persisted startup server location preference ('local' | 'none' | profileId). */
   getStartupLocation(): Promise<string>
   setStartupLocation(value: string): Promise<{ success: boolean }>

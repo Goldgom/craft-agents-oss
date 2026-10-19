@@ -89,7 +89,8 @@ if (isPickerMode) {
     getRuntimeEnvironment: (): 'electron' | 'web' => 'electron',
     getStartupContext: () => ipcRenderer.invoke('__get-server-context'),
     getRemoteServers: () => ipcRenderer.invoke('__picker-get-profiles'),
-    selectStartupServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
+    saveRemoteServer: (input: Parameters<ElectronAPI['saveRemoteServer']>[0]) => ipcRenderer.invoke('__remote-servers:save', input),
+    selectStartupServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target, true),
     switchServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
     getStartupLocation: () => ipcRenderer.invoke('__get-startup-location'),
     setStartupLocation: (value: string) => ipcRenderer.invoke('__set-startup-location', value),
@@ -696,7 +697,7 @@ const remoteCredentials = () => isClientOnly || !!ipcRenderer.sendSync('__get-wo
 ;(api as ElectronAPI).startupMode = 'normal'
 ;(api as ElectronAPI).getStartupContext = () => ipcRenderer.invoke('__get-server-context')
 ;(api as ElectronAPI).switchServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
-;(api as ElectronAPI).selectStartupServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
+;(api as ElectronAPI).selectStartupServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target, true)
 ;(api as ElectronAPI).getStartupLocation = () => ipcRenderer.invoke('__get-startup-location')
 ;(api as ElectronAPI).setStartupLocation = (value: string) => ipcRenderer.invoke('__set-startup-location', value)
 // Profile list is client-local too — overrides the CHANNEL_MAP entry so it

@@ -1,7 +1,7 @@
 # Build script for Windows NSIS installer
-# Usage: powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1 [-ForceDownload]
+# Usage: powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1 [-ForceDownload] [-SkipMsi]
 
-param([switch]$ForceDownload)
+param([switch]$ForceDownload, [switch]$SkipMsi)
 
 $ErrorActionPreference = "Stop"
 
@@ -544,17 +544,21 @@ if (-not $builderSuccess) {
 # MSI requires the WiX toolchain, which electron-builder downloads on demand.
 # Treat that optional target independently: network/toolchain failures should
 # not make the NSIS build fail.
-Push-Location $ElectronDir
-try {
-    Write-Host "  Building optional MSI installer..." -ForegroundColor Cyan
-    & bunx electron-builder --win msi --x64 --publish never @ElectronDistArgs 2>&1 | Tee-Object -Variable msiOutput
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  WARNING: MSI build skipped (WiX unavailable or download failed)." -ForegroundColor Yellow
-    } else {
-        Write-Host "  MSI installer built successfully." -ForegroundColor Green
+if (-not $SkipMsi) {
+    Push-Location $ElectronDir
+    try {
+        Write-Host "  Building optional MSI installer..." -ForegroundColor Cyan
+        & bunx electron-builder --win msi --x64 --publish never @ElectronDistArgs 2>&1 | Tee-Object -Variable msiOutput
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  WARNING: MSI build skipped (WiX unavailable or download failed)." -ForegroundColor Yellow
+        } else {
+            Write-Host "  MSI installer built successfully." -ForegroundColor Green
+        }
+    } finally {
+        Pop-Location
     }
-} finally {
-    Pop-Location
+} else {
+    Write-Host "  MSI target not requested (-SkipMsi); retaining the completed NSIS installer."
 }
 
 # 8. Verify the installer was built

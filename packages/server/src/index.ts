@@ -46,6 +46,7 @@ import type { HandlerDeps } from '@tokenbird/server-core/handlers'
 import type { ServerInstance } from '@tokenbird/server-core/bootstrap'
 import { createHeadlessSessionManager } from './session-manager'
 import { createHeadlessCredentialHost } from './credential-host'
+import { checkServerStartupCredentials, logServerCredentialDiagnostic } from './credential-startup'
 
 async function main(): Promise<void> {
 // --generate-token: print a crypto-random token and exit
@@ -210,6 +211,12 @@ const SERVER_RESTART_EXIT_CODE = 42
 
 const instance = await (async () => {
   try {
+    const credentialBackend = await checkServerStartupCredentials({
+      report: diagnostic => logServerCredentialDiagnostic(CONFIG_DIR, diagnostic),
+    })
+    // Reuse the backend that passed actual decryption rather than discarding
+    // the recovered key and repeating a potentially transient machine lookup.
+    getCredentialManager().configureBackend(credentialBackend)
     return await bootstrapServer<SessionManager, HandlerDeps>({
       bundledAssetsRoot,
       serverVersion: process.env.TOKENBIRD_VERSION ?? packageVersion,
@@ -272,7 +279,7 @@ const instance = await (async () => {
           platform,
           oauthFlowStore,
           messagingRegistry: messagingHandle?.registry,
-          remoteCredentialHost: createHeadlessCredentialHost(sessionManager),
+          remoteCredentialHost: createHeadlessCredentialHost(sessionManager, { backend: credentialBackend }),
         }
       },
       registerAllRpcHandlers: registerCoreRpcHandlers,

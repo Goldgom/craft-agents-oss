@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createRemoteCredentialService, type RemoteCredentialDependencies } from './remote-credentials'
+import { createRemoteCredentialService, RemoteCredentialUnavailableError, type RemoteCredentialDependencies } from './remote-credentials'
 import { toProfileInfo, type RemoteServerProfile } from '@tokenbird/shared/config/remote-servers'
 import { credentialIdToAccount, type StoredCredential } from '@tokenbird/shared/credentials'
 import type { RemoteServerConfig } from '@tokenbird/core/types'
@@ -35,6 +35,30 @@ function fixture() {
 }
 
 describe('revision-scoped remote credential service', () => {
+  test('a profile survives vault replacement and reconnects after replacing all referenced secrets', async () => {
+    const f = fixture(); await f.migrate(); f.state.protected = true
+    const before = structuredClone(f.profiles[0]!)
+    f.secrets.clear()
+    await expect(f.resolveProfile(before.id)).rejects.toBeInstanceOf(RemoteCredentialUnavailableError)
+    expect(f.profiles[0]).toEqual(before)
+    await f.saveProfile({ id: before.id, name: before.name, url: before.url, token: 'dummy-repaired-token',
+      sftp: { ...before.sftp!, password: ' dummy-repaired-password ', passphrase: ' dummy-repaired-phrase ' } })
+    const resolved = await f.resolveProfile(before.id)
+    expect(resolved?.token).toBe('dummy-repaired-token')
+    expect(resolved?.sftp?.password).toBe(' dummy-repaired-password ')
+    expect(resolved?.sftp?.passphrase).toBe(' dummy-repaired-phrase ')
+    expect(f.profiles[0]?.tokenRef).not.toBe(before.tokenRef)
+    expect(f.profiles[0]?.sftp?.passwordRef).not.toBe(before.sftp?.passwordRef)
+    expect(f.profiles[0]?.sftp?.passphraseRef).not.toBe(before.sftp?.passphraseRef)
+    expect(f.profiles[0]?.createdAt).toBe(before.createdAt)
+    expect(JSON.stringify(f.profiles)).not.toContain('dummy-repaired')
+  })
+
+  test('partial repair stays unavailable until every referenced secret is replaced', async () => {
+    const f = fixture(); await f.migrate(); f.secrets.clear()
+    await f.saveProfile({ id: 'profile-one', name: 'Dummy', url: f.profiles[0]!.url, token: 'dummy-repaired-token' })
+    await expect(f.resolveProfile('profile-one')).rejects.toBeInstanceOf(RemoteCredentialUnavailableError)
+  })
   test('legacy reads and saves remain functional without implicit migration', async () => {
     const f = fixture()
     expect((await f.resolveProfile('profile-one'))?.token).toBe('dummy-token')
