@@ -29,6 +29,7 @@
     "./auth/callback-page": "./src/auth/callback-page.ts",
     "./auth/types": "./src/auth/types.ts",
     "./config": "./src/config/index.ts",
+    "./config/models": "./src/config/models.ts",
     "./config/paths": "./src/config/paths.ts",
     "./config/llm-connections": "./src/config/llm-connections.ts",
     "./docs": "./src/docs/index.ts",

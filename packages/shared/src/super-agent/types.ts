@@ -9,6 +9,9 @@ export type { SessionPolicyPermissionScope } from '@tokenbird/core/types'
 
 /** One persistent model session, with no concurrent turn or delegated subprocess. */
 export interface SuperAgentNode {
+  /** Created for one assignment, rather than a user-configured permanent worker. */
+  dynamic?: boolean
+  modelEntryId?: string
   id: string
   role: 'coordinator' | 'orchestrator' | 'worker'
   name: string
@@ -81,13 +84,17 @@ export interface SuperAgentScript {
 
 export interface SuperAgentConfig {
   version: 1
+  architecture?: 'dynamic'
+  maxConcurrentSubagents?: number
+  reportCheckSeconds?: number
+  modelPool?: SuperAgentModelEntry[]
   name: string
   avatar: string
   nodes: SuperAgentNode[]
   workflow?: {
     pattern: 'lightweight' | 'development' | 'research' | 'deliverables' | 'incident'
     maxParallelTasks: number
-    /** Apply independent review to deliverable tasks with declared acceptance criteria. */
+    /** Explicit user opt-in to independent review; presets must leave this disabled. */
     independentReview: boolean
   }
   /** Idle inspection interval in minutes (1–1440), including continuous work reviews. */
@@ -121,12 +128,14 @@ export interface SuperAgentActionReceipt {
 }
 
 export interface SuperAgentTask {
+  modelEntryId?: string
   thinkingLevel?: ThinkingLevel
   id: string
   /** Durable dependency and exclusive resource contracts, enforced before dispatch. */
   dependsOn?: string[]
   resources?: string[]
   acceptanceCriteria?: string[]
+  /** Set only when the user explicitly requests independent review. Criteria alone do not enable it. */
   requiresIndependentReview?: boolean
   /** An independent verifier may read a submitted result before acceptance. */
   reviewOf?: string
@@ -258,6 +267,13 @@ export interface SuperAgentScriptRuntime {
 }
 
 export interface SuperAgentState {
+  reports?: SuperAgentReport[]
+  reportSequence?: number
+  consumedReportSequence?: number
+  lastReportCheckAt?: number
+  events?: SuperAgentWorkEvent[]
+  eventSequence?: number
+  consumedEventSequence?: number
   version: 1
   revision: number
   nodes: SuperAgentNodeRuntime[]
@@ -295,6 +311,7 @@ export interface SuperAgentIntent {
 }
 
 export interface SuperAgentTaskContract {
+  modelEntryId?: string
   thinkingLevel?: ThinkingLevel
   id?: string
   goalId?: string
@@ -319,8 +336,11 @@ export interface SuperAgentEnvironmentStatus {
 }
 
 export interface SuperAgentSnapshot {
+  resources?: unknown
   /** A user-requested inspection is queued or executing, including retry delays. */
   inspectionPending?: boolean
+  /** The interaction node has a queued or executing turn, independent of background work. */
+  interactionPending?: boolean
   /** Explicit user stop pauses internal verification until work is resumed. */
   recoverySuspended?: boolean
   readiness?: SuperAgentReadiness
@@ -403,7 +423,9 @@ export type SuperAgentCommand =
   | SuperAgentLibraryCommand
   | { type: 'reset'; confirmed: true; preserveConfig?: boolean }
   | { type: 'environment-check'; config: SuperAgentConfig }
-  | { type: 'chat'; text: string }
+  | { type: 'chat'; text: string; attachments?: Array<{ name: string; mimeType: string; text?: string; base64?: string }> }
+  | { type: 'resources'; operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'save-credentials' | 'test-automation' | 'replay-automation'; value?: unknown }
+  | { type: 'automation-work'; text: string; automationId: string; runId: string }
   | ({ type: 'task' } & SuperAgentTaskContract)
   | { type: 'continuous-work'; enabled: boolean }
   | { type: 'plan-upsert'; item: Pick<SuperAgentPlanItem, 'title' | 'instructions' | 'status' | 'priority' | 'note' | 'goalId' | 'blocker'> & { id?: string }; expectedRevision: number }
@@ -426,6 +448,11 @@ export type SuperAgentCommand =
 
 /** The execution host must enforce this before model tools are dispatched. */
 export interface SuperAgentSessionPolicy {
+  architecture?: 'dynamic'
+  /** Host-selected resource workspace; never accepted from model tool arguments. */
+  resourceScope?: 'super-agent'
+  /** Host-selected shared skill catalog; sources and credentials retain their own scope. */
+  skillWorkspaceRootPath?: string
   nodeId: string
   role: SuperAgentNode['role']
   rootPath: string
@@ -449,4 +476,48 @@ export interface SuperAgentSessionPolicy {
   allowSubagents: false
   /** Runtime-only verified container; never persist a stale container identity. */
   containerExecutor?: { runtimePath: string; containerId: string; workingDirectory: string }
+}
+
+export interface SuperAgentModelEntry {
+  id: string
+  name: string
+  llmConnection: string
+  model: string
+  agentRuntime?: AgentRuntimeProtocol
+  /** Unified strengths, limitations, tags and selection notes; data, not work instructions. */
+  capabilityNotes: string
+  /** User-adjustable selection score, not a published benchmark. */
+  intelligenceScore: number
+  enabled: boolean
+  supportedThinkingLevels: ThinkingLevel[]
+  skillSlugs: string[]
+  sourceSlugs: string[]
+  capabilities: string[]
+  maxCallsPerMinute: number
+}
+
+export interface SuperAgentReport {
+  id: string
+  sequence: number
+  nodeId: string
+  turnId: string
+  taskId?: string
+  goalId?: string
+  goalRevision?: number
+  kind: 'progress' | 'stage' | 'final' | 'failure' | 'question'
+  content: string
+  verification: 'unverified' | 'verified' | 'stale'
+  artifactIds: string[]
+  supersedes?: string
+  createdAt: number
+}
+
+export interface SuperAgentWorkEvent {
+  id: string
+  sequence: number
+  kind: 'work' | 'board' | 'report' | 'runtime' | 'automation'
+  actor: string
+  targetId?: string
+  revision: number
+  createdAt: number
 }

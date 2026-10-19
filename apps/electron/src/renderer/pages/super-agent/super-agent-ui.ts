@@ -6,8 +6,16 @@ import { hasCustomNodeSkills, presetSkillBinding } from '@tokenbird/shared/super
 import { PRESET_RECIPES, presetModels, presetStrings, nodePresetProfile, presetRequirements, type SuperAgentPreset } from './super-agent-presets'
 export type { SuperAgentPreset } from './super-agent-presets'
 import { improvementStrings } from './super-agent-improvement-strings'
+import { createSubagentModelPreset, mergeSubagentModelPresets, tokenNestModelPresets } from './super-agent-model-presets'
 
 const strings = {
+  taskNodeLifetime: ['Subagent 随任务创建，结束后自动移出节点列表；工作记录、会话与汇报保留在历史中。', 'Subagents are created per task and leave this list when finished. Task records, sessions and reports remain in history.'],
+  mainQueued: ['正在等待主节点响应…', 'Waiting for the main node…'],
+  mainPreparing: ['主节点正在准备…', 'Main node is preparing…'],
+  mainThinking: ['主节点正在思考…', 'Main node is thinking…'],
+  mainReplying: ['主节点正在组织回复…', 'Main node is composing a reply…'],
+  mainRecovering: ['主节点正在恢复…', 'Main node is recovering…'],
+  reports: ['汇报数据区', 'Reports'],
   resourceActivation: ['Skill / MCP 自主启用与分发', 'Autonomous Skill / MCP activation'],
   resourceActivationHint: ['编排智能体按任务给空闲工作节点分发技能和数据源，工作节点也可自行启用并自动继续任务。技能来自已安装目录，MCP 来自下方团队授权池。绑定会保存，操作仍遵守当前权限和审批。', 'The orchestrator assigns skills and sources to idle workers. Workers can activate resources themselves and resume their task automatically. Skills come from installed catalogs; MCP sources come from the team pool below. Assignments are saved and operations follow current permissions and approvals.'],
   deliveryStage: ['阶段交互', 'Stage interaction'],
@@ -509,6 +517,27 @@ export function createConfig(connections: LlmConnectionWithStatus[], text: Super
   }
   const connection = connections.find(item => item.slug === config.nodes[0].llmConnection && item.isAuthenticated && nodeModels(item).length)
   return connection ? applyPreset(config, 'daily', connection, text) : config
+}
+
+/** New teams configure model availability, never legacy worker personas or job presets. */
+export function createDynamicConfig(connections: LlmConnectionWithStatus[], text: SuperAgentText, preferredSlug?: string): SuperAgentConfig {
+  const main = createNode('coordinator', connections, text, preferredSlug)
+  const background = createNode('orchestrator', connections, text, preferredSlug)
+  const chinese = /[\u4e00-\u9fff]/.test(text('defaultName'))
+  const presets = connections.flatMap(connection => tokenNestModelPresets(connection, nodeModels(connection), chinese))
+  const models = presets.length ? mergeSubagentModelPresets([], presets).entries : [
+    { ...createSubagentModelPreset(main.llmConnection, main.model, chinese), capabilityNotes: '' },
+  ]
+  return {
+    version: 1, architecture: 'dynamic', name: text('defaultName'), avatar: '✦',
+    nodes: [main, background].map(node => ({ ...node, skillSlugs: [], sourceSlugs: [], abilityProfileIds: [] })),
+    modelPool: models,
+    maxConcurrentSubagents: 4, reportCheckSeconds: 5, idleInspectionMinutes: 60, continuousWork: false,
+    execution: { connectionConcurrency: 4, connectionCallsPerMinute: 60, stallMinutes: 15, maxResumeAttempts: 3 },
+    environment: { kind: 'folder', workingDirectory: '', permissionMode: 'allow-all', fullControl: true, credentialAccess: false,
+      permissions: { readFiles: true, writeFiles: false, runPrograms: false, browser: false } },
+    sourceSlugs: [], abilityProfiles: [], scripts: [],
+  }
 }
 
 /** Missing legacy settings inherit full control; an explicit limited mode is preserved. */

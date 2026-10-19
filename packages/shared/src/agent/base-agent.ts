@@ -668,7 +668,7 @@ export abstract class BaseAgent implements AgentBackend {
     const resourceDirectories = sources.filter(source => policy.fullControl || policy.allowSources.includes(source.config.slug)).map(source => source.folderPath);
     const paths = resourceDirectories.map(path => join(path, 'guide.md'));
     for (const slug of policy.allowSkills ?? []) {
-      const skill = loadSkillBySlug(this.config.workspace.rootPath, slug, this.config.session?.workingDirectory);
+      const skill = loadSkillBySlug(policy.skillWorkspaceRootPath ?? this.config.workspace.rootPath, slug, this.config.session?.workingDirectory);
       if (skill) { paths.push(join(skill.path, 'SKILL.md')); resourceDirectories.push(skill.path); }
     }
     // App-provided capability instructions are exact read-only references. Discover
@@ -992,7 +992,7 @@ ${formattedMessages}
     const workspaceRoot = this.config.workspace?.rootPath ?? this.workingDirectory;
     const projectRoot = this.config.session?.workingDirectory;
     const policy = getSessionExecutionPolicy(this._sessionId);
-    const skills = loadAllSkills(workspaceRoot, projectRoot).filter(skill => !policy || policy.allowSkills?.includes(skill.slug));
+    const skills = loadAllSkills(policy?.skillWorkspaceRootPath ?? workspaceRoot, projectRoot).filter(skill => !policy || policy.allowSkills?.includes(skill.slug));
     const skillSlugs = skills.map(s => s.slug);
 
     this.debug(`[extractSkillPaths] Available skills: ${skillSlugs.join(', ')}`);

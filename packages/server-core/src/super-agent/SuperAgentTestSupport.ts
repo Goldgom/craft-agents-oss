@@ -127,7 +127,7 @@ afterEach(async () => {
 })
 
 export async function superAgentFixture(options: Partial<Pick<SuperAgentServiceDeps,
-  'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged' | 'workflow' | 'upgradeArchitecture' | 'actionGates' | 'checkReadiness' | 'resolveNodeSkills' | 'describeNodeBackend' | 'describeNodeSkills' | 'describeResources'>> = {}) {
+  'accessResources' | 'rebuildArchitecture' | 'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged' | 'workflow' | 'upgradeArchitecture' | 'actionGates' | 'checkReadiness' | 'resolveNodeSkills' | 'describeNodeBackend' | 'describeNodeSkills' | 'describeResources'>> = {}) {
   const root = await mkdtemp(join(tmpdir(), fixturePrefix))
   const workingDirectory = join(root, 'work')
   await mkdir(workingDirectory)

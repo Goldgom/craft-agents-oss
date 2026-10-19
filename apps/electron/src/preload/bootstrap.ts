@@ -414,6 +414,7 @@ client.onConnectionStateChanged((state) => {
 // open browser → wait for callback → oauth:complete (server).
 // Runs client-side because the callback server must receive the redirect.
 ;(api as any).performOAuth = async (args: {
+  resourceScope?: 'super-agent'
   sourceSlug: string
   sessionId?: string
   authRequestId?: string
@@ -430,6 +431,7 @@ client.onConnectionStateChanged((state) => {
     // 2. Ask server to prepare the flow (PKCE, auth URL, store in flow store)
     const startResult = await client.invoke('oauth:start', {
       sourceSlug: args.sourceSlug,
+      resourceScope: args.resourceScope,
       callbackUrl,
       sessionId: args.sessionId,
       authRequestId: args.authRequestId,

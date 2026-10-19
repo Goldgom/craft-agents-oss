@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { SuperAgentLibraryCommandSchemas } from './library'
 import { SuperAgentPlanBlockerSchema } from './blockers'
 import { THINKING_LEVEL_IDS } from '../agent/thinking-levels'
+import { SuperAgentModelEntrySchema } from './dynamic'
 import type { SuperAgentCommand, SuperAgentConfig, SuperAgentState } from './types'
 
 const id = z.string().trim().min(1).max(64).regex(/^[a-z0-9][a-z0-9_-]*$/)
@@ -15,10 +16,15 @@ const skillSlug = slug.refine(value => !/[\\/:\0]/.test(value) && value !== '.' 
 
 const ConfigSchema = z.object({
   version: z.literal(1),
+  architecture: z.literal('dynamic').optional(),
+  maxConcurrentSubagents: z.number().int().min(1).max(30).optional(),
+  reportCheckSeconds: z.number().int().min(1).max(3600).optional(),
+  modelPool: z.array(SuperAgentModelEntrySchema).min(1).max(100).optional(),
   name,
   avatar,
   nodes: z.array(z.object({
     id, role: z.enum(['coordinator', 'orchestrator', 'worker']), name, avatar,
+    dynamic: z.boolean().optional(), modelEntryId: id.optional(),
     description: z.string().max(4_000),
     llmConnection: slug, model: slug,
     agentRuntime: z.union([z.enum(['pi', 'claude-code', 'codex']), z.string().regex(/^plugin:[a-z0-9][a-z0-9_-]*$/).max(200).transform(value => value as `plugin:${string}`)]).optional(),
@@ -32,7 +38,7 @@ const ConfigSchema = z.object({
     abilityProfileIds: z.array(id).max(100),
     capabilities: z.array(slug).max(32).optional(),
     presetProfile: slug.optional(), thinkingMode: z.enum(['fixed', 'task']).optional(),
-  }).strict()).min(2).max(32),
+  }).strict()).min(2).max(502),
   idleInspectionMinutes: z.number().finite().int().min(1).max(1_440),
   workflow: z.object({ pattern: z.enum(['lightweight', 'development', 'research', 'deliverables', 'incident']),
     maxParallelTasks: z.number().int().min(1).max(30), independentReview: z.boolean() }).strict().optional(),
@@ -72,7 +78,15 @@ export function validateSuperAgentConfig(value: unknown): SuperAgentConfig {
   const config = ConfigSchema.parse(value)
   if (JSON.stringify(config).length > 8 * 1024 * 1024) throw new Error('Super Agent settings must fit within 8 MB; reduce avatar sizes or ability instructions')
   if (config.nodes.filter(node => node.role === 'coordinator').length !== 1) throw new Error('Super Agent requires exactly one coordinator')
-  if (!config.nodes.some(node => node.role === 'worker')) throw new Error('Super Agent requires at least one worker')
+  if (config.architecture === 'dynamic') {
+    if (!config.modelPool?.some(entry => entry.enabled)) throw new Error('Enable at least one subagent model')
+    if (config.nodes.filter(node => node.role === 'orchestrator').length !== 1) throw new Error('Dynamic Super Agent requires exactly one background node')
+    if (config.nodes.some(node => node.role === 'worker' && !node.dynamic)) throw new Error('Dynamic workers must be created by the scheduler')
+    unique(config.modelPool.map(entry => entry.id), 'model entries')
+    for (const entry of config.modelPool) {
+      for (const source of entry.sourceSlugs) if (!config.sourceSlugs.includes(source)) throw new Error(`Model source is outside the Super Agent resource pool: ${source}`)
+    }
+  } else if (!config.nodes.some(node => node.role === 'worker')) throw new Error('Super Agent requires at least one worker')
   if (config.nodes.filter(node => node.role === 'orchestrator').length > 1) throw new Error('Super Agent supports one orchestrator')
   unique(config.nodes.map(node => node.id), 'node identifiers')
   unique(config.abilityProfiles.map(profile => profile.id), 'ability profile identifiers')
@@ -101,8 +115,11 @@ const CommandSchema = z.discriminatedUnion('type', [
   ...SuperAgentLibraryCommandSchemas,
   z.object({ type: z.literal('reset'), confirmed: z.literal(true), preserveConfig: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('environment-check'), config: ConfigSchema }).strict(),
-  z.object({ type: z.literal('chat'), text }).strict(),
+  z.object({ type: z.literal('chat'), text, attachments: z.array(z.object({ name: z.string().min(1).max(255), mimeType: z.string().max(200), text: z.string().max(20_000_000).optional(), base64: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/).max(28_000_000).optional() }).strict().refine(file => file.text !== undefined || file.base64 !== undefined, 'Attachment content is required')).max(10).optional() }).strict(),
+  z.object({ type: z.literal('resources'), operation: z.enum(['get', 'export', 'import', 'save-sources', 'save-automations', 'save-credentials', 'test-automation', 'replay-automation']), value: z.unknown().optional() }).strict(),
+  z.object({ type: z.literal('automation-work'), text, automationId: slug, runId: slug }).strict(),
   z.object({ type: z.literal('task'), id: id.optional(), title: name, instructions: text, nodeId: id.optional(), planId: id.optional(),
+    modelEntryId: id.optional(),
     thinkingLevel: z.enum(THINKING_LEVEL_IDS).optional(),
     goalId: id.optional(), requiredCapabilities: z.array(slug).max(32).optional(),
     goalCriteria: z.array(z.number().int().min(0).max(15)).max(16).optional(),

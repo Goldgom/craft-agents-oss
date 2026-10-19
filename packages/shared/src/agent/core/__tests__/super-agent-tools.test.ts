@@ -17,7 +17,7 @@ test('internal collaboration tools respect node roles and reject lookalike sourc
     }
   }
   for (const tool of SUPER_AGENT_ACTION_TOOLS) {
-    expect(classifyActionGate(`mcp__session__${tool.name}`, {})).toBeUndefined()
+    expect(classifyActionGate(`mcp__session__${tool.name}`, {})).toBe(tool.name === 'super_agent_manage_resources' ? 'state-change' : undefined)
     expect(classifyActionGate(`mcp__unassigned__${tool.name}`, {})).toBeDefined()
   }
 })

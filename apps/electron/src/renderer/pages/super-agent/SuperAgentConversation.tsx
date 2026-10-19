@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, ArrowUp, ChevronDown, Circle, LoaderCircle, ShieldCheck, Sparkles, Square } from 'lucide-react'
+import { AlertCircle, ArrowUp, ChevronDown, Circle, LoaderCircle, Paperclip, X, ShieldCheck, Sparkles, Square } from 'lucide-react'
 import { canShareSuperAgentPermission, type SuperAgentCommand, type SuperAgentConfig, type SuperAgentSnapshot } from '@tokenbird/shared/super-agent'
-import type { PermissionRequest } from '../../../shared/types'
+import type { FileAttachment, PermissionRequest } from '../../../shared/types'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/markdown'
 import { cn } from '@/lib/utils'
 import { AgentAvatar } from './SuperAgentForms'
+import { SuperAgentThinkingIndicator } from './SuperAgentThinkingIndicator'
+import { superAgentThinkingPhase } from './super-agent-thinking'
 import { nodeLabel } from './SuperAgentCollaboration'
 import { formatTimestamp, useSuperAgentText } from './super-agent-ui'
 import { conversationMessages, ordinaryPermissionHeads, recentPermissionResolutions, visibleActivityText, type SuperAgentApproval } from './super-agent-activity'
@@ -31,6 +33,9 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
   const { config, state } = snapshot
   const coordinator = config.nodes.find(node => node.role === 'coordinator')!
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<FileAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState('')
+  const [picking, setPicking] = useState(false)
   const [sending, setSending] = useState(false)
   const [inspecting, setInspecting] = useState(false)
   const inspectRef = useRef(false)
@@ -47,11 +52,12 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
   const sessionIds = new Set(state.nodes.map(node => node.sessionId).filter((id): id is string => !!id))
   const ordinary = ordinaryPermissionHeads(sessionIds, pendingPermissions, inbox)
   const approvalCount = approvals.length + ordinary.length
+  const coordinatorSession = state.nodes.find(node => node.nodeId === coordinator.id)?.sessionId
+  const thinkingPhase = superAgentThinkingPhase(snapshot, sending,
+    approvals.some(request => request.nodeId === coordinator.id) || ordinary.some(request => request.sessionId === coordinatorSession))
   const blockingReports = superAgentBlockingReports(state)
-  const humanReports = blockingReports.filter(report => report.kind === 'user')
-  const internalReports = snapshot.recoverySuspended ? [] : blockingReports.filter(report => report.kind !== 'user')
+  const humanReports = blockingReports.filter(report => report.kind === 'user' && report.requiresUserAction)
   const inspectionPending = inspecting || snapshot.inspectionPending === true
-  const processingBlockers = inspectionPending || busy || sending
   function provideInput(report: SuperAgentBlockingReport) {
     setInput(current => current || text('blockerReplyPrompt', { title: report.title, action: report.userAction ?? '' }))
     inputRef.current?.focus()
@@ -64,13 +70,25 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
   }
   useEffect(() => {
     if (active && followRef.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages.length, approvalCount, busy, active])
+  }, [messages.length, approvalCount, busy, active, thinkingPhase])
 
   async function send() {
-    if (!input.trim() || requestPending || sending || !snapshot.environment.available) return
+    if ((!input.trim() && !attachments.length) || picking || requestPending || sending || !snapshot.environment.available) return
     const draft = input
     setSending(true)
-    try { await onCommand({ type: 'chat', text: draft.trim() }); setInput(current => current === draft ? '' : current) } catch { /* The page keeps the draft and displays the actual backend error. */ } finally { setSending(false) }
+    try { await onCommand({ type: 'chat', text: draft.trim() || '请处理附件 / Please process the attachments', attachments: attachments.map(({ name, mimeType, text, base64 }) => ({ name, mimeType, text, base64 })) }); setAttachments([]); setInput(current => current === draft ? '' : current) } catch { /* The page keeps the draft and displays the actual backend error. */ } finally { setSending(false) }
+  }
+  async function pickAttachments() {
+    setPicking(true); setAttachmentError('')
+    try {
+      const paths = await window.electronAPI.openFileDialog()
+      const files = await Promise.all(paths.map(path => window.electronAPI.readFileAttachment(path)))
+      if (files.some(file => !file)) throw new Error('Unable to read one of the selected attachments')
+      const next = [...attachments, ...files.filter((file): file is FileAttachment => !!file)]
+      if (next.length > 10 || next.reduce((size, file) => size + file.size, 0) > 20_000_000) throw new Error('最多 10 个附件，总大小不超过 20 MB / Up to 10 files, 20 MB total')
+      setAttachments(next)
+    } catch (error) { setAttachmentError(error instanceof Error ? error.message : String(error)) }
+    finally { setPicking(false) }
   }
   async function inspect() {
     if (inspectRef.current || snapshot.inspectionPending || requestPending || !snapshot.environment.available) return
@@ -93,10 +111,10 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
     finally { setRespondingTo(null) }
   }
 
-  return <section aria-label={text('conversation')} className="flex min-h-0 min-w-0 flex-1 flex-col">
+  return <section aria-label={text('conversation')} aria-busy={!!thinkingPhase} className="flex min-h-0 min-w-0 flex-1 flex-col">
     <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-3">
       <div className="flex min-w-0 items-center gap-2"><AgentAvatar avatar={coordinator.avatar} name={coordinator.name} className="size-7 rounded-lg text-sm" />
-        <div className="min-w-0"><p className="truncate text-xs font-medium">{coordinator.name}</p><p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground"><Circle className={cn('size-1.5 fill-current', busy ? 'text-amber-500' : 'text-emerald-500')} /><span className="truncate">{coordinator.model}</span></p></div>
+        <div className="min-w-0"><p className="truncate text-xs font-medium">{coordinator.name}</p><p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">{thinkingPhase ? <LoaderCircle aria-hidden="true" className="size-3 text-primary motion-safe:animate-spin" /> : <Circle aria-hidden="true" className="size-1.5 fill-current text-emerald-500" />}<span className="truncate">{coordinator.model}</span></p></div>
       </div>
       {canStop ? <Button size="sm" variant="ghost" onClick={onStop}><Square className="size-3.5" />{text('stopAll')}</Button>
         : <Button size="sm" variant="ghost" disabled={inspectionPending || requestPending || !snapshot.environment.available} onClick={() => void inspect()}>{inspectionPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}{text('inspect')}</Button>}
@@ -106,7 +124,7 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
       if (scroller) followRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 100
     }}>
       <div className="mx-auto max-w-3xl space-y-6">
-        {!messages.some(message => !notices.get(message.id)) && <div className="mx-auto flex max-w-sm flex-col items-center gap-4 py-12 text-center"><AgentAvatar avatar={config.avatar} name={config.name} className="size-16 rounded-3xl text-3xl" /><h1 className="text-lg font-semibold">{config.name}</h1><p className="text-sm leading-6 text-muted-foreground">{text('introMessage')}</p></div>}
+        {!thinkingPhase && !messages.some(message => !notices.get(message.id)) && <div className="mx-auto flex max-w-sm flex-col items-center gap-4 py-12 text-center"><AgentAvatar avatar={config.avatar} name={config.name} className="size-16 rounded-3xl text-3xl" /><h1 className="text-lg font-semibold">{config.name}</h1><p className="text-sm leading-6 text-muted-foreground">{text('introMessage')}</p></div>}
         {messages.map(message => {
           if (notices.get(message.id)) return null
           const user = message.fromNodeId === 'user'
@@ -136,12 +154,7 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
             </div>
           </article>
         })}
-        {internalReports.length > 0 && <aside role="status" aria-live="polite" className="rounded-xl border border-border bg-foreground/5 px-4 py-3 text-xs">
-          <div className="flex items-center gap-2">{processingBlockers && <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />}<span>{text('blockerSystemIssue')}</span></div>
-          <details className="mt-2 text-muted-foreground"><summary className="cursor-pointer">{text('queueBlockerDetails')}</summary>
-            <div className="mt-2 space-y-3">{internalReports.map(report => <SuperAgentBlockingCard key={report.id} report={report} text={text} processing={processingBlockers} disabled onProvideInput={provideInput} />)}</div>
-          </details>
-        </aside>}
+        <SuperAgentThinkingIndicator phase={thinkingPhase} avatar={coordinator.avatar} name={coordinator.name} text={text} />
         {humanReports.length > 0 && <aside role="status" className="space-y-3 rounded-2xl border border-amber-500/25 bg-amber-500/5 p-4 text-sm">
           <h2 className="font-medium text-amber-700 dark:text-amber-400">{text('queueBlocked')}</h2>
           <div className="space-y-3">{humanReports.map(report => <SuperAgentBlockingCard key={report.id} report={report} text={text} processing={false}
@@ -162,10 +175,12 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
       <div className="mx-auto max-w-3xl space-y-2">
         {approvalCount > 0 && <button type="button" className="flex items-center gap-2 text-xs text-amber-700 hover:underline dark:text-amber-400" onClick={() => approvalRef.current?.scrollIntoView({ block: 'nearest' })}><ShieldCheck className="size-3.5" />{text('approvalCount', { count: approvalCount })}<ChevronDown className="size-3" /></button>}
         <div className="rounded-2xl border border-border bg-background p-3 shadow-xs">
+          {attachmentError && <p role="alert" className="text-xs text-destructive">{attachmentError}</p>}
+          <div className="flex flex-wrap gap-2">{attachments.map((file, index) => <button key={`${file.name}-${index}`} type="button" disabled={sending} className="flex items-center gap-1 rounded border px-2 py-1 text-xs" onClick={() => setAttachments(current => current.filter((_, i) => i !== index))}>{file.name}<X className="size-3" /></button>)}</div>
           <textarea ref={inputRef} rows={2} maxLength={32_000} className="max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-muted-foreground/70" value={input} placeholder={text('messagePlaceholder')} aria-label={text('messagePlaceholder')}
             onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
           <div className="mt-2 flex items-center justify-between gap-3"><span className="truncate text-[10px] text-muted-foreground">{busy ? text('sendWhileWorking') : text('coordinator')}</span>
-            <Button size="icon" className="size-8 shrink-0 rounded-xl" aria-label={text('send')} disabled={!input.trim() || requestPending || sending || !snapshot.environment.available} onClick={() => void send()}>{sending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}</Button></div>
+            <div className="flex gap-2"><Button size="icon" variant="ghost" aria-label="添加附件 / Attach files" disabled={sending || picking} onClick={() => void pickAttachments()}>{picking ? <LoaderCircle className="size-4 animate-spin" /> : <Paperclip className="size-4" />}</Button><Button size="icon" className="size-8 shrink-0 rounded-xl" aria-label={text('send')} disabled={(!input.trim() && !attachments.length) || picking || requestPending || sending || !snapshot.environment.available} onClick={() => void send()}>{sending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}</Button></div></div>
         </div>
       </div>
     </div>

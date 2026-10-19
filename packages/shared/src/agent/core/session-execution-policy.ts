@@ -59,6 +59,9 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     || !Array.isArray(input.allowSources) || input.allowSources.some(slug => typeof slug !== 'string' || !slug.trim())
     || (input.allowSkills !== undefined && (!Array.isArray(input.allowSkills) || input.allowSkills.length > 100 || input.allowSkills.some(slug => typeof slug !== 'string' || !slug.trim() || slug.length > 200 || /[\\/:\0]/.test(slug) || slug === '.' || slug === '..')))
     || (input.agentRuntime !== undefined && (typeof input.agentRuntime !== 'string' || !/^(?:pi|claude-code|codex|plugin:[a-z0-9][a-z0-9_-]*)$/.test(input.agentRuntime)))
+    || (input.skillWorkspaceRootPath !== undefined && (typeof input.skillWorkspaceRootPath !== 'string' || !isAbsolute(input.skillWorkspaceRootPath)))
+    || (input.architecture !== undefined && input.architecture !== 'dynamic')
+    || (input.resourceScope !== undefined && input.resourceScope !== 'super-agent')
     || (input.credentialAccess !== undefined && typeof input.credentialAccess !== 'boolean')
     || ['readFiles', 'writeFiles', 'runPrograms', 'browser'].some(key => typeof input[key as keyof SessionExecutionPolicy] !== 'boolean')) {
     throw new Error('Invalid Super Agent execution policy');
@@ -73,6 +76,8 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     if (contained(rootPath, protectedRoot) || contained(protectedRoot, rootPath)) throw new Error('Worker environment overlaps protected control or credential data');
   }
   return Object.freeze({
+    architecture: input.architecture, resourceScope: input.resourceScope,
+    ...(input.skillWorkspaceRootPath ? { skillWorkspaceRootPath: input.skillWorkspaceRootPath } : {}),
     nodeId: input.nodeId,
     role: input.role,
     rootPath,
@@ -84,13 +89,13 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     }) } : {}),
     ...(input.protectedRoots ? { protectedRoots: Object.freeze([...input.protectedRoots]) as unknown as string[] } : {}),
     // Keep the configured ceilings so turning full control off restores them.
-    readFiles: input.role === 'worker' && input.readFiles,
+    readFiles: (input.role === 'worker' || input.architecture === 'dynamic' && input.role === 'orchestrator') && input.readFiles,
     writeFiles: input.role === 'worker' && input.writeFiles,
     runPrograms: input.role === 'worker' && input.runPrograms,
     browser: input.role === 'worker' && input.browser,
     allowSources: Object.freeze(input.role === 'worker' ? [...new Set(input.allowSources)] : []) as unknown as string[],
     ...(input.agentRuntime ? { agentRuntime: input.agentRuntime } : {}),
-    ...(input.allowSkills !== undefined ? { allowSkills: Object.freeze([...new Set(input.allowSkills)]) as unknown as string[] } : {}),
+    ...(input.allowSkills !== undefined ? { allowSkills: Object.freeze(input.architecture === 'dynamic' && input.role === 'coordinator' ? [] : [...new Set(input.allowSkills)]) as unknown as string[] } : {}),
     allowSubagents: false,
   });
 }
@@ -303,6 +308,7 @@ export function checkSessionCredentialAccess(sessionId: string, input: Record<st
 
 function checkCredentialAccess(registered: RegisteredPolicy, input: Record<string, unknown>, cwd?: string): SessionPolicyToolResult {
   const policy = registered.policy!;
+  if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction reads work lists and reports only');
   if (policy.credentialAccess !== true) return deny('enable credential vault access in Super Agent settings');
   if (!input || typeof input.action !== 'string' || !['list', 'request', 'fill', 'run'].includes(input.action)) return deny('unknown credential operation');
   // Management nodes can discover account metadata, while workers handle use.
@@ -638,6 +644,7 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   // The host routes existing team sessions through the durable node scheduler.
   // Messaging never creates a session or bypasses its serial turn queue.
   if (canonical === 'send_agent_message') {
+    if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction submits requirements and replies only');
     if (slug && slug !== 'session') return deny('use the session messaging tool for configured team nodes');
     if (typeof input.sessionId !== 'string' || !input.sessionId.trim()
       || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 32_000
@@ -647,11 +654,14 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
     return { allowed: true };
   }
   if (canonical === 'collaboration_board') {
+    if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction reads work lists and reports only');
     if (slug && slug !== 'session') return deny('use the session collaboration board for shared team data');
     return input.action === 'get' ? { allowed: true } : deny('Super Agent board writes require a final board action with expectedRevision');
   }
   if (SUPER_AGENT_ACTION_TOOLS.some(def => def.name === canonical)) {
     if (slug !== 'session') return deny('use the registered session collaboration tools');
+    if (policy.architecture === 'dynamic' && policy.role === 'coordinator' && !['super_agent_intent', 'super_agent_deliver', 'super_agent_work_list', 'super_agent_reports', 'super_agent_resource_catalog'].includes(canonical)) return deny('interaction submits requirements and reads work lists and reports only');
+    if (canonical === 'super_agent_report' && policy.role === 'coordinator') return deny('only workers and the background node submit reports');
     const interaction = ['super_agent_intent', 'super_agent_deliver'];
     const orchestration = ['super_agent_dispatch', 'super_agent_plan', 'super_agent_accept'];
     if (interaction.includes(canonical) && policy.role !== 'coordinator') return deny('only the interaction node may hand off intent or deliver to the user');
@@ -660,14 +670,17 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
     return { allowed: true }; // The active host executor validates exact roles, versions, targets and budgets.
   }
   if (canonical === 'super_agent_task') {
+    if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('use super_agent_work_list for work contracts');
     if (slug !== 'session') return deny('use the session continuity tool');
     return policy.role === 'worker' || input.action === 'get' ? { allowed: true } : deny('only workers may update task checkpoints or artifacts');
   }
   if (canonical === 'super_agent_settings') {
+    if (policy.architecture === 'dynamic' && policy.role === 'orchestrator' && slug === 'session' && input.action === 'get') return { allowed: true };
     if (slug !== 'session') return deny('use the registered session settings tool');
     return policy.role === 'coordinator' ? { allowed: true } : deny('only the interaction node may edit team settings');
   }
   if (canonical === 'super_agent_library') {
+    if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction cannot read internal libraries');
     if (slug !== 'session') return deny('use the session library tool');
     if (input.type === 'library-list' || input.type === 'library-get') return { allowed: true };
     if (policy.role !== 'worker') return deny('only workers may write libraries or restore archives');
@@ -679,6 +692,19 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   if (name === 'skill' && (!slug || slug === 'session')) {
     const skill = typeof input.skill === 'string' ? input.skill.split(':').pop() : undefined;
     if (!skill || !policy.allowSkills?.includes(skill)) return deny('skill is not assigned to this node');
+    return { allowed: true };
+  }
+  if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction may only use requirements, work lists, reports and replies');
+  if (policy.architecture === 'dynamic' && policy.role === 'orchestrator' && READ_TOOLS.has(name) && (!slug || slug === 'session')) {
+    if (!policy.readFiles) return deny('background file reading is disabled');
+    const paths = [input.file_path, input.path, input.notebook_path].filter(value => value !== undefined);
+    if (!paths.length && !['glob', 'grep', 'find', 'ls'].includes(name)) return deny('a verifiable filesystem path is required');
+    for (const path of paths.length ? paths : [cwd || policy.rootPath]) {
+      if (typeof path !== 'string') return deny('filesystem path must be a string');
+      const error = checkSessionPolicyPath({ ...policy, fullControl: false }, path, cwd, true);
+      if (error) return deny(error);
+    }
+    if (name === 'glob' && typeof input.pattern === 'string' && (isAbsolute(input.pattern) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(input.pattern))) return deny('use a relative glob pattern inside the node environment');
     return { allowed: true };
   }
   if (referenceReadAllowed(registered, toolName, input, cwd)) return { allowed: true };

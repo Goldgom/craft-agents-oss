@@ -17,6 +17,8 @@ import { nodeModels, useSuperAgentText } from './super-agent-ui'
 import { getCompatibleAgentRuntimes, resolveAgentRuntime, type AgentRuntimeProtocol } from '@config/llm-connections'
 import { AgentFrameworkDetails, agentRuntimeDescription, agentRuntimeLabel } from '../settings/BackendFrameworkSettings'
 import { recommendedThinking } from './super-agent-presets'
+import { AgentAvatar } from './SuperAgentAvatar'
+export { AgentAvatar } from './SuperAgentAvatar'
 
 export const textareaClass = 'min-h-24 w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm leading-6 shadow-xs transition-colors outline-none placeholder:text-muted-foreground hover:border-primary/30 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50'
 
@@ -33,13 +35,6 @@ export function FormSection({ title, description, children }: { title: string; d
     <div><h3 className="text-sm font-semibold">{title}</h3>{description && <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>}</div>
     {children}
   </section>
-}
-
-export function AgentAvatar({ avatar, name, className }: { avatar: string; name: string; className?: string }) {
-  const isImage = /^data:image\/(?:png|jpe?g|webp);base64,/.test(avatar)
-  return <span className={cn('inline-flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/10 text-xl text-primary ring-1 ring-primary/10', className)}>
-    {isImage ? <img className="size-full object-cover" src={avatar} alt={name} /> : <span aria-hidden="true">{avatar || name.slice(0, 1)}</span>}
-  </span>
 }
 
 export function AvatarEditor({ avatar, name, onChange }: { avatar: string; name: string; onChange: (value: string) => void }) {

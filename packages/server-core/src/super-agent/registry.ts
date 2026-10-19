@@ -1,3 +1,5 @@
+import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
+import { SuperAgentResourceStore } from './SuperAgentResourceStore'
 import { SUPER_AGENT_COLLABORATION_SKILL } from '@tokenbird/session-tools-core/super-agent-tools'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { access, realpath } from 'node:fs/promises'
@@ -40,9 +42,10 @@ export async function validateSuperAgentCatalog(workspaceId: string, config: Sup
   const workspace = getWorkspaceByNameOrId(workspaceId)
   if (!workspace) throw new Error('Workspace not found')
   await validateExecutionRoot(workspaceId, config.environment)
-  const sources = new Set(loadWorkspaceSources(workspace.rootPath).map(source => source.config.slug))
+  const sources = new Set(loadWorkspaceSources(config.architecture === 'dynamic' ? superAgentResourceScope(workspace.rootPath).rootPath : workspace.rootPath).map(source => source.config.slug))
   const credentials = getCredentialManager()
-  for (const node of config.nodes) {
+  const configuredModels = [...config.nodes.filter(node => !node.dynamic), ...(config.modelPool ?? []).filter(entry => entry.enabled).map(entry => ({ ...entry, name: entry.name, skillSlugs: entry.skillSlugs, sourceSlugs: entry.sourceSlugs }))]
+  for (const node of configuredModels) {
     const connection = getLlmConnection(node.llmConnection)
     if (!connection) throw new Error(`AI connection not found: ${node.llmConnection}`)
     resolveSessionAgentRuntime(connection, node.agentRuntime)
@@ -76,14 +79,25 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
   if (existing) return existing.service
   const environments = new SuperAgentEnvironments({ isVmHost: process.env.TOKENBIRD_EXECUTION_HOST === 'vm' })
   const environmentConfigs = new Map<string, SuperAgentEnvironment>()
+  const resources = new SuperAgentResourceStore(getCredentialManager(), async (workspaceId, text, automationId, runId) => { await service.command(workspaceId, { type: 'automation-work', text, automationId, runId }) })
   const service = new SuperAgentService({
     actionGates: true,
     upgradeArchitecture: true,
+    rebuildArchitecture: true,
+    accessResources: async (workspaceId, operation, value) => {
+      const workspace = getWorkspaceByNameOrId(workspaceId)
+      if (!workspace) throw new Error('Workspace not found')
+      const result = await resources.access(workspaceId, workspace.rootPath, operation, value)
+      const scope = superAgentResourceScope(workspace.rootPath)
+      host.setupConfigWatcher(scope.rootPath, workspaceId)
+      host.notifyConfigFileChange(scope.rootPath, 'automations.json')
+      return result
+    },
     workflow: new MicrosoftAgentWorkflow(),
     describeResources: (workspaceId, config) => {
       const workspace = getWorkspaceByNameOrId(workspaceId)
       if (!workspace) throw new Error('Workspace not found')
-      return describeSuperAgentResources(workspace.rootPath, config)
+      return describeSuperAgentResources(config.architecture === 'dynamic' ? superAgentResourceScope(workspace.rootPath).rootPath : workspace.rootPath, config, workspace.rootPath)
     },
     describeNodeBackend: node => {
       const connection = getLlmConnection(node.llmConnection)
@@ -118,7 +132,11 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       })
     },
     host: {
-      createSession: (workspaceId, options) => host.createSession(workspaceId, options),
+      createSession: async (workspaceId, options, internal) => {
+        const workspace = getWorkspaceByNameOrId(workspaceId)
+        if (internal?.resourceScope && workspace) await resources.initialize(workspace.rootPath)
+        return host.createSession(workspaceId, options, internal)
+      },
       getSession: sessionId => host.getSession(sessionId),
       getSessions: workspaceId => host.getSessions(workspaceId),
       getSuperAgentSessionIds: (workspaceId, nodeId) => host.getSuperAgentSessionIds?.(workspaceId, nodeId) ?? [],
@@ -140,7 +158,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
         const environment = environmentConfigs.get(session.workspaceId)
         if (!environment) throw new Error('Node environment has not been validated')
         const executor = await environments.prepareSession(session.workspaceId, environment, policy)
-        await host.applySessionPolicy(sessionId, { ...policy, containerExecutor: executor })
+        await host.applySessionPolicy(sessionId, { ...policy, ...(policy.resourceScope === 'super-agent' ? { skillWorkspaceRootPath: getWorkspaceByNameOrId(session.workspaceId)?.rootPath } : {}), containerExecutor: executor })
         setSessionOperationRecorder(sessionId, request => service.prepareNodeOperation(session.workspaceId, sessionId, request))
       },
     },
@@ -161,7 +179,13 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
     },
     onConfigChanged: async workspaceId => {
       const current = (await service.get(workspaceId)).config
-      if (current) await environments.reconcile(workspaceId, current)
+      if (current) {
+        await environments.reconcile(workspaceId, current)
+        if (current.architecture === 'dynamic') {
+          const workspace = getWorkspaceByNameOrId(workspaceId)
+          if (workspace) { const scope = await resources.initialize(workspace.rootPath); host.setupConfigWatcher(scope.rootPath, workspaceId) }
+        }
+      }
     },
     resolveEnvironment: async (workspaceId, environment) => {
       await validateExecutionRoot(workspaceId, environment)
@@ -216,7 +240,13 @@ export async function restoreSuperAgents(host: ISessionManager, onError: (error:
   for (const workspace of host.getWorkspaces()) {
     try { await access(join(workspace.rootPath, 'super-agent', 'state.json')) }
     catch { try { await access(join(workspace.rootPath, 'super-agent', 'commit.json')) } catch { continue } }
-    try { await service.get(workspace.id) } catch (error) { onError(error) }
+    try {
+      const snapshot = await service.get(workspace.id)
+      if (snapshot.config?.architecture === 'dynamic') {
+        const scope = await new SuperAgentResourceStore().initialize(workspace.rootPath)
+        host.setupConfigWatcher(scope.rootPath, workspace.id)
+      }
+    } catch (error) { onError(error) }
   }
 }
 

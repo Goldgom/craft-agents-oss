@@ -92,7 +92,7 @@ export function NodeCommunication({ config, messages, onCommand }: {
         <div ref={endRef} />
       </div>
     </div>
-    <div className="shrink-0 border-t border-border/70 px-6 py-4">
+    {config.architecture !== 'dynamic' && <div className="shrink-0 border-t border-border/70 px-6 py-4">
       <div className="mx-auto max-w-3xl space-y-3">
         <div className="grid grid-cols-2 gap-3"><FormField label={text('from')}><WorkbenchSelect value={fromNodeId} onValueChange={value => { setFromNodeId(value); if (toNodeId === value) setToNodeId('all') }} options={[...config.nodes.map(node => ({ value: node.id, label: node.name }))]} /></FormField>
           <FormField label={text('to')}><WorkbenchSelect value={toNodeId} onValueChange={value => setToNodeId(value)} options={[{ value: "all", label: text('broadcast') }, ...config.nodes.filter(node => node.id !== fromNodeId).map(node => ({ value: node.id, label: node.name }))]} /></FormField></div>
@@ -101,6 +101,6 @@ export function NodeCommunication({ config, messages, onCommand }: {
           <Button className="size-10 shrink-0 rounded-xl" size="icon" disabled={!body.trim() || pending} aria-label={text('send')} onClick={() => void send()}>{pending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}</Button></div>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
       </div>
-    </div>
+    </div>}
   </div>
 }

@@ -1,3 +1,4 @@
+import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
 import type { EventSink, RpcServer } from '@tokenbird/server-core/transport'
 import { createAgentError, parseError } from '@tokenbird/shared/agent'
 import { TurnClientContexts, type TurnClientContext } from './turn-client-context'
@@ -1979,13 +1980,13 @@ export class SessionManager implements ISessionManager {
     const callbacks: ConfigWatcherCallbacks = {
       onSourcesListChange: async (sources: LoadedSource[]) => {
         sessionLog.info(`Sources list changed in ${workspaceRootPath} (${sources.length} sources)`)
-        this.broadcastSourcesChanged(workspaceId, sources)
+        if (getWorkspaceByNameOrId(workspaceId)?.rootPath === workspaceRootPath) this.broadcastSourcesChanged(workspaceId, sources)
         await this.reloadSourcesForWorkspace(workspaceRootPath)
       },
       onSourceChange: async (slug: string, source: LoadedSource | null) => {
         sessionLog.info(`Source '${slug}' changed:`, source ? 'updated' : 'deleted')
         const sources = loadWorkspaceSources(workspaceRootPath)
-        this.broadcastSourcesChanged(workspaceId, sources)
+        if (getWorkspaceByNameOrId(workspaceId)?.rootPath === workspaceRootPath) this.broadcastSourcesChanged(workspaceId, sources)
         await this.reloadSourcesForWorkspace(workspaceRootPath)
       },
       onSourceGuideChange: (sourceSlug: string) => {
@@ -1993,7 +1994,7 @@ export class SessionManager implements ISessionManager {
         // Broadcast the updated sources list so sidebar picks up guide changes
         // Note: Guide changes don't require session source reload (no server changes)
         const sources = loadWorkspaceSources(workspaceRootPath)
-        this.broadcastSourcesChanged(workspaceId, sources)
+        if (getWorkspaceByNameOrId(workspaceId)?.rootPath === workspaceRootPath) this.broadcastSourcesChanged(workspaceId, sources)
       },
       onStatusConfigChange: () => {
         sessionLog.info(`Status config changed in ${workspaceId}`)
@@ -2125,8 +2126,8 @@ export class SessionManager implements ISessionManager {
         onPromptsReady: async (prompts) => {
           // Execute prompt automations by creating new sessions
           const settled = await Promise.allSettled(
-            prompts.map((pending) =>
-              this.executePromptAutomation({
+            prompts.map(async (pending) => {
+              return this.executePromptAutomation({
                 workspaceId,
                 workspaceRootPath,
                 prompt: pending.prompt,
@@ -2139,7 +2140,7 @@ export class SessionManager implements ISessionManager {
                 automationName: pending.automationName,
                 telegramTopic: pending.telegramTopic,
               })
-            )
+            })
           )
 
           // Write enriched history entries (with session IDs and prompt summaries)
@@ -3124,7 +3125,7 @@ export class SessionManager implements ISessionManager {
   async createSession(
     workspaceId: string,
     options?: import('@tokenbird/shared/protocol').CreateSessionOptions,
-    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string; resourceScope?: 'super-agent' },
   ): Promise<Session> {
     if (options?.editedMessageContent !== undefined && (!options.branchFromMessageId || !options.branchFromSessionId)) {
       throw new Error('Editing a historical message requires a branch point.')
@@ -3158,12 +3159,13 @@ export class SessionManager implements ISessionManager {
     // announced to the renderer (see notifySessionCreated). Callers that register the session
     // themselves — the `sessions:create` RPC adds it from the return value — pass
     // `{ emitCreatedEvent: false }` to avoid a redundant hydrate.
-    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string; resourceScope?: 'super-agent' },
   ): Promise<Session> {
-    const workspace = getWorkspaceByNameOrId(workspaceId)
-    if (!workspace) {
-      throw new Error(`Workspace ${workspaceId} not found`)
-    }
+    const registeredWorkspace = getWorkspaceByNameOrId(workspaceId)
+    if (!registeredWorkspace) throw new Error(`Workspace ${workspaceId} not found`)
+    const workspace = internal?.resourceScope === 'super-agent'
+      ? { ...registeredWorkspace, rootPath: superAgentResourceScope(registeredWorkspace.rootPath).rootPath }
+      : registeredWorkspace
 
     // Get new session defaults from workspace config (with global fallback)
     // Options.permissionMode overrides the workspace default (used by EditPopover for auto-execute)

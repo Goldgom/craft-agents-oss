@@ -449,6 +449,7 @@ export function createWebApi(options: WebApiOptions): {
     // The OAuth provider redirects through the relay to our server's /api/oauth/callback,
     // which completes the token exchange and pushes status via WebSocket.
     performOAuth: async (args: {
+      resourceScope?: 'super-agent'
       sourceSlug: string
       sessionId?: string
       authRequestId?: string
@@ -468,6 +469,7 @@ export function createWebApi(options: WebApiOptions): {
         const callbackUrl = `${window.location.origin}/api/oauth/callback`
         const result = await client.invoke('oauth:start', {
           sourceSlug: args.sourceSlug,
+          resourceScope: args.resourceScope,
           callbackUrl,
           sessionId: args.sessionId,
           authRequestId: args.authRequestId,

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { emptySuperAgentState, type SuperAgentPlanItem, type SuperAgentTask } from '@tokenbird/shared/super-agent'
-import { superAgentBlockingReports } from './super-agent-blockers'
+import { superAgentBlockingReports, superAgentPlanNeedsUserAction, superAgentTaskNeedsUserAction } from './super-agent-blockers'
 import { SuperAgentBlockingCard } from './SuperAgentBlockingCard'
 import type { SuperAgentText } from './super-agent-ui'
 import zh from '@tokenbird/shared/i18n/locales/zh-Hans.json'
@@ -18,26 +18,17 @@ function render(report: ReturnType<typeof superAgentBlockingReports>[number], pr
   return renderToStaticMarkup(<SuperAgentBlockingCard report={report} text={text} processing={processing} disabled={false} onProvideInput={() => {}} />)
 }
 
-test('unknown outcomes show saved progress and a system action, with technical evidence collapsed', () => {
+test('automatic verification stays internal and does not render a user blocker', () => {
   const state = emptySuperAgentState(1)
-  state.plans = [plan]; state.tasks = [task]
+  state.plans = [plan]; state.tasks = [{ ...task, status: 'queued' }]
   state.operations = [{ id: 'op_unknown', key: 'a'.repeat(64), taskId: task.id, turnId: 'turn', nodeId: 'worker',
     sessionId: 'session', invocationId: 'call', toolName: 'Bash', status: 'unknown', createdAt: 1, updatedAt: 1 }]
-  state.artifacts = [{ id: 'file', taskId: task.id, path: 'research.md', sha256: 'b'.repeat(64), revision: 1, description: '', updatedAt: 1 }]
   const report = superAgentBlockingReports(state)[0]!
-  expect(report).toMatchObject({ kind: 'verification', submittedCount: 1, artifactCount: 1 })
-  const html = render(report)
-  const main = html.slice(0, html.indexOf('<details'))
-  expect(main).toContain('有 1 项工具操作的执行结果尚未确认')
-  expect(main).toContain('无需操作。AI 会自动核验执行结果并继续')
-  expect(main).toContain('已提交 1 份任务结果，已登记 1 项文件产物')
-  expect(main).not.toContain('<button')
-  expect(main).toContain('AI 自动核验与恢复')
-  expect(main).not.toContain('op_unknown')
-  expect(main).not.toContain('SHA256')
-  expect(html).toContain('op_unknown')
-  expect(html).not.toMatch(/<details[^>]*\bopen(?:[\s=>])/)
-  expect(render(report, true)).not.toContain('<button')
+  expect(report).toMatchObject({ kind: 'verification', requiresUserAction: false })
+  expect(report.operations[0]!.id).toBe('op_unknown')
+  expect(render(report)).toBe('')
+  expect(render(report, true)).toBe('')
+  expect(superAgentTaskNeedsUserAction(state, state.tasks[0]!)).toBe(false)
 })
 
 test('specific user information is explicit and uses a reply action instead of verification', () => {
@@ -56,7 +47,7 @@ test('legacy reports do not invent a missing user requirement or claim completed
   const reports = superAgentBlockingReports(state)
   expect(reports).toHaveLength(1)
   expect(reports[0]!.kind).toBe('unspecified')
-  expect(render(reports[0]!)).toContain('具体原因和解除条件还需要确认')
+  expect(render(reports[0]!)).toBe('')
   expect(render(reports[0]!)).not.toContain('需要你补充信息')
 })
 
@@ -69,4 +60,20 @@ test('upstream operations are included while unrelated and reconciled operations
   expect(reports).toHaveLength(1)
   expect(reports[0]!.kind).toBe('verification')
   expect(reports[0]!.operations.map(operation => operation.id)).toEqual(['op_relevant'])
+})
+test('only explicit actionable user requests count as blocked, including pending dependencies', () => {
+  const state = emptySuperAgentState(1)
+  state.plans = [{ ...plan, blocker: { kind: 'user', summary: '请选择市场', userAction: '请选择中国或美国市场。' } }]
+  const upstream: SuperAgentTask = { ...task, status: 'queued' }
+  const downstream = { ...task, id: 'next', planId: undefined, status: 'queued' as const, dependsOn: [task.id] }
+  state.tasks = [upstream, downstream]
+  expect(superAgentPlanNeedsUserAction(state.plans[0])).toBe(true)
+  expect(superAgentTaskNeedsUserAction(state, downstream)).toBe(true)
+  upstream.status = 'completed'
+  expect(superAgentTaskNeedsUserAction(state, downstream)).toBe(false)
+  state.plans[0]!.blocker = { kind: 'system', summary: '核验结果', systemAction: '自动核验后继续' }
+  expect(superAgentPlanNeedsUserAction(state.plans[0])).toBe(false)
+  state.plans[0]!.blocker = { kind: 'user', summary: '原因不明确', userAction: ' ' }
+  expect(superAgentPlanNeedsUserAction(state.plans[0])).toBe(false)
+  expect(render(superAgentBlockingReports(state)[0]!)).toBe('')
 })
