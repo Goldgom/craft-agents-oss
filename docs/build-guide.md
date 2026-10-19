@@ -253,6 +253,7 @@ apps/electron/release/
 | `Could not resolve "ssh2"`                                     | 确认使用包含`ssh2` 的最新代码，并在仓库根目录执行 `bun install`；不要在 `apps/electron/scripts` 中执行 `npm install` |
 | `claude-agent-sdk-linux-x64` 下载失败                          | 检查 npm registry 和 GitHub 网络连接后重新运行                                                                               |
 | AppImage 启动时报 FUSE 错误                                      | 安装对应 Ubuntu 版本的`libfuse2` 或 `libfuse2t64`                                                                        |
+| AppImage 启动报 `Could not load the "sharp" module using the linux-x64 runtime` | 使用最新打包配置重新构建；Linux `extraResources` 必须同时包含 `@img/sharp-linux-x64` 和 `@img/sharp-libvips-linux-x64`。在宿主机安装 sharp 无法修复已经生成的 AppImage。 |
 
 ---
 
