@@ -3093,7 +3093,7 @@ export class SuperAgentService {
     if (!catalog) throw new Error('This execution host cannot discover skills and sources')
     for (const slug of input.skillSlugs) if (!catalog.skills.some(skill => skill.slug === slug)) throw new Error(`Skill is not in the available catalog: ${slug}`)
     for (const slug of input.sourceSlugs) {
-      if (!config.sourceSlugs.includes(slug)) throw new Error(`Source is outside the team authorization pool: ${slug}`)
+      if (config.architecture !== 'dynamic' && !config.sourceSlugs.includes(slug)) throw new Error(`Source is outside the team authorization pool: ${slug}`)
       if (!catalog.sources.some(source => source.slug === slug && source.available)) throw new Error(`Source is disabled, unauthenticated or unavailable: ${slug}`)
     }
     const next = { ...target, skillSlugs: [...new Set([...(target.skillSlugs ?? []), ...input.skillSlugs])], sourceSlugs: [...new Set([...target.sourceSlugs, ...input.sourceSlugs])] }
@@ -3102,9 +3102,14 @@ export class SuperAgentService {
       return
     }
     const runtime = document.state.nodes.find(node => node.nodeId === target.id)
-    if (runtime && ['working', 'preparing', 'recovering'].includes(runtime.status)) throw new Error('Wait until the worker is idle before distributing resources')
-    if (runtime?.sessionId && (await this.deps.host.getSession(runtime.sessionId))?.isProcessing) throw new Error('Wait until the worker session is idle before distributing resources')
-    const candidate = validateSuperAgentConfig({ ...config, nodes: config.nodes.map(node => node.id === next.id ? next : node) })
+    // A worker may stage its own bindings; its current policy stays unchanged
+    // until the host completes this turn and starts the resource continuation.
+    const selfActivation = actor.role === 'worker' && actor.id === target.id
+    if (!selfActivation && runtime && ['working', 'preparing', 'recovering'].includes(runtime.status)) throw new Error('Wait until the worker is idle before distributing resources')
+    if (!selfActivation && runtime?.sessionId && (await this.deps.host.getSession(runtime.sessionId))?.isProcessing) throw new Error('Wait until the worker session is idle before distributing resources')
+    const candidate = validateSuperAgentConfig({ ...config,
+      sourceSlugs: config.architecture === 'dynamic' ? [...new Set([...config.sourceSlugs, ...input.sourceSlugs])] : config.sourceSlugs,
+      nodes: config.nodes.map(node => node.id === next.id ? next : node) })
     await this.deps.validateConfig?.(workspaceId, candidate)
     // Resolve real instructions and enforce their size before any bindings commit.
     this.nodePrompt(workspaceId, candidate, next, '')

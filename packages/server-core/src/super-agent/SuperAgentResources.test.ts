@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { loadSkillBySlug } from '@tokenbird/shared/skills'
 import { loadWorkspaceSources, SourceServerBuilder } from '@tokenbird/shared/sources'
 import { McpClientPool } from '@tokenbird/shared/mcp'
-import { loadSuperAgentDocument, withSuperAgentOrchestrator, type SuperAgentSnapshot } from '@tokenbird/shared/super-agent'
+import { loadSuperAgentDocument, rebuildSuperAgentConfig, withSuperAgentOrchestrator, type SuperAgentSnapshot } from '@tokenbird/shared/super-agent'
 import { describeSuperAgentResources } from './SuperAgentResources'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
@@ -163,8 +163,9 @@ test('a workspace that disables local MCP reports stdio sources as unavailable',
   expect(catalog.sources.find(source => source.slug === 'research-mcp')).toMatchObject({ available: false, status: 'local_mcp_disabled' })
 })
 
-test('self activation connects a real MCP transport on continuation and exposes callable tools and remote errors', async () => {
+for (const dynamic of [false, true]) test(`${dynamic ? 'dynamic shared' : 'legacy team'} self activation connects a real MCP transport on continuation and exposes callable tools and remote errors`, async () => {
   const f = await fixture()
+  if (dynamic) f.config = rebuildSuperAgentConfig(f.config)
   let connections = 0
   let remoteError = false
   const server = Bun.serve({
@@ -197,13 +198,32 @@ test('self activation connects a real MCP transport on continuation and exposes 
       expect(await pool.sync(configs)).toEqual([])
     }
     await f.service.save('alpha', f.config)
-    await f.service.command('alpha', { type: 'task', nodeId: 'worker', title: 'Read research', instructions: 'Read the research record and verify the result' })
-    const initial = await working(f, 'worker')
+    await f.service.command('alpha', { type: 'task', ...(dynamic ? { modelEntryId: f.config.modelPool![0]!.id, thinkingLevel: 'high' as const } : { nodeId: 'worker' }), title: 'Read research', instructions: 'Read the research record and verify the result' })
+    const initial = await until(() => f.service.get('alpha'), s => s.state.tasks[0]?.status === 'running'
+      && f.host.sends.some(send => send.sessionId === s.state.tasks[0]?.sessionId))
+    const worker = initial.state.tasks[0]!.nodeId, sessionId = initial.state.tasks[0]!.sessionId!
+    if (dynamic) {
+      expect(initial.config!.sourceSlugs).toEqual([])
+      expect(context(f.host.sends.at(-1)!.context).resourceCatalog.sources.some((source: { slug: string }) => source.slug === 'research-mcp')).toBe(true)
+      for (const slug of ['disabled-mcp', 'auth-mcp', 'missing-mcp']) {
+        await expect(f.service.callNodeActionTool('alpha', sessionId, 'super_agent_resources', {
+          requestId: `reject-${slug}`, ...activate(worker, [slug], []),
+        })).rejects.toThrow('disabled, unauthenticated or unavailable')
+        expect((await f.service.get('alpha')).config!.sourceSlugs).toEqual([])
+      }
+    }
     expect(connections).toBe(0)
     expect(pool.getTools('research-mcp')).toEqual([])
-    await finish(f, initial, 'worker', { activateResources: [activate()] })
+    const activated = await f.service.callNodeActionTool('alpha', sessionId, 'super_agent_resources', { requestId: 'load-research', ...activate(worker) })
+    expect('resourceContinuation' in activated && activated.resourceContinuation).toBe(true)
+    expect(f.host.policies.get(sessionId)!.allowSources).toEqual([])
+    expect(pool.getTools('research-mcp')).toEqual([])
+    f.host.complete(sessionId, '')
+    await until(() => f.service.get('alpha'), s => s.state.tasks[0]?.status === 'queued')
     f.advance(2_000); await f.service.tick()
-    const resumed = await working(f, 'worker')
+    const resumed = await working(f, worker)
+    expect(resumed.state.tasks[0]!.sessionId).toBe(sessionId)
+    expect(resumed.config!.nodes.find(node => node.id === worker)!.sourceSlugs).toEqual(['research-mcp'])
     expect(connections).toBe(1)
     expect(pool.getTools('research-mcp').map(tool => tool.name)).toEqual(['read_record'])
     expect((await pool.callTool('mcp__research-mcp__read_record', { text: 'Verified research record' })).content).toBe('Verified research record')
