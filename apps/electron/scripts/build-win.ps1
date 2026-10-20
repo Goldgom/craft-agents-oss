@@ -1,4 +1,4 @@
-# Build script for Windows NSIS installer
+﻿# Build script for Windows NSIS installer
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1 [-ForceDownload] [-SkipMsi]
 
 param([switch]$ForceDownload, [switch]$SkipMsi)
@@ -8,6 +8,10 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ElectronDir = Split-Path -Parent $ScriptDir
 $RootDir = Split-Path -Parent (Split-Path -Parent $ElectronDir)
+$ReleaseDir = if ($env:TOKENBIRD_RELEASE_DIR) { [System.IO.Path]::GetFullPath($env:TOKENBIRD_RELEASE_DIR) } else { Join-Path $ElectronDir "release" }
+if (-not $ReleaseDir.StartsWith($RootDir + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Release output must stay inside the checkout: $ReleaseDir"
+}
 
 # Configuration
 $BunVersion = "bun-v1.4.0"  # 1.3.9 loses non-ASCII TokenNest header bytes
@@ -73,7 +77,7 @@ Write-Host ""
 # Only stop this checkout's release app or packaging helpers that hold build files.
 # Other Node/Electron apps and development servers may be doing unrelated work.
 function Stop-PackageProcesses {
-    $releaseRoot = [System.IO.Path]::GetFullPath((Join-Path $ElectronDir 'release')) + '\'
+    $releaseRoot = [System.IO.Path]::GetFullPath($ReleaseDir) + '\'
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         ($_.Name -in @('node.exe', 'electron.exe', 'electron-builder.exe', 'TokenBird.exe')) -and
         (($_.ExecutablePath -and $_.ExecutablePath.StartsWith($releaseRoot, [StringComparison]::OrdinalIgnoreCase)) -or
@@ -93,7 +97,7 @@ Write-Host "Cleaning previous builds..."
 $foldersToClean = @(
     "$ElectronDir\node_modules\@anthropic-ai",
     "$ElectronDir\packages",
-    "$ElectronDir\release"
+    "$ReleaseDir"
 )
 foreach ($folder in $foldersToClean) {
     if (Test-Path $folder) {
@@ -508,15 +512,15 @@ while (-not $builderSuccess -and $builderRetry -lt $maxBuilderRetries) {
     Write-Host "  electron-builder attempt $builderRetry of $maxBuilderRetries..." -ForegroundColor Cyan
 
     # Clean release directory before each attempt to avoid stale files
-    if (Test-Path "$ElectronDir\release") {
+    if (Test-Path "$ReleaseDir") {
         Write-Host "  Cleaning release directory before attempt..."
-        Remove-Item -Recurse -Force "$ElectronDir\release" -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force "$ReleaseDir" -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
     }
 
     # Build NSIS first so an unavailable MSI/WiX toolchain cannot discard the
     # otherwise usable Windows installer.
-    & bunx electron-builder --win nsis --x64 --publish never @ElectronDistArgs 2>&1 | Tee-Object -Variable builderOutput
+    & bunx electron-builder --win nsis --x64 --publish never "--config.directories.output=$ReleaseDir" @ElectronDistArgs 2>&1 | Tee-Object -Variable builderOutput
 
     if ($LASTEXITCODE -eq 0) {
         $builderSuccess = $true
@@ -548,7 +552,7 @@ if (-not $SkipMsi) {
     Push-Location $ElectronDir
     try {
         Write-Host "  Building optional MSI installer..." -ForegroundColor Cyan
-        & bunx electron-builder --win msi --x64 --publish never @ElectronDistArgs 2>&1 | Tee-Object -Variable msiOutput
+        & bunx electron-builder --win msi --x64 --publish never "--config.directories.output=$ReleaseDir" @ElectronDistArgs 2>&1 | Tee-Object -Variable msiOutput
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  WARNING: MSI build skipped (WiX unavailable or download failed)." -ForegroundColor Yellow
         } else {
@@ -562,21 +566,21 @@ if (-not $SkipMsi) {
 }
 
 # 8. Verify the installer was built
-$InstallerPath = Get-ChildItem -Path "$ElectronDir\release" -Filter "*.exe" | Select-Object -First 1
+$InstallerPath = Get-ChildItem -Path "$ReleaseDir" -Filter "*.exe" | Select-Object -First 1
 
 if (-not $InstallerPath) {
-    Write-Host "ERROR: Installer not found in $ElectronDir\release" -ForegroundColor Red
+    Write-Host "ERROR: Installer not found in $ReleaseDir" -ForegroundColor Red
     Write-Host "Contents of release directory:"
-    Get-ChildItem "$ElectronDir\release"
+    Get-ChildItem "$ReleaseDir"
     exit 1
 }
 
 # Verify the unpacked application really contains a working Git Bash runtime.
 # Checking the source vendor directory alone would not catch an electron-builder
 # path/filter regression.
-$PackagedGitBash = "$ElectronDir\release\win-unpacked\resources\app\vendor\git-bash\bin\bash.exe"
-$PackagedGit = "$ElectronDir\release\win-unpacked\resources\app\vendor\git-bash\cmd\git.exe"
-$PackagedGitLicense = "$ElectronDir\release\win-unpacked\resources\app\vendor\git-bash\LICENSE.txt"
+$PackagedGitBash = "$ReleaseDir\win-unpacked\resources\app\vendor\git-bash\bin\bash.exe"
+$PackagedGit = "$ReleaseDir\win-unpacked\resources\app\vendor\git-bash\cmd\git.exe"
+$PackagedGitLicense = "$ReleaseDir\win-unpacked\resources\app\vendor\git-bash\LICENSE.txt"
 foreach ($RequiredPath in @($PackagedGitBash, $PackagedGit, $PackagedGitLicense)) {
     if (-not (Test-Path -LiteralPath $RequiredPath -PathType Leaf)) {
         throw "Packaged Git Bash verification failed: missing $RequiredPath"
@@ -590,7 +594,7 @@ if ($LASTEXITCODE -ne 0 -or $PackagedGitVersion -ne "git version 2.55.0.windows.
 Write-Host "Bundled Git Bash verified: $PackagedGitVersion" -ForegroundColor Green
 
 # Verify the clean-machine programming runtimes from the packaged tree itself.
-$PackagedToolchains = "$ElectronDir\release\win-unpacked\resources\app\vendor\toolchains"
+$PackagedToolchains = "$ReleaseDir\win-unpacked\resources\app\vendor\toolchains"
 $PackagedJava = "$PackagedToolchains\jdk\bin\java.exe"
 $PackagedJavac = "$PackagedToolchains\jdk\bin\javac.exe"
 $PackagedPython = "$PackagedToolchains\python\python.exe"

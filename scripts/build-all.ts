@@ -9,6 +9,7 @@ import { createReadStream } from 'fs';
 
 const root = resolve(import.meta.dir, '..');
 const dist = join(root, 'dist');
+const electronRelease = process.env.TOKENBIRD_RELEASE_DIR ? resolve(process.env.TOKENBIRD_RELEASE_DIR) : join(root, 'apps', 'electron', 'release');
 // Each invocation gets fresh headless output. Old staging files can be held open
 // by Windows antivirus or Explorer, so a new build must not depend on deleting them.
 const runId = `${Date.now()}-${process.pid}`;
@@ -61,7 +62,7 @@ function unavailableReason(target: Target): string | undefined {
 }
 
 function collectRelease(target: string): void {
-  const source = join(root, 'apps', 'electron', 'release');
+  const source = electronRelease;
   const destination = join(dist, target);
   mkdirSync(destination, { recursive: true });
   if (!existsSync(source)) throw new Error(`Electron release directory not found: ${source}`);
@@ -81,7 +82,7 @@ async function buildDesktop(target: 'win' | 'linux'): Promise<void> {
     }
     await run('bash', ['apps/electron/scripts/build-linux.sh', process.arch === 'arm64' ? 'arm64' : 'x64', ...(forceDownload ? ['--force-download'] : [])]);
   }
-  const unpackedResources = join(root, 'apps', 'electron', 'release', target === 'win' ? 'win-unpacked' : 'linux-unpacked', 'resources');
+  const unpackedResources = join(electronRelease, target === 'win' ? 'win-unpacked' : 'linux-unpacked', 'resources');
   for (const worker of ['messaging-whatsapp-worker', 'messaging-qqbot-worker']) {
     const workerPath = join(unpackedResources, worker, 'worker.cjs');
     if (!existsSync(workerPath)) throw new Error(`Packaged worker missing: ${workerPath}`);

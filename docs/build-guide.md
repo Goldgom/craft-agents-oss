@@ -90,6 +90,10 @@ cd apps/electron
 bun run dist:win
 ```
 
+旧测试版正在运行时，可设置 `TOKENBIRD_RELEASE_DIR` 为仓库内的独立绝对路径（例如
+`E:\Projects\TokenBird\apps\electron\release-26.10.20`），避免清理或结束旧目录中的测试程序。
+`build:all` 的 Windows 产物收集也使用此目录。
+
 Windows 单独打包可执行 `powershell -ExecutionPolicy Bypass -File apps/electron/scripts/build-win.ps1 -ForceDownload`
 强制重新下载。Linux/macOS 的对应脚本使用 `--force-download`。
 
