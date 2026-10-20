@@ -45,7 +45,8 @@ export PATH="$HOME/.bun/bin:$PATH"
 source_dir="$(wslpath -u "$1")"
 check_only="$2"
 force_download="$3"
-snapshot="$4"
+snapshot=""
+if [ "$#" -ge 4 ]; then snapshot="$4"; fi
 
 if [ ! -f "$source_dir/package.json" ] || [ ! -f "$source_dir/apps/electron/scripts/build-linux.sh" ]; then
   echo "WSL cannot access the repository at: $source_dir" >&2
@@ -153,7 +154,9 @@ if (snapshot) {
   if (archive.error) throw archive.error;
   if (archive.status !== 0) process.exit(archive.status ?? 1);
 }
-commandArgs.push(snapshot);
+// WSL rejects an explicitly empty trailing argument on some Windows hosts.
+// Omit it when no committed source archive is needed.
+if (snapshot) commandArgs.push(snapshot);
 let result: ReturnType<typeof spawnSync>;
 try {
   result = spawnSync('wsl.exe', commandArgs, {

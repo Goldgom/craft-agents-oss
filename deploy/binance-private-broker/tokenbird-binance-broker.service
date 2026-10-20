@@ -1,0 +1,30 @@
+[Unit]
+Description=TokenBird Binance read-only credential broker
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=all
+User=root
+WorkingDirectory=/home/goldgom/AIWorkSpace/tools/binance-cli-mcp
+Environment=TOKENBIRD_CONFIG_DIR=/root/.craft-agent
+Environment=TOKENBIRD_BROKER_WORKSPACE_ID=ws_e85b272c
+Environment=TOKENBIRD_BROKER_CREDENTIAL_NAME=binance-operations
+Environment=TOKENBIRD_BROKER_PYTHON=/home/goldgom/AIWorkSpace/.venv/bin/python
+Environment=TOKENBIRD_BROKER_SCRIPT=/home/goldgom/AIWorkSpace/tools/binance-cli-mcp/private_broker.py
+Environment=PATH=/home/goldgom/craft-server/vendor/bun:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/goldgom/craft-server/vendor/bun/bun run /home/goldgom/craft-server/deploy/binance-private-broker/launch.ts
+Restart=always
+RestartSec=5
+WatchdogSec=30
+WatchdogSignal=SIGKILL
+LimitCORE=0
+TimeoutStartSec=30
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
