@@ -1,6 +1,8 @@
 import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
+import { GlobalMemory } from './global-memory'
 import type { EventSink, RpcServer } from '@tokenbird/server-core/transport'
 import { createAgentError, parseError } from '@tokenbird/shared/agent'
+import { recoverableChat, CONTINUE_MESSAGE } from './recoverable-chat'
 import { TurnClientContexts, type TurnClientContext } from './turn-client-context'
 import { saveClientFiles } from './client-files'
 import { MessageBranchGate, editedBranchMessages, branchSeedMessages, copyBranchAttachmentFiles } from './message-branching'
@@ -7338,7 +7340,7 @@ export class SessionManager implements ISessionManager {
     // Get or create the agent (lazy loading). Its internal cold-session build at
     // ~L2956 now sees fresh tokens (or correctly-needs_auth failed sources, since
     // ensureFreshToken mirrors the disk write to source.config in-memory).
-    const agent = await this.getOrCreateAgent(managed)
+    let agent = await this.getOrCreateAgent(managed)
     sendSpan.mark('agent.ready')
 
     // Always set all sources for context (even if none are enabled), including built-ins
@@ -7401,6 +7403,8 @@ export class SessionManager implements ISessionManager {
       // rather than part of the user's message content. The original message is stored
       // in session JSONL (line ~3952); this only affects the SDK's in-process context.
       let effectiveMessage = message
+      try { effectiveMessage += new GlobalMemory().context(message) }
+      catch (error) { sessionLog.warn('Global memory retrieval failed:', error) }
       if (options?.superAgentContext && managed.executionPolicy) {
         // Persisted messages and user_message events contain only the upstream input.
         // Runtime state is transient model context, never a transcript bubble.
@@ -7435,7 +7439,23 @@ export class SessionManager implements ISessionManager {
 
       sendSpan.mark('chat.starting')
       effectiveMessage += this.turnClients.reminder(this.rpcServer, sessionId)
-      const chatIterator = agent.chat(effectiveMessage, modelInputAttachments.attachments)
+      const chatIterator = recoverableChat({
+        chat: continuing => agent.chat(
+          continuing ? `${CONTINUE_MESSAGE}\n\n<original_request>\n${effectiveMessage}\n</original_request>` : effectiveMessage,
+          continuing ? undefined : modelInputAttachments.attachments,
+        ),
+        isCurrent: () => this.sessions.get(sessionId) === managed
+          && managed.isProcessing && !managed.authRetryInProgress
+          && !managed.persistenceRetired && !managed.stopRequested
+          && managed.processingGeneration === myGeneration,
+        refresh: async () => {
+          agent = await this.getOrCreateAgent(managed)
+          if (this.pendingMcpReloadSessionIds.delete(sessionId)) {
+            await this.reloadSessionSources(managed, true)
+          }
+        },
+        onHandoffComplete: event => this.processEvent(managed, event),
+      })
       sessionLog.info('Got chat iterator, starting iteration...')
 
       for await (const event of chatIterator) {
@@ -9545,6 +9565,14 @@ export class SessionManager implements ISessionManager {
         // Persist compaction messages so they survive reload
         // Recovery notices are persisted above; other info stays transient.
         if (isCompactionComplete) {
+          // Snapshot before adding the new boundary; extraction never replays tools or chat.
+          if (managed.agent) {
+            try {
+              await new GlobalMemory().capture({ workspaceId, sessionId,
+                checkpoint: String(managed.messages.at(-1)?.id ?? infoTimestamp), messages: [...managed.messages] },
+              managed.agent.runMiniCompletion.bind(managed.agent))
+            } catch (error) { sessionLog.warn('Global memory capture failed:', error) }
+          }
           const compactionMessage: Message = {
             id: generateMessageId(),
             role: 'info',
@@ -9876,7 +9904,7 @@ export class SessionManager implements ISessionManager {
         // (WebUI, docker server) chain activations the same way the renderer used to.
         // The renderer still receives the event to render activation feedback, but no
         // longer fires its own auto_retry (see processor.ts).
-        sessionLog.info(`Source "${event.sourceSlug}" activated for session ${sessionId}, scheduling auto-retry`)
+        sessionLog.info(`Source "${event.sourceSlug}" activated for session ${sessionId}, continuing with updated tools`)
 
         this.sendEvent({
           type: 'source_activated',
@@ -9885,7 +9913,9 @@ export class SessionManager implements ISessionManager {
           originalMessage: event.originalMessage,
         }, workspaceId)
 
-        if (!managed) break
+        // Active sendMessage owns the handoff and resumes after the backend
+        // iterator closes. The timer remains only for legacy out-of-turn events.
+        if (!managed || managed.isProcessing) break
 
         const originalMessage = event.originalMessage ?? ''
         if (!originalMessage.trim()) {

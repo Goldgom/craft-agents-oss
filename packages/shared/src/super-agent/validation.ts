@@ -43,6 +43,7 @@ const ConfigSchema = z.object({
   workflow: z.object({ pattern: z.enum(['lightweight', 'development', 'research', 'deliverables', 'incident']),
     maxParallelTasks: z.number().int().min(1).max(30), independentReview: z.boolean() }).strict().optional(),
   continuousWork: z.boolean().default(true),
+  contextCompaction: z.object({ enabled: z.boolean(), tokenThreshold: z.number().int().min(8000).max(2_000_000), saveToMemory: z.boolean() }).strict().optional(),
   requirements: z.object({ programs: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$/)).max(32), browser: z.boolean() }).strict().optional(),
   execution: z.object({ connectionConcurrency: z.number().int().min(1).max(30), connectionCallsPerMinute: z.number().int().min(1).max(600),
     stallMinutes: z.number().int().min(1).max(1440), maxResumeAttempts: z.number().int().min(0).max(20) }).strict().optional(),

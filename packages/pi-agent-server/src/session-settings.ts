@@ -90,9 +90,7 @@ export function buildTokenBirdPiSettings(
   const reserveTokens = limit !== undefined && compaction?.contextWindow
     ? compaction.contextWindow - limit
     : undefined;
-  const keepRecentTokens = limit !== undefined
-    ? Math.min(20_000, Math.max(1_000, Math.floor(limit / 2)))
-    : undefined;
+  const keepRecentTokens = purpose === 'main' ? 512 : undefined;
 
   return {
     retry: {
@@ -106,9 +104,9 @@ export function buildTokenBirdPiSettings(
     // the intent is visible next to the retry policy.
     compaction: {
       enabled: true,
+      ...(keepRecentTokens !== undefined ? { keepRecentTokens } : {}),
       ...(reserveTokens !== undefined ? {
         reserveTokens,
-        keepRecentTokens,
       } : {}),
     },
   };

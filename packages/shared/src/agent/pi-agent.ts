@@ -40,7 +40,7 @@ import { getModelById } from '../config/models.ts';
 // BaseAgent provides common functionality
 import { BaseAgent } from './base-agent.ts';
 import { getGitBashPath, getLlmConnection, type Workspace } from '../config/storage.ts';
-import { getModelPromptSettings } from '../config/llm-connections.ts';
+import { getModelPromptSettings, getModelsForProviderType } from '../config/llm-connections.ts';
 
 // Event adapter
 import { PiEventAdapter } from './backend/pi/event-adapter.ts';
@@ -689,8 +689,10 @@ export class PiAgent extends BaseAgent {
       baseUrl: runtime.baseUrl,
       customEndpoint: runtime.customEndpoint,
       customModels: runtime.customModels,
+      compactionModels: this.getCompactionModels(),
       customHeaders: runtime.customHeaders,
       autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit,
+      compactionModel: this.config.modelPromptSettings?.compactionModel,
       // Branch params for Pi SDK session fork
       branchFromSdkSessionId: this.config.session?.branchFromSdkSessionId,
       branchFromSessionPath: this.config.session?.branchFromSessionPath,
@@ -2304,10 +2306,17 @@ export class PiAgent extends BaseAgent {
     });
   }
 
-  /**
-   * Ask subprocess to refresh runtime-affecting custom endpoint config in-place.
-   */
-  private async requestRuntimeConfigUpdate(update: BackendRuntimeUpdate & { autoCompactionTokenLimit?: number }): Promise<boolean> {
+  /** The displayed connection order defines the final compaction fallback. */
+  private getCompactionModels(): Array<{ id: string; name: string }> {
+    const connection = this.config.connectionSlug ? getLlmConnection(this.config.connectionSlug) : undefined;
+    if (!connection) return [];
+    const models = connection.models?.length ? connection.models
+      : getModelsForProviderType(connection.providerType, connection.piAuthProvider);
+    return models.map(model => typeof model === 'string' ? { id: model, name: model } : { id: model.id, name: model.name });
+  }
+
+  /** Ask subprocess to refresh runtime-affecting connection config in-place. */
+  private async requestRuntimeConfigUpdate(update: BackendRuntimeUpdate & { autoCompactionTokenLimit?: number; compactionModel?: string }): Promise<boolean> {
     if (!this.subprocess) return true;
 
     const id = `runtime-config-${++this.rpcIdCounter}`;
@@ -2340,8 +2349,10 @@ export class PiAgent extends BaseAgent {
         baseUrl: runtime.baseUrl,
         customEndpoint: runtime.customEndpoint,
         customModels: runtime.customModels,
+        compactionModels: this.getCompactionModels(),
         customHeaders: runtime.customHeaders,
         autoCompactionTokenLimit: update.autoCompactionTokenLimit,
+        compactionModel: update.compactionModel,
         browserToolOnly: hasSessionExecutionPolicy(this._sessionId),
         interactionOnly: ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(this._sessionId)?.role ?? ''),
         superAgentRole: getSessionExecutionPolicy(this._sessionId)?.role,
@@ -2670,6 +2681,7 @@ export class PiAgent extends BaseAgent {
       authType: this.config.authType,
       runtime: getBackendRuntime(this.config),
       autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit,
+      compactionModel: this.config.modelPromptSettings?.compactionModel,
     });
     this.debug(`Runtime config refreshed in subprocess: ${previousModel} → ${update.model}`);
     return updated;
@@ -2685,7 +2697,7 @@ export class PiAgent extends BaseAgent {
     // Forward to subprocess so it uses the new model on next turn
     if (this.subprocess) {
       this.debug(`Forwarding model change to subprocess: ${previousModel} → ${model}`);
-      this.send({ type: 'set_model', model, autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit });
+      this.send({ type: 'set_model', model, autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit, compactionModel: this.config.modelPromptSettings?.compactionModel });
     } else {
       this.debug(`Model updated but no subprocess to forward to: ${previousModel} → ${model}`);
     }

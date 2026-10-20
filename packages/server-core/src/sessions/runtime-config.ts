@@ -77,6 +77,8 @@ export function buildBackendRuntimeSignature(input: BackendRuntimeSignatureInput
         providerType: connection.providerType,
         authType: connection.authType,
         defaultModel: connection.defaultModel,
+        compactionModel: connection.compactionModel,
+        compactionModelList: connection.models?.map(model => typeof model === 'string' ? model : { id: model.id, name: model.name }),
         ...(isCompatProvider(connection.providerType)
           ? {
               baseUrl: connection.baseUrl,

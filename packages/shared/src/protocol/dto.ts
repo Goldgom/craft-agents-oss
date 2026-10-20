@@ -1011,6 +1011,8 @@ export interface UpdateInfo {
   downloadState: 'idle' | 'downloading' | 'ready' | 'installing' | 'error'
   downloadProgress: number
   error?: string
+  /** Manual download page when the release has no automatic update manifest. */
+  releaseUrl?: string
 }
 
 // ---------------------------------------------------------------------------

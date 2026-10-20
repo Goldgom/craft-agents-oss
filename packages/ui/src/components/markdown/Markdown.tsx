@@ -612,7 +612,7 @@ export function Markdown({
   )
 
   return (
-    <div className={cn('markdown-content', className)}>
+    <div className={cn('markdown-content min-w-0 [overflow-wrap:anywhere]', className)}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={[rehypeKatex, rehypeRaw]}

@@ -4,7 +4,7 @@ import { createAssistantMessageEventStream, type AssistantMessage, type Context 
 import { getModel } from '@earendil-works/pi-ai/compat';
 import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager,
   type ModelRuntime, type ExtensionAPI, type SessionBeforeCompactEvent } from '@earendil-works/pi-coding-agent';
-import { createCompactionPolicy, summaryTokenBudget } from './compaction-policy.ts';
+import { compactWithPolicy, createCompactionPolicy, summaryTokenBudget } from './compaction-policy.ts';
 
 const model = getModel('openai', 'gpt-4o');
 const context: Context = { systemPrompt: 'Summarize.', messages: [{ role: 'user', content: 'History', timestamp: 0 }] };
@@ -19,8 +19,8 @@ function streamOf(message: AssistantMessage) {
   stream.end(message);
   return stream;
 }
-async function setup(reason: SessionBeforeCompactEvent['reason'] = 'manual') {
-  const policy = createCompactionPolicy();
+async function setup(reason: SessionBeforeCompactEvent['reason'] = 'manual', config: Parameters<typeof createCompactionPolicy>[0] = {}) {
+  const policy = createCompactionPolicy(config);
   const handlers = new Map<string, (...args: any[]) => any>();
   await policy.extension({ on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler) } as unknown as ExtensionAPI);
   const signal = new AbortController().signal;
@@ -44,6 +44,33 @@ async function setup(reason: SessionBeforeCompactEvent['reason'] = 'manual') {
 }
 
 describe('summary-only compaction policy', () => {
+  it('archives before dropping file lists and adds the retrieval pointer independently of model output', async () => {
+    let archived: unknown;
+    const { policy, signal, event, originalBranch } = await setup('threshold', {
+      archive: async event => {
+        archived = [...event.preparation.fileOps.read];
+        return 'Session memory: C:/session/memory/compactions/archive.md';
+      },
+    });
+    expect(archived).toEqual(['src/file.ts']);
+    expect([...event.preparation.fileOps.read]).toEqual([]);
+    expect(JSON.stringify(event.branchEntries)).toBe(originalBranch);
+    const result = await (await policy.wrapStream((_model, context) => {
+      expect(context.systemPrompt).toContain('Omit unrelated/completed tasks');
+      return streamOf(response('Continue TB-123.'));
+    })(model, context, { signal })).result();
+    expect(result.content).toEqual([{ type: 'text', text: 'Continue TB-123.\n\nSession memory: C:/session/memory/compactions/archive.md' }]);
+  });
+
+  it('retains file metadata and never claims archival when memory is unavailable or disabled', async () => {
+    for (const archive of [undefined, async () => undefined, async () => { throw new Error('disk full'); }]) {
+      const { policy, signal, event } = await setup('overflow', { archive });
+      expect([...event.preparation.fileOps.read]).toEqual(['src/file.ts']);
+      const result = await (await policy.wrapStream(() => streamOf(response('Continue TB-123.')))(model, context, { signal })).result();
+      expect(result.content).toEqual([{ type: 'text', text: 'Continue TB-123.' }]);
+    }
+  });
+
   it('uses the policy through real SDK compact and keeps the entire original transcript', async () => {
     const policy = createCompactionPolicy();
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true, keepRecentTokens: 1_000 } });
@@ -71,7 +98,7 @@ describe('summary-only compaction policy', () => {
       return streamOf(response('Goal: continue the latest request. Constraint: keep original references. Next: inspect src/file.ts.'));
     });
     try {
-      const result = await session.compact('Preserve the pending task');
+      const result = await compactWithPolicy(session, '[super-agent-high-compression] Preserve the pending task');
       expect(calls).toHaveLength(1);
       expect(calls[0]!.context.systemPrompt).toContain('不要逐条累积旧摘要');
       expect(calls[0]!.options.apiKey).toBe('offline-test');
@@ -88,10 +115,28 @@ describe('summary-only compaction policy', () => {
     }
   });
 
-  it('subtracts the retained original text from the 10% target and bounds tiny/huge budgets', () => {
-    expect(summaryTokenBudget(100_000, 4_000)).toBe(5_744);
+  it('restores retention settings after a failed high-compression attempt and leaves ordinary compact unchanged', async () => {
+    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true, keepRecentTokens: 20000, reserveTokens: 12000 } });
+    const original = settingsManager.getCompactionSettings();
+    const session = { settingsManager, compact: async () => {
+      expect(settingsManager.getCompactionSettings().keepRecentTokens).toBe(512);
+      throw new Error('provider unavailable');
+    } };
+    await expect(compactWithPolicy(session, '[super-agent-high-compression]')).rejects.toThrow('provider unavailable');
+    expect(settingsManager.getCompactionSettings()).toEqual(original);
+    const ordinary = { settingsManager, compact: async () => {
+      expect(settingsManager.getCompactionSettings()).toEqual(original);
+      throw new Error('ordinary compact');
+    } };
+    await expect(compactWithPolicy(ordinary, 'Keep references')).rejects.toThrow('ordinary compact');
+    expect(settingsManager.getCompactionSettings()).toEqual(original);
+  });
+
+  it('targets 2% with a short checkpoint budget even for huge histories', () => {
+    expect(summaryTokenBudget(100_000, 512)).toBe(768);
+    expect(summaryTokenBudget(100_000, 4_000)).toBe(256);
     expect(summaryTokenBudget(10_000, 20_000)).toBe(256);
-    expect(summaryTokenBudget(1_000_000, 20_000)).toBe(12_000);
+    expect(summaryTokenBudget(1_000_000, 512)).toBe(768);
   });
 
   for (const reason of ['manual', 'threshold', 'overflow'] as const) {
@@ -137,11 +182,34 @@ describe('summary-only compaction policy', () => {
     expect(result.stopReason).toBe('stop');
   });
 
-  it('does not hide initial length/error responses or rewrite incomplete text', async () => {
-    for (const stop of ['length', 'error', 'aborted'] as const) {
+  it('retries initial truncation from the complete source and accounts for both calls', async () => {
+    const { policy, signal } = await setup();
+    const calls: Context[] = [];
+    const raw: StreamFn = (_model, ctx) => {
+      calls.push(ctx);
+      return streamOf(response(calls.length === 1 ? 'partial' : 'Complete checkpoint.', calls.length === 1 ? 'length' : 'stop'));
+    };
+    const result = await (await policy.wrapStream(raw)(model, context, { signal })).result();
+    expect(result.stopReason).toBe('stop');
+    expect(result.usage.totalTokens).toBe(60);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.messages).toEqual(context.messages);
+    expect(calls[1]!.systemPrompt).toContain('Start again from the full input');
+  });
+
+  it('bounds repeated truncation without accepting a partial checkpoint', async () => {
+    const { policy, signal } = await setup();
+    let calls = 0;
+    const raw: StreamFn = () => { calls++; return streamOf(response('partial', 'length')); };
+    await expect(async () => (await policy.wrapStream(raw)(model, context, {signal})).result()).toThrow('after 3');
+    expect(calls).toBe(3);
+  });
+
+  it('preserves provider errors for SDK retries and never retries an abort', async () => {
+    for (const stop of ['error', 'aborted'] as const) {
       const { policy, signal } = await setup();
       let calls = 0;
-      const raw: StreamFn = () => { calls++; return streamOf(response('partial '.repeat(500), stop)); };
+      const raw: StreamFn = () => { calls++; return streamOf(response('partial', stop)); };
       const result = await (await policy.wrapStream(raw)(model, context, { signal })).result();
       expect(result.stopReason).toBe(stop);
       expect(calls).toBe(1);

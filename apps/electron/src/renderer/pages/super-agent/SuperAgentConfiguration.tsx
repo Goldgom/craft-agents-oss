@@ -113,6 +113,15 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
         {section === 'environment' && <>
           <EnvironmentEditor environment={draft.environment} status={environmentStatus} onChange={environment => patch({ environment })} />
           <SuperAgentReadiness config={draft} onChange={requirements => patch({ requirements })} />
+          <FormSection title={text('autoCompaction')}>
+            <p className="text-xs leading-5 text-muted-foreground">{text('autoCompactionHint')}</p>
+            <div className="flex items-center justify-between gap-4"><label htmlFor="auto-context-compaction">{text('autoCompaction')}</label>
+              <Switch id="auto-context-compaction" checked={draft.contextCompaction?.enabled ?? true} onCheckedChange={enabled => patch({ contextCompaction: { tokenThreshold: 252000, saveToMemory: true, ...draft.contextCompaction, enabled } })} /></div>
+            <FormField label={text('compactionThreshold')}><Input type="number" min={8000} max={2000000} step={1000} disabled={draft.contextCompaction?.enabled === false}
+              value={draft.contextCompaction?.tokenThreshold ?? 252000} onChange={event => patch({ contextCompaction: { enabled: true, saveToMemory: true, ...draft.contextCompaction, tokenThreshold: Number(event.target.value) } })} /></FormField>
+            <div className="flex items-center justify-between gap-4"><label htmlFor="compact-to-memory">{text('compactionMemory')}</label>
+              <Switch id="compact-to-memory" checked={draft.contextCompaction?.saveToMemory ?? true} onCheckedChange={saveToMemory => patch({ contextCompaction: { enabled: true, tokenThreshold: 252000, ...draft.contextCompaction, saveToMemory } })} /></div>
+          </FormSection>
           <FormSection title={text('continuity')}><div className="grid gap-4 sm:grid-cols-2">
             {(['connectionConcurrency', 'connectionCallsPerMinute', 'stallMinutes', 'maxResumeAttempts'] as const).map(key => {
               const defaults = { connectionConcurrency: 4, connectionCallsPerMinute: 60, stallMinutes: 15, maxResumeAttempts: 3 }

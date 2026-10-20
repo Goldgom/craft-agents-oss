@@ -101,6 +101,8 @@ export interface SuperAgentConfig {
   idleInspectionMinutes: number
   /** Wake after idleInspectionMinutes of complete team inactivity. Defaults to true. */
   continuousWork?: boolean
+  /** Checked between node turns; omitted legacy settings enable the defaults. */
+  contextCompaction?: { enabled: boolean; tokenThreshold: number; saveToMemory: boolean }
   execution?: {
     connectionConcurrency: number
     connectionCallsPerMinute: number
@@ -171,6 +173,8 @@ export interface SuperAgentTask {
 
 export interface SuperAgentNodeRuntime {
   nodeId: string
+  /** Prevent repeated compaction of an unchanged provider usage snapshot, including after restart. */
+  lastAutoCompactUsage?: string
   /** Consecutive suppressed duplicate responses; rotate the model context after two. */
   repeatedResponses?: number
   sessionId?: string

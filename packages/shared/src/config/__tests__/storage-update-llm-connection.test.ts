@@ -78,6 +78,22 @@ function makeConnection(overrides: Record<string, unknown> = {}) {
   }
 }
 
+describe('updateLlmConnection – context compaction', () => {
+  it('persists selection and model thresholds, survives unrelated saves, and clears over JSON RPC', () => {
+    const modelSettings = { main: { autoCompactionTokenLimit: 80_000, lightweight: true } }
+    const { runUpdate, readConnection } = setup([makeConnection()])
+    expect(runUpdate('custom-compat', { compactionModel: ' luna-fast ', modelSettings })).toBe(true)
+    expect(readConnection('custom-compat').compactionModel).toBe('luna-fast')
+    expect(readConnection('custom-compat').modelSettings).toEqual(modelSettings)
+    expect(runUpdate('custom-compat', { name: 'Renamed' })).toBe(true)
+    expect(readConnection('custom-compat').compactionModel).toBe('luna-fast')
+    expect(readConnection('custom-compat').modelSettings).toEqual(modelSettings)
+    expect(runUpdate('custom-compat', { compactionModel: '' })).toBe(true)
+    expect(readConnection('custom-compat').compactionModel).toBeUndefined()
+    expect(readConnection('custom-compat').modelSettings).toEqual(modelSettings)
+  }, 30_000)
+})
+
 describe('updateLlmConnection – customEndpoint', () => {
   it('preserves customEndpoint when provided in updates', () => {
     const { runUpdate, readConnection } = setup([makeConnection()])

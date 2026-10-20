@@ -22,6 +22,7 @@ export function UpdatePrompt({ info, version, onInstall, onDismiss }: UpdateProm
   const { t } = useTranslation()
   const ready = info?.downloadState === 'ready'
   const downloading = info?.downloadState === 'downloading'
+  const releaseUrl = info?.releaseUrl
   useRegisterModal(Boolean(version), onDismiss)
 
   return (
@@ -30,7 +31,7 @@ export function UpdatePrompt({ info, version, onInstall, onDismiss }: UpdateProm
         <DialogHeader>
           <DialogTitle>{t('updatePrompt.title', { version })}</DialogTitle>
           <DialogDescription>
-            {ready ? t('toast.restartToApply') : t('updatePrompt.description')}
+            {releaseUrl ? t('updatePrompt.manualDownload') : ready ? t('toast.restartToApply') : t('updatePrompt.description')}
           </DialogDescription>
         </DialogHeader>
         {downloading && (
@@ -46,7 +47,11 @@ export function UpdatePrompt({ info, version, onInstall, onDismiss }: UpdateProm
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onDismiss}>{t('updatePrompt.later')}</Button>
-          <Button disabled={!ready} onClick={onInstall}>{t('updatePrompt.install')}</Button>
+          {releaseUrl ? (
+            <Button onClick={() => void window.electronAPI.openUrl(releaseUrl)}>{t('updatePrompt.download')}</Button>
+          ) : (
+            <Button disabled={!ready} onClick={onInstall}>{t('updatePrompt.install')}</Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

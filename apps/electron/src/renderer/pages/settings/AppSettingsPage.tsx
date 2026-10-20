@@ -573,6 +573,13 @@ export default function AppSettingsPage() {
                       </Button>
                     </SettingsRow>
                   )}
+                  {isElectron && updateChecker.updateAvailable && updateChecker.updateInfo?.releaseUrl && (
+                    <SettingsRow label={t('updatePrompt.title', { version: updateChecker.updateInfo.latestVersion })}>
+                      <Button size="sm" onClick={() => void window.electronAPI.openUrl(updateChecker.updateInfo!.releaseUrl!)}>
+                        {t('updatePrompt.download')}
+                      </Button>
+                    </SettingsRow>
+                  )}
                   {isElectron && updateChecker.isReadyToInstall && updateChecker.updateInfo?.latestVersion && (
                     <SettingsRow label={t("settings.about.updateReady")}>
                       <Button

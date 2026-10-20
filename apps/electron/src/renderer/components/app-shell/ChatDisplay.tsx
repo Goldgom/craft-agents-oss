@@ -75,6 +75,7 @@ import { navigate, routes } from "@/lib/navigate"
 import { CHAT_LAYOUT } from "@/config/layout"
 import { collectFileChangesFromActivities, getFirstFileChangeIdForActivity } from "@/lib/file-changes"
 import { resolveBranchNewPanelOption } from "./branching"
+import { scrollChatViewport } from "./chat-scroll"
 import { handleErrorMessageAction } from "./error-message-actions"
 import { isSessionTooSmallToCompact } from "./message-notice"
 import { useAtomValue } from 'jotai'
@@ -464,7 +465,7 @@ function ProcessingIndicator({ startTime, statusMessage, thinkingMessages }: Pro
             const stream = event.currentTarget
             followThinkingRef.current = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 24
           }}
-          className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs leading-relaxed select-text"
+          className="mt-2 min-w-0 max-h-64 overflow-y-auto overscroll-contain [overflow-wrap:anywhere] rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs leading-relaxed select-text"
         >
           {thinkingMessages.length > 0 ? thinkingMessages.map(message => (
             <p key={message.id} className="whitespace-pre-wrap break-words [&+p]:mt-2">
@@ -480,21 +481,21 @@ function ProcessingIndicator({ startTime, statusMessage, thinkingMessages }: Pro
 }
 
 /**
- * Scrolls to target element on mount, before browser paint.
+ * Scrolls the message viewport to the bottom on mount, before browser paint.
  * Uses useLayoutEffect to ensure scroll happens before content is visible.
  */
 function ScrollOnMount({
-  targetRef,
+  viewportRef,
   onScroll,
   skip = false
 }: {
-  targetRef: React.RefObject<HTMLDivElement | null>
+  viewportRef: React.RefObject<HTMLDivElement | null>
   onScroll?: () => void
   skip?: boolean
 }) {
   React.useLayoutEffect(() => {
     if (skip) return
-    targetRef.current?.scrollIntoView({ behavior: 'instant' })
+    scrollChatViewport(viewportRef.current)
     onScroll?.()
   }, [skip])
   return null
@@ -580,7 +581,6 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // Input is only disabled when explicitly disabled (e.g., agent needs activation)
   // User can type during streaming - submitting will stop the stream and send
   const isInputDisabled = disabled
-  const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const scrollViewportRef = React.useRef<HTMLDivElement>(null)
   const prevSessionIdRef = React.useRef<string | null>(null)
   // Reverse pagination: show last N turns initially, load more on scroll up
@@ -917,7 +917,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
         const buffer = 128
         const isVisible = rect.top >= buffer && rect.bottom <= window.innerHeight - buffer
         if (!isVisible) {
-          turnEl.scrollIntoView({ behavior: 'instant', block: 'center' })
+          scrollChatViewport(scrollViewportRef.current, { target: turnEl, behavior: 'instant', block: 'center' })
         }
       }
       shouldScrollToMatchRef.current = false
@@ -1302,7 +1302,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     const resizeObserver = new ResizeObserver(() => {
       // Unfocused panels: always scroll to bottom instantly (user isn't reading them)
       if (!isFocusedPanelRef.current) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' })
+        scrollChatViewport(viewport)
         return
       }
 
@@ -1314,7 +1314,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       debounceTimer = setTimeout(() => {
         // Skip smooth scroll if we just did an instant scroll (session switch/lazy load)
         if (Date.now() < skipSmoothScrollUntilRef.current) return
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+        scrollChatViewport(viewport, { behavior: 'smooth' })
       }, 200)
     })
 
@@ -1360,7 +1360,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     isStickToBottomRef.current = true
 
     requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({
+      scrollChatViewport(scrollViewportRef.current, {
         behavior: isFocusedPanelRef.current ? 'smooth' : 'instant',
       })
     })
@@ -1415,7 +1415,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     // Immediately scroll to bottom after sending - use requestAnimationFrame
     // to ensure the DOM has updated with the new message
     requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      scrollChatViewport(scrollViewportRef.current, { behavior: 'smooth' })
     })
   }
 
@@ -1561,7 +1561,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
       const turnContainer = turnRefs.current.get(turnKey)
       if (!turnContainer) return false
 
-      turnContainer.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      scrollChatViewport(scrollViewportRef.current, { target: turnContainer, behavior: 'smooth', block: 'center' })
       return true
     }
 
@@ -1714,7 +1714,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                   {/* Scroll to bottom before paint - fires via useLayoutEffect */}
                   {/* Skip when search is active on session switch - scroll to first match instead */}
                   <ScrollOnMount
-                    targetRef={messagesEndRef}
+                    viewportRef={scrollViewportRef}
                     skip={skipScrollToBottom}
                     onScroll={() => {
                       skipSmoothScrollUntilRef.current = Date.now() + 500
@@ -2085,8 +2085,6 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                     />
                   )
                 })()}
-                {/* Scroll Anchor: For auto-scroll to bottom */}
-                <div ref={messagesEndRef} />
               </div>
               </ScrollArea>
             </div>

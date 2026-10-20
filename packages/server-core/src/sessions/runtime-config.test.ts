@@ -45,6 +45,13 @@ const textAttachment: FileAttachment = {
 }
 
 describe('buildBackendRuntimeSignature', () => {
+  it('refreshes live sessions when the compaction model, display name or fallback order changes', () => {
+    expect(sig({ ...baseCompat, compactionModel: 'luna' })).not.toBe(sig(baseCompat))
+    const first = { ...baseCompat, models: ['main', 'luna', 'haiku'] }
+    expect(sig(first)).not.toBe(sig({ ...first, models: ['main', 'haiku', 'luna'] }))
+    const named = { ...baseCompat, models: [{ id: 'fast', name: 'Luna', contextWindow: 128_000 }] as LlmConnection['models'] }
+    expect(sig(named)).not.toBe(sig({ ...baseCompat, models: [{ id: 'fast', name: 'Haiku', contextWindow: 128_000 }] as LlmConnection['models'] }))
+  })
   it('changes when a custom endpoint model image override changes', () => {
     const enabled = sig(baseCompat)
     const disabled = sig({

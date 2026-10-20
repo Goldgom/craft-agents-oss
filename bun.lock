@@ -116,7 +116,7 @@
     },
     "apps/cli": {
       "name": "@tokenbird/cli",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "bin": {
         "tokenbird-cli": "src/index.ts",
       },
@@ -132,7 +132,7 @@
     },
     "apps/electron": {
       "name": "@tokenbird/electron",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
@@ -184,7 +184,7 @@
     },
     "apps/webui": {
       "name": "@tokenbird/webui",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@tokenbird/shared": "workspace:*",
         "@tokenbird/ui": "workspace:*",
@@ -199,7 +199,7 @@
     },
     "packages/cloud-server": {
       "name": "@tokenbird/cloud-server",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.8.2",
@@ -207,7 +207,7 @@
     },
     "packages/core": {
       "name": "@tokenbird/core",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "devDependencies": {
         "@types/uuid": "^11.0.0",
       },
@@ -218,7 +218,7 @@
     },
     "packages/messaging-gateway": {
       "name": "@tokenbird/messaging-gateway",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@larksuiteoapi/node-sdk": "^1.62.1",
         "@tokenbird/core": "workspace:*",
@@ -234,7 +234,7 @@
     },
     "packages/messaging-qqbot-worker": {
       "name": "@tokenbird/messaging-qqbot-worker",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@tencent-connect/qqbot-nodejs": "^1.0.4",
       },
@@ -245,7 +245,7 @@
     },
     "packages/messaging-whatsapp-worker": {
       "name": "@tokenbird/messaging-whatsapp-worker",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@whiskeysockets/baileys": "^6.7.0",
       },
@@ -256,7 +256,7 @@
     },
     "packages/pi-agent-server": {
       "name": "@tokenbird/pi-agent-server",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "bin": {
         "pi-agent-server": "./dist/index.js",
       },
@@ -275,7 +275,7 @@
     },
     "packages/server": {
       "name": "@tokenbird/server",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "bin": {
         "tokenbird-server": "src/index.ts",
       },
@@ -293,7 +293,7 @@
     },
     "packages/server-core": {
       "name": "@tokenbird/server-core",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@earendil-works/pi-ai": "0.85.1",
         "@tokenbird/core": "workspace:*",
@@ -312,7 +312,7 @@
     },
     "packages/session-mcp-server": {
       "name": "@tokenbird/session-mcp-server",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "bin": {
         "session-mcp-server": "./dist/index.js",
       },
@@ -328,7 +328,7 @@
     },
     "packages/session-tools-core": {
       "name": "@tokenbird/session-tools-core",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "beautiful-mermaid": "*",
         "gray-matter": "^4.0.3",
@@ -341,7 +341,7 @@
     },
     "packages/shared": {
       "name": "@tokenbird/shared",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@earendil-works/pi-agent-core": "0.85.1",
         "@earendil-works/pi-ai": "0.85.1",
@@ -374,7 +374,7 @@
     },
     "packages/ui": {
       "name": "@tokenbird/ui",
-      "version": "26.10.19",
+      "version": "26.10.20",
       "dependencies": {
         "@paper-design/shaders-react": "^0.0.69",
         "@tokenbird/core": "workspace:*",

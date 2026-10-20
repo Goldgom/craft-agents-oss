@@ -54,11 +54,13 @@ describe('createTokenBirdSettingsManager', () => {
 
   it('keeps auto-compaction enabled', () => {
     expect(createTokenBirdSettingsManager().getCompactionEnabled()).toBe(true);
+    expect(createTokenBirdSettingsManager().getCompactionSettings().keepRecentTokens).toBe(512);
+    expect(createTokenBirdSettingsManager('ephemeral').getCompactionSettings().keepRecentTokens).toBe(20_000);
   });
 
   it('converts a model token limit to the Pi SDK reserve threshold', () => {
     const settings = createTokenBirdSettingsManager('main', { tokenLimit: 80_000, contextWindow: 100_000 });
-    expect(settings.getCompactionSettings()).toEqual({ enabled: true, reserveTokens: 20_000, keepRecentTokens: 20_000 });
+    expect(settings.getCompactionSettings()).toEqual({ enabled: true, reserveTokens: 20_000, keepRecentTokens: 512 });
     expect(createTokenBirdSettingsManager('ephemeral', { tokenLimit: 80_000, contextWindow: 100_000 })
       .getCompactionReserveTokens()).toBe(16_384);
   });
@@ -66,7 +68,7 @@ describe('createTokenBirdSettingsManager', () => {
   it('uses the GPT default to start automatic compaction at 500k tokens', () => {
     const tokenLimit = getModelPromptSettings(undefined, 'gpt-6.1-sol')?.autoCompactionTokenLimit;
     const settings = createTokenBirdSettingsManager('main', { tokenLimit, contextWindow: 1_000_000 });
-    expect(settings.getCompactionSettings()).toEqual({ enabled: true, reserveTokens: 500_000, keepRecentTokens: 20_000 });
+    expect(settings.getCompactionSettings()).toEqual({ enabled: true, reserveTokens: 500_000, keepRecentTokens: 512 });
   });
 
   it('ignores a .pi/settings.json in the working directory', () => {

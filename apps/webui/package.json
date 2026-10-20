@@ -1,6 +1,6 @@
 {
   "name": "@tokenbird/webui",
-  "version": "26.10.19",
+  "version": "26.10.20",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",

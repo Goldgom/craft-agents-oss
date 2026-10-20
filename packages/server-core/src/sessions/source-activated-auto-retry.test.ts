@@ -128,6 +128,18 @@ describe('source_activated auto-retry', () => {
     expect(calls).toEqual(['list my repos\n\n[github activated]'])
   })
 
+  it('active chat owns recovery without scheduling a competing hidden resend', async () => {
+    const managed = buildSession('active-handoff')
+    managed.isProcessing = true
+    const calls = spyOnSendMessage(managed.id)
+    await fireSourceActivated(managed.id, 'binance-cli-mcp', 'inspect only')
+    expect(managed.autoRetryTimer).toBeUndefined()
+    expect(managed.autoRetryPending).toBeUndefined()
+    await new Promise(r => setTimeout(r, 150))
+    expect(calls).toEqual([])
+    expect(managed.isProcessing).toBe(true)
+  })
+
   it('chained activations — produces two retries with different suffixes', async () => {
     const sessionId = 'chained'
     buildSession(sessionId)

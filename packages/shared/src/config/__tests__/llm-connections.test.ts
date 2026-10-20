@@ -20,6 +20,17 @@ import {
 import { ANTHROPIC_MODELS, getModelDisplayName, getModelContextWindow, getModelShortName, isClaudeModel, normalizeDeprecatedModelId } from '../models'
 
 describe('resolveAutoCompactionTokenLimit', () => {
+  it('propagates the connection compaction model without changing prompt overrides or GPT thresholds', () => {
+    const modelSettings = { 'gpt-6-sol': { lightweight: true, autoCompactionTokenLimit: 320_000 } }
+    expect(getModelPromptSettings({ modelSettings, compactionModel: ' luna-fast ' }, 'gpt-6-sol'))
+      .toEqual({ lightweight: true, autoCompactionTokenLimit: 320_000, compactionModel: 'luna-fast' })
+    expect(getModelPromptSettings({ compactionModel: 'haiku' }, 'gpt-6-sol'))
+      .toEqual({ autoCompactionTokenLimit: 500_000, compactionModel: 'haiku' })
+    expect(getModelPromptSettings({ compactionModel: 'haiku' }, 'deepseek-chat'))
+      .toEqual({ compactionModel: 'haiku' })
+    expect(getModelPromptSettings({ compactionModel: ' ' }, 'deepseek-chat')).toBeUndefined()
+    expect(modelSettings['gpt-6-sol']).toEqual({ lightweight: true, autoCompactionTokenLimit: 320_000 })
+  })
   it('uses the saved token limit and keeps it inside the model window', () => {
     expect(resolveAutoCompactionTokenLimit({ autoCompactionTokenLimit: 80_000 }, 100_000)).toBe(80_000)
     expect(resolveAutoCompactionTokenLimit({ autoCompactionTokenLimit: 120_000 }, 100_000)).toBe(99_999)
