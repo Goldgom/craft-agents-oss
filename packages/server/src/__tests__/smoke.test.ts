@@ -180,7 +180,9 @@ describe('headless server smoke test', () => {
     server = await spawnTestServer()
     const ws = await connectWs(server.url, server.token, 'smoke-workspace')
     try {
-      expect((await invokeRpc(ws, RPC_CHANNELS.credentials.ACCESS)).state).toBe('required')
+      // Standalone servers approve verified connections within their workspace
+      // scope automatically, without a desktop confirmation dialog.
+      expect((await invokeRpc(ws, RPC_CHANNELS.credentials.ACCESS)).state).toBe('approved')
       await invokeRpc(ws, RPC_CHANNELS.credentials.REQUEST_ACCESS)
       expect((await invokeRpc(ws, RPC_CHANNELS.credentials.ACCESS)).state).toBe('approved')
       const id = { type: 'saved_credential', workspaceId: 'smoke-workspace', name: 'binance-operations' }

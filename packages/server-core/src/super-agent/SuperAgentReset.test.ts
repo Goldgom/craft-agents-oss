@@ -32,6 +32,69 @@ describe('Super Agent complete reset', () => {
     expect(() => validateSuperAgentCommand({ type: 'reset' })).toThrow()
     expect(() => validateSuperAgentCommand({ type: 'reset', confirmed: false })).toThrow()
     expect(validateSuperAgentCommand({ type: 'reset', confirmed: true })).toEqual({ type: 'reset', confirmed: true })
+    expect(validateSuperAgentCommand({ type: 'reset', confirmed: true, preserveConfig: true })).toEqual({ type: 'reset', confirmed: true, preserveConfig: true })
+    expect(() => validateSuperAgentCommand({ type: 'reset', confirmed: true, preserveConfig: 'yes' })).toThrow()
+  })
+
+  test('clears all team data while keeping exact settings and fresh usable node and script runtimes', async () => {
+    const f = await superAgentFixture()
+    const host = resetHost(f.host)
+    const config = { ...f.config, continuousWork: true,
+      environment: { ...f.config.environment, fullControl: true },
+      scripts: [{ id: 'registered', name: 'Keep registration', path: 'worker.js', args: ['--check'], timeoutSeconds: 60 }] }
+    await f.service.save('alpha', config)
+    const savedConfig = structuredClone((await f.service.get('alpha')).config)
+    await f.service.command('alpha', { type: 'board-upsert', item: { title: 'Old board', content: 'Old data' } })
+    await f.service.command('alpha', { type: 'memory-upsert', item: { title: 'Old memory', content: 'Old data', category: 'fact', tags: [], evidence: '' }, expectedRevision: 0 })
+    await writeFile(join(f.workingDirectory, 'report.md'), 'Keep project file')
+    await f.service.command('alpha', { type: 'archive-create', item: { title: 'Old archive', sourcePath: 'report.md', description: '', versionLabel: '', tags: [] } })
+    await f.service.command('alpha', { type: 'task', title: 'Old task', instructions: 'Old instructions' })
+    await until(() => f.service.get('alpha'), () => host.sends.length === 1)
+    const oldSession = host.sends[0]!.sessionId
+    host.sessions.set('retired', { ...host.sessions.get(oldSession)!, id: 'retired', isProcessing: false })
+    host.policies.set('retired', host.policies.get(oldSession)!)
+    host.sessions.set('ordinary', { id: 'ordinary', workspaceId: 'alpha', isProcessing: false })
+    const directory = join(f.root, 'alpha', 'super-agent')
+    await mkdir(join(directory, 'history'), { recursive: true })
+    await writeFile(join(directory, 'history', 'old.json'), 'Old history')
+    const oldRevision = (await f.service.get('alpha')).state.revision
+
+    const result = await f.service.command('alpha', { type: 'reset', confirmed: true, preserveConfig: true })
+    expect(result.config).toEqual(savedConfig)
+    expect(result.state.revision).toBeGreaterThan(oldRevision)
+    expect(result.state.nodes).toEqual(config.nodes.map(node => ({ nodeId: node.id, status: 'idle' })))
+    expect(result.state.scripts).toEqual([{ scriptId: 'registered', status: 'idle' }])
+    for (const key of ['tasks', 'messages', 'plans', 'board', 'memories', 'archives', 'artifacts', 'operations', 'permissionGrants'] as const) {
+      expect(result.state[key] ?? []).toEqual([])
+    }
+    expect(result.state.statistics).toBeUndefined()
+    expect(result.activity).toEqual([])
+    expect(result.permissionRequests).toEqual([])
+    expect(host.deleted.sort()).toEqual([oldSession, 'retired'].sort())
+    expect(host.sessions.has('ordinary')).toBe(true)
+    expect(host.fullControlChanges.some(change => change.workspaceId === 'alpha' && !change.enabled)).toBe(false)
+    expect(host.permissionGrantClears).toContain('alpha')
+    expect(await readFile(join(f.workingDirectory, 'report.md'), 'utf8')).toBe('Keep project file')
+    await expect(access(join(directory, 'history'))).rejects.toThrow()
+    await expect(access(join(directory, 'archive'))).rejects.toThrow()
+    for (const name of ['commit.json', 'state.json']) {
+      const document = JSON.parse(await readFile(join(directory, name), 'utf8'))
+      expect(document.config).toEqual(savedConfig)
+      expect(document.pendingTurns).toEqual([])
+      expect(document.failedTurns).toEqual([])
+      expect(JSON.stringify(document)).not.toContain('Old instructions')
+    }
+    for (const listener of host.listeners) listener({ workspaceId: 'alpha', sessionId: oldSession, reason: 'complete', finalText: 'Late old answer' })
+    await f.service.tick()
+    expect((await f.service.get('alpha')).state.messages).toEqual([])
+    const restarted = new SuperAgentService({ host, rootForWorkspace: id => join(f.root, id), autoTick: false })
+    try {
+      expect((await restarted.get('alpha')).config).toEqual(savedConfig)
+      await restarted.command('alpha', { type: 'task', title: 'New task', instructions: 'New work' })
+      const next = await until(() => restarted.get('alpha'), s => s.state.tasks[0]?.status === 'running' && host.sends.length === 2)
+      expect(next.state.tasks[0]!.sessionId).not.toBe(oldSession)
+      expect(next.state.tasks).toHaveLength(1)
+    } finally { await restarted.cleanup() }
   })
 
   test('stops active nodes and deletes current and retired content, while preserving other work', async () => {
@@ -160,5 +223,21 @@ describe('Super Agent complete reset', () => {
     expect((await fixture.service.get('alpha')).config).not.toBeNull()
     host.deleteSession = deleteSession
     expect((await fixture.service.command('alpha', { type: 'reset', confirmed: true })).config).toBeNull()
+  })
+
+  test('a failed data-only clear can be retried without changing saved settings', async () => {
+    const f = await superAgentFixture()
+    const host = resetHost(f.host)
+    await f.service.save('alpha', { ...f.config, continuousWork: true, environment: { ...f.config.environment, fullControl: true } })
+    const config = structuredClone((await f.service.get('alpha')).config)
+    await f.service.command('alpha', { type: 'chat', text: 'Old goal' })
+    await until(() => f.service.get('alpha'), () => host.sends.length === 1)
+    const deleteSession = host.deleteSession.bind(host)
+    host.deleteSession = async () => { throw new Error('Delete failed') }
+    await expect(f.service.command('alpha', { type: 'reset', confirmed: true, preserveConfig: true })).rejects.toThrow('Delete failed')
+    expect((await f.service.get('alpha')).config).toEqual(config)
+    host.deleteSession = deleteSession
+    expect((await f.service.command('alpha', { type: 'reset', confirmed: true, preserveConfig: true })).config).toEqual(config)
+    expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).config).toEqual(config)
   })
 })

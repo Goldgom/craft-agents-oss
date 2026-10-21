@@ -17,22 +17,20 @@ export const PRESET_RECIPES: Record<Exclude<SuperAgentPreset, 'custom'>, { workf
     { role: 'worker', profile: 'organizer', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
     { role: 'worker', profile: 'collaborationAssistant', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
   ] },
-  coding: { workflow: { pattern: 'development', maxParallelTasks: 3, independentReview: true }, continuousWork: true, idleInspectionMinutes: 10, nodes: [
+  coding: { workflow: { pattern: 'development', maxParallelTasks: 3, independentReview: false }, continuousWork: true, idleInspectionMinutes: 10, nodes: [
     { role: 'coordinator', profile: 'intentLead', model: 'standard', thinking: 'medium', rate: 8, rating: 3 },
     { role: 'orchestrator', profile: 'codeLead', model: 'standard', thinking: 'high', rate: 6, rating: 4 },
     { role: 'worker', profile: 'developer', model: 'standard', thinking: 'high', rate: 6, rating: 4 },
     { role: 'worker', profile: 'tester', model: 'standard', thinking: 'medium', rate: 6, rating: 4 },
-    { role: 'worker', profile: 'codeReviewer', model: 'deep', thinking: 'high', rate: 4, rating: 5 },
     computerUseNode,
     { role: 'worker', profile: 'codeAssistant', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
     { role: 'worker', profile: 'checkRunner', model: 'fast', thinking: 'max', rate: 6, rating: 2 },
   ] },
-  research: { workflow: { pattern: 'research', maxParallelTasks: 4, independentReview: true }, continuousWork: true, idleInspectionMinutes: 30, nodes: [
+  research: { workflow: { pattern: 'research', maxParallelTasks: 4, independentReview: false }, continuousWork: true, idleInspectionMinutes: 30, nodes: [
     { role: 'coordinator', profile: 'intentLead', model: 'standard', thinking: 'medium', rate: 8, rating: 3 },
     { role: 'orchestrator', profile: 'researchLead', model: 'deep', thinking: 'high', rate: 4, rating: 5 },
     { role: 'worker', profile: 'literature', model: 'standard', thinking: 'high', rate: 6, rating: 4 },
     { role: 'worker', profile: 'experiment', model: 'standard', thinking: 'high', rate: 6, rating: 4 },
-    { role: 'worker', profile: 'researchReviewer', model: 'deep', thinking: 'high', rate: 4, rating: 5 },
     computerUseNode,
     { role: 'worker', profile: 'organizer', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
     { role: 'worker', profile: 'collaborationAssistant', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
@@ -42,17 +40,15 @@ export const PRESET_RECIPES: Record<Exclude<SuperAgentPreset, 'custom'>, { workf
     { role: 'orchestrator', profile: 'workLead', model: 'standard', thinking: 'medium', rate: 8, rating: 4 },
     { role: 'worker', profile: 'analyst', model: 'standard', thinking: 'medium', rate: 8, rating: 4 },
     { role: 'worker', profile: 'producer', model: 'fast', thinking: 'medium', rate: 10, rating: 3 },
-    { role: 'worker', profile: 'workReviewer', model: 'standard', thinking: 'medium', rate: 6, rating: 4 },
     computerUseNode,
     { role: 'worker', profile: 'organizer', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
     { role: 'worker', profile: 'collaborationAssistant', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
   ] },
-  operations: { workflow: { pattern: 'incident', maxParallelTasks: 2, independentReview: true }, continuousWork: false, idleInspectionMinutes: 10, nodes: [
+  operations: { workflow: { pattern: 'incident', maxParallelTasks: 2, independentReview: false }, continuousWork: false, idleInspectionMinutes: 10, nodes: [
     { role: 'coordinator', profile: 'intentLead', model: 'standard', thinking: 'medium', rate: 8, rating: 3 },
     { role: 'orchestrator', profile: 'operationsLead', model: 'deep', thinking: 'high', rate: 6, rating: 5 },
     { role: 'worker', profile: 'diagnostician', model: 'standard', thinking: 'high', rate: 6, rating: 4 },
     { role: 'worker', profile: 'operator', model: 'standard', thinking: 'high', rate: 6, rating: 4 },
-    { role: 'worker', profile: 'operationsReviewer', model: 'deep', thinking: 'high', rate: 4, rating: 5 },
     computerUseNode,
     { role: 'worker', profile: 'organizer', model: 'fast', thinking: 'max', rate: 8, rating: 2 },
     { role: 'worker', profile: 'collaborationAssistant', model: 'fast', thinking: 'max', rate: 8, rating: 2 },

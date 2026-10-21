@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { FormField, textareaClass } from './SuperAgentForms'
 import { formatTimestamp, useSuperAgentText } from './super-agent-ui'
+import { superAgentPlanNeedsUserAction } from './super-agent-blockers'
 
 type PlanDraft = Extract<SuperAgentCommand, { type: 'plan-upsert' }>['item'] & { revision: number }
 const statuses = ['planned', 'active', 'blocked', 'completed', 'cancelled'] as const
@@ -30,7 +31,7 @@ export function SuperAgentPlans({ items, onCommand }: {
       <Button size="sm" variant="outline" disabled={pending} onClick={() => { setError(''); setEditing({ title: '', instructions: '', status: 'planned', priority: 3, note: '', revision: 0 }) }}><Plus className="size-3.5" />{text('addPlan')}</Button></div>
     {!items.length && <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border p-12 text-center"><ClipboardList className="size-8 text-muted-foreground/40" /><p className="text-sm text-muted-foreground">{text('noPlans')}</p></div>}
     {[...items].sort((a, b) => Number(['completed', 'cancelled'].includes(a.status)) - Number(['completed', 'cancelled'].includes(b.status)) || a.priority - b.priority || a.updatedAt - b.updatedAt).map(item => <article key={item.id} className="space-y-3 rounded-xl border border-border/70 p-5">
-      <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><h3 className="break-words text-sm font-semibold">{item.title}</h3><p className="mt-1 text-xs text-muted-foreground">{text(item.status)} · {text('priority')}: {item.priority}</p></div>
+      <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><h3 className="break-words text-sm font-semibold">{item.title}</h3><p className="mt-1 text-xs text-muted-foreground">{text(item.status === 'blocked' && !superAgentPlanNeedsUserAction(item) ? 'queueProcessing' : item.status)} · {text('priority')}: {item.priority}</p></div>
         <Button variant="ghost" size="icon" aria-label={text('edit')} disabled={pending} onClick={() => { setError(''); setEditing({ ...item }) }}><Pencil className="size-3.5" /></Button>
         <Button variant="ghost" size="icon" aria-label={text('delete')} disabled={pending} onClick={() => void run({ type: 'plan-delete', id: item.id, expectedRevision: item.revision })}><Trash2 className="size-3.5" /></Button></div>
       <p className="whitespace-pre-wrap break-words text-xs leading-5">{item.instructions}</p>

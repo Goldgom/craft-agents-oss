@@ -21,6 +21,7 @@ import { TokenBirdMcpClient, getProcessRssBytes, type McpClientConfig, type Pool
 import { mcpRuntimeLimiter, type McpRuntimeLease } from './runtime-limiter.ts';
 import { ApiSourcePoolClient } from './api-source-pool-client.ts';
 import { proxyToolName } from './proxy-tool-name.ts';
+import { normalizeMcpToolInputSchema } from './tool-schema.ts';
 import { sanitizeMcpConnectionError } from './connection-error.ts';
 import type { SdkMcpServerConfig } from '../agent/backend/types.ts';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -344,7 +345,17 @@ export class McpClientPool {
    */
   protected async registerClient(slug: string, client: PoolClient): Promise<void> {
     // listTools() triggers connect() internally for both TokenBirdMcpClient and ApiSourcePoolClient
-    const tools = await client.listTools();
+    const discoveredTools = await client.listTools();
+    const tools: Tool[] = [];
+    for (const tool of discoveredTools) {
+      try {
+        const { schema, repairs } = normalizeMcpToolInputSchema(tool.inputSchema);
+        tools.push({ ...tool, inputSchema: schema as Tool['inputSchema'] });
+        if (repairs.length > 0) this.debug(`Repaired MCP tool schema ${slug}/${tool.name}: ${repairs.join(', ')}`);
+      } catch (error) {
+        this.debug(`Skipped invalid MCP tool ${slug}/${tool.name}: ${error instanceof Error ? error.message : 'invalid input schema'}`);
+      }
+    }
     const connection = this.clientConnections.get(client);
     // Never publish an obsolete handshake, including to the workspace cache.
     if (connection && this.connections.get(slug) !== connection) return;

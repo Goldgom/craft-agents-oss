@@ -454,8 +454,8 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
         deps.platform.logger.info('Thumbnail generation failed (using fallback):', thumbError instanceof Error ? thumbError.message : thumbError)
       }
 
-      // 3. Convert Office files to markdown (for sending to Claude)
-      // This is required for Office files - Claude can't read raw Office binary
+      // 3. Try converting Office files to markdown for direct reading.
+      // Keep the original available by path when no converter supports it.
       let markdownPath: string | undefined
       if (attachment.type === 'office') {
         const mdFileName = `${id}_${safeName}.md`
@@ -475,11 +475,12 @@ export function registerFilesHandlers(server: RpcServer, deps: HandlerDeps): voi
           filesToCleanup.push(mdPath)
           deps.platform.logger.info(`Converted Office file to markdown: ${mdPath}`)
         } catch (convertError) {
-          // Conversion failed - throw so user knows the file can't be processed
-          // Claude can't read raw Office binary, so a failed conversion = unusable file
+          // Agents already receive storedPath in the prompt and can use tools
+          // to inspect formats that cannot be read directly (such as legacy .doc).
+          // A conversion failure must not discard the original or block sending.
           const errorMsg = convertError instanceof Error ? convertError.message : String(convertError)
-          deps.platform.logger.error('Office to markdown conversion failed:', errorMsg)
-          throw new Error(`Failed to convert "${attachment.name}" to readable format: ${errorMsg}`)
+          await unlink(mdPath).catch(() => {})
+          deps.platform.logger.warn(`Office conversion unavailable for "${attachment.name}"; using stored file path: ${storedPath}`, errorMsg)
         }
       }
 

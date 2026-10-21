@@ -279,11 +279,13 @@ function ModelPromptSettingsCard({
   enable1MContext,
   onChange,
   onCompactionLimitChange,
+  onCompactionModelChange,
 }: {
   connection: LlmConnectionWithStatus
   enable1MContext: boolean
   onChange: (model: string, key: 'lightweight' | 'mcpPromptEnhancement', value: boolean) => void
   onCompactionLimitChange: (model: string, value?: number) => Promise<boolean>
+  onCompactionModelChange: (value?: string) => Promise<void>
 }) {
   const { t } = useTranslation()
   const models = getModelOptionsForConnection(connection)
@@ -299,6 +301,18 @@ function ModelPromptSettingsCard({
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open/connection:rotate-90" />
         </summary>
         <div className="border-t border-border/50">
+          <SettingsMenuSelectRow
+            label={t('settings.ai.compactionModel')}
+            description={t('settings.ai.compactionModelDesc')}
+            value={connection.compactionModel || '__automatic_compaction__'}
+            onValueChange={value => { void onCompactionModelChange(value === '__automatic_compaction__' ? undefined : value) }}
+            options={[
+              { value: '__automatic_compaction__', label: t('settings.ai.compactionModelAuto') },
+              ...(connection.compactionModel && !models.some(model => model.value === connection.compactionModel)
+                ? [{ value: connection.compactionModel, label: connection.compactionModel }] : []),
+              ...models,
+            ]}
+          />
           {models.map((model, index) => {
             const settings = connection.modelSettings?.[model.value] ?? {}
             const contextWindow = !enable1MContext && resolveAgentRuntime(connection) === 'claude-code' && model.contextWindow === 1_000_000
@@ -1342,6 +1356,20 @@ export default function AiSettingsPage() {
     return false
   }, [refreshLlmConnections, t])
 
+  const handleCompactionModelChange = useCallback(async (connection: LlmConnectionWithStatus, value?: string) => {
+    try {
+      const latest = await window.electronAPI.getLlmConnection(connection.slug)
+      if (!latest) throw new Error('Connection no longer exists')
+      // Empty string survives JSON RPC and explicitly clears the saved choice.
+      const result = await window.electronAPI.saveLlmConnection({ ...latest, compactionModel: value ?? '' })
+      if (!result.success) throw new Error('Could not save compaction model')
+      await refreshLlmConnections()
+      toast.success(t('settings.promptOverview.saved'))
+    } catch {
+      toast.error(t('settings.ai.modelPromptSettingsUpdateFailed'))
+    }
+  }, [refreshLlmConnections, t])
+
   // Get the default connection for display
   const defaultConnection = useMemo(() => {
     return llmConnections.find(c => c.isDefault)
@@ -1655,6 +1683,7 @@ export default function AiSettingsPage() {
                   enable1MContext={enable1MContext}
                   onChange={(model, key, value) => handleModelPromptSettingChange(connection, model, key, value)}
                   onCompactionLimitChange={(model, value) => handleModelCompactionLimitChange(connection, model, value)}
+                  onCompactionModelChange={value => handleCompactionModelChange(connection, value)}
                 />
               ))}
 

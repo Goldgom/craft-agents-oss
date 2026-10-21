@@ -1,24 +1,46 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { loadSuperAgentDocument } from '@tokenbird/shared/super-agent'
+import { loadSuperAgentDocument, rebuildSuperAgentConfig } from '@tokenbird/shared/super-agent'
 import { SESSION_TOOL_REGISTRY, type SessionToolContext } from '@tokenbird/session-tools-core'
 import { filterSuperAgentTools } from '@tokenbird/shared/agent/core/browser-tool-policy'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
-async function configured() {
+async function configured(credentialAccess?: boolean) {
   const f = await superAgentFixture()
+  if (credentialAccess !== undefined) f.config.environment.credentialAccess = credentialAccess
   await f.service.save('alpha', f.config)
   const read = () => f.service.accessSettings('alpha', { action: 'get' }) as Promise<{ config: typeof f.config; revision: string; pending: boolean }>
   return { ...f, read }
 }
-async function interaction() {
-  const f = await configured()
+async function interaction(credentialAccess?: boolean) {
+  const f = await configured(credentialAccess)
   await f.service.command('alpha', { type: 'chat', text: 'Change my team settings' })
   const snapshot = await until(() => f.service.get('alpha'), s => s.state.nodes[0]?.status === 'working')
   return { ...f, sessionId: snapshot.state.nodes[0]!.sessionId! }
 }
 
 describe('AI Super Agent settings', () => {
+  for (const credentialAccess of [undefined, false, true]) {
+    for (const kind of ['chat', 'task'] as const) {
+      test(`${kind} reconciles legacy and explicit credential access ${credentialAccess}`, async () => {
+        const f = await configured(credentialAccess)
+        if (kind === 'chat') await f.service.command('alpha', { type: 'chat', text: 'Can you use saved accounts?' })
+        else await f.service.command('alpha', { type: 'task', nodeId: 'worker', title: 'List accounts', instructions: 'Check available accounts' })
+        await until(() => f.service.get('alpha'), () => f.host.sends.length === 1)
+        const sessionId = f.host.sends[0]!.sessionId
+        expect(f.host.policies.get(sessionId)?.credentialAccess).toBe(credentialAccess !== false)
+        expect(f.host.sends[0]!.context).toContain(`"credentialAccess":${credentialAccess !== false}`)
+      })
+    }
+  }
+
+  test('all node roles can discover the credential metadata tool', () => {
+    for (const role of ['worker', 'coordinator', 'orchestrator'] as const) {
+      const tools = filterSuperAgentTools([{ name: 'mcp__session__saved_credentials' }], role)
+      expect(tools.map(tool => tool.name)).toEqual(['mcp__session__saved_credentials'])
+    }
+  })
+
   test('persists user vault grants and passes them to worker sessions', async () => {
     const f = await configured();
     f.config.environment.credentialAccess = true;
@@ -32,7 +54,7 @@ describe('AI Super Agent settings', () => {
   });
 
   test('does not let a node grant itself credential vault access through settings', async () => {
-    const f = await interaction(); const before = await f.read();
+    const f = await interaction(false); const before = await f.read();
     await expect(f.service.accessSettings('alpha', { action: 'update', expectedRevision: before.revision,
       changes: { environment: { ...before.config.environment, credentialAccess: true } } }, f.sessionId)).rejects.toThrow('changed by the user');
     expect((await f.read()).config.environment.credentialAccess).not.toBe(true);
@@ -129,5 +151,88 @@ describe('AI Super Agent settings', () => {
     const ctx = { superAgentSettings: args => f.service.accessSettings('alpha', args) } as SessionToolContext
     expect((await tool.handler!(ctx, { action: 'get' })).isError).not.toBe(true)
     expect((await tool.handler!(ctx, { action: 'update', changes: { name: 'X' } })).isError).toBe(true)
+  })
+})
+
+describe('dynamic AI Super Agent settings', () => {
+  async function interaction() {
+    const f = await superAgentFixture()
+    const config = rebuildSuperAgentConfig(f.config)
+    await f.service.save('alpha', config)
+    await f.service.command('alpha', { type: 'chat', text: 'Change the model pool and concurrency settings' })
+    const snapshot = await until(() => f.service.get('alpha'), s => s.state.nodes.some(runtime => runtime.status === 'working'
+      && s.config?.nodes.find(node => node.id === runtime.nodeId)?.role === 'coordinator'
+      && f.host.sends.some(send => send.sessionId === runtime.sessionId)))
+    const sessionId = snapshot.state.nodes.find(runtime => runtime.status === 'working')!.sessionId!
+    const read = () => f.service.accessSettings('alpha', { action: 'get' }) as Promise<{ config: typeof config; revision: string; pending: boolean }>
+    return { ...f, sessionId, read }
+  }
+
+  test('chat edits dynamic models and limits through the registered tool and saves after delivery', async () => {
+    const f = await interaction()
+    const prompt = f.host.options.get(f.sessionId)!.agentSystemPrompt!
+    expect(prompt).toContain('直接使用 super_agent_settings')
+    const tool = SESSION_TOOL_REGISTRY.get('super_agent_settings')!
+    const ctx = { superAgentSettings: args => f.service.accessSettings('alpha', args, f.sessionId) } as SessionToolContext
+    expect((await tool.handler!(ctx, { action: 'get' })).isError).not.toBe(true)
+    const before = await f.read()
+    const modelPool = before.config.modelPool!.map(entry => ({ ...entry, capabilityNotes: 'User configured coding model', intelligenceScore: 85 }))
+    const result = await tool.handler!(ctx, { action: 'update', expectedRevision: before.revision,
+      changes: { modelPool, maxConcurrentSubagents: 3, reportCheckSeconds: 15 } })
+    expect(result.isError).not.toBe(true)
+    expect(result.content).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining('pending') })]))
+    expect((await f.read()).config).toEqual(before.config)
+    await expect(f.service.callNodeActionTool('alpha', f.sessionId, 'super_agent_intent', {
+      requestId: 'must-not-delegate', goal: 'Change settings', constraints: [], deliverables: [], acceptanceCriteria: [],
+    })).rejects.toThrow('pending')
+    await f.service.callNodeActionTool('alpha', f.sessionId, 'super_agent_deliver', { requestId: 'settings-pending', reply: '配置待本轮结束后保存。' })
+    f.host.complete(f.sessionId, '')
+    const after = await until(f.read, value => !value.pending && value.config.maxConcurrentSubagents === 3)
+    expect(after.config).toEqual({ ...before.config, modelPool, maxConcurrentSubagents: 3, reportCheckSeconds: 15 })
+    expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).config).toEqual(after.config)
+    expect((await f.service.get('alpha')).state.intents ?? []).toHaveLength(0)
+  })
+
+  test('rejects invalid and stale dynamic settings and vault access changes', async () => {
+    const f = await interaction(), before = await f.read()
+    for (const changes of [{ modelPool: [] }, { maxConcurrentSubagents: 0 }, { reportCheckSeconds: 0 },
+      { environment: { ...before.config.environment, credentialAccess: false } }]) {
+      await expect(f.service.accessSettings('alpha', { action: 'update', expectedRevision: before.revision, changes }, f.sessionId)).rejects.toThrow()
+    }
+    await expect(f.service.accessSettings('alpha', { action: 'update', expectedRevision: '0'.repeat(64), changes: { name: 'Stale' } }, f.sessionId)).rejects.toThrow('revision')
+    expect(await f.read()).toEqual(before)
+  })
+
+  test('interrupted dynamic interaction discards its staged update', async () => {
+    const f = await interaction(), before = await f.read()
+    await f.service.accessSettings('alpha', { action: 'update', expectedRevision: before.revision, changes: { name: 'Cancelled' } }, f.sessionId)
+    f.host.complete(f.sessionId, '', 'interrupted')
+    await until(f.read, value => !value.pending)
+    expect((await f.read()).config).toEqual(before.config)
+    expect((await f.service.get('alpha')).state.messages.some(message => message.body.includes('Settings update was not saved'))).toBe(true)
+  })
+
+  test('dynamic interaction cannot change settings during worker execution or grant workers settings access', async () => {
+    const f = await interaction(), before = await f.read()
+    await f.service.command('alpha', { type: 'task', title: 'Work', instructions: 'Execute', modelEntryId: before.config.modelPool![0]!.id, thinkingLevel: 'high' })
+    const running = await until(() => f.service.get('alpha'), value => value.state.tasks.some(task => task.status === 'running'
+      && f.host.sends.some(send => send.sessionId === task.sessionId)))
+    const worker = running.state.tasks.find(task => task.status === 'running')!.sessionId!
+    const current = await f.read()
+    await expect(f.service.accessSettings('alpha', { action: 'get' }, worker)).rejects.toThrow('interaction node')
+    await expect(f.service.accessSettings('alpha', { action: 'update', expectedRevision: current.revision,
+      changes: { name: 'Busy' } }, f.sessionId)).rejects.toThrow('Stop active')
+    expect(await f.read()).toEqual(current)
+  })
+
+  test('dynamic staged edits preserve newer UI changes', async () => {
+    const f = await interaction(), before = await f.read()
+    await f.service.accessSettings('alpha', { action: 'update', expectedRevision: before.revision, changes: { name: 'Stale draft' } }, f.sessionId)
+    await f.service.save('alpha', { ...before.config, maxConcurrentSubagents: 7 })
+    await f.service.callNodeActionTool('alpha', f.sessionId, 'super_agent_deliver', { requestId: 'pending', reply: 'Pending save' })
+    f.host.complete(f.sessionId, '')
+    await until(f.read, value => !value.pending)
+    expect((await f.read()).config).toEqual({ ...before.config, maxConcurrentSubagents: 7 })
+    expect((await f.service.get('alpha')).state.messages.some(message => message.body.includes('Settings update was not saved'))).toBe(true)
   })
 })

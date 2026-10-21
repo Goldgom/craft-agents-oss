@@ -1,3 +1,5 @@
+import { getSessionExecutionPolicy } from '@tokenbird/shared/agent/core/session-execution-policy'
+import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
 import { randomUUID } from 'node:crypto'
 import { RPC_CHANNELS } from '@tokenbird/shared/protocol'
 import { getWorkspaceByNameOrId } from '@tokenbird/shared/config'
@@ -82,6 +84,7 @@ export function registerOAuthHandlers(server: RpcServer, deps: HandlerDeps): voi
 
   // ── oauth:start ──────────────────────────────────────────────
   server.handle(RPC_CHANNELS.oauth.START, async (ctx, args: {
+    resourceScope?: 'super-agent'
     sourceSlug: string
     callbackPort?: number
     callbackUrl?: string
@@ -99,7 +102,9 @@ export function registerOAuthHandlers(server: RpcServer, deps: HandlerDeps): voi
       throw new Error(`Workspace not found: ${ctx.workspaceId}`)
     }
 
-    const source = loadSource(workspace.rootPath, sourceSlug)
+    const scopedSession = !!sessionId && deps.sessionManager.getSuperAgentSessionIds?.(ctx.workspaceId).includes(sessionId) && getSessionExecutionPolicy(sessionId)?.resourceScope === 'super-agent'
+    const resourceRoot = args.resourceScope === 'super-agent' || scopedSession ? superAgentResourceScope(workspace.rootPath).rootPath : workspace.rootPath
+    const source = loadSource(resourceRoot, sourceSlug)
     if (!source) {
       throw new Error(`Source not found: ${sourceSlug}`)
     }

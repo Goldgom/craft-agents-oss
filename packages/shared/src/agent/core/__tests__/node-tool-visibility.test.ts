@@ -19,6 +19,7 @@ test('registered schemas survive role filtering for intent handoff, orchestratio
   expect(legacy).toContain('mcp__session__super_agent_dispatch')
   expect(legacy).not.toContain('Read')
   for (const role of ['coordinator', 'orchestrator', 'worker'] as const) {
+    expect(names(role)).toContain('mcp__session__saved_credentials')
     expect(() => assertSuperAgentTools(filterSuperAgentTools(tools, role), role)).not.toThrow()
     expect(() => assertSuperAgentTools([{ name: 'mcp__session__send_agent_message' }], role)).toThrow('tools are unavailable')
   }

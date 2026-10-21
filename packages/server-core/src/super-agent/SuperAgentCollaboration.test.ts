@@ -20,8 +20,11 @@ describe('Super Agent collaboration and continuity', () => {
       expect(packet.environment.workerPermissions).toEqual({ readFiles: true, writeFiles: fullControl, runPrograms: fullControl, browser: true })
       expect(context.host.policies.get(context.host.sends[0]!.sessionId)).toMatchObject({ role: 'coordinator', fullControl: false, writeFiles: false, runPrograms: false })
       const prompt = context.host.options.get(context.host.sends[0]!.sessionId)!.agentSystemPrompt!
-      expect(prompt).toContain('不代表工作节点权限关闭')
+      expect(prompt).toContain('读写、运行和浏览器操作由工作节点承担')
       expect(prompt).toContain('不臆造权限阻碍')
+      expect(prompt).toContain('以完成用户实际目标为首要责任')
+      expect(prompt).toContain('用户授权的交易自动化')
+      expect(prompt).toContain('状态未知先查询对账再决定重试')
     })
   }
 

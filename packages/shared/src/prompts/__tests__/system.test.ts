@@ -49,8 +49,13 @@ describe('system prompt guidance', () => {
       expect(prompt).toContain('Describing a call, printing JSON, or saying you will act does not execute it')
       expect(prompt).toContain('Prefer app-managed tools')
       expect(prompt).toContain('inspect state before retrying to avoid duplicates')
-      expect(prompt).toContain('never loop on a permission denial')
+      expect(prompt).toContain("use the host's permission flow")
       expect(prompt).toContain('Verify the requested state or output before claiming completion')
+      expect(prompt).toContain("Own the user's goal through a verified result")
+      expect(prompt).toContain('Investment and Other Authorized Automation')
+      expect(prompt).toContain("execute the user's explicit instructions or standing strategy")
+      expect(prompt).toContain('Inspect uncertain order state before retrying')
+      expect(prompt).not.toContain('Always ask before deleting content')
     }
   })
 
@@ -185,7 +190,7 @@ describe('system prompt guidance', () => {
 
     expect(prompt).toContain('Only include fields accepted by the advertised tool schema.')
     expect(prompt).not.toContain('All MCP tools require two metadata fields')
-    expect(mini).toContain('Tool names and parameters vary by runtime')
+    expect(mini).toContain('Resolve tool names and parameters from the active runtime catalog')
     expect(mini).not.toContain('Use Read, Edit, Write tools')
   })
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { createDynamicConfig } from './super-agent-ui'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import { applyPreset, configError, createConfig, nodeModels, scriptAccessGranted, withExecuteMode, type SuperAgentText } from './super-agent-ui'
 import { SUPER_AGENT_PRESETS, PRESET_RECIPES, recommendedThinking } from './super-agent-presets'
@@ -24,6 +25,19 @@ const tokenNest: LlmConnectionWithStatus = {
 }
 
 describe('Super Agent model authorization and setup', () => {
+  it('creates two permanent nodes and a model catalog without worker personas or job presets', () => {
+    const draft = createDynamicConfig([tokenNest], text)
+    draft.environment.workingDirectory = process.cwd()
+    const config = validateSuperAgentConfig(draft)
+    expect(config.architecture).toBe('dynamic')
+    expect(config.nodes.map(node => node.role)).toEqual(['coordinator', 'orchestrator'])
+    expect(config.modelPool!.map(entry => entry.model).sort()).toEqual(['available-mini', 'available-model'])
+    expect(config.modelPool!.find(entry => entry.model === 'available-model')).toMatchObject({ name: 'available-model', model: 'available-model', intelligenceScore: 60, capabilities: [], skillSlugs: [], sourceSlugs: [] })
+    expect(config.modelPool![0]!.capabilityNotes).not.toBe('')
+    expect(config.modelPool![0]!.supportedThinkingLevels).toContain('xhigh')
+    expect(config.maxConcurrentSubagents).toBeGreaterThan(config.modelPool!.length)
+    expect(config.nodes.every(node => node.skillSlugs?.length === 0)).toBe(true)
+  })
   it('gives every preset one desktop specialist and preserves its identity and custom bindings', () => {
     const config = createConfig([tokenNest], text)
     const desktop = config.nodes.find(node => node.presetProfile === 'computerUse')!
@@ -75,6 +89,14 @@ describe('Super Agent model authorization and setup', () => {
       }
       expect(SUPER_AGENT_PRESETS).toHaveLength(5)
     } finally { rmSync(workspace, { recursive: true, force: true }) }
+  })
+
+  it('does not enable independent review or add dedicated reviewers through a preset', () => {
+    for (const preset of SUPER_AGENT_PRESETS) {
+      const config = applyPreset(createConfig([tokenNest], text), preset, tokenNest, text)
+      expect(config.workflow?.independentReview).not.toBe(true)
+      expect(config.nodes.some(node => /Reviewer$/.test(node.presetProfile ?? ''))).toBe(false)
+    }
   })
 
   it('preserves explicit default skill removals and custom additions across repeated preset application', () => {
@@ -184,7 +206,7 @@ describe('Super Agent model authorization and setup', () => {
       const result = applyPreset(config, preset, tokenNest, text)
       result.environment.workingDirectory = 'C:\\work'
       expect(() => validateSuperAgentConfig(result)).not.toThrow()
-      expect(result.nodes).toHaveLength(preset === 'daily' ? 6 : 8)
+      expect(result.nodes).toHaveLength(preset === 'daily' ? 6 : 7)
       expect(result.continuousWork).toBe(preset !== 'operations')
       expect(result.nodes.filter(node => node.role === 'orchestrator')).toHaveLength(1)
       expect(result.workflow).toEqual(PRESET_RECIPES[preset].workflow)
@@ -218,7 +240,7 @@ describe('Super Agent model authorization and setup', () => {
   it('uses standard and expert models by role, works without TokenNest, and falls back to a single model', () => {
     const provider = { ...tokenNest, oauthProvider: undefined, channelGroups: undefined, models: ['available-mini', 'gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-astra', 'gpt-6.1-sol'], defaultModel: 'gpt-6-astra' }
     const coding = applyPreset(createConfig([provider], text), 'coding', provider, text)
-    expect(coding.nodes.map(node => node.model)).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-luna'])
+    expect(coding.nodes.map(node => node.model)).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-luna'])
     for (const preset of SUPER_AGENT_PRESETS) {
       const result = applyPreset(createConfig([provider], text), preset, provider, text)
       const collaborators = result.nodes.slice(-2)

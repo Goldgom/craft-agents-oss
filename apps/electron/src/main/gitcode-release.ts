@@ -11,12 +11,16 @@ interface GitCodeAsset {
 interface GitCodeRelease {
   tag_name: string
   prerelease?: boolean
+  draft?: boolean
+  release_status?: string
   assets: GitCodeAsset[]
 }
 
 export interface GitCodeUpdateFeed {
   version: string
   feedUrl: string | null
+  available: boolean
+  releaseUrl: string
 }
 
 type ReleaseRequest = (url: string, init?: RequestInit) => Promise<Response>
@@ -32,27 +36,48 @@ export async function getGitCodeUpdateFeed(
     throw new Error(`Invalid GitCode repository: ${repository}`)
   }
 
-  const apiUrl = `https://api.gitcode.com/api/v5/repos/${parts.map(encodeURIComponent).join('/')}/releases/latest`
-  const response = await request(apiUrl, {
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(15000),
-  })
-  if (!response.ok) throw new Error(`GitCode release check failed (HTTP ${response.status})`)
+  if (!semver.valid(currentVersion)) {
+    throw new Error(`Invalid current version: ${currentVersion}`)
+  }
+  // GitCode's "latest" designation can be reassigned to an older release.
+  // Compare stable release tags, independently of publication order or assets.
+  const apiUrl = `https://api.gitcode.com/api/v5/repos/${parts.map(encodeURIComponent).join('/')}/releases`
+  let release: GitCodeRelease | undefined
+  let version = ''
+  const signal = AbortSignal.timeout(15000)
+  for (let page = 1; ; page++) {
+    const response = await request(`${apiUrl}?page=${page}&per_page=100`, {
+      headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+      signal,
+    })
+    if (!response.ok) throw new Error(`GitCode release check failed (HTTP ${response.status})`)
+    const releases: unknown = await response.json()
+    if (!Array.isArray(releases)) throw new Error('Invalid GitCode releases response')
+    for (const candidate of releases as GitCodeRelease[]) {
+      const candidateVersion = typeof candidate?.tag_name === 'string'
+        ? semver.valid(candidate.tag_name.replace(/^v/, '')) : null
+      if (!candidateVersion || semver.prerelease(candidateVersion) || candidate.prerelease
+        || candidate.draft || candidate.release_status === 'pre') continue
+      if (!release || semver.gt(candidateVersion, version)) {
+        release = candidate
+        version = candidateVersion
+      }
+    }
+    if (releases.length < 100) break
+    if (page >= 20) throw new Error('GitCode release list exceeds pagination limit')
+  }
+  if (!release) throw new Error('No stable GitCode release found')
 
-  const release = await response.json() as GitCodeRelease
-  const version = release.tag_name?.replace(/^v/, '')
-  if (!semver.valid(version) || !semver.valid(currentVersion)) {
-    throw new Error(`Invalid GitCode release version: ${release.tag_name}`)
-  }
-  if (release.prerelease || !semver.gt(version, currentVersion)) {
-    return { version, feedUrl: null }
-  }
+  const available = semver.gt(version, currentVersion)
+  const releaseUrl = `https://gitcode.com/${repository}/releases/tag/${encodeURIComponent(release.tag_name)}`
+  const result = { version, available, releaseUrl, feedUrl: null }
+  if (!available) return result
 
   const assets = Array.isArray(release.assets) ? release.assets : []
   const manifest = assets.find(asset => asset.name === 'latest.yml' && asset.type !== 'source')
   const installer = assets.find(asset => asset.name === 'TokenBird-x64.exe' && asset.type !== 'source')
   if (!manifest || !installer) {
-    throw new Error(`GitCode release ${release.tag_name} must contain latest.yml and TokenBird-x64.exe`)
+    return result
   }
 
   const expectedPrefix = `https://gitcode.com/${repository}/releases/download/${encodeURIComponent(release.tag_name)}/`
@@ -62,5 +87,5 @@ export async function getGitCodeUpdateFeed(
     }
   }
 
-  return { version, feedUrl: expectedPrefix }
+  return { ...result, feedUrl: expectedPrefix }
 }

@@ -66,3 +66,27 @@ test('expired approval denies further reads and writes', async () => {
     expect(f.changes).toEqual([])
   } finally { clock.mockRestore() }
 })
+
+test('automatic access rechecks connection and workspace scope before returning metadata', async () => {
+  for (const disconnect of [false, true]) {
+    const handlers = new Map<string, HandlerFn>()
+    const controller = new AbortController()
+    let sourceWorkspaceId = 'source-a'
+    const host: RemoteCredentialHost = {
+      accessPolicy: 'authenticated-connection',
+      scope: workspaceId => ({ workspaceId, sourceWorkspaceId, sourceScopeUnavailable: false, includesGlobal: true, includesLlm: true }),
+      status: async () => ({ state: 'empty', protection: 'none', backend: null, canList: true, canApply: true, canMigrate: false, legacyBackupAvailable: false, requiresSeparateHeadlessConfig: false }),
+      listMetadata: async () => {
+        if (disconnect) controller.abort()
+        else sourceWorkspaceId = 'changed-source'
+        return [{ id: { type: 'saved_credential', workspaceId: 'a', name: 'old-scope' }, hasValue: true, presentFields: ['value'] }]
+      },
+      apply: async () => ({ upsertedCount: 0, deletedCount: 0 }),
+      approve: async () => { throw new Error('Automatic access should not request approval') },
+    }
+    registerCredentialHandlers({ handle: (channel: string, handler: HandlerFn) => handlers.set(channel, handler) } as unknown as RpcServer, { remoteCredentialHost: host } as HandlerDeps)
+    const result = await handlers.get(RPC_CHANNELS.credentials.LIST)!({ clientId: 'client', workspaceId: 'a', webContentsId: null, authenticatedBy: 'bearer', signal: controller.signal })
+    expect(result.code).toBe('SCOPE_NOT_ALLOWED')
+    expect(result.value).toBeUndefined()
+  }
+})

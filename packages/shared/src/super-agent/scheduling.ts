@@ -15,6 +15,9 @@ export function superAgentTaskBlocker(state: SuperAgentState, task: SuperAgentTa
     if (dependency.status === 'failed') return { code: 'dependencyFailed', detail: dependency.title, permanent: false }
     const ready = task.reviewOf === id ? dependency.status === 'completed' && (!dependency.actionReceipt || dependency.actionReceipt.status === 'applied') : superAgentDependencySatisfied(dependency)
     if (!ready) return { code: 'dependencyWaiting', detail: dependency.title, permanent: false }
+    if (state.operations?.some(operation => operation.taskId === id && ['prepared', 'running', 'unknown'].includes(operation.status))) {
+      return { code: 'dependencyWaiting', detail: `${dependency.title}: operation outcome is unsettled`, permanent: false }
+    }
   }
   const plan = state.plans.find(plan => plan.id === task.planId)
   if (plan?.status === 'blocked' || plan?.status === 'cancelled') return { code: 'planBlocked', detail: plan.note || plan.title, permanent: plan.status === 'cancelled' }

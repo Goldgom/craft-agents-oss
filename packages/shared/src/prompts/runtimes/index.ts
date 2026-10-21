@@ -14,7 +14,7 @@ export function getAgentRuntimePrompt(runtime: AgentRuntimeProtocol): string {
     case 'claude-code': return CLAUDE_CODE_RUNTIME_PROMPT;
     case 'codex': return CODEX_RUNTIME_PROMPT;
     case 'pi': return PI_RUNTIME_PROMPT;
-    default: return 'Use the tools and capabilities supplied by the active agent plugin. Request host authorization before executing native tools, follow the returned arguments, and respect denied operations. Do not assume Pi, Claude Code, or Codex-specific commands are available.';
+    default: return 'Use the tools and capabilities supplied by the active agent plugin. Request host authorization before executing native tools, follow the returned arguments, and respect denied operations. Resolve supported commands from the active plugin catalog.';
   }
 }
 

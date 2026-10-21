@@ -101,6 +101,7 @@ credentials.enc
 /artifacts/
 /.tmp/
 /apps/electron/.tmp/
+/apps/electron/.tmp-*/
 
 # Cloud build runtime cache and local deployment credentials/state
 /.bun-cache/

@@ -8,3 +8,5 @@ export * from './library'
 export { superAgentScriptOperation, superAgentNodePermissions, SuperAgentPermissionGrantSchema, superAgentPermissionEnvironmentKey, matchesSuperAgentPermissionGrant, canShareSuperAgentPermission } from './permissions'
 export { validateSuperAgentConfig, validateSuperAgentCommand, emptySuperAgentState } from './validation'
 export { planSuperAgentHistoryCleanup, protectedHistorySessionIds, historySessionEligible } from './history'
+
+export * from './dynamic'

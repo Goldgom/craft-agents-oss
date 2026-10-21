@@ -301,6 +301,6 @@ test('an independent verifier cannot accept an artifact changed after its input 
   const changed = await f.service.get('alpha')
   expect(changed.state.artifacts![0]!.sha256).not.toBe(oldHash)
   const refused = await finishNode(f, 'orchestrator', actions({ acceptances: [{ taskId: 'job', evidenceTaskId: 'review', status: 'accepted', note: 'Old verification' }] }))
-  expect(refused.state.tasks.find(task => task.id === 'job')!.acceptance).toBeUndefined()
+  expect(refused.state.tasks.find(task => task.id === 'job')!.acceptance?.status).toBe('stale')
   expect(refused.state.messages.some(message => message.body.includes('Evidence does not verify the current artifact'))).toBe(true)
 })

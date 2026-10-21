@@ -7,6 +7,23 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const FIXTURE = (name: string) => join(HERE, 'fixtures', name)
 
 describe('validateStdioMcpConnection', () => {
+  it('accepts repairable arrays but reports the path of an invalid schema', async () => {
+    const validate = (actions: Record<string, unknown>) => validateStdioMcpConnection({
+      command: 'node',
+      args: [FIXTURE('mcp-server-good.mjs')],
+      env: { MCP_TEST_INPUT_SCHEMA: JSON.stringify({ type: 'object', properties: { actions } }) },
+      timeout: 8000,
+    });
+    const repaired = await validate({ type: 'array' });
+    expect(repaired.success).toBe(true);
+    expect(repaired.tools).toEqual(['echo']);
+    const invalid = await validate({ type: 'array', items: null });
+    expect(invalid.success).toBe(false);
+    expect(invalid.errorType).toBe('invalid-schema');
+    expect(invalid.error).toContain('echo');
+    expect(invalid.error).toContain('inputSchema.properties.actions.items');
+  }, 20000);
+
   it(
     'returns success and tool list for a spec-compliant stdio server',
     async () => {

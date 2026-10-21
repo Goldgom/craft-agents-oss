@@ -1,5 +1,6 @@
 export * from './browser'
 export * from './scheduling'
 export * from './blockers'
+export * from './dynamic'
 export { loadSuperAgentDocument, saveSuperAgentDocument, clearSuperAgentHistory } from './storage'
 export type { SuperAgentDocument, SuperAgentPendingTurn } from './storage'

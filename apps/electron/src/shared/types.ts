@@ -484,7 +484,7 @@ export interface ElectronAPI {
   /** Switch the frontend service while retaining running local agents: 'local', 'none', or a remote profile id. */
   switchServer(target: string): Promise<{ success: boolean }>
   /** Alias for switchServer — used by the startup server picker page. */
-  selectStartupServer(target: string): Promise<{ success: boolean }>
+  selectStartupServer(target: string): Promise<{ success: boolean; needsCredentialRepair?: boolean }>
   /** Persisted startup server location preference ('local' | 'none' | profileId). */
   getStartupLocation(): Promise<string>
   setStartupLocation(value: string): Promise<{ success: boolean }>
@@ -659,7 +659,7 @@ export interface ElectronAPI {
   getMcpTools(workspaceId: string, sourceSlug: string, forceRefresh?: boolean): Promise<McpToolsResult>
 
   // OAuth (server-owned credentials, client-orchestrated flow)
-  performOAuth(args: { sourceSlug: string; sessionId?: string; authRequestId?: string }): Promise<{ success: boolean; error?: string; email?: string }>
+  performOAuth(args: { resourceScope?: 'super-agent'; sourceSlug: string; sessionId?: string; authRequestId?: string }): Promise<{ success: boolean; error?: string; email?: string }>
   oauthRevoke(sourceSlug: string): Promise<{ success: boolean }>
 
   // Session content search (full-text search via ripgrep)

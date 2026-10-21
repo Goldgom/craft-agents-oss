@@ -88,9 +88,9 @@ describe('Pi subprocess tool shape contract', () => {
 });
 
 describe('Pi SDK 0.70.0 CreateAgentSessionOptions contract', () => {
-  it('the interaction node exposes communication without execution or source tools', () => {
-    const tools = [{ name: 'read' }, { name: 'mcp__session__browser_tool' }, { name: 'mcp__assigned__query' }, { name: 'mcp__session__send_agent_message' }];
-    expect(filterInteractionTools(tools, true).map(tool => tool.name)).toEqual(['mcp__session__send_agent_message']);
+  it('the interaction node exposes communication and credential discovery without execution or source tools', () => {
+    const tools = [{ name: 'read' }, { name: 'mcp__session__browser_tool' }, { name: 'mcp__assigned__query' }, { name: 'mcp__session__send_agent_message' }, { name: 'mcp__session__saved_credentials' }];
+    expect(filterInteractionTools(tools, true).map(tool => tool.name)).toEqual(['mcp__session__send_agent_message', 'mcp__session__saved_credentials']);
     expect(filterInteractionTools(tools)).toEqual(tools);
   });
   it('Super Agent web access keeps browser_tool and coding tools while hiding native fetch and search', () => {

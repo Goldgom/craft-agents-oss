@@ -6,6 +6,8 @@ import type { RequestContext, RpcServer } from '../../transport'
 import type { HandlerDeps } from '../handler-deps'
 
 export interface RemoteCredentialHost {
+  /** Standalone servers can use their verified connection authentication directly. */
+  accessPolicy?: 'host-approval' | 'authenticated-connection'
   scope(workspaceId: string): NativeCredentialScope | null
   status(): Promise<NativeCredentialVaultStatus>
   listMetadata(): Promise<NativeCredentialMetadata[]>
@@ -19,7 +21,7 @@ const inScope = (id: NativeCredentialChange['id'], scope: NativeCredentialScope)
   ? !!scope.sourceWorkspaceId && id.workspaceId === scope.sourceWorkspaceId
   : !id.workspaceId || id.workspaceId === scope.workspaceId
 
-/** Network callers require a scoped, expiring grant from the host's access policy. */
+/** The host selects connection authentication or an explicit scoped, expiring grant. */
 export function registerCredentialHandlers(server: RpcServer, deps: HandlerDeps): void {
   const grants = new Map<string, { expiresAt: number; scope: string }>()
   const pending = new Set<string>()
@@ -32,19 +34,23 @@ export function registerCredentialHandlers(server: RpcServer, deps: HandlerDeps)
   }
   const key = (ctx: RequestContext) => JSON.stringify([ctx.clientId, ctx.workspaceId])
   const approved = (ctx: RequestContext, scope: NativeCredentialScope) => {
+    if (host?.accessPolicy === 'authenticated-connection') {
+      return !ctx.signal?.aborted && (ctx.authenticatedBy === 'bearer' || ctx.authenticatedBy === 'cookie')
+    }
     const grant = grants.get(key(ctx))
     return !!grant && grant.expiresAt > Date.now() && grant.scope === JSON.stringify(scope)
   }
   const access = (ctx: RequestContext) => {
     const scope = resolve(ctx)
     return { state: approved(ctx, scope) ? 'approved' : pending.has(key(ctx)) ? 'pending' : 'required',
-      ...(approved(ctx, scope) ? { expiresAt: grants.get(key(ctx))!.expiresAt } : {}) }
+      ...(approved(ctx, scope) && host?.accessPolicy !== 'authenticated-connection' ? { expiresAt: grants.get(key(ctx))!.expiresAt } : {}) }
   }
   server.handle(RPC_CHANNELS.credentials.ACCESS, ctx => {
     try { return access(ctx) } catch { return { state: 'unavailable' } }
   })
   server.handle(RPC_CHANNELS.credentials.REQUEST_ACCESS, ctx => {
     const scope = resolve(ctx)
+    if (host!.accessPolicy === 'authenticated-connection') return access(ctx)
     for (const [id, grant] of grants) if (grant.expiresAt <= Date.now()) grants.delete(id)
     if (approved(ctx, scope) || pending.has(key(ctx))) return access(ctx)
     if (pending.size >= 8 || grants.size >= 256) throw new CredentialVaultError('VAULT_LOCKED')
@@ -67,7 +73,10 @@ export function registerCredentialHandlers(server: RpcServer, deps: HandlerDeps)
         const scope = resolve(ctx)
         if (!approved(ctx, scope)) throw new CredentialVaultError('SCOPE_NOT_ALLOWED')
         const value = await operation(scope, args)
-        if (channel !== RPC_CHANNELS.credentials.APPLY && !approved(ctx, resolve(ctx))) throw new CredentialVaultError('SCOPE_NOT_ALLOWED')
+        if (channel !== RPC_CHANNELS.credentials.APPLY) {
+          const currentScope = resolve(ctx)
+          if (JSON.stringify(currentScope) !== JSON.stringify(scope) || !approved(ctx, currentScope)) throw new CredentialVaultError('SCOPE_NOT_ALLOWED')
+        }
         return { ok: true, value }
       } catch (error) {
         const safe = error instanceof CredentialVaultError ? error : new CredentialVaultError('VAULT_READ_FAILED')

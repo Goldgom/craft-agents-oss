@@ -42,7 +42,9 @@ export function markArtifactStale(document: SuperAgentDocument, artifactId: stri
   }
   for (const task of document.state.tasks) {
     if (!affected.has(task.id)) continue
-    if (task.acceptance) task.acceptance = { ...task.acceptance, status: 'stale', note: `Artifact ${artifactId} changed; verify the current version before accepting again.` }
+    task.acceptance = { evidenceTaskId: task.id, reviewedBy: 'system',
+      reviewedAt: document.state.artifacts?.find(artifact => artifact.id === artifactId)?.updatedAt ?? 0,
+      ...task.acceptance, status: 'stale', note: `Artifact ${artifactId} changed; verify the current version before accepting again.` }
     const plan = document.state.plans.find(plan => plan.id === task.planId)
     if (plan?.status === 'completed') { plan.status = 'active'; plan.revision++; plan.note = `Artifact ${artifactId} changed; prior completion needs verification.` }
     const goal = document.state.intents?.find(goal => goal.id === task.goalId)

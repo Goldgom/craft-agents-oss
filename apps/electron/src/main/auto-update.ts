@@ -212,8 +212,9 @@ autoUpdater.on('update-available', (info) => {
     ...updateInfo,
     available: true,
     latestVersion: info.version,
-    downloadState: 'downloading',
+    downloadState: autoUpdater.autoDownload ? 'downloading' : 'idle',
     downloadProgress: 0,
+    error: undefined,
   }
   broadcastUpdateInfo()
 })
@@ -226,6 +227,8 @@ autoUpdater.on('update-not-available', (info) => {
     available: false,
     latestVersion: info.version,
     downloadState: 'idle',
+    downloadProgress: 0,
+    error: undefined,
   }
   broadcastUpdateInfo()
 })
@@ -368,15 +371,17 @@ async function performUpdateCheck(options: CheckOptions): Promise<UpdateInfo> {
       if (!release.feedUrl) {
         updateInfo = {
           ...updateInfo,
-          available: false,
+          available: release.available,
           latestVersion: release.version,
           downloadState: 'idle',
           downloadProgress: 0,
           error: undefined,
+          releaseUrl: release.available ? release.releaseUrl : undefined,
         }
         broadcastUpdateInfo()
         return getUpdateInfo()
       }
+      updateInfo = { ...updateInfo, releaseUrl: undefined, error: undefined }
       autoUpdater.setFeedURL({ provider: 'generic', url: release.feedUrl })
       mainLog.info(`[auto-update] GitCode release feed: ${release.feedUrl}`)
     }
@@ -496,7 +501,7 @@ export async function installUpdate(): Promise<void> {
  * Result of update check on launch
  */
 export interface UpdateOnLaunchResult {
-  action: 'none' | 'skipped' | 'ready' | 'downloading'
+  action: 'none' | 'skipped' | 'ready' | 'downloading' | 'available'
   reason?: string
   version?: string | null
 }
@@ -528,5 +533,5 @@ export async function checkForUpdatesOnLaunch(): Promise<UpdateOnLaunchResult> {
   }
 
   // Download in progress — will notify when ready via update-downloaded event
-  return { action: 'downloading', version: info.latestVersion }
+  return { action: info.downloadState === 'downloading' ? 'downloading' : 'available', version: info.latestVersion }
 }

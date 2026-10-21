@@ -39,11 +39,10 @@ function fixture() {
   return { root, file, backend, manager, host, ctx, handlers, invoke, authorize, notifyStoredCredentialChanges };
 }
 
-test('headless RPC supports encrypted create, metadata list, update, and delete with scoped grants', async () => {
+test('authenticated headless connections use the vault immediately with workspace isolation', async () => {
   const f = fixture();
-  expect(await f.invoke(RPC_CHANNELS.credentials.ACCESS)).toEqual({ state: 'required' });
-  expect((await f.invoke(RPC_CHANNELS.credentials.LIST)).ok).toBe(false);
-  await f.authorize();
+  expect(await f.invoke(RPC_CHANNELS.credentials.ACCESS)).toEqual({ state: 'approved' });
+  expect((await f.invoke(RPC_CHANNELS.credentials.LIST)).ok).toBe(true);
   const id = { type: 'saved_credential' as const, workspaceId: 'ws-a', name: 'binance-operations' };
   const secret = 'dummy-binance-secret';
   const create = await f.invoke(RPC_CHANNELS.credentials.APPLY, { changes: [{ op: 'upsert', id, credential: { value: secret, credentialKind: 'api-key' } }] });
@@ -59,7 +58,7 @@ test('headless RPC supports encrypted create, metadata list, update, and delete 
   expect((await reloaded.get(id))?.value).toBe(secret);
   expect((await f.invoke(RPC_CHANNELS.credentials.APPLY, { changes: [{ op: 'upsert', id, credential: { value: 'updated-secret' } }] })).ok).toBe(true);
   expect((await f.manager.get(id))?.credentialKind).toBe('api-key');
-  expect((await f.handlers.get(RPC_CHANNELS.credentials.LIST)!({ ...f.ctx, clientId: 'other' })).ok).toBe(false);
+  expect((await f.handlers.get(RPC_CHANNELS.credentials.LIST)!({ ...f.ctx, clientId: 'other', authenticatedBy: null })).ok).toBe(false);
   expect((await f.invoke(RPC_CHANNELS.credentials.APPLY, { changes: [{ op: 'delete', id: { ...id, workspaceId: 'ws-b' } }] })).code).toBe('SCOPE_NOT_ALLOWED');
   expect(await f.invoke(RPC_CHANNELS.credentials.APPLY, { changes: [{ op: 'delete', id }] })).toMatchObject({ ok: true });
   expect((await f.invoke(RPC_CHANNELS.credentials.LIST)).value.entries).toEqual([]);
@@ -78,6 +77,36 @@ test('headless approval requires server-verified authentication, and unusable va
   const id = { type: 'saved_credential', workspaceId: 'ws-a', name: 'key' };
   expect((await f.invoke(RPC_CHANNELS.credentials.APPLY, { changes: [{ op: 'upsert', id, credential: { value: 'dummy' } }] })).ok).toBe(false);
   expect(readFileSync(f.file, 'utf8')).toBe('corrupt-vault-preserve-this');
+});
+
+test('default vault access survives reconnects and time without admitting unverified or closed connections', async () => {
+  const f = fixture();
+  const invoke = (ctx: any, channel: string, ...args: unknown[]) => f.handlers.get(channel)!(ctx, ...args);
+  for (const authenticatedBy of ['bearer', 'cookie']) {
+    const reconnected = { ...f.ctx, clientId: 'reconnected-' + authenticatedBy, authenticatedBy };
+    expect(await invoke(reconnected, RPC_CHANNELS.credentials.ACCESS)).toEqual({ state: 'approved' });
+    expect(await invoke(reconnected, RPC_CHANNELS.credentials.REQUEST_ACCESS)).toEqual({ state: 'approved' });
+    expect((await invoke(reconnected, RPC_CHANNELS.credentials.LIST)).ok).toBe(true);
+  }
+  const clock = spyOn(Date, 'now').mockReturnValue(Date.now() + 11 * 60_000);
+  try {
+    expect(await f.invoke(RPC_CHANNELS.credentials.ACCESS)).toEqual({ state: 'approved' });
+    expect((await f.invoke(RPC_CHANNELS.credentials.LIST)).ok).toBe(true);
+  } finally { clock.mockRestore(); }
+  const cancelled = new AbortController(); cancelled.abort();
+  for (const ctx of [
+    { ...f.ctx, authenticatedBy: undefined },
+    { ...f.ctx, authenticatedBy: null },
+    { ...f.ctx, workspaceId: 'missing' },
+    { ...f.ctx, signal: cancelled.signal },
+  ]) {
+    expect((await invoke(ctx, RPC_CHANNELS.credentials.ACCESS)).state).not.toBe('approved');
+    for (const channel of [RPC_CHANNELS.credentials.STATUS, RPC_CHANNELS.credentials.LIST]) {
+      expect((await invoke(ctx, channel)).ok).toBe(false);
+    }
+    expect((await invoke(ctx, RPC_CHANNELS.credentials.APPLY, { changes: [{ op: 'upsert', id: { type: 'saved_credential', workspaceId: 'ws-a', name: 'blocked' }, credential: { value: 'dummy-secret' } }] })).ok).toBe(false);
+  }
+  expect(await f.manager.get({ type: 'saved_credential', workspaceId: 'ws-a', name: 'blocked' })).toBeNull();
 });
 
 test('standalone session requests secure input, saves on the host and resumes without returning a secret', async () => {

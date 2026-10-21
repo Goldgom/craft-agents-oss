@@ -33,17 +33,43 @@ beforeEach(() => {
 
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
+describe('rebuilt Super Agent role boundaries', () => {
+  test('interaction can read work and reports, but cannot read files, board, credentials or internal tasks', () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', resourceScope: 'super-agent', role: 'coordinator', fullControl: true, credentialAccess: true });
+    for (const name of ['super_agent_work_list', 'super_agent_reports', 'super_agent_intent', 'super_agent_deliver', 'super_agent_settings']) {
+      expect(checkSessionExecutionPolicy(sessionId, `mcp__session__${name}`, {}).allowed).toBe(true);
+    }
+    for (const name of ['collaboration_board', 'super_agent_task', 'super_agent_library', 'super_agent_dispatch', 'super_agent_report', 'saved_credentials', 'send_agent_message']) {
+      expect(checkSessionExecutionPolicy(sessionId, `mcp__session__${name}`, { action: 'get' }).allowed).toBe(false);
+    }
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(root, 'allowed.txt') }).allowed).toBe(false);
+    expect(checkSessionCredentialAccess(sessionId, { action: 'list' }).allowed).toBe(false);
+  });
+
+  test('background can read project files while retaining path and write boundaries', () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', role: 'orchestrator', fullControl: true });
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(root, 'allowed.txt') }).allowed).toBe(true);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(outside, 'secret.txt') }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Write', { file_path: join(root, 'allowed.txt'), content: 'changed' }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Bash', { command: 'echo forbidden' }).allowed).toBe(false);
+  });
+});
+
 describe('explicit credential vault access', () => {
-  test('requires an explicit worker grant in either full control mode, including the host callback', async () => {
+  test('permits account metadata for granted roles while keeping credential use worker-only', async () => {
     for (const fullControl of [false, true]) {
       for (const role of ['worker', 'coordinator', 'orchestrator'] as const) {
         for (const credentialAccess of [undefined, false, true]) {
           setSessionExecutionPolicy(sessionId, { ...policy, role, fullControl, credentialAccess, actionGates: true });
-          const allowed = role === 'worker' && credentialAccess === true;
+          const allowed = credentialAccess === true;
           for (const toolName of ['saved_credentials', 'mcp__session__saved_credentials']) {
             expect(checkSessionExecutionPolicy(sessionId, toolName, { action: 'list' }).allowed).toBe(allowed);
           }
           expect(checkSessionCredentialAccess(sessionId, { action: 'list' }).allowed).toBe(allowed);
+          if (role !== 'worker') for (const action of ['request', 'fill', 'run']) {
+            expect(checkSessionCredentialAccess(sessionId, { action }).allowed).toBe(false);
+            expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__saved_credentials', { action }).allowed).toBe(false);
+          }
           if (allowed) {
             const result = await runPreToolUseChecksWithPermissions({ toolName: 'mcp__session__saved_credentials', input: { action: 'list' }, sessionId,
               permissionMode: 'allow-all', workspaceRootPath: root, workspaceId: 'workspace', workingDirectory: root,

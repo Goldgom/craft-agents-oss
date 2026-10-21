@@ -167,18 +167,15 @@ describe('separated Super Agent architecture', () => {
     await started(f, 'verifier')
   })
 
-  it('requires evidence acceptance before closing a modern plan', async () => {
+  it('closes a plan from successful self-checked tasks without mandatory acceptance', async () => {
     const f = await team()
     await plan(f, { plans: [{ id: 'goal', title: 'Goal', instructions: 'Deliver artifact', status: 'planned', priority: 1, note: '', expectedRevision: 0 }], tasks: [task('artifact', 'worker', { planId: 'goal' })] })
     await finish(f, 'worker', 'Artifact and self-check evidence.')
     f.advance(2_000); await f.service.tick()
     const s = await f.service.get('alpha'), item = s.state.plans.find(plan => plan.id === 'goal')!
-    const denied = await finish(f, 'orchestrator', block({ plans: [{ ...item, revision: undefined, updatedBy: undefined, updatedAt: undefined, status: 'completed', expectedRevision: item.revision }] }))
-    expect(denied.state.plans.find(plan => plan.id === 'goal')!.status).toBe('active')
-    f.advance(2_000)
-    await f.service.command('alpha', { type: 'message', fromNodeId: 'main', toNodeId: 'orchestrator', body: 'Review the evidence.' })
-    const accepted = await finish(f, 'orchestrator', block({ acceptances: [{ taskId: 'artifact', evidenceTaskId: 'artifact', status: 'accepted', note: 'Self-check evidence meets low-risk acceptance.' }], plans: [{ id: 'goal', title: item.title, instructions: item.instructions, status: 'completed', priority: item.priority, note: 'Accepted evidence.', expectedRevision: item.revision }] }))
-    expect(accepted.state.plans.find(plan => plan.id === 'goal')!.status).toBe('completed')
+    const completed = await finish(f, 'orchestrator', block({ plans: [{ ...item, revision: undefined, updatedBy: undefined, updatedAt: undefined, status: 'completed', expectedRevision: item.revision }] }))
+    expect(completed.state.plans.find(plan => plan.id === 'goal')!.status).toBe('completed')
+    expect(completed.state.tasks[0]!.acceptance).toBeUndefined()
   })
 
   it('upgrades idle persisted teams without replacing nodes, sessions or source bindings', async () => {

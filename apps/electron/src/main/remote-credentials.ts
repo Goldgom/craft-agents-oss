@@ -27,7 +27,14 @@ export interface RemoteCredentialMigrationResult {
   migratedWorkspaceCount: number
 }
 
-const resolutionError = () => new Error('The saved remote credential is unavailable. Open Remote Servers settings to repair this connection.')
+export class RemoteCredentialUnavailableError extends Error {
+  readonly code = 'REMOTE_CREDENTIAL_UNAVAILABLE'
+  constructor() {
+    super('The saved remote credential is unavailable. Repair the saved connection before connecting.')
+    this.name = 'RemoteCredentialUnavailableError'
+  }
+}
+const resolutionError = () => new RemoteCredentialUnavailableError()
 const publicationError = () => new Error('Remote credential migration or save could not finish. Existing connection snapshots are preserved; retry from Remote Servers settings.')
 const profileHasReferences = (profile: RemoteServerProfile) => !!(profile.tokenRef || profile.sftp?.passwordRef || profile.sftp?.passphraseRef)
 const profileHasPlaintext = (profile: RemoteServerProfile) => !!(profile.token || profile.sftp?.password || profile.sftp?.passphrase)

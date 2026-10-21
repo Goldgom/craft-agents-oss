@@ -17,7 +17,10 @@
 import http from 'node:http';
 import { restrictedResources } from './restricted-resources.ts';
 import { contextImagesExtension } from './context-images.ts';
-import { createCompactionPolicy } from './compaction-policy.ts';
+import { compactWithPolicy, createCompactionPolicy } from './compaction-policy.ts';
+import { compactionModelCandidates } from './compaction-models.ts';
+import { archiveCompactionHistory } from './compaction-memory.ts';
+import { loadStoredConfig } from '../../shared/src/config/storage.ts';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -148,6 +151,8 @@ interface InitMessage {
   customHeaders?: Record<string, string>;
   piAuth?: { provider: string; credential: PiCredential };
   autoCompactionTokenLimit?: number;
+  compactionModel?: string;
+  compactionModels?: Array<{ id: string; name: string }>;
   /** Windows: globally configured Git Bash path (config.json gitBashPath) for the built-in bash tool */
   gitBashPath?: string;
 }
@@ -163,6 +168,8 @@ interface RuntimeConfigUpdateMessage {
   customModels?: Array<string | { id: string; contextWindow?: number; supportsImages?: boolean }>;
   customHeaders?: Record<string, string>;
   autoCompactionTokenLimit?: number;
+  compactionModel?: string;
+  compactionModels?: Array<{ id: string; name: string }>;
   browserToolOnly?: boolean;
   interactionOnly?: boolean;
   superAgentRole?: SuperAgentToolRole;
@@ -180,7 +187,7 @@ type InboundMessage =
   | { type: 'llm_query'; id: string; request: LLMQueryRequest }
   | { type: 'cancel_ephemeral_query'; id: string }
   | { type: 'ensure_session_ready'; id: string }
-  | { type: 'set_model'; model: string; autoCompactionTokenLimit?: number }
+  | { type: 'set_model'; model: string; autoCompactionTokenLimit?: number; compactionModel?: string }
   | { type: 'set_thinking_level'; level: string }
   | { type: 'compact'; id: string; customInstructions?: string }
   | { type: 'set_auto_compaction'; id: string; enabled: boolean }
@@ -805,7 +812,26 @@ async function ensureSession(): Promise<AgentSession> {
     tokenLimit: initConfig.autoCompactionTokenLimit,
     contextWindow: sessionOptions.model?.contextWindow,
   });
-  const compactionPolicy = createCompactionPolicy();
+  const compactionPolicy = createCompactionPolicy({
+    archive: event => {
+      const mode = process.env.TOKENBIRD_MEMORY_MODE ?? loadStoredConfig()?.memoryMode ?? 'tokenbird';
+      return mode === 'tokenbird' && initConfig?.sessionPath && !initConfig.browserToolOnly && toolAllowlist.includes('read')
+        ? archiveCompactionHistory(initConfig.sessionPath, event) : Promise.resolve(undefined);
+    },
+    getModels: current => {
+      const listed = initConfig?.compactionModels?.length ? initConfig.compactionModels : initConfig?.customModels;
+      const available = listed?.length
+        ? listed.map(entry => {
+            const resolved = resolvePiModel(modelRegistry, typeof entry === 'string' ? entry : entry.id,
+              initConfig?.piAuth?.provider, shouldPreferCustomEndpoint());
+            return resolved && resolved.provider === current.provider
+              ? { ...resolved, name: typeof entry !== 'string' && 'name' in entry ? entry.name : resolved.name } : undefined;
+          }).filter((entry): entry is NonNullable<typeof entry> => !!entry)
+        : modelRegistry.getAll().filter(entry => entry.provider === current.provider);
+      return compactionModelCandidates(available.length ? available : [current], initConfig?.compactionModel);
+    },
+    onModel: model => setInterceptorApiHints(model),
+  });
   const extensionFactories = [contextImagesExtension({
     tokenLimit: initConfig.autoCompactionTokenLimit,
     reserveTokens: sessionOptions.settingsManager.getCompactionSettings().reserveTokens,
@@ -1710,7 +1736,7 @@ async function handleCompact(msg: Extract<InboundMessage, { type: 'compact' }>):
     // before starting a manual one. waitForCompaction has its own timeout
     // fallback so we don't deadlock on a stuck subprocess.
     await waitForCompaction(session);
-    const result = await session.compact(msg.customInstructions);
+    const result = await compactWithPolicy(session, msg.customInstructions);
     send({
       type: 'compact_result',
       id: msg.id,
@@ -1779,6 +1805,8 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       customModels: msg.customModels,
       customHeaders: normalizeCustomHeaderValues(msg.customHeaders),
       autoCompactionTokenLimit: msg.autoCompactionTokenLimit,
+      compactionModel: msg.compactionModel,
+      compactionModels: msg.compactionModels,
       browserToolOnly: msg.browserToolOnly ?? initConfig.browserToolOnly,
       interactionOnly: msg.interactionOnly ?? initConfig.interactionOnly,
       superAgentRole: msg.superAgentRole ?? initConfig.superAgentRole,
@@ -1861,6 +1889,7 @@ async function handleSetModel(msg: Extract<InboundMessage, { type: 'set_model' }
       }
       initConfig.model = msg.model;
       initConfig.autoCompactionTokenLimit = msg.autoCompactionTokenLimit;
+      initConfig.compactionModel = msg.compactionModel;
     }
     debugLog(`[set_model] Model changed to: ${msg.model} (resolved: ${piModel.provider}/${piModel.id})`);
   } catch (error) {

@@ -24,6 +24,7 @@ export function classifyActionGate(toolName: string, input: Record<string, unkno
     if (/send|post|publish|comment|email|announce/.test(tool)) return 'external-communication';
     return 'unknown';
   }
+  if (tool === 'super_agent_manage_resources') return 'state-change';
   if (SUPER_AGENT_ACTION_TOOLS.some(def => def.name === tool)) return;
   const name = tool.replace(/_/g, '');
   if (name === 'savedcredentials' && input.action === 'list') return;

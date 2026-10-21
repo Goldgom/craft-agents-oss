@@ -124,6 +124,8 @@ export interface ModelPromptSettings {
   mcpPromptEnhancement?: boolean;
   /** Context tokens used before automatic compaction starts. GPT defaults to 500k; others use the runtime default. */
   autoCompactionTokenLimit?: number;
+  /** Resolved connection-level model used for context checkpoints. */
+  compactionModel?: string;
 }
 
 export const GPT_DEFAULT_AUTO_COMPACTION_TOKEN_LIMIT = 500_000;
@@ -147,11 +149,13 @@ export function resolveAutoCompactionTokenLimit(
 
 /** Resolve prompt settings while accepting legacy/deprecated model ids. */
 export function getModelPromptSettings(
-  connection: Pick<LlmConnection, 'modelSettings'> | undefined,
+  connection: Pick<LlmConnection, 'modelSettings' | 'compactionModel'> | undefined,
   model: string | undefined,
 ): ModelPromptSettings | undefined {
   if (!model) return undefined;
-  const settings = connection?.modelSettings?.[model] ?? connection?.modelSettings?.[normalizeDeprecatedModelId(model)];
+  const saved = connection?.modelSettings?.[model] ?? connection?.modelSettings?.[normalizeDeprecatedModelId(model)];
+  const settings = connection?.compactionModel?.trim()
+    ? { ...saved, compactionModel: connection.compactionModel.trim() } : saved;
   const defaultLimit = getDefaultAutoCompactionTokenLimit(model);
   if (defaultLimit !== undefined && settings?.autoCompactionTokenLimit === undefined) {
     return { ...settings, autoCompactionTokenLimit: defaultLimit };
@@ -237,6 +241,8 @@ export interface LlmConnection {
 
   /** Prompt behavior overrides keyed by model id. */
   modelSettings?: Record<string, ModelPromptSettings>;
+  /** Preferred context-compaction model on this connection; unset selects automatically. */
+  compactionModel?: string;
 
   /** Default model for this connection */
   defaultModel?: string;

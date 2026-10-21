@@ -53,6 +53,8 @@ import {
 
 // Config stored in JSON file (credentials stored in encrypted file, not here)
 export interface StoredConfig {
+  /** Host persistent memory: TokenBird extraction (default), runtime native, or disabled. */
+  memoryMode?: 'tokenbird' | 'native' | 'off';
   // LLM Connections (authoritative source for auth and model config)
   llmConnections?: LlmConnection[];
   defaultLlmConnection?: string;  // Slug of default connection for new sessions
@@ -2889,6 +2891,8 @@ export function updateLlmConnection(slug: string, updates: Partial<Omit<LlmConne
     // Optional fields from updates or existing
     baseUrl: updates.baseUrl !== undefined ? updates.baseUrl : existing.baseUrl,
     models: updates.models !== undefined ? updates.models : existing.models,
+    modelSettings: updates.modelSettings !== undefined ? updates.modelSettings : existing.modelSettings,
+    compactionModel: updates.compactionModel !== undefined ? updates.compactionModel.trim() || undefined : existing.compactionModel,
     defaultModel: updates.defaultModel !== undefined ? updates.defaultModel : existing.defaultModel,
     modelSelectionMode: updates.modelSelectionMode !== undefined ? updates.modelSelectionMode : existing.modelSelectionMode,
     channelGroup: updates.channelGroup !== undefined ? updates.channelGroup : existing.channelGroup,

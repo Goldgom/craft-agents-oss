@@ -89,7 +89,8 @@ if (isPickerMode) {
     getRuntimeEnvironment: (): 'electron' | 'web' => 'electron',
     getStartupContext: () => ipcRenderer.invoke('__get-server-context'),
     getRemoteServers: () => ipcRenderer.invoke('__picker-get-profiles'),
-    selectStartupServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
+    saveRemoteServer: (input: Parameters<ElectronAPI['saveRemoteServer']>[0]) => ipcRenderer.invoke('__remote-servers:save', input),
+    selectStartupServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target, true),
     switchServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
     getStartupLocation: () => ipcRenderer.invoke('__get-startup-location'),
     setStartupLocation: (value: string) => ipcRenderer.invoke('__set-startup-location', value),
@@ -413,6 +414,7 @@ client.onConnectionStateChanged((state) => {
 // open browser → wait for callback → oauth:complete (server).
 // Runs client-side because the callback server must receive the redirect.
 ;(api as any).performOAuth = async (args: {
+  resourceScope?: 'super-agent'
   sourceSlug: string
   sessionId?: string
   authRequestId?: string
@@ -429,6 +431,7 @@ client.onConnectionStateChanged((state) => {
     // 2. Ask server to prepare the flow (PKCE, auth URL, store in flow store)
     const startResult = await client.invoke('oauth:start', {
       sourceSlug: args.sourceSlug,
+      resourceScope: args.resourceScope,
       callbackUrl,
       sessionId: args.sessionId,
       authRequestId: args.authRequestId,
@@ -696,7 +699,7 @@ const remoteCredentials = () => isClientOnly || !!ipcRenderer.sendSync('__get-wo
 ;(api as ElectronAPI).startupMode = 'normal'
 ;(api as ElectronAPI).getStartupContext = () => ipcRenderer.invoke('__get-server-context')
 ;(api as ElectronAPI).switchServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
-;(api as ElectronAPI).selectStartupServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
+;(api as ElectronAPI).selectStartupServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target, true)
 ;(api as ElectronAPI).getStartupLocation = () => ipcRenderer.invoke('__get-startup-location')
 ;(api as ElectronAPI).setStartupLocation = (value: string) => ipcRenderer.invoke('__set-startup-location', value)
 // Profile list is client-local too — overrides the CHANNEL_MAP entry so it

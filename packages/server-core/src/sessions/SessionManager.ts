@@ -1,5 +1,8 @@
+import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
+import { GlobalMemory } from './global-memory'
 import type { EventSink, RpcServer } from '@tokenbird/server-core/transport'
 import { createAgentError, parseError } from '@tokenbird/shared/agent'
+import { recoverableChat, CONTINUE_MESSAGE } from './recoverable-chat'
 import { TurnClientContexts, type TurnClientContext } from './turn-client-context'
 import { saveClientFiles } from './client-files'
 import { MessageBranchGate, editedBranchMessages, branchSeedMessages, copyBranchAttachmentFiles } from './message-branching'
@@ -1979,13 +1982,13 @@ export class SessionManager implements ISessionManager {
     const callbacks: ConfigWatcherCallbacks = {
       onSourcesListChange: async (sources: LoadedSource[]) => {
         sessionLog.info(`Sources list changed in ${workspaceRootPath} (${sources.length} sources)`)
-        this.broadcastSourcesChanged(workspaceId, sources)
+        if (getWorkspaceByNameOrId(workspaceId)?.rootPath === workspaceRootPath) this.broadcastSourcesChanged(workspaceId, sources)
         await this.reloadSourcesForWorkspace(workspaceRootPath)
       },
       onSourceChange: async (slug: string, source: LoadedSource | null) => {
         sessionLog.info(`Source '${slug}' changed:`, source ? 'updated' : 'deleted')
         const sources = loadWorkspaceSources(workspaceRootPath)
-        this.broadcastSourcesChanged(workspaceId, sources)
+        if (getWorkspaceByNameOrId(workspaceId)?.rootPath === workspaceRootPath) this.broadcastSourcesChanged(workspaceId, sources)
         await this.reloadSourcesForWorkspace(workspaceRootPath)
       },
       onSourceGuideChange: (sourceSlug: string) => {
@@ -1993,7 +1996,7 @@ export class SessionManager implements ISessionManager {
         // Broadcast the updated sources list so sidebar picks up guide changes
         // Note: Guide changes don't require session source reload (no server changes)
         const sources = loadWorkspaceSources(workspaceRootPath)
-        this.broadcastSourcesChanged(workspaceId, sources)
+        if (getWorkspaceByNameOrId(workspaceId)?.rootPath === workspaceRootPath) this.broadcastSourcesChanged(workspaceId, sources)
       },
       onStatusConfigChange: () => {
         sessionLog.info(`Status config changed in ${workspaceId}`)
@@ -2125,8 +2128,8 @@ export class SessionManager implements ISessionManager {
         onPromptsReady: async (prompts) => {
           // Execute prompt automations by creating new sessions
           const settled = await Promise.allSettled(
-            prompts.map((pending) =>
-              this.executePromptAutomation({
+            prompts.map(async (pending) => {
+              return this.executePromptAutomation({
                 workspaceId,
                 workspaceRootPath,
                 prompt: pending.prompt,
@@ -2139,7 +2142,7 @@ export class SessionManager implements ISessionManager {
                 automationName: pending.automationName,
                 telegramTopic: pending.telegramTopic,
               })
-            )
+            })
           )
 
           // Write enriched history entries (with session IDs and prompt summaries)
@@ -3124,7 +3127,7 @@ export class SessionManager implements ISessionManager {
   async createSession(
     workspaceId: string,
     options?: import('@tokenbird/shared/protocol').CreateSessionOptions,
-    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string; resourceScope?: 'super-agent' },
   ): Promise<Session> {
     if (options?.editedMessageContent !== undefined && (!options.branchFromMessageId || !options.branchFromSessionId)) {
       throw new Error('Editing a historical message requires a branch point.')
@@ -3158,12 +3161,13 @@ export class SessionManager implements ISessionManager {
     // announced to the renderer (see notifySessionCreated). Callers that register the session
     // themselves — the `sessions:create` RPC adds it from the return value — pass
     // `{ emitCreatedEvent: false }` to avoid a redundant hydrate.
-    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string },
+    internal?: { emitCreatedEvent?: boolean; collaboration?: SessionCollaboration; callerClientId?: string; resourceScope?: 'super-agent' },
   ): Promise<Session> {
-    const workspace = getWorkspaceByNameOrId(workspaceId)
-    if (!workspace) {
-      throw new Error(`Workspace ${workspaceId} not found`)
-    }
+    const registeredWorkspace = getWorkspaceByNameOrId(workspaceId)
+    if (!registeredWorkspace) throw new Error(`Workspace ${workspaceId} not found`)
+    const workspace = internal?.resourceScope === 'super-agent'
+      ? { ...registeredWorkspace, rootPath: superAgentResourceScope(registeredWorkspace.rootPath).rootPath }
+      : registeredWorkspace
 
     // Get new session defaults from workspace config (with global fallback)
     // Options.permissionMode overrides the workspace default (used by EditPopover for auto-execute)
@@ -7336,7 +7340,7 @@ export class SessionManager implements ISessionManager {
     // Get or create the agent (lazy loading). Its internal cold-session build at
     // ~L2956 now sees fresh tokens (or correctly-needs_auth failed sources, since
     // ensureFreshToken mirrors the disk write to source.config in-memory).
-    const agent = await this.getOrCreateAgent(managed)
+    let agent = await this.getOrCreateAgent(managed)
     sendSpan.mark('agent.ready')
 
     // Always set all sources for context (even if none are enabled), including built-ins
@@ -7399,6 +7403,8 @@ export class SessionManager implements ISessionManager {
       // rather than part of the user's message content. The original message is stored
       // in session JSONL (line ~3952); this only affects the SDK's in-process context.
       let effectiveMessage = message
+      try { effectiveMessage += new GlobalMemory().context(message) }
+      catch (error) { sessionLog.warn('Global memory retrieval failed:', error) }
       if (options?.superAgentContext && managed.executionPolicy) {
         // Persisted messages and user_message events contain only the upstream input.
         // Runtime state is transient model context, never a transcript bubble.
@@ -7433,7 +7439,23 @@ export class SessionManager implements ISessionManager {
 
       sendSpan.mark('chat.starting')
       effectiveMessage += this.turnClients.reminder(this.rpcServer, sessionId)
-      const chatIterator = agent.chat(effectiveMessage, modelInputAttachments.attachments)
+      const chatIterator = recoverableChat({
+        chat: continuing => agent.chat(
+          continuing ? `${CONTINUE_MESSAGE}\n\n<original_request>\n${effectiveMessage}\n</original_request>` : effectiveMessage,
+          continuing ? undefined : modelInputAttachments.attachments,
+        ),
+        isCurrent: () => this.sessions.get(sessionId) === managed
+          && managed.isProcessing && !managed.authRetryInProgress
+          && !managed.persistenceRetired && !managed.stopRequested
+          && managed.processingGeneration === myGeneration,
+        refresh: async () => {
+          agent = await this.getOrCreateAgent(managed)
+          if (this.pendingMcpReloadSessionIds.delete(sessionId)) {
+            await this.reloadSessionSources(managed, true)
+          }
+        },
+        onHandoffComplete: event => this.processEvent(managed, event),
+      })
       sessionLog.info('Got chat iterator, starting iteration...')
 
       for await (const event of chatIterator) {
@@ -7903,6 +7925,26 @@ export class SessionManager implements ISessionManager {
     }
   }
 
+  /** Auxiliary cleanup cannot delay or reject a turn's completion notification. */
+  private runAfterTurnCleanup(sessionId: string, label: string, action: () => void | Promise<void>): void {
+    const failed = (error: unknown) => sessionLog.warn(`Non-blocking ${label} failed for ${sessionId}:`, error)
+    try { void Promise.resolve(action()).catch(failed) } catch (error) { failed(error) }
+  }
+
+  private clearBrowserAfterTurn(managed: ManagedSession): void {
+    // Nodes with no browser permission do not need a desktop client for cleanup.
+    if (managed.executionPolicy && !managed.executionPolicy.browser) return
+    const generation = managed.processingGeneration
+    this.runAfterTurnCleanup(managed.id, 'browser cleanup', async () => {
+      const bpm = this.getBrowserPaneManagerForSession(managed.id)
+      if (!bpm) return
+      await bpm.clearVisualsForSession(managed.id)
+      // A delayed desktop reply must not unbind a newly started turn.
+      if (managed.processingGeneration === generation && !managed.isProcessing
+        && !managed.messageQueue.length && !managed.pendingAuthResume) bpm.unbindAllForSession(managed.id)
+    })
+  }
+
   /**
    * Central handler for when processing stops (any reason).
    * Single source of truth for cleanup and queue processing.
@@ -7954,16 +7996,7 @@ export class SessionManager implements ISessionManager {
     // Clear agent control overlay between turns. The session keeps browser
     // ownership (boundSessionId) — only the visual overlay is removed.
     // Full unbind happens below when the queue is empty (session truly done).
-    const turnBpm = this.getBrowserPaneManagerForSession(sessionId)
-    if (turnBpm) {
-      // Same guard as the queue-empty teardown below: a remote BPM throw on a
-      // headless server must not abort processing-stop handling.
-      try {
-        await turnBpm.clearVisualsForSession(sessionId)
-      } catch (err) {
-        sessionLog.warn(`Browser-pane visual clear failed for ${sessionId} (continuing):`, err)
-      }
-    }
+    this.clearBrowserAfterTurn(managed)
 
     // 2. Handle unread state based on whether user is viewing this session
     //    This is the explicit state machine for NEW badge:
@@ -7979,13 +8012,15 @@ export class SessionManager implements ISessionManager {
     if (reason === 'complete' && didReceiveNewFinalMessage) {
       if (isViewing) {
         // User is watching - mark as read immediately
-        await this.markSessionRead(sessionId)
+        this.runAfterTurnCleanup(sessionId, 'read-state update', () => this.markSessionRead(sessionId))
       } else {
         // User is not watching - mark as unread for NEW badge
         if (!managed.hasUnread) {
           managed.hasUnread = true
-          await updateSessionMetadata(managed.workspace.rootPath, sessionId, { hasUnread: true })
-          this.emitUnreadSummaryChanged()
+          this.runAfterTurnCleanup(sessionId, 'unread-state update', async () => {
+            await updateSessionMetadata(managed.workspace.rootPath, sessionId, { hasUnread: true })
+            this.emitUnreadSummaryChanged()
+          })
         }
       }
     }
@@ -7995,7 +8030,7 @@ export class SessionManager implements ISessionManager {
     //    and should automatically move to 'done' when finished
     if (reason === 'complete' && managed.systemPromptPreset === 'mini' && managed.sessionStatus !== 'done') {
       sessionLog.info(`Auto-completing mini agent session ${sessionId}`)
-      await this.setSessionStatus(sessionId, 'done')
+      this.runAfterTurnCleanup(sessionId, 'mini-session status', () => this.setSessionStatus(sessionId, 'done'))
     }
 
     // 4. Apply deferred external metadata updates captured while processing.
@@ -8003,7 +8038,7 @@ export class SessionManager implements ISessionManager {
       const pendingHeader = managed.pendingExternalMetadata
       managed.pendingExternalMetadata = undefined
       sessionLog.info(`Applying deferred external metadata for session ${sessionId} after processing stop`)
-      this.applyExternalSessionMetadata(managed, pendingHeader)
+      this.runAfterTurnCleanup(sessionId, 'external metadata', () => { this.applyExternalSessionMetadata(managed, pendingHeader) })
     }
 
     // Authentication is a pause, not a terminal task outcome. Keep queued
@@ -8038,23 +8073,6 @@ export class SessionManager implements ISessionManager {
       // Has queued messages - process next
       this.processNextQueuedMessage(sessionId)
     } else {
-      // Session is truly done — release browser ownership.
-      // The window stays alive (hidden) and becomes reusable by future sessions.
-      // On the next turn, getOrCreateForSession() will re-bind it.
-      const doneBpm = this.getBrowserPaneManagerForSession(sessionId)
-      if (doneBpm) {
-        // Teardown must never block completion. On a headless/WebUI server the BPM is
-        // remote and these calls throw (BROWSER_NO_CAPABLE_CLIENT) when no desktop
-        // browser client is connected — which previously aborted onProcessingStopped
-        // before emitSessionComplete, hanging the Tasks Conductor completion seam.
-        try {
-          await doneBpm.clearVisualsForSession(sessionId)
-          doneBpm.unbindAllForSession(sessionId)
-        } catch (err) {
-          sessionLog.warn(`Browser-pane teardown failed for ${sessionId} (continuing to completion):`, err)
-        }
-      }
-
       // No queue - emit complete to UI (include tokenUsage and hasUnread for state updates)
       this.sendEvent({
         type: 'complete',
@@ -8067,15 +8085,6 @@ export class SessionManager implements ISessionManager {
         // real `task_completed` will arrive when the agent actually finishes.
         backgroundTasksAlive: this.keepBackgroundTasksAlive,
       }, managed.workspace.id)
-
-      if (this.pendingMcpReloadSessionIds.delete(sessionId)) {
-        try {
-          await this.reloadSessionSources(managed, true)
-          sessionLog.info(`Completed deferred MCP reload for session ${sessionId}`)
-        } catch (error) {
-          sessionLog.error(`Deferred MCP reload failed for session ${sessionId}:`, error)
-        }
-      }
 
       // Tasks Conductor seam: signal true completion (queue empty) with the stop
       // reason + this turn's final assistant message, so the Conductor can advance
@@ -8090,6 +8099,16 @@ export class SessionManager implements ISessionManager {
         canRetry: completion.canRetry,
         tokenUsage: managed.tokenUsage,
       })
+
+      // Completion is published before source maintenance or cache eviction.
+      if (this.pendingMcpReloadSessionIds.delete(sessionId)) {
+        try {
+          await this.reloadSessionSources(managed, true)
+          sessionLog.info(`Completed deferred MCP reload for session ${sessionId}`)
+        } catch (error) {
+          sessionLog.error(`Deferred MCP reload failed for session ${sessionId}:`, error)
+        }
+      }
 
       // A completed, queue-empty session becomes a warm runtime candidate.
       // Keep only the configured LRU budget so MCP processes cannot accumulate
@@ -9546,6 +9565,14 @@ export class SessionManager implements ISessionManager {
         // Persist compaction messages so they survive reload
         // Recovery notices are persisted above; other info stays transient.
         if (isCompactionComplete) {
+          // Snapshot before adding the new boundary; extraction never replays tools or chat.
+          if (managed.agent) {
+            try {
+              await new GlobalMemory().capture({ workspaceId, sessionId,
+                checkpoint: String(managed.messages.at(-1)?.id ?? infoTimestamp), messages: [...managed.messages] },
+              managed.agent.runMiniCompletion.bind(managed.agent))
+            } catch (error) { sessionLog.warn('Global memory capture failed:', error) }
+          }
           const compactionMessage: Message = {
             id: generateMessageId(),
             role: 'info',
@@ -9877,7 +9904,7 @@ export class SessionManager implements ISessionManager {
         // (WebUI, docker server) chain activations the same way the renderer used to.
         // The renderer still receives the event to render activation feedback, but no
         // longer fires its own auto_retry (see processor.ts).
-        sessionLog.info(`Source "${event.sourceSlug}" activated for session ${sessionId}, scheduling auto-retry`)
+        sessionLog.info(`Source "${event.sourceSlug}" activated for session ${sessionId}, continuing with updated tools`)
 
         this.sendEvent({
           type: 'source_activated',
@@ -9886,7 +9913,9 @@ export class SessionManager implements ISessionManager {
           originalMessage: event.originalMessage,
         }, workspaceId)
 
-        if (!managed) break
+        // Active sendMessage owns the handoff and resumes after the backend
+        // iterator closes. The timer remains only for legacy out-of-turn events.
+        if (!managed || managed.isProcessing) break
 
         const originalMessage = event.originalMessage ?? ''
         if (!originalMessage.trim()) {

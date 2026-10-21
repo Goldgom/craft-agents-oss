@@ -384,6 +384,38 @@ export class SecureStorageBackend implements CredentialBackend {
     });
   }
 
+  /** Main-process recovery only, after the user explicitly chooses to reconfigure. */
+  async resetUnreadableNativeVault(): Promise<{ backupPath?: string }> {
+    if (!this.keyProtection) throw new CredentialVaultError('OS_STORAGE_UNAVAILABLE');
+    this.keyProtection.assertAvailable();
+    return this.withWriteLock(() => {
+      this.clearCache();
+      try {
+        this.loadStoreSync();
+        // Another process or an unlocked OS store may already have repaired it.
+        return {};
+      } catch (error) {
+        if (!(error instanceof CredentialVaultError)
+          || !['VAULT_READ_FAILED', 'VAULT_CORRUPT'].includes(error.code)) throw error;
+      }
+      const original = readFileSync(this.filePath);
+      if (!original.subarray(0, MAGIC_SIZE).equals(NATIVE_MAGIC_BYTES)) throw new CredentialVaultError('VAULT_CORRUPT');
+      const backupPath = `${this.filePath}.recovery-${Date.now()}-${randomBytes(8).toString('hex')}`;
+      // Back up the exact encrypted bytes before replacing anything. Never use
+      // the legacy snapshot: it can be stale and requires the same lost OS key.
+      this.persistFileSync(backupPath, original, true);
+      this.clearCache();
+      try {
+        // Validates a fresh OS-wrapped key before the atomic live-file commit.
+        this.saveStoreSync(this.mutableStore(null), true);
+      } catch (error) {
+        this.clearCache();
+        throw error;
+      }
+      return { backupPath };
+    });
+  }
+
   /** Explicit optional upgrade. Legacy reads/writes never migrate implicitly. */
   async migrateToProtectedStorage(): Promise<{ migratedCredentialCount: number; backupCreated: boolean }> {
     if (!this.keyProtection) throw new CredentialVaultError('OS_STORAGE_UNAVAILABLE');

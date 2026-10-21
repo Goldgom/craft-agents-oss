@@ -23,12 +23,12 @@ export const SuperAgentResourceActionSchema = z.object({
 
 export type SuperAgentResourceAction = z.infer<typeof SuperAgentResourceActionSchema>
 
-export function describeSuperAgentResources(workspaceRoot: string, config: SuperAgentConfig): SuperAgentResourceCatalog {
+export function describeSuperAgentResources(workspaceRoot: string, config: SuperAgentConfig, skillWorkspaceRoot = workspaceRoot): SuperAgentResourceCatalog {
   const localMcpEnabled = isLocalMcpEnabled(workspaceRoot)
   return {
-    skills: loadAllSkills(workspaceRoot, config.environment.workingDirectory)
+    skills: loadAllSkills(skillWorkspaceRoot, config.environment.workingDirectory)
       .map(skill => ({ slug: skill.slug, name: skill.metadata.name, description: skill.metadata.description.slice(0, 2_000) })),
-    sources: loadWorkspaceSources(workspaceRoot).filter(source => config.sourceSlugs.includes(source.config.slug))
+    sources: loadWorkspaceSources(workspaceRoot).filter(source => config.architecture === 'dynamic' || config.sourceSlugs.includes(source.config.slug))
       .map(source => ({ slug: source.config.slug, name: source.config.name, description: (source.config.tagline ?? source.config.provider).slice(0, 2_000),
         type: source.config.type, available: isSourceUsable(source) && (source.config.mcp?.transport !== 'stdio' || localMcpEnabled),
         status: source.config.mcp?.transport === 'stdio' && !localMcpEnabled ? 'local_mcp_disabled' : source.config.connectionStatus })),
