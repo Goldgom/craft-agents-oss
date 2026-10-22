@@ -1,4 +1,5 @@
 import type { ProviderDriver, DriverTestConnectionArgs, BackendRuntimePayload, BackendProviderOptions } from '../driver-types.ts';
+import { resolveBackendHostTooling } from '../runtime-resolver.ts';
 import type { LlmConnection } from '../../../../config/llm-connections.ts';
 import type { ModelDefinition } from '../../../../config/models.ts';
 import { getAllPiModels, getPiModelsForAuthProvider } from '../../../../config/models-pi.ts';
@@ -249,8 +250,9 @@ export function buildPiConnectionTransport(connection?: LlmConnection | null, pr
 
 export const piDriver: ProviderDriver = {
   provider: 'pi',
-  buildRuntime: ({ context, providerOptions, resolvedPaths }) => ({
+  buildRuntime: ({ context, providerOptions, resolvedPaths, hostRuntime }) => ({
     paths: {
+      ripgrep: hostRuntime ? resolveBackendHostTooling(hostRuntime).ripgrepPath : undefined,
       piServer: resolvedPaths.piServerPath,
       interceptor: resolvedPaths.interceptorBundlePath,
       node: resolvedPaths.nodeRuntimePath,

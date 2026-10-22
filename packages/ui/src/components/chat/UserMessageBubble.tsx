@@ -9,6 +9,7 @@
  * - Optional file attachments with thumbnails
  * - Content badges for @mentions (sources, skills)
  * - Pending/queued states (Electron only)
+ * - Dedicated incoming agent message cards for send_agent_message envelopes
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -21,6 +22,8 @@ import { FileTypeIcon, getFileTypeLabel } from './attachment-helpers'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '../tooltip'
 import { useTranslation } from 'react-i18next'
 import { usePlatform } from '../../context/PlatformContext'
+import { AgentMessageCard } from './AgentMessageCard'
+import { parseAgentMessage } from './agent-message'
 
 // Fallback text icons for badges without iconDataUrl
 // Using simple characters since SVG rendering may not work in all contexts
@@ -444,11 +447,26 @@ export function UserMessageBubble({
 
   if (!displayContent.trim() && !hasAttachments && !hasEditRequestBadges && !hasInlineBadges && !showQueued) return null
 
+  const agentMessage = parseAgentMessage(displayContent)
+  const bodyContent = agentMessage?.body ?? displayContent
+  const bodyBadges = agentMessage ? inlineBadges
+    .filter(badge => badge.start >= agentMessage.bodyStart)
+    .map(badge => ({ ...badge, start: badge.start - agentMessage.bodyStart, end: badge.end - agentMessage.bodyStart })) : inlineBadges
+  const messageContent = <>
+    {showQueued && <div className="mb-1.5 flex items-center gap-1.5 text-foreground/55" role="status" aria-live="polite">
+      <Clock className="h-3 w-3 animate-pulse" aria-hidden="true" />
+      <span className="text-[11px] italic">{t('chat.queuedBadge')}</span>
+    </div>}
+    {bodyBadges.length ? renderContentWithBadges(bodyContent, bodyBadges, onUrlClick, onFileClick)
+      : <Markdown mode="minimal" onUrlClick={onUrlClick} onFileClick={onFileClick}
+        className="text-sm [&_a]:underline [&_code]:bg-foreground/10 [&_p]:whitespace-pre-wrap">{bodyContent}</Markdown>}
+  </>
+
   return (
     <div className={cn("flex flex-col items-end gap-3 w-full", className)}>
       {/* Attachment preview row - stored attachments with thumbnails */}
       {hasAttachments && (
-        <div className="flex gap-2 justify-end max-w-[80%] flex-wrap">
+        <div className={cn('flex gap-2 flex-wrap', agentMessage ? 'max-w-full self-start justify-start' : 'max-w-[80%] justify-end')}>
           {attachments!.map((att, i) => {
             const isImage = att.type === 'image'
             const hasThumbnail = !!att.thumbnailBase64
@@ -507,37 +525,17 @@ export function UserMessageBubble({
           separate pill below — keeps the chat to one bubble per message
           while the chip and pulsing icon make the waiting state obvious
           (#616 follow-up). */}
-      {(displayContent.trim() || hasInlineBadges || showQueued) && <div
+      {(displayContent.trim() || hasInlineBadges || showQueued) && (agentMessage
+        ? <AgentMessageCard envelope={agentMessage}>{messageContent}</AgentMessageCard>
+        : <div
         data-theme-bubble="user"
         className={cn(
           "theme-message-user-bubble max-w-[80%] bg-user-message-bubble rounded-[16px] break-words min-w-0 select-text [&_p]:m-0",
           compactMode ? "px-4 py-2" : "px-5 py-3.5"
         )}
       >
-        {showQueued && (
-          <div
-            className="flex items-center gap-1.5 text-foreground/55 mb-1.5"
-            role="status"
-            aria-live="polite"
-          >
-            <Clock className="h-3 w-3 animate-pulse" aria-hidden="true" />
-            <span className="text-[11px] italic">{t('chat.queuedBadge')}</span>
-          </div>
-        )}
-        {hasInlineBadges
-          ? renderContentWithBadges(displayContent, inlineBadges, onUrlClick, onFileClick)
-          : (
-            <Markdown
-              mode="minimal"
-              onUrlClick={onUrlClick}
-              onFileClick={onFileClick}
-              className="text-sm [&_a]:underline [&_code]:bg-foreground/10 [&_p]:whitespace-pre-wrap"
-            >
-              {displayContent}
-            </Markdown>
-          )
-        }
-      </div>}
+        {messageContent}
+      </div>)}
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useId } from 'react'
 import birdIcon from '../../assets/branding/tokenbird.png'
 import type { BirdCompanionState, BirdGesture } from '../../../shared/bird-companion'
 import { getBirdPerformance, type BirdExpression } from './bird-performance'
+import './bird-avatar.css'
 
 // Isolate the face while keeping the top of the handheld panel stationary.
 const HEAD = 'M0 0 H512 V200 H186 L172 181 H0 Z'
@@ -22,16 +23,17 @@ function Eyes({ expression }: { expression: BirdExpression }) {
   </>
 }
 
-export function BirdAvatar({ state, gesture = null, dragging = false }: {
+export function BirdAvatar({ state, gesture = null, dragging = false, paused = false }: {
   state: Pick<BirdCompanionState, 'mood' | 'activity'>
   gesture?: BirdGesture | null
   dragging?: boolean
+  paused?: boolean
 }) {
   const id = useId().replaceAll(':', '')
   const { expression, motion, talking } = getBirdPerformance(state, gesture, dragging)
   return (
     <svg className={`bird-avatar bird-avatar--${state.mood} bird-motion--${motion} bird-expression--${expression} ${talking ? 'bird-avatar--talking' : ''}`}
-      data-motion={motion} data-expression={expression} viewBox="0 42 512 416" aria-hidden="true">
+      data-motion={motion} data-expression={expression} data-paused={paused} viewBox="0 42 512 416" aria-hidden="true">
       <defs>
         <mask id={`${id}-body`} maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
           <rect width="512" height="512" fill="white" />

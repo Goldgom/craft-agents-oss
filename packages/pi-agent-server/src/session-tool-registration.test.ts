@@ -11,6 +11,8 @@ import {
   type CreateAgentSessionOptions,
 } from '@earendil-works/pi-coding-agent';
 import { createSearchTool } from './tools/search/create-search-tool.ts';
+import { createLocalSearchTools } from './tools/local-search.ts';
+import { withBashTimeout } from './tool-execution.ts';
 import { createWebFetchTool } from './tools/web-fetch.ts';
 import type { WebSearchProvider } from './tools/search/types.ts';
 import { filterInteractionTools, filterNativeWebTools } from '../../shared/src/agent/core/browser-tool-policy.ts';
@@ -71,11 +73,10 @@ describe('Pi subprocess tool shape contract', () => {
     const cwd = '/tmp';
     const builtins = [
       createReadToolDefinition(cwd),
-      createBashToolDefinition(cwd),
+      withBashTimeout(createBashToolDefinition(cwd)),
       createEditToolDefinition(cwd),
       createWriteToolDefinition(cwd),
-      createGrepToolDefinition(cwd),
-      createFindToolDefinition(cwd),
+      ...createLocalSearchTools(cwd),
       createLsToolDefinition(cwd),
     ];
     for (const tool of builtins) {

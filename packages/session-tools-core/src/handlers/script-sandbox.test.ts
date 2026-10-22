@@ -105,7 +105,7 @@ afterAll(() => {
     expect(text).toContain('networkIsolation: enforced');
     expect(text).toContain('filesystemIsolation: enforced');
     expect(text).toContain('stdout:');
-  });
+  }, 120_000);
 
   it('blocks writes outside session directory when sandbox runs', async () => {
     const outsidePath = join(rootDir, 'outside-write.txt');
@@ -121,6 +121,7 @@ afterAll(() => {
     if (
       text.includes('filesystem isolation') ||
       text.includes('network isolation') ||
+      text.includes('Could not create Linux script sandbox after automatic repair') ||
       text.includes('sandbox_apply') ||
       text.includes('Operation not permitted')
     ) {
@@ -131,7 +132,7 @@ afterAll(() => {
 
     expect(result.isError).toBe(true);
     expect(existsSync(outsidePath)).toBe(false);
-  });
+  }, 120_000);
 
   it('passes stdin through when sandbox backend is available', async () => {
     const result = await handleScriptSandbox(ctx(), {
@@ -147,6 +148,7 @@ afterAll(() => {
       (
         text.includes('filesystem isolation') ||
         text.includes('network isolation') ||
+        text.includes('Could not create Linux script sandbox after automatic repair') ||
         text.includes('sandbox_apply') ||
         text.includes('Operation not permitted')
       )
@@ -157,7 +159,7 @@ afterAll(() => {
 
     expect(result.isError).toBe(false);
     expect(text).toContain('HELLO STDIN');
-  });
+  }, 120_000);
 
   it('reports timeout when script exceeds timeoutMs', async () => {
     const result = await handleScriptSandbox(ctx(), {
@@ -172,6 +174,7 @@ afterAll(() => {
       (
         text.includes('filesystem isolation') ||
         text.includes('network isolation') ||
+        text.includes('Could not create Linux script sandbox after automatic repair') ||
         text.includes('sandbox_apply') ||
         text.includes('Operation not permitted')
       )
@@ -181,5 +184,5 @@ afterAll(() => {
     }
 
     expect(text).toContain('timedOut: true');
-  });
+  }, 120_000);
 });

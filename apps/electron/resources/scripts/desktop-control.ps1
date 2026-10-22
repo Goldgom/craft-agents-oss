@@ -193,6 +193,22 @@ function Write-Result([hashtable]$Value) {
   $Value | ConvertTo-Json -Compress -Depth 10
 }
 
+function Get-SnapshotBounds($Rectangle) {
+  # UI Automation can report Rect.Empty even for an element marked on-screen.
+  # Windows PowerShell 5.1 serializes its infinities as invalid JSON tokens.
+  $available = $null -ne $Rectangle -and -not $Rectangle.IsEmpty
+  if ($available) {
+    foreach ($value in @($Rectangle.X, $Rectangle.Y, $Rectangle.Width, $Rectangle.Height)) {
+      if ([double]::IsNaN($value) -or [double]::IsInfinity($value)) { $available = $false; break }
+    }
+    $available = $available -and $Rectangle.Width -gt 0 -and $Rectangle.Height -gt 0
+  }
+  if (-not $available) {
+    return @{ boundsAvailable = $false; x = $null; y = $null; width = $null; height = $null }
+  }
+  return @{ boundsAvailable = $true; x = $Rectangle.X; y = $Rectangle.Y; width = $Rectangle.Width; height = $Rectangle.Height }
+}
+
 function Require-Argument([int]$Index, [string]$Name) {
   if ($Arguments.Count -le $Index -or [string]::IsNullOrWhiteSpace($Arguments[$Index])) {
     throw "Missing argument: $Name"
@@ -297,6 +313,10 @@ Usage:
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
     $handle = Resolve-Window $(if ($request) { [string]$request.windowId } else { '' })
+    if ([TokenBird.Desktop.NativeMethods]::IsIconic($handle)) {
+      Write-Result @{ action = 'snapshot'; windowId = $handle.ToInt64().ToString(); minimized = $true; elements = @(); truncated = $false; message = 'Window is minimized. Use focus with this windowId to restore it before requesting another snapshot.' }
+      break
+    }
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
     $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
     $limit = if ($request -and $request.limit) { [int]$request.limit } else { 200 }
@@ -312,7 +332,9 @@ Usage:
         $current = $entry.element.Current
         $rect = $current.BoundingRectangle
         if (-not $current.IsOffscreen) {
-          $elements.Add(@{ name = $(if ($current.IsPassword) { '[password]' } else { $current.Name }); automationId = $current.AutomationId; className = $current.ClassName; role = $current.ControlType.ProgrammaticName; enabled = $current.IsEnabled; password = $current.IsPassword; x = $rect.X; y = $rect.Y; width = $rect.Width; height = $rect.Height })
+          $element = @{ name = $(if ($current.IsPassword) { '[password]' } else { $current.Name }); automationId = $current.AutomationId; className = $current.ClassName; role = $current.ControlType.ProgrammaticName; enabled = $current.IsEnabled; password = $current.IsPassword }
+          $element += Get-SnapshotBounds $rect
+          $elements.Add($element)
         }
         if ($entry.depth -lt 8 -and -not $current.IsPassword) {
           $child = $walker.GetFirstChild($entry.element)
@@ -323,7 +345,7 @@ Usage:
         }
       } catch [System.Windows.Automation.ElementNotAvailableException] { }
     }
-    Write-Result @{ action = 'snapshot'; windowId = $handle.ToInt64().ToString(); elements = @($elements.ToArray()); truncated = $queue.Count -gt 0 }
+    Write-Result @{ action = 'snapshot'; windowId = $handle.ToInt64().ToString(); minimized = $false; elements = @($elements.ToArray()); truncated = $queue.Count -gt 0 }
   }
   'screenshot' {
     $requestedPath = Require-Argument 0 'path'

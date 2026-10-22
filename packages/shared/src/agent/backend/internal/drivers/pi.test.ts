@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import { piDriver } from './pi.ts';
 import { createServer } from 'node:http';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { DriverBuildArgs } from '../driver-types.ts';
 import { stream as streamOpenAI } from '@earendil-works/pi-ai/api/openai-completions';
 import type { Model } from '@earendil-works/pi-ai';
@@ -81,6 +84,22 @@ describe('TokenNest group request headers', () => {
 });
 
 describe('piDriver.buildRuntime custom endpoint models', () => {
+  it('propagates the packaged host ripgrep path to the Pi runtime', () => {
+    const root = mkdtempSync(join(tmpdir(), 'tokenbird-pi-tooling-'));
+    const binary = join(root, 'node_modules', '@vscode', 'ripgrep', 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');
+    try {
+      mkdirSync(dirname(binary), { recursive: true });
+      writeFileSync(binary, 'fixture');
+      const runtime = piDriver.buildRuntime({
+        context: { connection: null }, resolvedPaths: {},
+        hostRuntime: { appRootPath: root, isPackaged: true },
+      } as DriverBuildArgs);
+      expect(runtime.paths?.ripgrep).toBe(binary);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('preserves explicit per-model supportsImages values', () => {
     const runtime = piDriver.buildRuntime({
       context: {
@@ -105,7 +124,7 @@ describe('piDriver.buildRuntime custom endpoint models', () => {
         } as any,
       },
       coreConfig: {} as any,
-      hostRuntime: {} as any,
+      hostRuntime: { appRootPath: process.cwd(), isPackaged: false },
       resolvedPaths: {
         piServerPath: '/tmp/pi-agent-server.js',
         interceptorBundlePath: '/tmp/interceptor.cjs',

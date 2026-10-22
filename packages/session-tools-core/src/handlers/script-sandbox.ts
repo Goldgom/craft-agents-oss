@@ -4,11 +4,12 @@ import { join, resolve } from 'node:path';
 import type { SessionToolContext } from '../context.ts';
 import { errorResponse, successResponse } from '../response.ts';
 import type { ToolResult } from '../types.ts';
-import { applyNetworkIsolation } from '../runtime/network-isolation.ts';
-import { applyFilesystemIsolation } from '../runtime/filesystem-isolation.ts';
+import { applyNetworkIsolation, type NetworkIsolationPlan } from '../runtime/network-isolation.ts';
+import { applyFilesystemIsolation, type FilesystemIsolationPlan } from '../runtime/filesystem-isolation.ts';
 import { isPathWithinDirectory } from '../runtime/path-security.ts';
 import { resolveScriptRuntime } from '../runtime/resolve-script-runtime.ts';
 import { createScriptRuntimeEnv } from '../runtime/sandbox-env.ts';
+import { prepareLinuxScriptSandbox } from '../runtime/linux-script-sandbox.ts';
 
 export interface ScriptSandboxArgs {
   language: 'python3' | 'node' | 'bun';
@@ -75,10 +76,16 @@ export async function handleScriptSandbox(
     const runtime = resolveScriptRuntime(args.language);
     const runtimeArgs = [...runtime.argsPrefix, tempScript, ...resolvedInputs];
 
-    let networkIsolation = applyNetworkIsolation(runtime.command, runtimeArgs);
-    let filesystemIsolation = applyFilesystemIsolation(runtime.command, runtimeArgs, sessionDir);
+    let networkIsolation: Omit<NetworkIsolationPlan, 'backend'> & { backend: string };
+    let filesystemIsolation: FilesystemIsolationPlan;
+    let sandboxRepaired = false;
 
-    if (process.platform === 'darwin') {
+    if (process.platform === 'linux') {
+      const sandbox = await prepareLinuxScriptSandbox(runtime.command, runtimeArgs, sessionDir);
+      networkIsolation = { status: 'enforced', ...sandbox };
+      filesystemIsolation = { status: 'enforced', ...sandbox };
+      sandboxRepaired = sandbox.repaired;
+    } else if (process.platform === 'darwin') {
       // macOS: compose network + filesystem restrictions in a SINGLE sandbox-exec profile
       // to avoid nested sandbox-exec wrapping failures.
       filesystemIsolation = applyFilesystemIsolation(runtime.command, runtimeArgs, sessionDir, {
@@ -177,6 +184,7 @@ export async function handleScriptSandbox(
       `networkBackend: ${networkIsolation.backend}`,
       `filesystemIsolation: ${filesystemIsolation.status}`,
       `filesystemBackend: ${filesystemIsolation.backend}`,
+      `sandboxAutoRepaired: ${sandboxRepaired}`,
     ];
 
     if (stdout.text.length > 0) {

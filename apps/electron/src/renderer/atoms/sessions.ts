@@ -14,6 +14,7 @@ import type { Getter, Setter } from 'jotai/vanilla'
 import { atomFamily } from 'jotai-family'
 import type { Session, Message } from '../../shared/types'
 import { visibleSessionIdsAtom } from './panel-stack'
+import { sessionBranchRootId } from '../lib/session-branch-history'
 
 /**
  * Session metadata for list display (lightweight, no messages)
@@ -153,6 +154,29 @@ export const sessionAtomFamily = atomFamily(
  */
 export const sessionMetaMapAtom = atom<Map<string, SessionMeta>>(new Map())
 
+/** Each parent observes only its own children, not unrelated streaming updates. */
+export const subagentSessionsAtomFamily = atomFamily((parentId: string) => selectAtom(
+  sessionMetaMapAtom,
+  map => {
+    const parent = map.get(parentId)
+    const branchRoot = parent ? sessionBranchRootId(parent, map) : undefined
+    return [...map.values()].filter(session => {
+      if (session.hidden || session.id === parentId || session.workspaceId !== parent?.workspaceId || !session.parentSessionId) return false
+      const owner = map.get(session.parentSessionId)
+      return !!owner && !owner.hidden && sessionBranchRootId(owner, map) === branchRoot
+    })
+      .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id.localeCompare(b.id))
+  },
+  (previous, next) => previous.length === next.length && previous.every((session, index) => {
+    const other = next[index]!
+    return session.id === other.id && session.name === other.name && session.preview === other.preview
+      && session.isProcessing === other.isProcessing && session.hasUnread === other.hasUnread
+      && session.lastMessageRole === other.lastMessageRole && session.sessionStatus === other.sessionStatus
+      && session.model === other.model && session.llmConnection === other.llmConnection
+      && session.messageCount === other.messageCount && session.lastMessageAt === other.lastMessageAt
+  }),
+))
+
 /** Message actions only observe branch structure; streaming in other chats stays isolated. */
 export const sessionBranchesAtom = selectAtom(sessionMetaMapAtom,
   map => [...map.values()].filter(session => !!session.branchFromMessageId).map(session => ({
@@ -175,6 +199,9 @@ export const sessionIdsAtom = atom<string[]>([])
  * Sessions are loaded with empty messages initially, messages are fetched on-demand
  */
 export const loadedSessionsAtom = atom<Set<string>>(new Set<string>())
+
+/** Reference counts for transcripts being read in details dialogs outside the panel stack. */
+export const sessionDetailsReadersAtom = atom<Map<string, number>>(new Map())
 
 /**
  * Promise cache for deduplicating concurrent session load requests.
@@ -492,6 +519,7 @@ export const removeSessionAtom = atom(
     // Clean up additional atom families to prevent memory leaks
     // These store per-session UI state that should be garbage collected
     backgroundTasksAtomFamily.remove(sessionId)
+    subagentSessionsAtomFamily.remove(sessionId)
   }
 )
 
@@ -718,6 +746,7 @@ export const releaseSessionMessagesAtom = atom(
     const loading = sessionLoadingPromises.get(sessionId)
     if (loading) await loading.catch(() => undefined)
     if (get(visibleSessionIdsAtom).has(sessionId)) return false
+    if (get(sessionDetailsReadersAtom).has(sessionId)) return false
     const loadedSessions = get(loadedSessionsAtom)
     const session = get(sessionAtomFamily(sessionId))
     if (!loadedSessions.has(sessionId) || !session || session.isProcessing) return false

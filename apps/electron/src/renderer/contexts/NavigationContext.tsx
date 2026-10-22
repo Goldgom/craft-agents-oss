@@ -42,6 +42,7 @@ import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { useSession } from '@/hooks/useSession'
 import { useLabels } from '@/hooks/useLabels'
 import { matchesLabelFilter } from '@tokenbird/shared/labels'
+import { conversationListSessions } from '@/lib/session-subagents'
 import {
   parseRoute,
   parseRouteToNavigationState,
@@ -543,7 +544,7 @@ export function NavigationProvider({
   const filterSessionsByFilter = useCallback(
     (filter: SessionFilter): SessionMeta[] => {
       // First filter out hidden sessions - they should never appear in any view
-      const visibleSessions = sessionMetas.filter(
+      const visibleSessions = conversationListSessions(sessionMetas).filter(
         s => !s.hidden && (!workspaceId || s.workspaceId === workspaceId)
       )
 

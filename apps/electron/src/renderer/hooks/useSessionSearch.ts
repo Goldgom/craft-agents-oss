@@ -8,6 +8,7 @@ import { fuzzyScore } from "@tokenbird/shared/search"
 import { getSessionTitle, getSessionStatus } from "@/utils/session"
 import type { SessionMeta } from "@/atoms/sessions"
 import { collapseSessionBranchHistory } from '../lib/session-branch-history'
+import { conversationListSessions, conversationSearchResults } from '../lib/session-subagents'
 import type { ViewConfig } from "@tokenbird/shared/views"
 import type { SessionFilter } from "@/contexts/NavigationContext"
 
@@ -35,6 +36,7 @@ export interface DateGroup {
 export interface ContentSearchResult {
   matchCount: number
   snippet: string
+  subagentMatchCount?: number
 }
 
 /** Metadata for a collapsed group — emitted by the data pipeline so the renderer can show header-only groups */
@@ -70,7 +72,7 @@ export interface UseSessionSearchResult {
   isSearchingContent: boolean
   /** Whether the search service is unavailable (e.g. ripgrep not found on remote server) */
   isSearchUnavailable: boolean
-  /** Raw content search results — needed by SessionItem for `chatMatchCount` */
+  /** Search hits grouped under their owning conversation, including subagent matches. */
   contentSearchResults: Map<string, ContentSearchResult>
 
   // Filtered + grouped results
@@ -303,7 +305,8 @@ export function useSessionSearch({
   scrollViewportRef,
 }: UseSessionSearchOptions): UseSessionSearchResult {
 
-  const [contentSearchResults, setContentSearchResults] = useState<Map<string, ContentSearchResult>>(new Map())
+  const [rawContentSearchResults, setContentSearchResults] = useState<Map<string, ContentSearchResult>>(new Map())
+  const contentSearchResults = useMemo(() => conversationSearchResults(items, rawContentSearchResults), [items, rawContentSearchResults])
   const [isSearchingContent, setIsSearchingContent] = useState(false)
   const [isSearchUnavailable, setIsSearchUnavailable] = useState(false)
   const [displayLimit, setDisplayLimit] = useState(INITIAL_DISPLAY_LIMIT)
@@ -390,8 +393,8 @@ export function useSessionSearch({
 
   // --- Data pipeline ---
 
-  // Filter out hidden sessions before any processing
-  const visibleItems = useMemo(() => items.filter(item => !item.hidden), [items])
+  // Keep one row per conversation; child transcripts remain accessible through its details.
+  const visibleItems = useMemo(() => conversationListSessions(items), [items])
 
   // Sort by most recent activity first
   const sortedItems = useMemo(() =>

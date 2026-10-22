@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useMemo, useEffect, useRef, useCallback, useState } from 'react'
 import i18n from 'i18next'
 import { useTranslation } from 'react-i18next'
+import { ToolElapsed } from './ToolElapsed'
 import type { ToolDisplayMeta, AnnotationV1 } from '@tokenbird/core'
 import { normalizePath, pathStartsWith, stripPathPrefix } from '@tokenbird/core/utils'
 import { isParentTaskTool } from '@tokenbird/shared/utils/toolNames'
@@ -1034,6 +1035,7 @@ function ActivityRow({ activity, onOpenDetails, isLastChild, sessionFolderPath, 
         onClick={onOpenDetails && isComplete ? onOpenDetails : undefined}
       >
         <ActivityStatusIcon status={activity.status} toolName={activity.toolName} customIcon={toolDisplay.icon} />
+        {activity.type === 'tool' && activity.status === 'running' && <ToolElapsed startedAt={activity.timestamp} />}
         {/* MCP/API tools: Source name (shrink-0) then error badge (if any) then compound label (flex-1) */}
         {isMcpOrApiTool && !isBackgrounded && (
           <>
@@ -1486,7 +1488,7 @@ function clearAnnotationMarks(root: HTMLElement): void {
   annotatedInlineCodeNodes.forEach((codeNode) => {
     codeNode.removeAttribute('data-ca-annotation-inline-code')
     codeNode.style.backgroundColor = ''
-    codeNode.style.boxShadow = ''
+    codeNode.style.removeProperty('box-shadow')
   })
 
   const marks = root.querySelectorAll('span[data-ca-annotation-id]')

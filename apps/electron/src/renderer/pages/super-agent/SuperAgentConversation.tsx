@@ -4,6 +4,7 @@ import { canShareSuperAgentPermission, type SuperAgentCommand, type SuperAgentCo
 import type { FileAttachment, PermissionRequest } from '../../../shared/types'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { Button } from '@/components/ui/button'
+import { BirdAvatar } from '@/components/bird/BirdAvatar'
 import { Markdown } from '@/components/markdown'
 import { cn } from '@/lib/utils'
 import { AgentAvatar } from './SuperAgentForms'
@@ -52,9 +53,12 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
   const sessionIds = new Set(state.nodes.map(node => node.sessionId).filter((id): id is string => !!id))
   const ordinary = ordinaryPermissionHeads(sessionIds, pendingPermissions, inbox)
   const approvalCount = approvals.length + ordinary.length
-  const coordinatorSession = state.nodes.find(node => node.nodeId === coordinator.id)?.sessionId
-  const thinkingPhase = superAgentThinkingPhase(snapshot, sending,
-    approvals.some(request => request.nodeId === coordinator.id) || ordinary.some(request => request.sessionId === coordinatorSession))
+  const coordinatorRuntime = state.nodes.find(node => node.nodeId === coordinator.id)
+  const coordinatorSession = coordinatorRuntime?.sessionId
+  const coordinatorWaiting = approvals.some(request => request.nodeId === coordinator.id)
+    || ordinary.some(request => request.sessionId === coordinatorSession)
+    || (coordinatorRuntime?.status === 'working' && snapshot.activity?.some(item => item.nodeId === coordinator.id && item.sessionId === coordinatorSession && item.status === 'waiting_permission'))
+  const thinkingPhase = superAgentThinkingPhase(snapshot, sending, coordinatorWaiting)
   const blockingReports = superAgentBlockingReports(state)
   const humanReports = blockingReports.filter(report => report.kind === 'user' && report.requiresUserAction)
   const inspectionPending = inspecting || snapshot.inspectionPending === true
@@ -113,7 +117,13 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
 
   return <section aria-label={text('conversation')} aria-busy={!!thinkingPhase} className="flex min-h-0 min-w-0 flex-1 flex-col">
     <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-3">
-      <div className="flex min-w-0 items-center gap-2"><AgentAvatar avatar={coordinator.avatar} name={coordinator.name} className="size-7 rounded-lg text-sm" />
+      <div className="flex min-w-0 items-center gap-2"><div aria-hidden="true" className="h-10 w-12 shrink-0">
+        <BirdAvatar paused={!active} state={{
+          mood: coordinatorWaiting ? 'waiting' : coordinatorRuntime?.status === 'error' ? 'error'
+            : thinkingPhase === 'mainReplying' ? 'working' : thinkingPhase ? 'thinking' : 'idle',
+          activity: thinkingPhase === 'mainReplying' ? 'greeting' : 'idle',
+        }} />
+      </div>
         <div className="min-w-0"><p className="truncate text-xs font-medium">{coordinator.name}</p><p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">{thinkingPhase ? <LoaderCircle aria-hidden="true" className="size-3 text-primary motion-safe:animate-spin" /> : <Circle aria-hidden="true" className="size-1.5 fill-current text-emerald-500" />}<span className="truncate">{coordinator.model}</span></p></div>
       </div>
       {canStop ? <Button size="sm" variant="ghost" onClick={onStop}><Square className="size-3.5" />{text('stopAll')}</Button>
@@ -123,7 +133,7 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
       const scroller = scrollRef.current
       if (scroller) followRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 100
     }}>
-      <div className="mx-auto max-w-3xl space-y-6">
+      <div className="mx-auto w-full max-w-6xl space-y-6">
         {!thinkingPhase && !messages.some(message => !notices.get(message.id)) && <div className="mx-auto flex max-w-sm flex-col items-center gap-4 py-12 text-center"><AgentAvatar avatar={config.avatar} name={config.name} className="size-16 rounded-3xl text-3xl" /><h1 className="text-lg font-semibold">{config.name}</h1><p className="text-sm leading-6 text-muted-foreground">{text('introMessage')}</p></div>}
         {messages.map(message => {
           if (notices.get(message.id)) return null
@@ -136,7 +146,7 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
                   : 'conversationErrorGeneral') : undefined
           return <article key={message.id} className={cn('flex items-start gap-3', user && 'flex-row-reverse')}>
             {!user && <AgentAvatar avatar={sender.avatar} name={sender.name} className="mt-0.5 size-8 rounded-lg text-base" />}
-            <div className={cn('min-w-0 max-w-[88%]', user ? 'rounded-2xl bg-foreground/5 px-4 py-3' : 'flex-1')}>
+            <div className={cn('min-w-0', user ? 'max-w-[88%] rounded-2xl bg-foreground/5 px-4 py-3' : 'flex-1')}>
               {!user && <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground"><span className="font-medium">{nodeLabel(config, message.fromNodeId, text)}</span><span>{formatTimestamp(message.createdAt)}</span></div>}
               {errorSummary ? <details className="group min-w-0 rounded-2xl border border-destructive/25 bg-destructive/10 text-destructive">
                 <summary className="flex cursor-pointer list-none items-center gap-2 rounded-2xl px-4 py-3 text-sm leading-6 outline-none focus-visible:ring-2 focus-visible:ring-destructive/50 [&::-webkit-details-marker]:hidden">
@@ -172,7 +182,7 @@ export function SuperAgentConversation({ snapshot, active, busy, requestPending,
       </div>
     </div>
     <div className="shrink-0 px-5 pb-5 pt-3">
-      <div className="mx-auto max-w-3xl space-y-2">
+      <div className="mx-auto w-full max-w-6xl space-y-2">
         {approvalCount > 0 && <button type="button" className="flex items-center gap-2 text-xs text-amber-700 hover:underline dark:text-amber-400" onClick={() => approvalRef.current?.scrollIntoView({ block: 'nearest' })}><ShieldCheck className="size-3.5" />{text('approvalCount', { count: approvalCount })}<ChevronDown className="size-3" /></button>}
         <div className="rounded-2xl border border-border bg-background p-3 shadow-xs">
           {attachmentError && <p role="alert" className="text-xs text-destructive">{attachmentError}</p>}

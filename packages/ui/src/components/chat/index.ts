@@ -14,6 +14,7 @@ export { SessionViewer, type SessionViewerProps, type SessionViewerMode } from '
 export { UserMessageBubble, type UserMessageBubbleProps } from './UserMessageBubble'
 export { MessageHistoryActions } from './MessageHistoryActions'
 export { SystemMessage, type SystemMessageProps, type SystemMessageType } from './SystemMessage'
+export { SourceActivationNotice, parseSourceActivation } from './SourceActivationNotice'
 
 // Attachment helpers
 export { FileTypeIcon, getFileTypeLabel, type FileTypeIconProps } from './attachment-helpers'

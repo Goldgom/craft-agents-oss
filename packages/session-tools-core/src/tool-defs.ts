@@ -696,6 +696,7 @@ Use this for short Python/Node/Bun snippets when strict Explore-mode Bash parsin
 - Executes script source from \`script\` in a temporary file
 - Returns stdout/stderr, exit code, duration, and timeout status
 - Accepts optional input files and stdin
+- On Linux, automatically creates and verifies a sandbox; if no usable backend exists, attempts to install bubblewrap using the host package manager (root or passwordless sudo required), then continues the original script
 - Requires enforced network and filesystem isolation; if unsupported or unusable, execution is blocked
 
 **Safety:**

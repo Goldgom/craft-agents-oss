@@ -54,6 +54,7 @@ import {
 } from './session-scoped-tools.ts';
 import { type AutomationSystem, type SdkAutomationCallbackMatcher } from '../automations/index.ts';
 import { listAgents, loadClaudeSubagents } from '../agents/index.ts';
+import { COMPACTION_TARGET_INSTRUCTIONS } from '../agents/types.ts';
 import {
   getPermissionMode,
   getPermissionModeDiagnostics,
@@ -1369,7 +1370,7 @@ export class ClaudeAgent extends BaseAgent {
         // - Mini agents: Use custom (lean) system prompt without Claude Code preset
         // - Normal agents: Append to Claude Code's system prompt (recommended by docs)
         systemPrompt: miniConfig.enabled
-          ? this.getMiniSystemPrompt()
+          ? `${this.getMiniSystemPrompt()}\n\n# Compact instructions\n${COMPACTION_TARGET_INSTRUCTIONS}`
           : this.config.modelPromptSettings?.lightweight
             ? getSystemPrompt(
               this.pinnedPreferencesPrompt ?? undefined,
@@ -1383,7 +1384,7 @@ export class ClaudeAgent extends BaseAgent {
               this.config.agentPrompt,
               this.config.modelPromptSettings,
               this.config.agentRuntime,
-            )
+            ) + `\n\n# Compact instructions\n${COMPACTION_TARGET_INSTRUCTIONS}`
             : {
               type: 'preset' as const,
               preset: 'claude_code' as const,
@@ -1400,7 +1401,7 @@ export class ClaudeAgent extends BaseAgent {
                 this.config.agentPrompt,
                 this.config.modelPromptSettings,
                 this.config.agentRuntime,
-              ),
+              ) + `\n\n# Compact instructions\n${COMPACTION_TARGET_INSTRUCTIONS}`,
             },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.
         // This ensures SDK can always find session transcripts regardless of workingDirectory changes.
@@ -1820,12 +1821,12 @@ export class ClaudeAgent extends BaseAgent {
         SDK_SLASH_COMMANDS.includes(commandName as typeof SDK_SLASH_COMMANDS[number]) &&
         !attachments?.length;
       // A workspace may customize the built-in compact agent's instructions.
-      // Keep execution native, but use the configured prompt when no explicit
-      // instructions were supplied with /compact.
+      // Keep execution native. Custom focus augments the common retention target.
       let slashCommandMessage = trimmedMessage;
-      if (isSlashCommand && commandName === 'compact' && !trimmedMessage.match(/^\/compact\s+/i)) {
+      if (isSlashCommand && commandName === 'compact') {
         const compactAgent = (await listAgents(this.workspaceRootPath)).find(agent => agent.id === 'compact');
-        if (compactAgent?.prompt) slashCommandMessage = `/compact ${compactAgent.prompt}`;
+        const focus = trimmedMessage.replace(/^\/compact\s*/i, '');
+        slashCommandMessage = `/compact ${compactAgent?.prompt ?? ''}\n${focus}\n${COMPACTION_TARGET_INSTRUCTIONS}`;
       }
 
       // For SDK-fork branches: prepend a one-time context hint so the model treats

@@ -49,6 +49,8 @@ import {
   TurnCard,
   UserMessageBubble,
   MessageHistoryActions,
+  SourceActivationNotice,
+  parseSourceActivation,
   groupMessagesByTurn,
   formatTurnAsMarkdown,
   formatActivityAsMarkdown,
@@ -2566,6 +2568,11 @@ function MessageBubble({
           <div className="flex-1 h-px bg-border" />
         </div>
       )
+    }
+
+    const activatedSource = parseSourceActivation(message.content)
+    if (activatedSource && (!message.infoLevel || message.infoLevel === 'success' || message.infoLevel === 'info')) {
+      return <SourceActivationNotice sourceSlug={activatedSource} className="my-1" />
     }
 
     const level = message.infoLevel || 'info'
