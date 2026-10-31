@@ -6,7 +6,7 @@ import { updateSuperAgentMemory } from './SuperAgentLibrary'
 export const DEFAULT_CONTEXT_COMPACTION = { enabled: true, tokenThreshold: 252_000, saveToMemory: true }
 export const SUPER_AGENT_COMPACT_INSTRUCTIONS = '/compact Preserve authorized goals, unfinished plans, artifact paths, numeric contracts, blockers and latest verification evidence. ' +
   'Do not execute tasks or replay action blocks. [super-agent-high-compression] ' +
-  'Rebuild a minimal checkpoint targeting at most 10% of the original context. Remove obsolete progress, duplicate instructions and verbose tool output. ' +
+  'Rebuild a checkpoint targeting approximately 10% of the original conversation tokens, including the summary and retained verbatim history together. Remove obsolete progress, duplicate instructions and verbose tool output. ' +
   'Keep unresolved work, exact references and uncertainty. Long-term handoff checkpoints are retrievable through super_agent_library; do not copy their full text into the summary.'
 
 export function compactionUsageKey(sessionId: string, usage?: Session['tokenUsage']): string {

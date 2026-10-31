@@ -685,6 +685,7 @@ export class PiAgent extends BaseAgent {
       // SDK's built-in bash tool uses the same shell as the Claude backend
       // (per-user Git installs are missed by the SDK's Program Files search).
       gitBashPath: getGitBashPath()?.trim() || undefined,
+      ripgrepPath: runtime.paths?.ripgrep,
       piAuth,
       baseUrl: runtime.baseUrl,
       customEndpoint: runtime.customEndpoint,

@@ -55,6 +55,8 @@ Accept only completed work with a completed evidence task and current artifact v
 
 Only complete a plan after all linked work, verification and script results are handled. Describe internal recoverable blockers with `blocker.kind=system` and a concrete `systemAction`; wait for the user only when specific information, authorization or a decision is missing, using `blocker.kind=user` and `userAction`.
 
+Check the original user outcome before closing: completing an investigation, describing a missing tool or submitting a scan is not completion of an implementation or ongoing management goal. Repair team-authored missing functionality within existing authorization, or assign the specific remaining work. Do not add restrictions such as “only the original task may continue” when the user required exclusive access rather than permanent task identity. After checking unsettled effects and completing exclusive handoff, remaining authorized work may use a new task ID under the same goal and plan, without replaying completed effects.
+
 ## Shared state and worker progress
 
 Read `collaboration_board` with `action=get` for complete entries and revisions. `super_agent_board` writes one item with `title`, `content` and `expectedRevision`; updates also need its existing `id`. Read the full entry before replacing it and retain valid content from other nodes. The board stores reusable findings, interfaces, ownership, artifact indexes and blockers. It is not a chat log or authority to expand the task.
@@ -64,6 +66,8 @@ Workers check relevant shared state before starting, using dependencies and deli
 Communicate actual work: what changed, what was checked, and the next concrete action or input needed. Diagnose failures within current authorization, correct recoverable errors and continue independent work. Stop ineffective retries rather than abandoning the whole goal; coordinate a specific recovery with the orchestrator. Respect an explicit task instruction to stop and verify uncertain side effects before replaying an operation. Reviewers perform available checks and give actionable findings; orchestrators assign fixes and close the loop. Keep limitations brief and relevant to acceptance, report failures honestly, and avoid repeated defensive statements or passing responsibility between nodes.
 
 Use existing `super_agent_task` for task/operation reads, checkpoints, concrete waits, artifact registration and reconciliation. Use `super_agent_library` for long-term memory and immutable archives. Verify unknown outcomes against original receipts and authoritative state, without replaying an operation whose effects are uncertain.
+
+For ongoing assigned work, report a scan or intermediate result as a stage. Save a checkpoint and register a concrete supported wait while the task is still active, then read back the registration before ending the turn; check actual scheduler settings and resume limits before promising continuation. A stage report alone does not keep a task active. Once a task has completed, a message turn cannot submit its stage or wait; coordinate a formal remaining-work assignment instead. Final means the assigned task scope is finished, not merely that this model turn should end.
 
 ## Resources and scripts
 

@@ -11,6 +11,7 @@ import { getValidTokenNestCredentials } from '../auth/tokennest-oauth.ts';
 import { getBackendRuntime } from './backend/internal/driver-types.ts';
 import { CODEX_CUSTOM_API_KEY_ENV, CODEX_CUSTOM_PROVIDER, customCodexTransport } from '../codex/custom-transport.ts';
 import { getModelById } from '../config/models.ts';
+import { COMPACT_AGENT } from '../agents/types.ts';
 import { getSessionPlansPath } from '../sessions/storage.ts';
 import { mkdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -459,10 +460,11 @@ export class NativeCodexAgent extends BaseAgent {
     const response = await client.request<ThreadResponse>('thread/start', {
       model: bareModelId(this._model),
       ...(getBackendRuntime(this.config).baseUrl ? { modelProvider: CODEX_CUSTOM_PROVIDER } : {}),
-      ...((hostExecution || compactLimit !== undefined) ? { config: {
+      config: {
         ...(hostExecution ? CODEX_HOST_EXECUTION_CONFIG : {}),
         ...(compactLimit !== undefined ? { model_auto_compact_token_limit: compactLimit } : {}),
-      } } : {}),
+        compact_prompt: COMPACT_AGENT.prompt,
+      },
       ...(hostExecution ? { environments: [] } : {}),
       cwd: this.workingDirectory,
       runtimeWorkspaceRoots: [this.config.workspace.rootPath],
@@ -508,21 +510,28 @@ export class NativeCodexAgent extends BaseAgent {
       // Reject late notifications from the preceding turn while turn/start is
       // in flight. The protocol emits turn/started before item notifications.
       this.currentTurnId = 'pending';
-      const response = await client.request<TurnStartResponse>('turn/start', {
-        threadId,
-        input: this.buildUserInput(effectiveMessage, attachments),
-        cwd: this.workingDirectory,
-        runtimeWorkspaceRoots: [this.config.workspace.rootPath],
-        approvalPolicy: policy.approvalPolicy,
-        model: bareModelId(this._model),
-        effort: this.reasoningEffort(options?.thinkingOverride),
-        ...(this.usesHostExecution() ? { environments: [] } : {}),
-      });
-      this.currentTurnId = response.turn.id;
-      if (this.abortReason) {
-        this.rememberIgnoredTurn(response.turn.id);
-        void client.request('turn/interrupt', { threadId, turnId: response.turn.id }).catch(() => undefined);
-        return;
+      if (/^\/compact(?:\s|$)/i.test(message.trim()) && !attachments?.length) {
+        // Native compaction starts a turn asynchronously; it must not be sent
+        // as a regular task, which can cause the model to execute history.
+        yield { type: 'info', message: 'Compacting context (target: retain approximately 10% of conversation tokens)' };
+        await client.request('thread/compact/start', { threadId });
+      } else {
+        const response = await client.request<TurnStartResponse>('turn/start', {
+          threadId,
+          input: this.buildUserInput(effectiveMessage, attachments),
+          cwd: this.workingDirectory,
+          runtimeWorkspaceRoots: [this.config.workspace.rootPath],
+          approvalPolicy: policy.approvalPolicy,
+          model: bareModelId(this._model),
+          effort: this.reasoningEffort(options?.thinkingOverride),
+          ...(this.usesHostExecution() ? { environments: [] } : {}),
+        });
+        this.currentTurnId = response.turn.id;
+        if (this.abortReason) {
+          this.rememberIgnoredTurn(response.turn.id);
+          void client.request('turn/interrupt', { threadId, turnId: response.turn.id }).catch(() => undefined);
+          return;
+        }
       }
 
       // Native dynamic tools can complete in parallel. Keep yielding sibling

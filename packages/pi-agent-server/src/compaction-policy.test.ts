@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import { createAssistantMessageEventStream, type AssistantMessage, type Context } from '@earendil-works/pi-ai';
 import { getModel } from '@earendil-works/pi-ai/compat';
-import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager,
+import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, estimateTokens,
   type ModelRuntime, type ExtensionAPI, type SessionBeforeCompactEvent } from '@earendil-works/pi-coding-agent';
 import { compactWithPolicy, createCompactionPolicy, summaryTokenBudget } from './compaction-policy.ts';
 
@@ -109,6 +109,10 @@ describe('summary-only compaction policy', () => {
       expect(keptIndex).toBeGreaterThan(0);
       const expectedRecent = originalEntries.slice(keptIndex).filter(entry => entry.type === 'message').map(entry => entry.message);
       expect(session.agent.state.messages.slice(-expectedRecent.length)).toEqual(expectedRecent);
+      const retainedTokens = expectedRecent.reduce((sum, message) => sum + estimateTokens(message), 0);
+      const budget = summaryTokenBudget(result.tokensBefore, retainedTokens);
+      expect(budget).toBeGreaterThan(768);
+      expect(calls[0]!.context.systemPrompt).toContain(`Target approximately ${budget} tokens`);
       expect(result.estimatedTokensAfter).toBeLessThan(result.tokensBefore * 0.1);
     } finally {
       session.dispose();
@@ -132,16 +136,17 @@ describe('summary-only compaction policy', () => {
     expect(settingsManager.getCompactionSettings()).toEqual(original);
   });
 
-  it('targets 2% with a short checkpoint budget even for huge histories', () => {
-    expect(summaryTokenBudget(100_000, 512)).toBe(768);
-    expect(summaryTokenBudget(100_000, 4_000)).toBe(256);
+  it('budgets 10% for summary plus recent history and metadata without a fixed ceiling', () => {
+    expect(summaryTokenBudget(100_000, 512)).toBe(9_360);
+    expect(summaryTokenBudget(100_000, 4_000)).toBe(5_872);
     expect(summaryTokenBudget(10_000, 20_000)).toBe(256);
-    expect(summaryTokenBudget(1_000_000, 512)).toBe(768);
+    expect(summaryTokenBudget(1_000_000, 512)).toBe(99_360);
+    expect(summaryTokenBudget(100_000, 512, 1_000)).toBe(8_488);
   });
 
   for (const reason of ['manual', 'threshold', 'overflow'] as const) {
     it(`preserves original history, recent boundary and settings during ${reason} compaction`, async () => {
-      const { event, originalBranch } = await setup(reason);
+      const { event, originalBranch, policy, signal } = await setup(reason);
       expect(JSON.stringify(event.branchEntries)).toBe(originalBranch);
       expect(event.preparation.firstKeptEntryId).toBe('kept');
       expect(event.preparation.settings.keepRecentTokens).toBe(20_000);
@@ -151,6 +156,14 @@ describe('summary-only compaction policy', () => {
       expect(event.preparation.turnPrefixMessages).toEqual([]);
       expect(event.preparation.previousSummary).toBe('Prior checkpoint');
       expect([...event.preparation.fileOps.read]).toEqual(['src/file.ts']);
+      const metadataTokens = 128 + estimateTokens({ role: 'user', content: 'src/file.ts', timestamp: 0 });
+      const kept = event.branchEntries[2]!;
+      const retainedTokens = kept.type === 'message' ? estimateTokens(kept.message) : 0;
+      const budget = summaryTokenBudget(10_000, retainedTokens, metadataTokens);
+      await policy.wrapStream((_model, ctx) => {
+        expect(ctx.systemPrompt).toContain(`Target approximately ${budget} tokens`);
+        return streamOf(response('Complete checkpoint.'));
+      })(model, context, { signal });
     });
   }
 
@@ -195,6 +208,8 @@ describe('summary-only compaction policy', () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]!.messages).toEqual(context.messages);
     expect(calls[1]!.systemPrompt).toContain('Start again from the full input');
+    expect(calls[1]!.systemPrompt?.match(/Target approximately (\d+) tokens/)?.[1])
+      .toBe(calls[0]!.systemPrompt?.match(/Target approximately (\d+) tokens/)?.[1]);
   });
 
   it('bounds repeated truncation without accepting a partial checkpoint', async () => {

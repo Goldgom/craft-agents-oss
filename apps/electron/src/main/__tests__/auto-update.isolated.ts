@@ -8,8 +8,8 @@ const updater = Object.assign(new EventEmitter(), {
   setFeedURL: mock((_feed: unknown) => {}),
   checkForUpdates: mock(async () => null),
 })
-const releaseUrl = 'https://gitcode.com/Goldgom/token-bird/releases/tag/26.10.20'
-let releaseResult = { version: '26.10.20', available: true, releaseUrl, feedUrl: null as string | null }
+const releaseUrl = 'https://gitcode.com/Goldgom/token-bird/releases/tag/26.10.21'
+let releaseResult = { version: '26.10.21', available: true, releaseUrl, feedUrl: null as string | null }
 let checkError: Error | undefined
 let dismissed: string | null = null
 const broadcasts: unknown[] = []
@@ -44,7 +44,7 @@ setAutoUpdateEventSink((_channel, _target, payload) => { broadcasts.push(payload
 beforeEach(() => {
   checkError = undefined
   dismissed = null
-  releaseResult = { version: '26.10.20', available: true, releaseUrl, feedUrl: null }
+  releaseResult = { version: '26.10.21', available: true, releaseUrl, feedUrl: null }
   updater.setFeedURL.mockClear()
   updater.checkForUpdates.mockClear()
   broadcasts.length = 0
@@ -53,15 +53,15 @@ beforeEach(() => {
 describe('Windows GitCode update check', () => {
   test('announces a tag-only update without calling electron-updater', async () => {
     const info = await checkForUpdates()
-    expect(info).toMatchObject({ available: true, latestVersion: '26.10.20', releaseUrl, downloadState: 'idle' })
+    expect(info).toMatchObject({ available: true, latestVersion: '26.10.21', releaseUrl, downloadState: 'idle' })
     expect(updater.checkForUpdates).not.toHaveBeenCalled()
     expect(broadcasts.at(-1)).toEqual(info)
-    expect(await checkForUpdatesOnLaunch()).toEqual({ action: 'available', version: '26.10.20' })
+    expect(await checkForUpdatesOnLaunch()).toEqual({ action: 'available', version: '26.10.21' })
   })
 
   test('respects dismissal while keeping the manual download available in settings', async () => {
-    dismissed = '26.10.20'
-    expect(await checkForUpdatesOnLaunch()).toEqual({ action: 'skipped', reason: 'dismissed', version: '26.10.20' })
+    dismissed = '26.10.21'
+    expect(await checkForUpdatesOnLaunch()).toEqual({ action: 'skipped', reason: 'dismissed', version: '26.10.21' })
     expect((await checkForUpdates()).releaseUrl).toBe(releaseUrl)
   })
 
@@ -74,9 +74,9 @@ describe('Windows GitCode update check', () => {
   })
 
   test('retains automatic updates for complete releases and restores download settings', async () => {
-    releaseResult.feedUrl = 'https://gitcode.com/Goldgom/token-bird/releases/download/26.10.20/'
+    releaseResult.feedUrl = 'https://gitcode.com/Goldgom/token-bird/releases/download/26.10.21/'
     updater.checkForUpdates.mockImplementation(async () => {
-      updater.emit('update-available', { version: '26.10.20' })
+      updater.emit('update-available', { version: '26.10.21' })
       return null
     })
     const info = await checkForUpdates({ autoDownload: false })

@@ -12,6 +12,7 @@ import type { CredentialManager } from '../../../credentials/manager.ts';
 import type { ResolvedBackendRuntimePaths } from './runtime-resolver.ts';
 
 export interface BackendRuntimePaths {
+  ripgrep?: string;
   copilotCli?: string;
   interceptor?: string;
   sessionServer?: string;

@@ -2431,7 +2431,6 @@ export default function App() {
                             <SuperAgentPage
                               active={studioMode === 'super-agent'}
                               onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }}
-                              onOpenSession={id => { setStudioMode('agent'); navigate(routes.view.allSessions(id)) }}
                             />
                           </React.Suspense>
                         </StudioPagePanel>

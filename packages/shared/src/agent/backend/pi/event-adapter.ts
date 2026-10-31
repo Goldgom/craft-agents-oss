@@ -762,7 +762,11 @@ export class PiEventAdapter extends BaseEventAdapter {
         const isError = event.isError;
         let result: string;
 
-        if (accumulatedOutput) {
+        if (isError) {
+          // Final failures include timeout/cancellation information that a
+          // successful partial output chunk cannot replace.
+          result = this.extractToolResult(event.result, true);
+        } else if (accumulatedOutput) {
           result = accumulatedOutput;
         } else if (blockReason) {
           result = blockReason;

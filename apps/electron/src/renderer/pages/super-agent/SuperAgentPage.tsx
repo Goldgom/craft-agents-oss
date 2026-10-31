@@ -2,7 +2,7 @@ import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  Activity, ArrowLeft, BookOpen, Bot, BrainCircuit, Check, ChevronDown, ClipboardList, Code2, ExternalLink,
+  Activity, ArrowLeft, BookOpen, Bot, BrainCircuit, Check, ChevronDown, ClipboardList, Code2,
   FolderOpen, Layers3, LoaderCircle, MessagesSquare, Plus, RefreshCw,
   Settings2, ShieldCheck, Square, Wrench, Archive, PanelLeftOpen, Database, KeyRound, Zap,
 } from 'lucide-react'
@@ -32,6 +32,7 @@ import { SuperAgentLibrary } from './SuperAgentLibrary'
 import { NodeCommunication, SharedBoard } from './SuperAgentCollaboration'
 import { SuperAgentPlans } from './SuperAgentPlans'
 import { SuperAgentHistory } from './SuperAgentHistory'
+import { SuperAgentSessionDialog } from './SuperAgentSessionDialog'
 import { SuperAgentPermissions } from './SuperAgentPermissions'
 import { SuperAgentNodeRecovery } from './SuperAgentNodeRecovery'
 import { SuperAgentConversation, SuperAgentPermissionHistory } from './SuperAgentConversation'
@@ -46,7 +47,6 @@ import { recentActivityEntries, taskActivity, tasklessWorkerActivities, visibleA
 export interface SuperAgentPageProps {
   active?: boolean
   onOpenAiSettings?: () => void
-  onOpenSession?: (sessionId: string) => void
 }
 
 type SettingsSection = 'settings' | 'team' | 'plans' | 'board' | 'communication' | 'resources' | 'scripts' | 'history' | 'permissionManagement' | 'statistics' | 'archiveLibrary' | 'memoryLibrary' | 'reports' | 'sources' | 'credentials' | 'automations' | 'import' | 'skills'
@@ -61,7 +61,7 @@ const settingsSections: Array<{ id: SettingsSection; icon: typeof Bot }> = [
   { id: 'statistics', icon: Activity },
 ]
 
-export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpenSession }: SuperAgentPageProps) {
+export default function SuperAgentPage({ active = true, onOpenAiSettings }: SuperAgentPageProps) {
   const text = useSuperAgentText()
   const { t, i18n } = useTranslation()
   const pageSidebar = usePageSidebar()
@@ -80,6 +80,10 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>()
   const [sources, setSources] = useState<LoadedSource[]>([])
   const [taskDialogNode, setTaskDialogNode] = useState<string | null>(null)
+  const [sessionDetails, setSessionDetails] = useState<{ workspaceId: string; sessionId: string } | null>(null)
+  const openSessionDetails = useCallback((sessionId: string) => {
+    if (activeWorkspaceId) setSessionDetails({ workspaceId: activeWorkspaceId, sessionId })
+  }, [activeWorkspaceId])
   const pageRef = useRef<HTMLDivElement>(null)
   const pageWidth = useContainerWidth(pageRef)
   const compact = pageWidth < 920
@@ -115,8 +119,10 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
 
   useEffect(() => {
     ++requestRef.current
-    setSnapshot(null); setError(''); setLoading(!!activeWorkspaceId); setView('home'); setSettingsSection('settings'); setSelectedNodeId(undefined); setSources([])
+    setSnapshot(null); setError(''); setLoading(!!activeWorkspaceId); setView('home'); setSettingsSection('settings'); setSelectedNodeId(undefined); setSources([]); setSessionDetails(null)
   }, [activeWorkspaceId])
+
+  useEffect(() => { if (!active) setSessionDetails(null) }, [active])
 
   useEffect(() => {
     if (!active || !activeWorkspaceId) return
@@ -233,12 +239,12 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
                     onInspect={async () => { await command({ type: 'inspect' }) }} />
                   <WorkProgress snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} compact={compact} busy={busy}
                     onOpenPlans={() => { setSettingsSection('plans'); setView('settings') }}
-                    onCreateTask={() => setTaskDialogNode('')} onCommand={async value => { await command(value) }} onOpenSession={onOpenSession} />
+                    onCreateTask={() => setTaskDialogNode('')} onCommand={async value => { await command(value) }} onOpenSession={openSessionDetails} />
                 </div>}
                 {view === 'settings' && <div className={cn('flex h-full min-h-0', compact ? 'flex-col' : 'flex-row')}>
                   <div className="min-h-0 min-w-0 flex-1">
                     {settingsSection === 'team' && <NodeTeam snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} pendingPermissions={pendingPermissions}
-                      onEdit={openNodeSettings} onOpenSession={onOpenSession} onTask={nodeId => setTaskDialogNode(nodeId)} onCommand={async value => { await command(value) }} busy={busy} />}
+                      onEdit={openNodeSettings} onOpenSession={openSessionDetails} onTask={nodeId => setTaskDialogNode(nodeId)} onCommand={async value => { await command(value) }} busy={busy} />}
                     {settingsSection === 'board' && <SharedBoard config={config} items={snapshot.state.board} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'plans' && <div className="h-full overflow-y-auto"><SuperAgentRequirements state={snapshot.state} /><SuperAgentPlans items={snapshot.state.plans} onCommand={async value => { await command(value) }} /></div>}
                     {settingsSection === 'credentials' && <NativeCredentialManager key={activeWorkspaceId!} workspaceId={activeWorkspaceId!} />}
@@ -258,6 +264,9 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings, onOpen
                 </div>}
               </div>
               <TaskDialog config={config} nodeId={taskDialogNode} onClose={() => setTaskDialogNode(null)} onCommand={async value => { await command(value) }} />
+              {active && sessionDetails?.workspaceId === activeWorkspaceId && <SuperAgentSessionDialog key={activeWorkspaceId + ':' + sessionDetails.sessionId}
+                sessionId={sessionDetails.sessionId} snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }}
+                busy={busy} onCommand={command} onClose={() => setSessionDetails(null)} />}
             </>}
   </div></div></SuperAgentFileContext>
 }
@@ -360,7 +369,7 @@ function NodeTeam({ snapshot, pendingPermissions, onEdit, onOpenSession, onTask,
         {runtime && <SuperAgentNodeRecovery runtime={runtime} nodeName={node.name} busy={busy} onCommand={onCommand} />}
         <div className="flex flex-wrap gap-2 border-t border-border/60 pt-3">
           {!node.dynamic && <Button size="sm" variant="outline" onClick={() => onEdit(node.id)}><Settings2 className="size-3.5" />{text('editNode')}</Button>}
-          {runtime?.sessionId && onOpenSession && <Button size="sm" variant="outline" className={approvalCount ? 'border-amber-500/30 text-amber-600 dark:text-amber-400' : ''} onClick={() => onOpenSession(runtime.sessionId!)}><ExternalLink className="size-3.5" />{text('openSession')}{approvalCount > 0 && <span className="rounded-full bg-amber-500/10 px-1.5 text-[10px]">{approvalCount}</span>}</Button>}
+          {runtime?.sessionId && onOpenSession && <Button size="sm" variant="outline" className={approvalCount ? 'border-amber-500/30 text-amber-600 dark:text-amber-400' : ''} onClick={() => onOpenSession(runtime.sessionId!)}><MessagesSquare className="size-3.5" />{text('openSession')}{approvalCount > 0 && <span className="rounded-full bg-amber-500/10 px-1.5 text-[10px]">{approvalCount}</span>}</Button>}
           {node.role === 'worker' && !node.dynamic && <Button size="sm" variant="ghost" disabled={busy || !snapshot.environment.available} onClick={() => onTask(node.id)}><Plus className="size-3.5" />{text('createTask')}</Button>}
         </div>
       </article>
@@ -401,7 +410,7 @@ function TaskList({ snapshot, busy, onCommand, onOpenSession }: {
       {task.acceptance && <p className="text-[11px] leading-5 text-muted-foreground">{task.acceptance.note}</p>}
       {activity && <WorkerActivity activity={activity} />}
       {task.output && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">{text('result')}</summary><div className="mt-2 max-h-80 overflow-y-auto text-xs leading-5"><Markdown>{task.output}</Markdown></div></details>}
-      {(running || (sessionId && onOpenSession)) && <div className="flex flex-wrap gap-1.5">{sessionId && onOpenSession && <button type="button" className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => onOpenSession(sessionId)}><ExternalLink className="size-3" />{text('openSession')}</button>}
+      {(running || (sessionId && onOpenSession)) && <div className="flex flex-wrap gap-1.5">{sessionId && onOpenSession && <button type="button" className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => onOpenSession(sessionId)}><MessagesSquare className="size-3" />{text('openSession')}</button>}
         {running && <button type="button" disabled={busy} className="ml-auto inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive disabled:opacity-50" onClick={() => { void onCommand({ type: 'cancel', taskId: task.id }).catch(() => {}) }}><Square className="size-3" />{text('stop')}</button>}</div>}
     </article>
   })}</div>

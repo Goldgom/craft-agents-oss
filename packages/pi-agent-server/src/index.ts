@@ -16,6 +16,8 @@
 
 import http from 'node:http';
 import { restrictedResources } from './restricted-resources.ts';
+import { createLocalSearchTools } from './tools/local-search.ts';
+import { withBashTimeout, runToolPhase, appendToolDiagnostic } from './tool-execution.ts';
 import { contextImagesExtension } from './context-images.ts';
 import { compactWithPolicy, createCompactionPolicy } from './compaction-policy.ts';
 import { compactionModelCandidates } from './compaction-models.ts';
@@ -41,8 +43,6 @@ import {
   createBashToolDefinition,
   createEditToolDefinition,
   createWriteToolDefinition,
-  createGrepToolDefinition,
-  createFindToolDefinition,
   createLsToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import type {
@@ -155,6 +155,7 @@ interface InitMessage {
   compactionModels?: Array<{ id: string; name: string }>;
   /** Windows: globally configured Git Bash path (config.json gitBashPath) for the built-in bash tool */
   gitBashPath?: string;
+  ripgrepPath?: string;
 }
 
 interface RuntimeConfigUpdateMessage {
@@ -382,6 +383,11 @@ function send(msg: OutboundMessage): void {
 function debugLog(message: string): void {
   // Write debug messages to stderr so they don't interfere with JSONL protocol
   process.stderr.write(`[pi-server] ${message}\n`);
+}
+
+function logToolPhase(record: string): void {
+  debugLog(`Tool phase ${record}`);
+  appendToolDiagnostic(initConfig?.sessionPath, record);
 }
 
 /** Find the most recent .jsonl session file in a directory. */
@@ -701,11 +707,10 @@ async function ensureSession(): Promise<AgentSession> {
   }
   const builtinDefs = [
     createReadToolDefinition(cwd),
-    createBashToolDefinition(cwd, bashShellPath ? { shellPath: bashShellPath } : undefined),
+    withBashTimeout(createBashToolDefinition(cwd, bashShellPath ? { shellPath: bashShellPath } : undefined)),
     createEditToolDefinition(cwd),
     createWriteToolDefinition(cwd),
-    createGrepToolDefinition(cwd),
-    createFindToolDefinition(cwd),
+    ...createLocalSearchTools(cwd, initConfig.ripgrepPath),
     createLsToolDefinition(cwd),
   ];
   const proxyTools = buildProxyTools();
@@ -939,7 +944,8 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
     }
 
     // Send to main process for permission checking + transforms
-    inputObj = await requestPreToolUseApproval(sdkToolName, inputObj, toolCallId);
+    inputObj = await runToolPhase(logToolPhase, toolCallId, sdkToolName, 'permission',
+      () => requestPreToolUseApproval(sdkToolName, inputObj, toolCallId));
 
     // Metadata is for TokenBird UI only. Keep a final defensive strip here so the
     // upstream Pi tool implementation always receives clean executable args,
@@ -947,55 +953,57 @@ function wrapSingleTool(tool: ToolDefinition<any, any>): ToolDefinition<any, any
     inputObj = stripTokenBirdMetadata(inputObj);
 
     // Execute original tool with (potentially modified) input
-    const result = await originalExecute(toolCallId, inputObj, signal, onUpdate, ctx);
+    const result = await runToolPhase(logToolPhase, toolCallId, sdkToolName, 'execution',
+      () => originalExecute(toolCallId, inputObj, signal, onUpdate, ctx));
 
     // --- Post-execute: large response summarization ---
+    return runToolPhase(logToolPhase, toolCallId, sdkToolName, 'result-processing', async () => {
+      const resultText = result.content
+        .filter((c): c is PiTextContent => c.type === 'text')
+        .map(c => c.text)
+        .join('');
 
-    const resultText = result.content
-      .filter((c): c is PiTextContent => c.type === 'text')
-      .map(c => c.text)
-      .join('');
+      // Source the active model's contextWindow each call so the threshold
+      // tracks set_model mid-session, not the model that was active at session
+      // creation. Falls back to the fixed default when the model isn't set yet.
+      const modelContextWindow = piSession?.agent.state.model?.contextWindow;
+      if (estimateTokens(resultText) > tokenLimitFor(modelContextWindow) && initConfig) {
+        try {
+          const sessionPath = getSessionPath(
+            initConfig.workspaceRootPath,
+            initConfig.sessionId,
+          );
 
-    // Source the active model's contextWindow each call so the threshold
-    // tracks set_model mid-session, not the model that was active at session
-    // creation. Falls back to the fixed default when the model isn't set yet.
-    const modelContextWindow = piSession?.agent.state.model?.contextWindow;
-    if (estimateTokens(resultText) > tokenLimitFor(modelContextWindow) && initConfig) {
-      try {
-        const sessionPath = getSessionPath(
-          initConfig.workspaceRootPath,
-          initConfig.sessionId,
-        );
+          const largeResult = await handleLargeResponse({
+            text: resultText,
+            sessionPath,
+            context: {
+              toolName: sdkToolName,
+              input: inputObj,
+              intent,
+              userRequest: currentUserMessage,
+            },
+            // Node tool results stay in the node's model process. Keep full text
+            // on disk with a preview instead of starting a second model query.
+            summarize: initConfig.browserToolOnly ? undefined : runMiniCompletion,
+            contextWindow: modelContextWindow,
+          });
 
-        const largeResult = await handleLargeResponse({
-          text: resultText,
-          sessionPath,
-          context: {
-            toolName: sdkToolName,
-            input: inputObj,
-            intent,
-            userRequest: currentUserMessage,
-          },
-          // Node tool results stay in the node's model process. Keep full text
-          // on disk with a preview instead of starting a second model query.
-          summarize: initConfig.browserToolOnly ? undefined : runMiniCompletion,
-          contextWindow: modelContextWindow,
-        });
-
-        if (largeResult) {
-          return {
-            content: [{ type: 'text', text: largeResult.message }],
-            details: result.details,
-          };
+          if (largeResult) {
+            return {
+              content: [{ type: 'text', text: largeResult.message }],
+              details: result.details,
+            };
+          }
+        } catch (error) {
+          debugLog(
+            `Large response handling failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-      } catch (error) {
-        debugLog(
-          `Large response handling failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
       }
-    }
 
-    return result;
+      return result;
+    });
   };
 
   return {

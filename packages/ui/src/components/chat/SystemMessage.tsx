@@ -10,8 +10,10 @@
  */
 
 import type { CSSProperties } from 'react'
+import type { Message } from '@tokenbird/core'
 import { cn } from '../../lib/utils'
 import { Markdown } from '../markdown'
+import { SourceActivationNotice, parseSourceActivation } from './SourceActivationNotice'
 
 export type SystemMessageType = 'error' | 'info' | 'warning' | 'system'
 
@@ -20,6 +22,7 @@ export interface SystemMessageProps {
   content: string
   /** Message type determining visual style */
   type: SystemMessageType
+  infoLevel?: Message['infoLevel']
   /** Additional className for the outer container */
   className?: string
 }
@@ -62,8 +65,11 @@ const MESSAGE_STYLES: Record<SystemMessageType, {
 export function SystemMessage({
   content,
   type,
+  infoLevel,
   className,
 }: SystemMessageProps) {
+  const activatedSource = type === 'info' && (!infoLevel || infoLevel === 'success' || infoLevel === 'info') ? parseSourceActivation(content) : null
+  if (activatedSource) return <div className={cn('px-4 py-2', className)}><SourceActivationNotice sourceSlug={activatedSource} /></div>
   const style = MESSAGE_STYLES[type]
 
   return (

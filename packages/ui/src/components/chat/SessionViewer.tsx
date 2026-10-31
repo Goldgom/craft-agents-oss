@@ -9,7 +9,7 @@
 
 import type { ReactNode } from 'react'
 import { useMemo, useState, useCallback } from 'react'
-import type { StoredSession } from '@tokenbird/core'
+import type { Message, StoredSession } from '@tokenbird/core'
 import { cn } from '../../lib/utils'
 import { CHAT_LAYOUT, CHAT_CLASSES } from '../../lib/layout'
 import { PlatformProvider, type PlatformActions } from '../../context'
@@ -27,7 +27,9 @@ export type SessionViewerMode = 'interactive' | 'readonly'
 
 export interface SessionViewerProps {
   /** Session data to display */
-  session: StoredSession
+  session: Pick<StoredSession, 'id' | 'messages'> | { id: string; messages: Message[] }
+  /** Live subagent details can observe an active session as well as stored snapshots. */
+  isProcessing?: boolean
   /** View mode - 'readonly' for web viewer, 'interactive' for Electron */
   mode?: SessionViewerMode
   /** Platform-specific actions (file opening, URL handling, etc.) */
@@ -74,6 +76,7 @@ function TokenBirdAgentLogo({ className }: { className?: string }) {
  */
 export function SessionViewer({
   session,
+  isProcessing = false,
   mode = 'readonly',
   platformActions = {},
   className,
@@ -84,12 +87,10 @@ export function SessionViewer({
   footer,
   sessionFolderPath,
 }: SessionViewerProps) {
-  // Convert StoredMessage[] to Message[] and group into turns.
-  // Viewer is always a snapshot of a finished session, so we mark it as not processing
-  // to force the open turn (if any) to flush with the intermediate-text fallback applied.
+  // Preserve runtime streaming fields for live details; stored snapshots default to finished.
   const turns = useMemo(
-    () => groupMessagesByTurn(session.messages.map(storedToMessage), { isSessionProcessing: false }),
-    [session.messages]
+    () => groupMessagesByTurn(session.messages.map(message => 'role' in message ? message : storedToMessage(message)), { isSessionProcessing: isProcessing }),
+    [session.messages, isProcessing]
   )
 
   // Track expanded turns (for controlled state)
@@ -184,6 +185,7 @@ export function SessionViewer({
                     key={turn.message.id}
                     content={turn.message.content}
                     type={msgType}
+                    infoLevel={turn.message.infoLevel}
                   />
                 )
               }

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ComponentEntry } from './types'
 import { AppShellProvider, useAppShellContext } from '../../context/AppShellContext'
 import SuperAgentPage from '../../pages/super-agent/SuperAgentPage'
-import type { LlmConnectionWithStatus, LoadedSource, SessionEvent } from '../../../shared/types'
+import type { LlmConnectionWithStatus, LoadedSource, SessionEvent, Session } from '../../../shared/types'
 import type { SuperAgentCommand, SuperAgentConfig, SuperAgentSnapshot } from '@tokenbird/shared/super-agent'
 
 const connection: LlmConnectionWithStatus = {
@@ -150,6 +150,17 @@ function SuperAgentPreview({ scenario = 'configured' }: { scenario?: 'onboarding
         if (command.type === 'script-run' || command.type === 'script-stop') throw new Error('此演示不运行脚本。')
         return commit()
       },
+      getSessionMessages: async (sessionId: string): Promise<Session | null> => {
+        const runtime = snapshot.state.nodes.find(node => node.sessionId === sessionId)
+        if (!runtime) return null
+        const node = snapshot.config?.nodes.find(node => node.id === runtime.nodeId)
+        const activity = snapshot.activity?.find(item => item.sessionId === sessionId)
+        return { id: sessionId, workspaceId: shell.activeWorkspaceId!, workspaceName: 'Synthetic preview', name: node?.name,
+          isProcessing: ['working', 'preparing', 'recovering'].includes(runtime.status), hidden: true, lastMessageAt: Date.now(),
+          messages: [{ id: sessionId + ':prompt', role: 'user', content: node?.description ?? 'Synthetic preview', timestamp: 1 },
+            ...(activity?.entries ?? []).map(entry => ({ id: entry.id, role: entry.kind === 'tool' ? 'tool' as const : 'assistant' as const,
+              content: entry.text, timestamp: entry.createdAt, toolName: entry.toolName, toolUseId: entry.toolUseId, turnId: entry.turnId }))] }
+      },
       getSources: async () => [source],
       getSkills: async () => [],
       onSessionEvent: listener => { eventListeners.add(listener); return () => { eventListeners.delete(listener) } },
@@ -187,7 +198,7 @@ function SuperAgentPreview({ scenario = 'configured' }: { scenario?: 'onboarding
   }, [scenario])
   return <AppShellProvider value={{ ...shell, llmConnections: [connection], workspaceDefaultLlmConnection: connection.slug, pendingPermissions: new Map(), isCompactMode: false }}>
     <div className="flex h-full min-h-0 flex-col"><div className="shrink-0 border-b border-amber-500/20 bg-amber-500/8 px-4 py-2 text-[10px] text-amber-700 dark:text-amber-400">Synthetic preview · 不调用 AI、不操作文件、不运行脚本 · 操作记录 {requests}{notice && ' · ' + notice}</div>
-      <div className="min-h-0 flex-1">{ready && <SuperAgentPage key={scenario} onOpenAiSettings={() => setNotice('演示：打开 AI 设置')} onOpenSession={id => setNotice('演示会话：' + id)} />}</div></div>
+      <div className="min-h-0 flex-1">{ready && <SuperAgentPage key={scenario} onOpenAiSettings={() => setNotice('演示：打开 AI 设置')} />}</div></div>
   </AppShellProvider>
 }
 

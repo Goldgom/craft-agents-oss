@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setSessionExecutionPolicy, clearSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import * as preferences from '../config/preferences.ts';
+import { COMPACT_AGENT } from '../agents/types.ts';
 
 function createAgent(overrides: Partial<BackendConfig> = {}): NativeCodexAgent {
   const now = Date.now();
@@ -220,7 +221,7 @@ describe('NativeCodexAgent protocol adaptation', () => {
       return { thread: { id: 'configured-thread' } };
     } } as never;
     await agent['ensureThread'](client);
-    expect(params?.config).toEqual({ model_auto_compact_token_limit: 80_000 });
+    expect(params?.config).toEqual({ model_auto_compact_token_limit: 80_000, compact_prompt: COMPACT_AGENT.prompt });
     agent.destroy();
   });
 
@@ -233,6 +234,33 @@ describe('NativeCodexAgent protocol adaptation', () => {
     expect(agent['reasoningEffort']('xhigh')).toBe('xhigh');
     expect(agent['reasoningEffort']('max')).toBe('ultra');
     agent.destroy();
+  });
+
+  it('routes compact commands to native compaction and waits for completion or failure', async () => {
+    for (const status of ['completed', 'failed'] as const) {
+      const agent = createAgent();
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const client = { request: async (method: string, params: unknown) => {
+        calls.push({ method, params });
+        agent['handleNotification']('turn/started', { threadId: 'compact-thread', turn: { id: 'compact-turn' } });
+        if (status === 'completed') agent['handleNotification']('thread/compacted', { threadId: 'compact-thread', turnId: 'compact-turn' });
+        agent['handleNotification']('turn/completed', { threadId: 'compact-thread', turn: {
+          id: 'compact-turn', status, items: [], error: status === 'failed' ? { message: 'Summary generation failed' } : null,
+        } });
+        return {};
+      } };
+      agent['ensureClient'] = async () => client as never;
+      agent['ensureThread'] = async () => { agent['codexThreadId'] = 'compact-thread'; return 'compact-thread'; };
+      agent['authenticated'] = true;
+      try {
+        const events = [];
+        for await (const event of agent['chatImpl']('/compact [super-agent-high-compression]')) events.push(event);
+        expect(calls).toEqual([{ method: 'thread/compact/start', params: { threadId: 'compact-thread' } }]);
+        expect(events.at(-1)?.type).toBe('complete');
+        expect(events.some(event => event.type === 'typed_error' || event.type === 'error')).toBe(status === 'failed');
+        expect(agent.isProcessing()).toBe(false);
+      } finally { agent.destroy(); }
+    }
   });
 
   it('maps streamed text, usage, and completion into TokenBird events', async () => {

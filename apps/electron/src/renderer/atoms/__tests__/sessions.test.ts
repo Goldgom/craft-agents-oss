@@ -46,6 +46,20 @@ describe('session message loading atoms', () => {
     }
   })
 
+  it('loads a hidden retired node by id without adding it to the conversation list', async () => {
+    const store = createStore()
+    const hidden = makeSession({ id: 'retired-node', hidden: true, messages: [msg('node-result', 'assistant')] })
+    globalThis.window = {
+      electronAPI: { getSessionMessages: async (id: string) => id === hidden.id ? hidden : null },
+    } as unknown as typeof window
+    const loaded = await store.set(ensureSessionMessagesLoadedAtom, hidden.id)
+    expect(loaded?.messages[0]?.content).toBe('content:node-result')
+    expect(loaded?.hidden).toBe(true)
+    expect(store.get(sessionMetaMapAtom).has(hidden.id)).toBe(false)
+    expect(store.get(sessionIdsAtom)).toEqual([])
+    expect(await store.set(releaseSessionMessagesAtom, hidden.id)).toBe(true)
+  })
+
   it('replaceLoadedSessionAtom marks authoritative full sessions as loaded', () => {
     const store = createStore()
     const sessionId = 'session-1'

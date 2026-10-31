@@ -1,5 +1,27 @@
 import type { SessionMeta } from '../atoms/sessions'
 
+/** Shared by history rows and their subagent details entry. */
+export function sessionBranchRootId(item: SessionMeta, byId: ReadonlyMap<string, SessionMeta>, cache = new Map<string, string>()): string {
+  const path: string[] = []
+  let current = item
+  let root: string
+  while (true) {
+    const cached = cache.get(current.id)
+    if (cached) { root = cached; break }
+    const cycleStart = path.indexOf(current.id)
+    if (cycleStart >= 0) { root = path.slice(cycleStart).sort()[0]!; break }
+    path.push(current.id)
+    if (!current.branchFromSessionId) { root = current.id; break }
+    const parent = byId.get(current.branchFromSessionId)
+    // Surviving siblings still share one entry after deleting their source.
+    if (!parent) { root = current.branchFromSessionId; break }
+    if (parent.workspaceId !== item.workspaceId) { root = current.id; break }
+    current = parent
+  }
+  for (const id of path) cache.set(id, root)
+  return root
+}
+
 /** One history entry per conversation, with the selected variant as its target. */
 export function collapseSessionBranchHistory(
   items: SessionMeta[],
@@ -8,26 +30,7 @@ export function collapseSessionBranchHistory(
 ): SessionMeta[] {
   const byId = new Map(ancestry.map(item => [item.id, item]))
   const roots = new Map<string, string>()
-  const rootOf = (item: SessionMeta): string => {
-    const path: string[] = []
-    let current = item
-    let root: string
-    while (true) {
-      const cached = roots.get(current.id)
-      if (cached) { root = cached; break }
-      const cycleStart = path.indexOf(current.id)
-      if (cycleStart >= 0) { root = path.slice(cycleStart).sort()[0]!; break }
-      path.push(current.id)
-      if (!current.branchFromSessionId) { root = current.id; break }
-      const parent = byId.get(current.branchFromSessionId)
-      // Surviving siblings still share one entry after deleting their source.
-      if (!parent) { root = current.branchFromSessionId; break }
-      if (parent.workspaceId !== item.workspaceId) { root = current.id; break }
-      current = parent
-    }
-    for (const id of path) roots.set(id, root)
-    return root
-  }
+  const rootOf = (item: SessionMeta): string => sessionBranchRootId(item, byId, roots)
 
   const groups = new Map<string, SessionMeta[]>()
   for (const item of items) {

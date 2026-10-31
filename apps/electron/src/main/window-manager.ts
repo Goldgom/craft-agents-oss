@@ -6,6 +6,7 @@ import { existsSync } from 'fs'
 import { release } from 'os'
 import { fileURLToPath } from 'url'
 import { getWorkspaceByNameOrId } from '@tokenbird/shared/config'
+import { i18n } from '@tokenbird/shared/i18n'
 import { classifyExternalUrl, formatBlockedUrlError } from '@tokenbird/shared/utils/url-safety'
 import { RPC_CHANNELS, type WindowCloseRequestSource } from '../shared/types'
 import type { SavedWindow } from './window-state'
@@ -294,18 +295,28 @@ export class WindowManager {
       this.openExternalFromRenderer(url, 'will-navigate', window)
     })
 
-    // Enable right-click context menu in development
-    if (!app.isPackaged) {
-      window.webContents.on('context-menu', (_event, params) => {
-        Menu.buildFromTemplate([
-          { label: 'Inspect Element', click: () => window.webContents.inspectElement(params.x, params.y) },
+    // Native editing roles preserve the input's selection, paste handlers, and undo history.
+    window.webContents.on('context-menu', (_event, params) => {
+      const template: Electron.MenuItemConstructorOptions[] = []
+      if (params.isEditable) {
+        template.push(
+          { label: i18n.t('menu.cut'), role: 'cut', enabled: params.editFlags.canCut },
+          { label: i18n.t('menu.copy'), role: 'copy', enabled: params.editFlags.canCopy },
+          { label: i18n.t('menu.paste'), role: 'paste', enabled: params.editFlags.canPaste },
           { type: 'separator' },
-          { label: 'Cut', role: 'cut', enabled: params.editFlags.canCut },
-          { label: 'Copy', role: 'copy', enabled: params.editFlags.canCopy },
-          { label: 'Paste', role: 'paste', enabled: params.editFlags.canPaste },
-        ]).popup()
-      })
-    }
+          { label: i18n.t('menu.selectAll'), role: 'selectAll', enabled: params.editFlags.canSelectAll },
+        )
+      } else if (params.selectionText.trim()) {
+        template.push({ label: i18n.t('menu.copy'), role: 'copy', enabled: params.editFlags.canCopy })
+      }
+
+      if (!app.isPackaged) {
+        if (template.length > 0) template.push({ type: 'separator' })
+        template.push({ label: 'Inspect Element', click: () => window.webContents.inspectElement(params.x, params.y) })
+      }
+
+      if (template.length > 0) Menu.buildFromTemplate(template).popup({ window })
+    })
 
     // The renderer's index.html ships with `<title>TokenBird</title>`, so
     // without this Electron auto-syncs every window's title back to that on

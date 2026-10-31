@@ -80,6 +80,7 @@ import {
 } from "@/components/ui/collapsible"
 import { SessionList, type ChatGroupingMode } from "./SessionList"
 import { collapseSessionBranchHistory } from '@/lib/session-branch-history'
+import { conversationListSessions, sessionConversationId } from '@/lib/session-subagents'
 import { MainContentPanel } from "./MainContentPanel"
 import { BoardListToggle } from "./kanban/BoardListToggle"
 import { PanelStackContainer } from "./PanelStackContainer"
@@ -1449,6 +1450,11 @@ function AppShellContent({
   // For remote workspaces, sessions have the remote workspace ID (not the local one),
   // so we match against both the local and remote workspace IDs.
   const remoteWorkspaceId = activeWorkspace?.remoteServer?.remoteWorkspaceId
+  const selectedConversationId = useMemo(() => {
+    const id = focusedSessionId ?? session.selected
+    const meta = id ? sessionMetaMap.get(id) : undefined
+    return meta ? sessionConversationId(meta, sessionMetaMap) : id
+  }, [sessionMetaMap, focusedSessionId, session.selected])
   const rawWorkspaceSessionMetas = useMemo(() => {
     const metas = Array.from(sessionMetaMap.values())
     if (!activeWorkspaceId) return metas.filter(s => !s.hidden)
@@ -1457,7 +1463,7 @@ function AppShellContent({
     )
   }, [sessionMetaMap, activeWorkspaceId, remoteWorkspaceId])
   const workspaceSessionMetas = useMemo(() =>
-    collapseSessionBranchHistory(rawWorkspaceSessionMetas, focusedSessionId ?? session.selected),
+    collapseSessionBranchHistory(conversationListSessions(rawWorkspaceSessionMetas), focusedSessionId ?? session.selected),
     [rawWorkspaceSessionMetas, focusedSessionId, session.selected])
 
   // Active sessions exclude archived - use this for all counts and filters except archived view
@@ -3742,7 +3748,7 @@ function AppShellContent({
                   workspaceId={activeWorkspaceId ?? undefined}
                   statusFilter={listFilter}
                   labelFilterMap={labelFilter}
-                  focusedSessionId={panelCount === 0 ? null : panelCount > 1 ? focusedSessionId : undefined}
+                  focusedSessionId={panelCount === 0 ? null : selectedConversationId}
                   onNavigateToSession={panelCount > 1 ? navigateToSessionInPanel : undefined}
                   hasPendingPrompt={hasPendingPrompt}
                   activeChatMatchInfo={chatMatchInfo}

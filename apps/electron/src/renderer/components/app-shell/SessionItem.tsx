@@ -13,6 +13,7 @@ import { BatchSessionMenu } from "./BatchSessionMenu"
 import { CompactSessionMenu } from "./CompactSessionMenu"
 import { CollaborationDialog } from './CollaborationDialog'
 import { SessionStatusIcon } from "./SessionStatusIcon"
+import { SubagentIndicator } from './SubagentIndicator'
 import { SessionBadges } from "./SessionBadges"
 import { SessionProjectColorWrapper } from "./SessionProjectColorWrapper"
 import { hasTransferTargets } from "./transfer-targets"
@@ -69,8 +70,10 @@ export function SessionItem({
   // For the active session, prefer logical match count over ripgrep count
   const activeMatch = ctx.activeChatMatchInfo
   const isActiveSession = isSelected && activeMatch?.sessionId === item.id
-  const ripgrepMatchCount = ctx.contentSearchResults.get(item.id)?.matchCount
-  const chatMatchCount = isActiveSession ? activeMatch!.count : ripgrepMatchCount
+  const searchResult = ctx.contentSearchResults.get(item.id)
+  const chatMatchCount = isActiveSession
+    ? activeMatch!.count + (searchResult?.subagentMatchCount ?? 0)
+    : searchResult?.matchCount
   const hasMatch = chatMatchCount != null && chatMatchCount > 0
   const hasLabels = !!(item.labels && item.labels.length > 0 && ctx.flatLabels.length > 0 && item.labels.some(entry => {
     const labelId = extractLabelId(entry)
@@ -272,7 +275,9 @@ export function SessionItem({
         </span>
       ) : undefined}
       badges={hasLabels ? <SessionBadges item={item} /> : undefined}
-    />
+    >
+      <SubagentIndicator sessionId={item.id} inList />
+    </EntityRow>
       <CollaborationDialog primary={item} open={collaborationOpen} onOpenChange={setCollaborationOpen} />
     </SessionProjectColorWrapper>
   )
