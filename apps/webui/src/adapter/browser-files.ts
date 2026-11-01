@@ -1,5 +1,6 @@
 import type { FileAttachment } from '../../../electron/src/shared/types'
 import { invokeAndroidNative } from '../../../electron/src/shared/android-native'
+import { attachmentMimeType } from '../../../electron/src/renderer/lib/attachment-mime'
 
 // These handles denote files explicitly selected on this device, never server paths.
 const pickedFiles = new Map<string, File>()
@@ -45,7 +46,7 @@ export async function blobBase64(blob: Blob): Promise<string> {
 export async function pickedAttachment(path: string): Promise<FileAttachment | null> {
   const file = getPickedFile(path)
   if (!file) return null
-  const mimeType = file.type || 'application/octet-stream'
+  const mimeType = attachmentMimeType(file)
   const type = mimeType.startsWith('image/') ? 'image' : mimeType === 'application/pdf' ? 'pdf'
     : mimeType.startsWith('audio/') ? 'audio' : mimeType.startsWith('text/') || /\.(md|json|csv|yaml|yml|ts|js|py)$/i.test(file.name) ? 'text' : 'unknown'
   return { name: file.name, path, mimeType, type, size: file.size,

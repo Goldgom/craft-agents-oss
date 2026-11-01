@@ -51,6 +51,7 @@ import {
 } from '@/components/ui/styled-dropdown'
 import { cn } from '@/lib/utils'
 import { coerceInputText } from '@/lib/input-text'
+import { attachmentMimeType } from '@/lib/attachment-mime'
 import { isMac } from '@/lib/platform'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
@@ -1187,12 +1188,11 @@ export function FreeFormInput({
 
         let type: FileAttachment['type'] = 'unknown'
         const fileName = overrideName || file.name
-        if (file.type.startsWith('image/')) type = 'image'
+        const mimeType = attachmentMimeType(file)
+        if (mimeType.startsWith('image/')) type = 'image'
         else if (file.type === 'application/pdf') type = 'pdf'
         else if (file.type.includes('text') || fileName.match(/\.(txt|md|json|js|ts|tsx|py|css|html)$/i)) type = 'text'
         else if (file.type.includes('officedocument') || fileName.match(/\.(docx?|xlsx?|pptx?)$/i)) type = 'office'
-
-        const mimeType = file.type || 'application/octet-stream'
 
         // For text files, decode the ArrayBuffer as UTF-8 text
         let text: string | undefined

@@ -307,13 +307,13 @@ public final class MainActivity extends Activity {
                 pendingFileChooser = filePathCallback;
 
                 try {
-                    Intent picker = fileChooserParams.createIntent();
-                    picker.addCategory(Intent.CATEGORY_OPENABLE);
+                    Intent picker = AttachmentFileChooser.createIntent(fileChooserParams);
                     startActivityForResult(picker, FILE_CHOOSER_REQUEST_CODE);
                     return true;
                 } catch (ActivityNotFoundException | SecurityException error) {
                     pendingFileChooser.onReceiveValue(null);
                     pendingFileChooser = null;
+                    webView.evaluateJavascript("window.dispatchEvent(new Event('tokenbird:file-picker-cancel'))", null);
                     Toast.makeText(MainActivity.this, R.string.file_picker_unavailable, Toast.LENGTH_LONG).show();
                     return true;
                 }
@@ -1202,7 +1202,7 @@ public final class MainActivity extends Activity {
             ValueCallback<Uri[]> callback = pendingFileChooser;
             pendingFileChooser = null;
             if (callback != null) {
-                callback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+                callback.onReceiveValue(AttachmentFileChooser.parseResult(resultCode, data));
             }
             if (resultCode != RESULT_OK) webView.evaluateJavascript("window.dispatchEvent(new Event('tokenbird:file-picker-cancel'))", null);
             return;

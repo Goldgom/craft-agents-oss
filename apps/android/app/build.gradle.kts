@@ -113,6 +113,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -146,4 +150,9 @@ android {
             )
         }
     }
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }
