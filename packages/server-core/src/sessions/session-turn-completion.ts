@@ -1,5 +1,15 @@
 export const EMPTY_RESPONSE_ERROR_CODE = 'empty_response'
 
+/** A spawned task leaves the live chat only after its final result and all
+ * continuations have settled. Authentication and background work are pauses. */
+export function shouldFinishSpawnedSession(state: {
+  parentSessionId?: string; managedWorkflow: boolean; reason: string; hasNewFinal: boolean
+  queued: number; authPending: boolean; backgroundRunning: boolean
+}): boolean {
+  return !!state.parentSessionId && !state.managedWorkflow && state.reason === 'complete'
+    && state.hasNewFinal && state.queued === 0 && !state.authPending && !state.backgroundRunning
+}
+
 type CompletionMessage = {
   id: string
   role: string

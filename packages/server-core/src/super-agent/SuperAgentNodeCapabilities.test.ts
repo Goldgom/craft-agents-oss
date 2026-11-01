@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { validateSuperAgentConfig } from '@tokenbird/shared/super-agent'
 import { resolveSessionAgentRuntime, type LlmConnection } from '@tokenbird/shared/config/llm-connections'
 import { sameNodeSessionIdentity } from './SuperAgentScheduling'
@@ -38,7 +39,9 @@ test('loads current skill instructions per node and applies the selected backend
   await until(() => f.service.get('alpha'), () => f.host.sends.length === 1)
   const first = f.host.sends[0]!
   expect(first.message).toBe('Write the report.')
-  expect(f.host.options.get(first.sessionId)!.agentSystemPrompt).toContain('VERSION_ONE')
+  const firstVersion = createHash('sha256').update(content).digest('hex')
+  expect(f.host.options.get(first.sessionId)!.agentSystemPrompt).toContain(firstVersion)
+  expect(f.host.options.get(first.sessionId)!.agentSystemPrompt).not.toContain('VERSION_ONE')
   expect(f.host.policies.get(first.sessionId)).toMatchObject({ agentRuntime: 'pi', allowSkills: ['super-agent-collaboration', 'report'], allowSources: ['research'], allowSubagents: false })
   f.host.complete(first.sessionId, 'Verified report.')
   await until(() => f.service.get('alpha'), snapshot => snapshot.state.tasks[0]?.status === 'completed')
@@ -47,8 +50,8 @@ test('loads current skill instructions per node and applies the selected backend
   await f.service.command('alpha', { type: 'task', nodeId: 'worker', title: 'Second report', instructions: 'Write another report.' })
   await until(() => f.service.get('alpha'), snapshot => snapshot.state.tasks[1]?.status === 'running')
   expect(f.host.sends.find(send => send.message === 'Write another report.')!.sessionId).toBe(first.sessionId)
-  expect(f.host.options.get(first.sessionId)!.agentSystemPrompt).toContain('VERSION_TWO')
-  expect(f.host.options.get(first.sessionId)!.agentSystemPrompt).not.toContain('VERSION_ONE')
+  expect(f.host.options.get(first.sessionId)!.agentSystemPrompt).toContain(createHash('sha256').update(content).digest('hex'))
+  expect(f.host.options.get(first.sessionId)!.agentSystemPrompt).not.toContain(firstVersion)
 })
 
 test('backend and skill changes retire node sessions while reordered bindings retain them', async () => {

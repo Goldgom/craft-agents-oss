@@ -19,6 +19,8 @@ import { restrictedResources } from './restricted-resources.ts';
 import { createLocalSearchTools } from './tools/local-search.ts';
 import { withBashTimeout, runToolPhase, appendToolDiagnostic } from './tool-execution.ts';
 import { contextImagesExtension } from './context-images.ts';
+import { hostContextExtension, hostContextMessage } from './host-context.ts';
+import type { HostContext } from '../../shared/src/agent/core/host-context.ts';
 import { compactWithPolicy, createCompactionPolicy } from './compaction-policy.ts';
 import { compactionModelCandidates } from './compaction-models.ts';
 import { archiveCompactionHistory } from './compaction-memory.ts';
@@ -103,7 +105,7 @@ import { getSessionPlansPath, getSessionPath } from '../../shared/src/sessions/s
 import { buildCallLlmRequest } from '../../shared/src/agent/llm-tool.ts';
 import type { LLMQueryRequest, LLMQueryResult } from '../../shared/src/agent/llm-tool.ts';
 import { PI_TOOL_NAME_MAP, THINKING_TO_PI } from '../../shared/src/agent/backend/pi/constants.ts';
-import { assertSuperAgentTools, filterInteractionTools, filterNativeWebTools, type SuperAgentToolRole } from '../../shared/src/agent/core/browser-tool-policy.ts';
+import { assertSuperAgentTools, filterInteractionTools, filterNativeWebTools, type SuperAgentToolRole, type SuperAgentToolArchitecture } from '../../shared/src/agent/core/browser-tool-policy.ts';
 import { installTokenBirdPiRetryClassifier } from '../../shared/src/agent/backend/pi/retry-policy.ts';
 import { getDefaultSummarizationModel } from '../../shared/src/config/models.ts';
 import { resolveBashShellPath } from './bash-shell-path.ts';
@@ -137,6 +139,8 @@ interface InitMessage {
   browserToolOnly?: boolean;
   interactionOnly?: boolean;
   superAgentRole?: SuperAgentToolRole;
+  superAgentArchitecture?: SuperAgentToolArchitecture;
+  superAgentRoleTopologyVersion?: 2;
   agentDir?: string;
   providerType?: string;
   authType?: string;
@@ -174,12 +178,14 @@ interface RuntimeConfigUpdateMessage {
   browserToolOnly?: boolean;
   interactionOnly?: boolean;
   superAgentRole?: SuperAgentToolRole;
+  superAgentArchitecture?: SuperAgentToolArchitecture;
+  superAgentRoleTopologyVersion?: 2;
 }
 
 /** Messages from main process (stdin) */
 type InboundMessage =
   | InitMessage
-  | { type: 'prompt'; id: string; message: string; systemPrompt: string; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
+  | { type: 'prompt'; id: string; message: string; systemPrompt: string; hostContext?: HostContext; images?: Array<{ type: 'image'; data: string; mimeType: string }> }
   | { type: 'register_tools'; id: string; tools: ProxyToolDef[] }
   | { type: 'tool_execute_response'; requestId: string; result: ProxyToolResult }
   | { type: 'pre_tool_use_response'; requestId: string; action: 'allow' | 'block' | 'modify'; input?: Record<string, unknown>; reason?: string }
@@ -714,8 +720,8 @@ async function ensureSession(): Promise<AgentSession> {
     createLsToolDefinition(cwd),
   ];
   const proxyTools = buildProxyTools();
-  const wrappedAll = wrapToolsWithHooks(filterInteractionTools([...builtinDefs, ...webTools, ...proxyTools], initConfig.interactionOnly, initConfig.superAgentRole));
-  assertSuperAgentTools(wrappedAll, initConfig.superAgentRole);
+  const wrappedAll = wrapToolsWithHooks(filterInteractionTools([...builtinDefs, ...webTools, ...proxyTools], initConfig.interactionOnly, initConfig.superAgentRole, initConfig.superAgentArchitecture, initConfig.superAgentRoleTopologyVersion));
+  assertSuperAgentTools(wrappedAll, initConfig.superAgentRole, initConfig.superAgentArchitecture, initConfig.superAgentRoleTopologyVersion);
   const toolAllowlist = wrappedAll.map(t => t.name);
   debugLog(`Session tools: ${builtinDefs.length} builtin + ${webTools.length} web + ${proxyTools.length} proxy = ${wrappedAll.length} total`);
 
@@ -836,8 +842,11 @@ async function ensureSession(): Promise<AgentSession> {
       return compactionModelCandidates(available.length ? available : [current], initConfig?.compactionModel);
     },
     onModel: model => setInterceptorApiHints(model),
+    onUsage: record => appendToolDiagnostic(initConfig?.sessionPath, JSON.stringify({ timestamp: new Date().toISOString(), phase: 'compaction', ...record })),
+    onCompacted: record => appendToolDiagnostic(initConfig?.sessionPath, JSON.stringify({ timestamp: new Date().toISOString(), phase: 'compaction_result', ...record })),
   });
-  const extensionFactories = [contextImagesExtension({
+  const extensionFactories = [hostContextExtension(() => latestHostContext,
+    record => appendToolDiagnostic(initConfig?.sessionPath, JSON.stringify({ phase: 'host_context', ...record }))), contextImagesExtension({
     tokenLimit: initConfig.autoCompactionTokenLimit,
     reserveTokens: sessionOptions.settingsManager.getCompactionSettings().reserveTokens,
     describe: describeHistoryImage,
@@ -1551,6 +1560,8 @@ async function waitForCompaction(session: { isCompacting: boolean }, timeoutMs =
   }
 }
 
+let latestHostContext: ReturnType<typeof hostContextMessage> | undefined;
+
 async function handlePrompt(msg: Extract<InboundMessage, { type: 'prompt' }>): Promise<void> {
   currentUserMessage = msg.message;
 
@@ -1585,6 +1596,9 @@ async function handlePrompt(msg: Extract<InboundMessage, { type: 'prompt' }>): P
 
     // Wait for any in-flight auto-compaction to avoid race (tokenbird#464)
     await waitForCompaction(session);
+
+    latestHostContext = msg.hostContext ? hostContextMessage(msg.hostContext) : undefined;
+    if (latestHostContext) await session.sendCustomMessage(latestHostContext, { triggerTurn: false });
 
     // Fire prompt — use followUp when session is already streaming so the
     // message is queued instead of throwing "Agent is already processing".
@@ -1799,6 +1813,8 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       || (initConfig.browserToolOnly ?? false) !== (msg.browserToolOnly ?? initConfig.browserToolOnly ?? false)
       || (initConfig.interactionOnly ?? false) !== (msg.interactionOnly ?? initConfig.interactionOnly ?? false)
       || initConfig.superAgentRole !== (msg.superAgentRole ?? initConfig.superAgentRole)
+      || initConfig.superAgentRoleTopologyVersion !== (msg.superAgentRoleTopologyVersion ?? initConfig.superAgentRoleTopologyVersion)
+      || initConfig.superAgentArchitecture !== (msg.superAgentArchitecture ?? initConfig.superAgentArchitecture)
       || (initConfig.model !== msg.model && (initConfig.autoCompactionTokenLimit || msg.autoCompactionTokenLimit))) {
       toolsChanged = true;
     }
@@ -1818,6 +1834,8 @@ async function handleUpdateRuntimeConfig(msg: RuntimeConfigUpdateMessage): Promi
       browserToolOnly: msg.browserToolOnly ?? initConfig.browserToolOnly,
       interactionOnly: msg.interactionOnly ?? initConfig.interactionOnly,
       superAgentRole: msg.superAgentRole ?? initConfig.superAgentRole,
+      superAgentArchitecture: msg.superAgentArchitecture ?? initConfig.superAgentArchitecture,
+      superAgentRoleTopologyVersion: msg.superAgentRoleTopologyVersion ?? initConfig.superAgentRoleTopologyVersion,
     };
 
     if (piModelRegistry && initConfig.baseUrl?.trim() && initConfig.customEndpoint) {

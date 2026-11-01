@@ -6,6 +6,7 @@ import type { SuperAgentSessionPolicy } from '../../super-agent/types.ts';
 import type { SessionPolicyPermissionScope } from '@tokenbird/core/types';
 import { isReadOnlySystemInspection } from './system-inspection-policy.ts';
 import { classifyActionGate, type ActionReview, type ActionReviewRequest } from './action-gates.ts';
+import { superAgentRoleToolNames } from './browser-tool-policy.ts';
 
 export interface SessionProgramExecutor {
   runtimePath: string;
@@ -34,7 +35,7 @@ type RegisteredPolicy = {
   grants?: Map<string, OperationGrant>;
   generation?: number;
   reviewAction?: (request: ActionReviewRequest) => Promise<ActionReview>;
-  gates?: Map<string, { key: string; pathIdentity: string; generation: number | undefined; expiresAt: number; dispatched: boolean; approved?: boolean; executed?: boolean; fileAccess?: boolean; target?: string; targetClaimed?: boolean }>;
+  gates?: Map<string, { key: string; pathIdentity: string; generation: number | undefined; expiresAt: number; dispatched: boolean; approved?: boolean; executed?: boolean; capabilityOverride?: boolean; target?: string; targetClaimed?: boolean }>;
   recordOperation?: (request: { toolName: string; input: Record<string, unknown>; invocationId: string }) => Promise<void>;
 };
 const policies = new Map<string, RegisteredPolicy>();
@@ -46,9 +47,10 @@ function contained(root: string, path: string): boolean {
 
 export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): SessionExecutionPolicy {
   if (!input || typeof input.nodeId !== 'string' || !input.nodeId.trim()
-    || !['coordinator', 'orchestrator', 'worker'].includes(input.role)
+    || !['coordinator', 'planner', 'orchestrator', 'worker'].includes(input.role)
     || typeof input.rootPath !== 'string' || !isAbsolute(input.rootPath)
     || input.allowSubagents !== false
+    || (input.roleTopologyVersion !== undefined && input.roleTopologyVersion !== 2)
     || (input.fullControl !== undefined && typeof input.fullControl !== 'boolean')
     || (input.actionGates !== undefined && input.actionGates !== true)
     || (input.protectedRoots !== undefined && (!Array.isArray(input.protectedRoots) || input.protectedRoots.length > 16 || input.protectedRoots.some(path => typeof path !== 'string' || !isAbsolute(path))))
@@ -60,6 +62,8 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     || (input.allowSkills !== undefined && (!Array.isArray(input.allowSkills) || input.allowSkills.length > 100 || input.allowSkills.some(slug => typeof slug !== 'string' || !slug.trim() || slug.length > 200 || /[\\/:\0]/.test(slug) || slug === '.' || slug === '..')))
     || (input.agentRuntime !== undefined && (typeof input.agentRuntime !== 'string' || !/^(?:pi|claude-code|codex|plugin:[a-z0-9][a-z0-9_-]*)$/.test(input.agentRuntime)))
     || (input.skillWorkspaceRootPath !== undefined && (typeof input.skillWorkspaceRootPath !== 'string' || !isAbsolute(input.skillWorkspaceRootPath)))
+    || (input.contextDataRoot !== undefined && (typeof input.contextDataRoot !== 'string' || !isAbsolute(input.contextDataRoot)))
+    || (input.compactionModel !== undefined && (typeof input.compactionModel !== 'string' || !input.compactionModel.trim() || input.compactionModel.length > 200))
     || (input.architecture !== undefined && input.architecture !== 'dynamic')
     || (input.resourceScope !== undefined && input.resourceScope !== 'super-agent')
     || (input.credentialAccess !== undefined && typeof input.credentialAccess !== 'boolean')
@@ -78,10 +82,13 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
   return Object.freeze({
     architecture: input.architecture, resourceScope: input.resourceScope,
     ...(input.skillWorkspaceRootPath ? { skillWorkspaceRootPath: input.skillWorkspaceRootPath } : {}),
+    ...(input.contextDataRoot ? { contextDataRoot: realpathSync(input.contextDataRoot) } : {}),
+    ...(input.compactionModel ? { compactionModel: input.compactionModel } : {}),
     nodeId: input.nodeId,
     role: input.role,
+    ...(input.roleTopologyVersion === 2 ? { roleTopologyVersion: 2 as const } : {}),
     rootPath,
-    fullControl: input.role === 'worker' && input.fullControl === true,
+    fullControl: (input.role === 'worker' || input.architecture === 'dynamic' && (input.role === 'orchestrator' || input.role === 'planner')) && input.fullControl === true,
     ...(input.credentialAccess !== undefined ? { credentialAccess: input.credentialAccess === true } : {}),
     ...(input.actionGates ? { actionGates: true as const, userIntent: input.userIntent ?? '', safety: Object.freeze({
       autoReview: input.safety?.autoReview === true,
@@ -89,7 +96,7 @@ export function normalizeSessionExecutionPolicy(input: SessionExecutionPolicy): 
     }) } : {}),
     ...(input.protectedRoots ? { protectedRoots: Object.freeze([...input.protectedRoots]) as unknown as string[] } : {}),
     // Keep the configured ceilings so turning full control off restores them.
-    readFiles: (input.role === 'worker' || input.architecture === 'dynamic' && input.role === 'orchestrator') && input.readFiles,
+    readFiles: (input.role === 'worker' || input.architecture === 'dynamic' && (input.role === 'orchestrator' || input.role === 'planner')) && input.readFiles,
     writeFiles: input.role === 'worker' && input.writeFiles,
     runPrograms: input.role === 'worker' && input.runPrograms,
     browser: input.role === 'worker' && input.browser,
@@ -234,7 +241,7 @@ function referenceReadAllowed(registered: RegisteredPolicy, toolName: string, in
       if (typeof raw !== 'string' || !raw || raw.includes('\0') || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(raw) || /^(?:[a-z]+:\/\/|\\\\)/i.test(raw)) return false;
       const path = resolve(expandPath(raw, cwd || policy.rootPath));
       if (name === 'read' && registered.referenceFiles?.has(path) && !lstatSync(path).isSymbolicLink() && realpathSync(path) === path) return true;
-      for (const root of registered.referenceDirectories ?? []) {
+      for (const root of [...registered.referenceDirectories ?? [], ...(policy.contextDataRoot ? [policy.contextDataRoot] : [])]) {
         if (contained(root, path) && realpathSync(root) === root
           && checkSessionPolicyPath({ ...policy, rootPath: root, fullControl: false }, path, root, search) === null) return true;
       }
@@ -303,13 +310,19 @@ function deny(reason: string): SessionPolicyToolResult { return { allowed: false
 export function checkSessionCredentialAccess(sessionId: string, input: Record<string, unknown>, cwd?: string): SessionPolicyToolResult {
   const registered = policies.get(sessionId);
   if (!registered?.policy) return deny('credential access requires a valid node policy');
-  return checkCredentialAccess(registered, input, cwd);
+  const tools = ['saved_credentials', 'mcp__session__saved_credentials'];
+  const approved = tools.some(tool => !!getOperationGrant(sessionId, tool, input, cwd)
+    || [...registered.gates?.values() ?? []].some(lease => lease.approved && lease.capabilityOverride
+      && lease.generation === registered.generation && lease.expiresAt > Date.now()
+      && lease.key === operationKey(registered.policy!, tool, input, cwd)
+      && lease.pathIdentity === operationPathIdentity(registered.policy!, tool, input, cwd)));
+  return checkCredentialAccess(approved ? { ...registered, policy: { ...registered.policy, fullControl: true } } : registered, input, cwd);
 }
 
 function checkCredentialAccess(registered: RegisteredPolicy, input: Record<string, unknown>, cwd?: string): SessionPolicyToolResult {
   const policy = registered.policy!;
   if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction reads work lists and reports only');
-  if (policy.credentialAccess !== true) return deny('enable credential vault access in Super Agent settings');
+  if (policy.credentialAccess !== true && !policy.fullControl) return deny('enable credential vault access in Super Agent settings');
   if (!input || typeof input.action !== 'string' || !['list', 'request', 'fill', 'run'].includes(input.action)) return deny('unknown credential operation');
   // Management nodes can discover account metadata, while workers handle use.
   if (input.action === 'list') return { allowed: true };
@@ -409,6 +422,21 @@ export function hasSessionPolicyToolGrant(sessionId: string, toolName: string, i
   return !!getOperationGrant(sessionId, toolName, input, cwd);
 }
 
+/** Connections may be prepared for an approved invocation; later calls still need their own grants. */
+export function getSessionPolicyApprovedSourceSlugs(sessionId: string): string[] {
+  const registered = policies.get(sessionId);
+  if (!registered?.policy) return [];
+  const keys = [
+    ...[...registered.grants?.values() ?? []].filter(grant => grant.scope.expiresAt > Date.now()).map(grant => grant.key),
+    ...[...registered.gates?.values() ?? []].filter(lease => lease.approved && lease.generation === registered.generation && lease.expiresAt > Date.now()).map(lease => lease.key),
+  ];
+  return [...new Set(keys.flatMap(key => {
+    const [tool] = JSON.parse(key) as [string];
+    const parts = tool.split('__');
+    return parts.length >= 3 && parts[0] === 'mcp' && parts[1] !== 'session' ? [parts[1]!] : [];
+  }))];
+}
+
 function hostProgram(registered: RegisteredPolicy, toolName: string): boolean {
   const parts = toolName.toLowerCase().split('__');
   const name = parts.at(-1)!.replace(/_/g, '');
@@ -447,12 +475,15 @@ function permissionScope(registered: RegisteredPolicy, toolName: string, input: 
   const canonical = parts.at(-1)!.toLowerCase();
   const name = canonical.replace(/_/g, '');
   const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
-  if (slug && slug !== 'session') return;
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return;
+  if (slug && slug !== 'session') return policy.role === 'worker' ? {
+    kind: 'source', target: slug, toolName, operation: canonicalJson(input), boundary: 'source', expiresAt: Date.now() + 10 * 60_000,
+  } : undefined;
   const normalized = operationInput(policy, toolName, input, cwd);
   const expiresAt = Date.now() + 10 * 60_000;
   if (READ_TOOLS.has(name) || WRITE_TOOLS.has(name)) {
     const writing = WRITE_TOOLS.has(name);
+    if (policy.role !== 'worker' && !(policy.architecture === 'dynamic' && (policy.role === 'orchestrator' || policy.role === 'planner') && !writing)) return;
     if (writing && policy.role !== 'worker') return;
     const paths = [normalized.file_path, normalized.path, normalized.notebook_path].filter(value => value !== undefined);
     if (paths.some(value => typeof value !== 'string') || !paths.length || operationPathIdentity(policy, toolName, input, cwd) === undefined
@@ -473,15 +504,12 @@ function permissionScope(registered: RegisteredPolicy, toolName: string, input: 
       boundary: name === 'localbash' ? 'client' : registered.executor && name === 'bash' ? 'environment' : 'host', expiresAt };
   }
   if (canonical === 'browser_tool') {
-    // Check the same command/path restrictions with just the missing browser flag enabled.
-    const original = registered.policy;
-    registered.policy = { ...policy, browser: true };
-    try {
-      if (!checkPolicyRules(registered, toolName, input, cwd).allowed) return;
-    } finally { registered.policy = original; }
+    if (!checkPolicyRules(registered, toolName, input, cwd, true).allowed) return;
     return { kind: 'browser', target: 'browser_tool', toolName, operation: canonicalJson(input.command), boundary: 'environment', expiresAt };
   }
-  // Unassigned sources need binding/authentication through settings, not an invisible temporary source.
+  if (policy.role === 'worker' && checkPolicyRules(registered, toolName, input, cwd, true).allowed) {
+    return { kind: 'source', target: toolName, toolName, operation: canonicalJson(normalized), boundary: 'host', expiresAt };
+  }
   return;
 }
 
@@ -490,7 +518,6 @@ export async function authorizeSessionPolicyTool(sessionId: string, toolName: st
   const gated = policies.get(sessionId);
   if (gated?.policy?.actionGates && !gated.policy.fullControl) return authorizeActionGate(sessionId, gated, toolName, input, cwd, invocationId);
   const checked = checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
-  if (['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(sessionId)?.role ?? '')) return checked;
   if (hasSessionFullControl(sessionId) || isSessionPolicyShellAutoAllowed(sessionId, toolName, input, cwd)) return checked;
   const result = deniedReason ? deny(deniedReason) : checked;
   if (result.allowed || hasSessionPolicyToolGrant(sessionId, toolName, input, cwd)) return { allowed: true };
@@ -523,11 +550,10 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   if (!input || typeof input !== 'object' || Array.isArray(input)) return checked;
   const policy = registered.policy!;
   const ceiling = checkPolicyRules(registered, toolName, input, cwd);
-  const fileScope = !ceiling.allowed ? permissionScope(registered, toolName, input, cwd) : undefined;
-  const fileAccess = fileScope?.kind === 'file_read' || fileScope?.kind === 'file_write';
-  if (!ceiling.allowed && (!fileAccess || !checkPolicyRules(registered, toolName, input, cwd, true).allowed)) return ceiling;
+  const requestedScope = !ceiling.allowed ? permissionScope(registered, toolName, input, cwd) : undefined;
+  const capabilityOverride = !!requestedScope;
+  if (!ceiling.allowed && (!capabilityOverride || !checkPolicyRules(registered, toolName, input, cwd, true).allowed)) return ceiling;
   const rules = policy.safety?.customRules.filter(rule => rule.toolName.toLowerCase() === toolName.toLowerCase()) ?? [];
-  if (rules.some(rule => rule.effect === 'deny')) return checked;
   if (!invocationId || invocationId.length > 300 || registered.gates?.has(invocationId) || !registered.requestPermission) return checked;
   if ((registered.gates?.size ?? 0) >= 1_024) return deny('too many gated invocations in this turn');
   const key = operationKey(policy, toolName, input, cwd);
@@ -535,7 +561,7 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   if (pathIdentity === undefined) return deny('the operation path cannot be verified');
   const category = hostProgram(registered, toolName) ? 'unknown' : classifyActionGate(toolName, input) ?? 'unknown';
   const expiresAt = Date.now() + 10 * 60_000;
-  const lease = { key, pathIdentity, generation: registered.generation, expiresAt, dispatched: true, approved: false, fileAccess, target: '' };
+  const lease = { key, pathIdentity, generation: registered.generation, expiresAt, dispatched: true, approved: false, capabilityOverride, target: '' };
   registered.gates ??= new Map();
   registered.gates.set(invocationId, lease); // Pending/denied IDs cannot be replayed or raced.
   const normalized = JSON.parse(canonicalJson(operationInput(policy, toolName, input, cwd))) as Record<string, unknown>;
@@ -544,8 +570,8 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   const scope: SessionPolicyPermissionScope = {
     kind: WRITE_TOOLS.has(name.replace(/_/g, '')) ? 'file_write' : READ_TOOLS.has(name) ? 'file_read'
       : credentialProgram || ['bash', 'localbash', 'runshell'].includes(name.replace(/_/g, '')) ? 'program' : name === 'browser_tool' ? 'browser' : 'source',
-    target: fileScope?.target ?? String(normalized.file_path ?? normalized.path ?? normalized.cwd ?? toolName),
-    toolName, operation: canonicalJson(normalized), boundary: fileScope?.boundary ?? (credentialProgram ? 'host' : hostProgram(registered, toolName)
+    target: requestedScope?.target ?? String(normalized.file_path ?? normalized.path ?? normalized.cwd ?? toolName),
+    toolName, operation: canonicalJson(normalized), boundary: requestedScope?.boundary ?? (credentialProgram ? 'host' : hostProgram(registered, toolName)
       ? name.replace(/_/g, '') === 'localbash' ? 'client' : 'host'
       : toolName.startsWith('mcp__') && !toolName.startsWith('mcp__session__') ? 'source' : 'environment'),
     expiresAt, actionGate: { invocationId, category },
@@ -553,7 +579,7 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
   const current = () => policies.get(sessionId) === registered && registered.policy === policy && registered.generation === lease.generation
     && registered.gates?.get(invocationId) === lease && expiresAt > Date.now()
     && key === operationKey(policy, toolName, input, cwd) && pathIdentity === operationPathIdentity(policy, toolName, input, cwd)
-    && checkPolicyRules(registered, toolName, input, cwd, fileAccess).allowed;
+    && checkPolicyRules(registered, toolName, input, cwd, capabilityOverride).allowed;
   if (policy.safety?.autoReview) {
     let review: ActionReview = { verdict: 'unavailable', reason: 'Independent reviewer is unavailable; human review is required.' };
     try { if (registered.reviewAction) review = await registered.reviewAction({ toolName, operation: scope.operation, category, userIntent: policy.userIntent ?? '', customRules: policy.safety.customRules }); } catch { /* Human review remains mandatory. */ }
@@ -561,7 +587,8 @@ async function authorizeActionGate(sessionId: string, registered: RegisteredPoli
     scope.actionGate!.review = { verdict: review.verdict, reason: review.reason.slice(0, 2_000) };
     if (hasSessionFullControl(sessionId)) return checkSessionExecutionPolicy(sessionId, toolName, input, cwd);
     if (!current()) return deny('the operation or node policy changed during independent review');
-    if (review.verdict === 'deny') return deny(`independent review rejected the action: ${review.reason.slice(0, 2_000)}`);
+    // A review result informs the user's decision; it cannot replace the
+    // permission dialog with a terminal tool error.
   }
   let approved = false;
   try { approved = await registered.requestPermission({ toolName, input: normalized,
@@ -596,7 +623,7 @@ export function claimSessionActionGateDispatch(sessionId: string, toolName: stri
   if (!lease.dispatched || lease.executed || lease.expiresAt <= Date.now() || lease.generation !== registered.generation
     || lease.key !== operationKey(registered.policy, toolName, input, cwd)
     || lease.pathIdentity !== operationPathIdentity(registered.policy, toolName, input, cwd)) return deny('Action Gate dispatch is missing, changed or already consumed');
-  const ceiling = checkPolicyRules(registered, toolName, input, cwd, lease.fileAccess);
+  const ceiling = checkPolicyRules(registered, toolName, input, cwd, lease.capabilityOverride);
   if (!ceiling.allowed) return ceiling;
   lease.executed = true;
   return { allowed: true };
@@ -609,16 +636,18 @@ export function checkSessionExecutionPolicy(sessionId: string, toolName: string,
   const policy = registered.policy;
   if (!policy) return deny('the persisted execution policy is invalid; configure the node again');
   if (!input || typeof input !== 'object' || Array.isArray(input)) return deny('tool input must be an object');
+  if (referenceReadAllowed(registered, toolName, input, cwd)) return { allowed: true };
+  // Full control is the permission master switch, including source selection
+  // and custom rules. Keep role/protocol validation in checkPolicyRules.
+  if (policy.fullControl) return checkPolicyRules(registered, toolName, input, cwd);
   if (policy.actionGates) {
     const lease = invocationId ? registered.gates?.get(invocationId) : undefined;
     const approved = !!lease && !lease.dispatched && lease.expiresAt > Date.now() && lease.generation === registered.generation
       && lease.key === operationKey(policy, toolName, input, cwd) && lease.pathIdentity === operationPathIdentity(policy, toolName, input, cwd);
-    const ceiling = checkPolicyRules(registered, toolName, input, cwd, approved && lease?.fileAccess);
+    const ceiling = checkPolicyRules(registered, toolName, input, cwd, approved && lease?.capabilityOverride);
     if (!ceiling.allowed) return ceiling;
     const rule = policy.safety?.customRules.find(rule => rule.toolName.toLowerCase() === toolName.toLowerCase() && rule.effect === 'deny');
-    if (rule) return deny(`custom rule: ${rule.reason}`);
-    // Full control skips every approval and review, while keeping execution boundaries.
-    if (policy.fullControl) return { allowed: true };
+    if (rule && !approved) return deny(`custom rule requires user approval: ${rule.reason}`);
     const category = hostProgram(registered, toolName) ? 'unknown' : classifyActionGate(toolName, input);
     if (category === undefined && !policy.safety?.customRules.some(rule => rule.toolName.toLowerCase() === toolName.toLowerCase())) return { allowed: true };
     if (!approved) return deny('Action Gate requires approval for this exact invocation');
@@ -628,14 +657,15 @@ export function checkSessionExecutionPolicy(sessionId: string, toolName: string,
   return checkPolicyRules(registered, toolName, input, cwd);
 }
 
-function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string, fileAccess = false): SessionPolicyToolResult {
-  const policy = registered.policy!;
+function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input: Record<string, unknown>, cwd?: string, capabilityOverride = false): SessionPolicyToolResult {
+  const policy = capabilityOverride && registered.policy!.role === 'worker'
+    ? { ...registered.policy!, fullControl: true } : registered.policy!;
   const parts = toolName.split('__');
   const name = parts[parts.length - 1]!.toLowerCase().replace(/_/g, '');
   const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
   const canonical = parts[parts.length - 1]!.toLowerCase();
   if (name === 'savedcredentials' && (!slug || slug === 'session')) {
-    return checkCredentialAccess(registered, input, cwd);
+    return checkCredentialAccess({ ...registered, policy }, input, cwd);
   }
   if (canonical === 'computer_use') {
     if (policy.role === 'worker' && policy.fullControl && !registered.executor) return { allowed: true };
@@ -660,9 +690,14 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   }
   if (SUPER_AGENT_ACTION_TOOLS.some(def => def.name === canonical)) {
     if (slug !== 'session') return deny('use the registered session collaboration tools');
-    if (policy.architecture === 'dynamic' && policy.role === 'coordinator' && !['super_agent_intent', 'super_agent_deliver', 'super_agent_work_list', 'super_agent_reports', 'super_agent_resource_catalog'].includes(canonical)) return deny('interaction submits requirements and reads work lists and reports only');
+    if (policy.architecture === 'dynamic' && policy.role === 'coordinator' && !superAgentRoleToolNames('coordinator', 'dynamic', policy.roleTopologyVersion).some(name => name === canonical)) return deny('interaction submits requirements and reads work lists, health and reports only');
+    if (policy.roleTopologyVersion === 2 && !superAgentRoleToolNames(policy.role, policy.architecture, 2).includes(canonical)) return deny('tool belongs to a different team role');
     if (canonical === 'super_agent_report' && policy.role === 'coordinator') return deny('only workers and the background node submit reports');
-    const interaction = ['super_agent_intent', 'super_agent_deliver'];
+    if (canonical === 'super_agent_finish_turn' && !['planner', 'orchestrator'].includes(policy.role)) return deny('only planning and dispatch may finish an internal management turn');
+    const interaction = ['super_agent_submit_request', 'super_agent_deliver'];
+    if (canonical === 'super_agent_intent' && !['coordinator', 'planner'].includes(policy.role)) return deny('only the planner may maintain goals');
+    if (['super_agent_dispatch', 'super_agent_accept'].includes(canonical) && policy.role !== 'orchestrator' && policy.role !== 'coordinator') return deny('only the dispatcher may dispatch or accept work');
+    if (canonical === 'super_agent_plan' && policy.role === 'worker') return deny('only management may maintain plans');
     const orchestration = ['super_agent_dispatch', 'super_agent_plan', 'super_agent_accept'];
     if (interaction.includes(canonical) && policy.role !== 'coordinator') return deny('only the interaction node may hand off intent or deliver to the user');
     if (orchestration.includes(canonical) && policy.role === 'worker') return deny('only the orchestrator may dispatch, plan or accept work');
@@ -675,7 +710,7 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
     return policy.role === 'worker' || input.action === 'get' ? { allowed: true } : deny('only workers may update task checkpoints or artifacts');
   }
   if (canonical === 'super_agent_settings') {
-    if (policy.architecture === 'dynamic' && policy.role === 'orchestrator' && slug === 'session' && input.action === 'get') return { allowed: true };
+    if (policy.architecture === 'dynamic' && (policy.role === 'orchestrator' || policy.role === 'planner') && slug === 'session' && input.action === 'get') return { allowed: true };
     if (slug !== 'session') return deny('use the registered session settings tool');
     return policy.role === 'coordinator' ? { allowed: true } : deny('only the interaction node may edit team settings');
   }
@@ -691,27 +726,28 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   }
   if (name === 'skill' && (!slug || slug === 'session')) {
     const skill = typeof input.skill === 'string' ? input.skill.split(':').pop() : undefined;
-    if (!skill || !policy.allowSkills?.includes(skill)) return deny('skill is not assigned to this node');
+    if (!skill || !policy.fullControl && !policy.allowSkills?.includes(skill)) return deny('skill is not assigned to this node');
     return { allowed: true };
   }
-  if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction may only use requirements, work lists, reports and replies');
-  if (policy.architecture === 'dynamic' && policy.role === 'orchestrator' && READ_TOOLS.has(name) && (!slug || slug === 'session')) {
-    if (!policy.readFiles) return deny('background file reading is disabled');
+  if (referenceReadAllowed(registered, toolName, input, cwd)) return { allowed: true };
+  if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('interaction may only use requirements, work lists, reports and replies; use super_agent_work_list, super_agent_reports or super_agent_health for status, and sessionIdentity from the current context for your own session');
+  if (policy.architecture === 'dynamic' && (policy.role === 'orchestrator' || policy.role === 'planner') && READ_TOOLS.has(name) && (!slug || slug === 'session')) {
+    if (!policy.readFiles && !capabilityOverride && !policy.fullControl) return deny('background file reading is disabled');
     const paths = [input.file_path, input.path, input.notebook_path].filter(value => value !== undefined);
     if (!paths.length && !['glob', 'grep', 'find', 'ls'].includes(name)) return deny('a verifiable filesystem path is required');
     for (const path of paths.length ? paths : [cwd || policy.rootPath]) {
       if (typeof path !== 'string') return deny('filesystem path must be a string');
-      const error = checkSessionPolicyPath({ ...policy, fullControl: false }, path, cwd, true);
-      if (error) return deny(error);
+      const error = checkSessionPolicyPath(policy, path, cwd, true);
+      if (error && !capabilityOverride) return deny(error);
     }
     if (name === 'glob' && typeof input.pattern === 'string' && (isAbsolute(input.pattern) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(input.pattern))) return deny('use a relative glob pattern inside the node environment');
     return { allowed: true };
   }
-  if (referenceReadAllowed(registered, toolName, input, cwd)) return { allowed: true };
   if (policy.role !== 'worker') return deny('the main agent only understands user needs and communicates; assign reading, research, execution and verification to workers');
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return deny('each node uses one model process; spawning, delegation and additional model calls are disabled');
   if (name === 'webfetch' && !slug) return deny('WebFetch can call an additional summarization model; use browser_tool to fetch pages within the node model process');
-  if (policy.fullControl === true && !policy.actionGates) {
+  if (!registered.policy!.fullControl && registered.executor && ['localbash', 'runshell'].includes(name) && (!slug || slug === 'session')) return deny('use Bash to run programs in the configured sandbox');
+  if (policy.fullControl === true) {
     if (['bash', 'localbash', 'runshell'].includes(name) && (!slug || slug === 'session')
       && (typeof input.command !== 'string' || !input.command.trim() || input.command.includes('\0')
         || (input.cwd !== undefined && typeof input.cwd !== 'string'))) return deny('a valid program command and working directory are required');
@@ -731,10 +767,10 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
     const search = ['glob', 'grep', 'find', 'ls'].includes(name);
     if (suppliedPaths.some(value => typeof value !== 'string')) return deny('filesystem path must be a string');
     if (!rawPath && !search) return deny('a verifiable filesystem path is required');
-    if (!(policy.fullControl || fileAccess || (writing ? policy.writeFiles : policy.readFiles))) return deny(`${writing ? 'file writing' : 'file reading'} is disabled for this node`);
+    if (!(policy.fullControl || capabilityOverride || (writing ? policy.writeFiles : policy.readFiles))) return deny(`${writing ? 'file writing' : 'file reading'} is disabled for this node`);
     for (const path of suppliedPaths.length ? suppliedPaths : [cwd || policy.rootPath]) {
       const error = checkSessionPolicyPath(policy, path as string, cwd, search);
-      if (error && !fileAccess) return deny(error);
+      if (error && !capabilityOverride) return deny(error);
     }
     // Glob patterns can carry their own base path independently of input.path.
     const pattern = input.pattern;

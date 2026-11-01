@@ -1,4 +1,5 @@
 export type * from './types'
+export * from './board'
 export * from './scheduling'
 export * from './architecture'
 export * from './default-skills'
@@ -10,3 +11,5 @@ export { validateSuperAgentConfig, validateSuperAgentCommand, emptySuperAgentSta
 export { planSuperAgentHistoryCleanup, protectedHistorySessionIds, historySessionEligible } from './history'
 
 export * from './dynamic'
+
+export * from './topology'

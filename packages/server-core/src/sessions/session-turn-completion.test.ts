@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { resolveSessionTurnCompletion } from './session-turn-completion'
+import { resolveSessionTurnCompletion, shouldFinishSpawnedSession } from './session-turn-completion'
 
 const oldAnswer = { id: 'old', role: 'assistant', content: '<super_agent_actions>{"tasks":["old task"]}</super_agent_actions>' }
 const user = { id: 'user', role: 'user', content: 'Continue validation' }
@@ -7,6 +7,13 @@ const error = { id: 'error', role: 'error', content: 'Connection Error: Could no
 const answer = { id: 'new', role: 'assistant', content: 'Actual current result' }
 
 describe('current turn completion', () => {
+  test('retires successful spawned sessions after their queue drains, preserving paused and failed work', () => {
+    const completed = { parentSessionId: 'parent', managedWorkflow: false, reason: 'complete', hasNewFinal: true, queued: 0, authPending: false, backgroundRunning: false }
+    expect(shouldFinishSpawnedSession(completed)).toBe(true)
+    for (const change of [{ parentSessionId: undefined }, { managedWorkflow: true }, { reason: 'error' }, { reason: 'interrupted' }, { hasNewFinal: false }, { queued: 1 }, { authPending: true }, { backgroundRunning: true }]) {
+      expect(shouldFinishSpawnedSession({ ...completed, ...change })).toBe(false)
+    }
+  })
   test('preserves current structured failure metadata without using historical errors', () => {
     const typed = { ...error, errorCode: 'network_error', errorCanRetry: true }
     expect(resolveSessionTurnCompletion([oldAnswer, user, typed], 'complete', 'old', 'old'))

@@ -3,7 +3,7 @@ import type { ToolResult } from '../types.ts';
 import { errorResponse, successResponse } from '../response.ts';
 
 export type CollaborationBoardArgs =
-  | { action: 'get'; goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }
+  | ({ action: 'get' } & NonNullable<Parameters<NonNullable<SessionToolContext['getCollaboration']>>[0]>)
   | { action: 'set'; itemId: string; value: unknown };
 
 /**

@@ -8,6 +8,10 @@ export function compactionModelCandidates<T extends Pick<Model<Api>, 'id' | 'nam
   const eligible = models.filter(model => !isImageGenerationModelId(model.id));
   const bare = preferred?.replace(/^pi\//, '').trim();
   const selected = eligible.find(model => model.id === bare || model.name === bare);
+  if (bare) {
+    if (!selected) throw new Error(`Configured compaction model is unavailable on this connection: ${bare}`);
+    return [selected];
+  }
   const result = [
     ...(selected ? [selected] : []),
     ...eligible.filter(model => /luna/i.test(`${model.id} ${model.name}`)),

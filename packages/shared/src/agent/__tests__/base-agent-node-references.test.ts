@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, setSessionExecutionPolicy, setSessionPolicyPermissionHandler } from '../core/session-execution-policy.ts';
+import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, clearSessionExecutionPolicy, getSessionExecutionPolicy, setSessionExecutionPolicy, setSessionPolicyPermissionHandler } from '../core/session-execution-policy.ts';
 import { setBundledAssetsRoot } from '../../utils/paths.ts';
 import { createMockBackendConfig, createMockSession, createMockSource, TestAgent } from './test-utils.ts';
 
@@ -49,6 +49,23 @@ afterEach(() => {
 });
 
 describe('node builtin instructions', () => {
+  test.each(['coordinator', 'planner', 'orchestrator', 'worker'] as const)('dynamic %s can read advertised built-ins absent from its skill bindings', async role => {
+    // Reproduce the installed app: a built-in advertised by the system prompt,
+    // outside the project, but absent from this node's configured skills.
+    const path = join(temp, 'resources', 'skills', 'task-orchestration', 'SKILL.md');
+    mkdirSync(join(temp, 'resources', 'skills', 'task-orchestration'));
+    writeFileSync(path, '# Task orchestration');
+    setSessionExecutionPolicy(sessionId, { ...getSessionExecutionPolicy(sessionId)!, architecture: 'dynamic', roleTopologyVersion: 2, role,
+      actionGates: true, allowSkills: ['super-agent-collaboration'], readFiles: false });
+    setSessionPolicyPermissionHandler(sessionId, async () => { throw new Error('Built-in skill reads must never ask permission'); });
+    const agent = new TestAgent(createMockBackendConfig({ session: createMockSession({ id: sessionId }),
+      workspace: { id: 'workspace', name: 'Workspace', slug: 'workspace', rootPath: environment, createdAt: 1 } }));
+    try {
+      expect((await authorizeSessionPolicyTool(sessionId, 'Read', { file_path: path }, environment, undefined, 'builtin-read')).allowed).toBe(true);
+      agent.setAllSources([]);
+      expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: path }, environment).allowed).toBe(true);
+    } finally { agent.dispose(); }
+  });
   test('automatically reads skill packages, assigned source packages and shipped docs without approvals after source refresh', async () => {
     let requests = 0;
     setSessionPolicyPermissionHandler(sessionId, async () => { requests++; return false; });

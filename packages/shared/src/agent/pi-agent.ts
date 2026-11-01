@@ -209,6 +209,7 @@ interface PendingEphemeralRequest<T> {
  * planning heuristics, config watching, usage tracking).
  */
 export class PiAgent extends BaseAgent {
+  protected override readonly usesTransientHostContext = true;
   protected backendName = 'TokenBird Backend';
 
   // ============================================================
@@ -677,6 +678,8 @@ export class PiAgent extends BaseAgent {
       browserToolOnly: hasSessionExecutionPolicy(sessionId),
       interactionOnly: ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(sessionId)?.role ?? ''),
       superAgentRole: getSessionExecutionPolicy(sessionId)?.role,
+      superAgentArchitecture: getSessionExecutionPolicy(sessionId)?.architecture,
+      superAgentRoleTopologyVersion: getSessionExecutionPolicy(sessionId)?.roleTopologyVersion,
       providerType: this.config.providerType,
       authType: this.config.authType,
       oauthProvider: runtime.oauthProvider,
@@ -693,7 +696,7 @@ export class PiAgent extends BaseAgent {
       compactionModels: this.getCompactionModels(),
       customHeaders: runtime.customHeaders,
       autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit,
-      compactionModel: this.config.modelPromptSettings?.compactionModel,
+      compactionModel: getSessionExecutionPolicy(this.config.session?.id ?? '')?.compactionModel ?? this.config.modelPromptSettings?.compactionModel,
       // Branch params for Pi SDK session fork
       branchFromSdkSessionId: this.config.session?.branchFromSdkSessionId,
       branchFromSessionPath: this.config.session?.branchFromSessionPath,
@@ -2357,6 +2360,8 @@ export class PiAgent extends BaseAgent {
         browserToolOnly: hasSessionExecutionPolicy(this._sessionId),
         interactionOnly: ['coordinator', 'orchestrator'].includes(getSessionExecutionPolicy(this._sessionId)?.role ?? ''),
         superAgentRole: getSessionExecutionPolicy(this._sessionId)?.role,
+        superAgentArchitecture: getSessionExecutionPolicy(this._sessionId)?.architecture,
+        superAgentRoleTopologyVersion: getSessionExecutionPolicy(this._sessionId)?.roleTopologyVersion,
       });
     });
   }
@@ -2564,6 +2569,7 @@ export class PiAgent extends BaseAgent {
         id: turnId,
         message: userMessage,
         systemPrompt: fullSystemPrompt,
+        hostContext: options?.hostContext,
         images: images.length > 0 ? images : undefined,
       });
 
@@ -2682,7 +2688,7 @@ export class PiAgent extends BaseAgent {
       authType: this.config.authType,
       runtime: getBackendRuntime(this.config),
       autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit,
-      compactionModel: this.config.modelPromptSettings?.compactionModel,
+      compactionModel: getSessionExecutionPolicy(this.config.session?.id ?? '')?.compactionModel ?? this.config.modelPromptSettings?.compactionModel,
     });
     this.debug(`Runtime config refreshed in subprocess: ${previousModel} → ${update.model}`);
     return updated;
@@ -2698,7 +2704,7 @@ export class PiAgent extends BaseAgent {
     // Forward to subprocess so it uses the new model on next turn
     if (this.subprocess) {
       this.debug(`Forwarding model change to subprocess: ${previousModel} → ${model}`);
-      this.send({ type: 'set_model', model, autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit, compactionModel: this.config.modelPromptSettings?.compactionModel });
+      this.send({ type: 'set_model', model, autoCompactionTokenLimit: this.config.modelPromptSettings?.autoCompactionTokenLimit, compactionModel: getSessionExecutionPolicy(this.config.session?.id ?? '')?.compactionModel ?? this.config.modelPromptSettings?.compactionModel });
     } else {
       this.debug(`Model updated but no subprocess to forward to: ${previousModel} → ${model}`);
     }

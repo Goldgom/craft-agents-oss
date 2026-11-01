@@ -12,17 +12,17 @@ import { executeShell, type AndroidAdbArgs, type AndroidPermissionArgs, type She
 import type { ISessionManager, IBrowserPaneManager, ExecutePromptAutomationInput } from '@tokenbird/server-core/handlers'
 import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
 import { runStudioImageToolAction } from './studio-image-tool'
-import { EMPTY_RESPONSE_ERROR_CODE, resolveSessionTurnCompletion } from './session-turn-completion'
+import { EMPTY_RESPONSE_ERROR_CODE, resolveSessionTurnCompletion, shouldFinishSpawnedSession } from './session-turn-completion'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@tokenbird/server-core/handlers'
 import { createScopedLogger, CONSOLE_LOGGER, type PlatformServices, type Logger } from '@tokenbird/server-core/runtime'
 import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
-import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, setSessionActionReviewer, checkSessionExecutionPolicy, checkSessionCredentialAccess, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@tokenbird/shared/agent'
+import { setSessionExecutionPolicy, setSessionProgramExecutor, getSessionProgramExecutor, clearSessionExecutionPolicy, clearSessionPolicyGrants, setSessionPolicyPermissionHandler, setSessionActionReviewer, checkSessionExecutionPolicy, checkSessionCredentialAccess, getSessionPolicyApprovedSourceSlugs, checkSessionPolicyPath, isSessionPolicyShellAutoAllowed, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '@tokenbird/shared/agent'
 import { reviewActionGate, type ActionReviewRequest } from '@tokenbird/shared/agent'
 import { CONFIG_DIR } from '@tokenbird/shared/config/paths'
-import type { SuperAgentSessionPolicy } from '@tokenbird/shared/super-agent'
+import { awaitSuperAgentPreparation, type SuperAgentPreparationOptions, type SuperAgentSessionPolicy } from '@tokenbird/shared/super-agent'
 import { cleanupSuperAgents, getSuperAgentService } from '../super-agent/registry'
 import { type AgentEvent, setPermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, type MessagingToolBridge, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive, isContentPolicyBlocked } from '@tokenbird/shared/agent'
 import {
@@ -411,8 +411,11 @@ async function buildServersFromSources(
 
 /** Apply an Agent's independent MCP/API source switches. Ordinary sessions
  * have no policy and retain the workspace behaviour unchanged. */
-function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'agentSessionSettings' | 'executionPolicy'>): LoadedSource[] {
-  if (managed?.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) sources = sources.filter(source => managed.executionPolicy!.allowSources.includes(source.config.slug))
+function filterAgentSources(sources: LoadedSource[], managed?: Pick<ManagedSession, 'id' | 'agentSessionSettings' | 'executionPolicy'>): LoadedSource[] {
+  if (managed?.executionPolicy && !managed.executionPolicy.fullControl) {
+    const allowed = new Set([...managed.executionPolicy.allowSources, ...getSessionPolicyApprovedSourceSlugs(managed.id)])
+    sources = sources.filter(source => allowed.has(source.config.slug))
+  }
   const settings = managed?.agentSessionSettings
   if (!settings) return sources
   const mcp = settings.mcpSourceSlugs ? new Set(settings.mcpSourceSlugs) : null
@@ -1882,7 +1885,7 @@ export class SessionManager implements ISessionManager {
         reason: request.reason,
         impact: request.scope.kind === 'program' && request.scope.boundary !== 'environment'
           ? `Runs this complete command on the ${request.scope.boundary} machine with cwd ${request.input.cwd}. There is no sandbox isolation for this command. Approval is limited to this exact invocation and cannot be remembered or shared.`
-          : request.scope.actionGate ? 'Approve this invocation once. It cannot be remembered, shared with other nodes, or expand filesystem, source, network or sandbox permissions.'
+          : request.scope.actionGate ? 'Approve this exact invocation once and resume the original operation. It cannot be remembered or shared with other nodes. The selected execution environment remains in use.'
           : 'Temporarily permits this exact operation in the current node turn. Other operations remain subject to the node policy.',
         policyScope: { ...request.scope },
       } }, managed.workspace.id)
@@ -2981,6 +2984,9 @@ export class SessionManager implements ISessionManager {
 
     for (const session of this.sessions.values()) {
       if (session.hidden || session.isArchived) continue
+      const parent = session.parentSessionId ? this.sessions.get(session.parentSessionId) : undefined
+      if (parent && !parent.hidden && parent.workspace.id === session.workspace.id
+        && !session.isProcessing && ['done', 'cancelled'].includes(session.sessionStatus ?? '')) continue
       if (!session.hasUnread) continue
 
       const workspaceId = session.workspace.id
@@ -3720,9 +3726,12 @@ export class SessionManager implements ISessionManager {
   }
 
   /** Apply a durable permission ceiling; verified executors are runtime-only and reattached per dispatch. */
-  async applySessionPolicy(sessionId: string, input: SuperAgentSessionPolicy): Promise<void> {
+  async applySessionPolicy(sessionId: string, input: SuperAgentSessionPolicy, options?: SuperAgentPreparationOptions): Promise<void> {
+    options?.signal?.throwIfAborted()
     const managed = this.sessions.get(sessionId)
     if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (managed.runtimeTeardown) await awaitSuperAgentPreparation(managed.runtimeTeardown, options?.signal)
+    options?.signal?.throwIfAborted()
     if (managed.isProcessing) throw new Error('Stop the node before changing its execution policy')
     const previous = JSON.stringify(managed.executionPolicy)
     const policy = setSessionExecutionPolicy(sessionId, input.actionGates ? { ...input, protectedRoots: [CONFIG_DIR, managed.workspace.rootPath] } : input)
@@ -3732,9 +3741,10 @@ export class SessionManager implements ISessionManager {
     managed.enabledSourceSlugs = [...policy.allowSources]
     this.attachNodePermissionHandler(managed)
     this.setSessionPermissionMode(sessionId, 'allow-all')
-    if (managed.agent && previous !== JSON.stringify(policy)) await this.disposeManagedAgentRuntime(managed, 'node execution policy changed')
+    if (managed.agent && previous !== JSON.stringify(policy)) await awaitSuperAgentPreparation(this.disposeManagedAgentRuntime(managed, 'node execution policy changed'), options?.signal)
+    options?.signal?.throwIfAborted()
     this.persistSession(managed, true)
-    await sessionPersistenceQueue.flush(sessionId)
+    await awaitSuperAgentPreparation(sessionPersistenceQueue.flush(sessionId), options?.signal)
   }
 
   /** Change operational access immediately without replacing a running node's conversation. */
@@ -3812,16 +3822,21 @@ export class SessionManager implements ISessionManager {
   }
 
   /** Reuse a node's conversation while updating the effective prompt and Execute mode. */
-  async ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void> {
+  async ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }, options?: SuperAgentPreparationOptions): Promise<void> {
     if (settings?.permissionMode !== 'allow-all' || typeof settings.agentSystemPrompt !== 'string' || !settings.agentSystemPrompt.trim()) {
       throw new Error('Super Agent nodes require Execute mode and a non-empty system prompt')
     }
     const systemPrompt = settings.agentSystemPrompt
     const previous = this.nodeSettingsLocks.get(sessionId) ?? Promise.resolve()
+    // Keep the predecessor in the queue even when this caller stops waiting.
+    // Otherwise cancelling a waiter can hide an older update that still owns
+    // the session and allow a third preparation to overlap it.
     const work = previous.catch(() => undefined).then(async () => {
+      options?.signal?.throwIfAborted()
       const managed = this.sessions.get(sessionId)
       if (!managed?.executionPolicy) throw new Error('Super Agent node session not found')
       const assertIdle = () => {
+        options?.signal?.throwIfAborted()
         if (this.sessions.get(sessionId) !== managed || managed.persistenceRetired) throw new Error('Node session is being removed')
         if (managed.isProcessing || managed.stopRequested || managed.agent?.isProcessing?.()
           || managed.messageQueue.length || managed.pendingAuthRequest || this.hasPendingPermissionRequest(sessionId)
@@ -3835,24 +3850,40 @@ export class SessionManager implements ISessionManager {
         const refreshing = this.agentRefreshLocks.get(sessionId)
         const teardown = managed.runtimeTeardown
         if (!creating && !refreshing && !teardown) break
-        await Promise.allSettled([creating, refreshing, teardown])
+        await awaitSuperAgentPreparation(Promise.allSettled([creating, refreshing, teardown]), options?.signal)
         assertIdle()
       }
       // Hydrate before mutating so a cold session's existing transcript and
       // queued messages remain authoritative; never overwrite them with [].
-      await this.ensureMessagesLoaded(managed)
+      await awaitSuperAgentPreparation(this.ensureMessagesLoaded(managed), options?.signal)
       assertIdle()
       const promptChanged = managed.agentSystemPrompt !== systemPrompt || managed.agentPrompt !== systemPrompt
       managed.agentSystemPrompt = systemPrompt
       managed.agentPrompt = systemPrompt
       this.setSessionPermissionMode(sessionId, 'allow-all')
-      if (promptChanged && managed.agent) await this.disposeManagedAgentRuntime(managed, 'Super Agent system prompt changed')
+      if (promptChanged && managed.agent) await awaitSuperAgentPreparation(this.disposeManagedAgentRuntime(managed, 'Super Agent system prompt changed'), options?.signal)
+      options?.signal?.throwIfAborted()
       this.persistSession(managed, true)
-      await sessionPersistenceQueue.flush(sessionId)
+      await awaitSuperAgentPreparation(sessionPersistenceQueue.flush(sessionId), options?.signal)
     })
     this.nodeSettingsLocks.set(sessionId, work)
-    try { await work }
-    finally { if (this.nodeSettingsLocks.get(sessionId) === work) this.nodeSettingsLocks.delete(sessionId) }
+    const release = () => { if (this.nodeSettingsLocks.get(sessionId) === work) this.nodeSettingsLocks.delete(sessionId) }
+    void work.then(release, release)
+    await awaitSuperAgentPreparation(work, options?.signal)
+  }
+
+  /** No transcript, credentials or model calls; safe during a stuck preparation. */
+  getSuperAgentPreparationBlockers(sessionId: string): string[] {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return []
+    return [
+      ...(managed.runtimeTeardown ? ['runtime-cleanup'] : []),
+      ...(this.nodeSettingsLocks.has(sessionId) ? ['session-settings'] : []),
+      ...(this.agentCreationLocks.has(sessionId) ? ['runtime-startup'] : []),
+      ...(this.agentRefreshLocks.has(sessionId) ? ['runtime-refresh'] : []),
+      ...(managed.isProcessing || managed.agent?.isProcessing?.() ? ['model-running'] : []),
+      ...(sessionPersistenceQueue.isWriting(sessionId) ? ['session-persistence'] : []),
+    ]
   }
 
   private async waitForNodeSettings(sessionId: string, ignoreErrors = false): Promise<void> {
@@ -5204,7 +5235,7 @@ export class SessionManager implements ISessionManager {
         runLocalShellFn: (args: ShellExecArgs): Promise<ClientShellResult> => this.runSessionLocalShell(managed, args),
         requestClientFilesFn: async (input) => {
           // Restricted nodes cannot acquire files outside their assigned environment.
-          if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates)) throw new Error('This node policy does not permit requesting client files')
+          if (managed.executionPolicy && !managed.executionPolicy.fullControl) throw new Error('This node policy does not permit requesting client files')
           const request = validateClientFileRequest(input)
           const clientId = this.turnClients.requireClient(this.rpcServer, managed.id, managed.workspace.id, CLIENT_REQUEST_FILES)
           const requestContext = this.turnClients.get(managed.id)
@@ -6122,7 +6153,7 @@ export class SessionManager implements ISessionManager {
     if (!managed) {
       throw new Error(`Session not found: ${sessionId}`)
     }
-    if (managed.executionPolicy && (!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates) && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug))) {
+    if (managed.executionPolicy && !managed.executionPolicy.fullControl && sourceSlugs.some(slug => !managed.executionPolicy!.allowSources.includes(slug) && !getSessionPolicyApprovedSourceSlugs(sessionId).includes(slug))) {
       throw new Error('Super Agent policy: data source is not assigned to this node')
     }
 
@@ -6993,7 +7024,7 @@ export class SessionManager implements ISessionManager {
       setSessionExecutionPolicy(sessionId, managed.executionPolicy)
       for (const attachment of attachments ?? []) {
         const path = attachment.path
-        if ((!managed.executionPolicy.fullControl || managed.executionPolicy.actionGates) && ((!managed.executionPolicy.readFiles && !managed.executionPolicy.fullControl) || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory)))) {
+        if (!managed.executionPolicy.fullControl && (!managed.executionPolicy.readFiles || (path && checkSessionPolicyPath(managed.executionPolicy, path, managed.workingDirectory)))) {
           throw new Error('Super Agent policy: attachment is outside the node environment or file reading is disabled')
         }
       }
@@ -7405,11 +7436,9 @@ export class SessionManager implements ISessionManager {
       let effectiveMessage = message
       try { effectiveMessage += new GlobalMemory().context(message) }
       catch (error) { sessionLog.warn('Global memory retrieval failed:', error) }
-      if (options?.superAgentContext && managed.executionPolicy) {
-        // Persisted messages and user_message events contain only the upstream input.
-        // Runtime state is transient model context, never a transcript bubble.
-        effectiveMessage += `\n\n<super_agent_context>\n${options.superAgentContext}\n</super_agent_context>`
-      }
+      const hostContext = options?.superAgentContext && managed.executionPolicy
+        ? { kind: 'super-agent' as const, snapshotId: `${sessionId}:${myGeneration}`, text: options.superAgentContext }
+        : undefined
       if (managed.wasInterrupted) {
         effectiveMessage += '\n\n<system-reminder>The previous assistant response was interrupted by the user and may be incomplete. Do not repeat or continue the interrupted response unless asked. Focus on the new message above.</system-reminder>'
         managed.wasInterrupted = false
@@ -7443,6 +7472,7 @@ export class SessionManager implements ISessionManager {
         chat: continuing => agent.chat(
           continuing ? `${CONTINUE_MESSAGE}\n\n<original_request>\n${effectiveMessage}\n</original_request>` : effectiveMessage,
           continuing ? undefined : modelInputAttachments.attachments,
+          { hostContext },
         ),
         isCurrent: () => this.sessions.get(sessionId) === managed
           && managed.isProcessing && !managed.authRetryInProgress
@@ -8053,8 +8083,10 @@ export class SessionManager implements ISessionManager {
     }
 
     // Empty completion errors used to reach only the in-process conductor.
-    // Persist and publish them before completion so ordinary chat can recover too.
-    if (completion.errorCode === EMPTY_RESPONSE_ERROR_CODE &&
+    // Ordinary chat needs a visible retry. Super Agent owns receipt validation
+    // and bounded recovery; publishing here would show a false error before it
+    // accepts a tool-only report or an intentional silent delivery.
+    if (!managed.executionPolicy?.nodeId && completion.errorCode === EMPTY_RESPONSE_ERROR_CODE &&
       !managed.messages.slice(managed.messages.findLastIndex(m => m.role === 'user') + 1)
         .some(m => m.role === 'error' && m.errorCode === EMPTY_RESPONSE_ERROR_CODE)) {
       const error = createAgentError(EMPTY_RESPONSE_ERROR_CODE)
@@ -8073,6 +8105,16 @@ export class SessionManager implements ISessionManager {
       // Has queued messages - process next
       this.processNextQueuedMessage(sessionId)
     } else {
+      if (managed.sessionStatus !== 'done' && shouldFinishSpawnedSession({
+        parentSessionId: managed.parentSessionId, managedWorkflow: !!managed.executionPolicy || !!managed.collaboration,
+        reason, hasNewFinal: didReceiveNewFinalMessage, queued: managed.messageQueue.length,
+        authPending: !!managed.pendingAuthResume || !!managed.pendingAuthRequest, backgroundRunning: Array.from(managed.backgroundTaskRegistry?.values() ?? []).some(task => task.status === 'running'),
+      })) {
+        this.runAfterTurnCleanup(sessionId, 'subagent completion status', async () => {
+          await this.setSessionStatus(sessionId, 'done')
+          this.emitUnreadSummaryChanged()
+        })
+      }
       // No queue - emit complete to UI (include tokenUsage and hasUnread for state updates)
       this.sendEvent({
         type: 'complete',

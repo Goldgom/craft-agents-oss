@@ -25,12 +25,12 @@ const tokenNest: LlmConnectionWithStatus = {
 }
 
 describe('Super Agent model authorization and setup', () => {
-  it('creates two permanent nodes and a model catalog without worker personas or job presets', () => {
+  it('creates three permanent nodes and a model catalog without worker personas or job presets', () => {
     const draft = createDynamicConfig([tokenNest], text)
     draft.environment.workingDirectory = process.cwd()
     const config = validateSuperAgentConfig(draft)
     expect(config.architecture).toBe('dynamic')
-    expect(config.nodes.map(node => node.role)).toEqual(['coordinator', 'orchestrator'])
+    expect(config.nodes.map(node => node.role)).toEqual(['coordinator', 'planner', 'orchestrator'])
     expect(config.modelPool!.map(entry => entry.model).sort()).toEqual(['available-mini', 'available-model'])
     expect(config.modelPool!.find(entry => entry.model === 'available-model')).toMatchObject({ name: 'available-model', model: 'available-model', intelligenceScore: 60, capabilities: [], skillSlugs: [], sourceSlugs: [] })
     expect(config.modelPool![0]!.capabilityNotes).not.toBe('')

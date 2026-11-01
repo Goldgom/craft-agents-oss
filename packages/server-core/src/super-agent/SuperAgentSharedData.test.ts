@@ -11,10 +11,12 @@ test('nodes fetch complete board entries with current revisions and reject forei
   const sessionId = state.state.tasks[0]!.sessionId!
   expect(host.sends[0]!.message).toBe('Read shared item contract and produce the assigned artifact.')
   expect(host.sends[0]!.context).toContain('[…]')
-  const full = await service.getNodeSharedData('alpha', sessionId)
+  const preview = await service.getNodeSharedData('alpha', sessionId)
+  expect(preview.board[0]!.content.length).toBeLessThan(content.length)
+  const full = await service.getNodeSharedData('alpha', sessionId, { id: 'contract', view: 'detail' })
   expect(full.board[0]).toMatchObject({ id: 'contract', content, revision: 1 })
   full.board[0]!.content = 'A caller cannot mutate storage'
-  expect((await service.getNodeSharedData('alpha', sessionId)).board[0]!.content).toBe(content)
+  expect((await service.getNodeSharedData('alpha', sessionId, { id: 'contract', view: 'detail' })).board[0]!.content).toBe(content)
   await expect(service.getNodeSharedData('alpha', 'foreign-session')).rejects.toThrow('not a current node')
   await expect(service.getNodeSharedData('another-workspace', sessionId)).rejects.toThrow()
   host.complete(sessionId, 'Verified artifact')

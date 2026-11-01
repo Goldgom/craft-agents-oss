@@ -65,12 +65,61 @@ async function fixture(options: { cold?: boolean; role?: 'coordinator' | 'worker
 }
 
 describe('Super Agent session settings reconciliation', () => {
+  test('cancelling a settings waiter retains the predecessor cleanup barrier', async () => {
+    const f = await fixture({ role: 'worker' })
+    const gate = deferred()
+    const controller = new AbortController()
+    f.internals.nodeSettingsLocks.set(f.managed.id, gate.promise)
+    const update = f.manager.ensureSuperAgentSessionSettings(f.managed.id, { permissionMode: 'allow-all', agentSystemPrompt: 'Cancelled waiter' }, { signal: controller.signal })
+    controller.abort(new Error('Preparation cancelled'))
+    await expect(update).rejects.toThrow('cancelled')
+    expect(f.manager.getSuperAgentPreparationBlockers(f.managed.id)).toContain('session-settings')
+    gate.resolve()
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(f.manager.getSuperAgentPreparationBlockers(f.managed.id)).toEqual([])
+    expect(f.managed.agentSystemPrompt).toBe('Legacy node prompt')
+  })
+
+  test('cancelled preparation cannot publish settings after an old startup resolves', async () => {
+    const f = await fixture()
+    const gate = deferred()
+    const controller = new AbortController()
+    f.internals.agentCreationLocks.set(f.managed.id, gate.promise)
+    const update = f.manager.ensureSuperAgentSessionSettings(f.managed.id, { permissionMode: 'allow-all', agentSystemPrompt: 'Cancelled prompt' }, { signal: controller.signal })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(f.manager.getSuperAgentPreparationBlockers(f.managed.id)).toContain('runtime-startup')
+    controller.abort(new Error('Preparation deadline exceeded'))
+    await expect(update).rejects.toThrow('deadline exceeded')
+    f.internals.agentCreationLocks.delete(f.managed.id)
+    gate.resolve()
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(f.managed.agentSystemPrompt).toBe('Legacy node prompt')
+    expect(f.getDisposals()).toBe(0)
+    expect(f.manager.getSuperAgentPreparationBlockers(f.managed.id)).toEqual([])
+  })
+
+  test('cancelled policy preparation waits for cleanup before changing the session', async () => {
+    const f = await fixture({ role: 'worker' })
+    const gate = deferred()
+    const controller = new AbortController()
+    f.managed.runtimeTeardown = gate.promise
+    const update = f.manager.applySessionPolicy(f.managed.id, { ...f.policy, readFiles: false }, { signal: controller.signal })
+    controller.abort(new Error('Preparation cancelled'))
+    await expect(update).rejects.toThrow('cancelled')
+    expect(f.manager.getSuperAgentPreparationBlockers(f.managed.id)).toContain('runtime-cleanup')
+    f.managed.runtimeTeardown = undefined
+    gate.resolve()
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(f.managed.executionPolicy?.readFiles).toBe(true)
+  })
+
   test('live full control persists and restores access without recycling an active cold node or losing its limited capabilities', async () => {
     const f = await fixture({ cold: true, role: 'worker' })
     f.managed.isProcessing = true
     const input = { file_path: resolve(f.root, '..', 'outside-node.txt'), content: 'outside' }
-    const enabling = f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
     expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(false)
+    const enabling = f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
+    expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(true)
     expect(f.managed.isProcessing).toBe(true)
     await enabling
     expect(f.getDisposals()).toBe(0)
@@ -83,7 +132,7 @@ describe('Super Agent session settings reconciliation', () => {
     const restored = createManagedSession({ ...savedHeader, id: 'restored-full-control' }, f.managed.workspace)
     expect(restored.executionPolicy?.fullControl).toBe(true)
     expect(restored.executionPolicy?.actionGates).toBe(true)
-    expect(checkSessionExecutionPolicy(restored.id, 'Write', input, f.root).allowed).toBe(false)
+    expect(checkSessionExecutionPolicy(restored.id, 'Write', input, f.root).allowed).toBe(true)
     clearSessionExecutionPolicy(restored.id)
     const disabling = f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
     expect(checkSessionExecutionPolicy(f.managed.id, 'Write', input, f.root).allowed).toBe(false)
@@ -166,7 +215,7 @@ describe('Super Agent session settings reconciliation', () => {
     expect(loadSession(f.root, f.managed.id)!.executionPolicy).not.toHaveProperty('containerExecutor')
   })
 
-  test('all capabilities preserve attachment, directory and source boundaries', async () => {
+  test('full control permits outside files while revocation restores file boundaries and retains source bindings', async () => {
     const f = await fixture({ role: 'worker' })
     const outside = await mkdtemp(join(tmpdir(), 'super-agent-direct-outside-'))
     cleanups.push(() => rm(outside, { recursive: true, force: true }))
@@ -174,18 +223,18 @@ describe('Super Agent session settings reconciliation', () => {
     await writeFile(attachment.path, 'Existing outside attachment')
     await f.manager.setSuperAgentSessionFullControl(f.managed.id, true)
     f.managed.isProcessing = true
-    await expect(f.manager.sendMessage(f.managed.id, 'Read the outside attachment', [attachment])).rejects.toThrow('attachment is outside')
-    expect(f.managed.messageQueue).toHaveLength(0)
+    await f.manager.sendMessage(f.managed.id, 'Read the outside attachment', [attachment])
+    expect(f.managed.messageQueue).toHaveLength(1)
     f.managed.messageQueue = []
     f.managed.isProcessing = false
     f.managed.agent = null
-    expect(() => f.manager.updateWorkingDirectory(f.managed.id, outside)).toThrow('working directory is outside')
+    expect(() => f.manager.updateWorkingDirectory(f.managed.id, outside)).not.toThrow()
     const sourceFolder = join(f.root, 'sources', 'selected-real-source')
     await mkdir(sourceFolder, { recursive: true })
     await writeFile(join(sourceFolder, 'config.json'), JSON.stringify({ id: 'selected-real-source', name: 'Real Source', slug: 'selected-real-source',
       enabled: true, provider: 'test', type: 'api', api: { baseUrl: 'https://example.invalid', authType: 'none' } }))
     expect(getSourcesBySlugs(f.root, ['selected-real-source']).filter(isSourceUsable)).toHaveLength(1)
-    await expect(f.manager.setSessionSources(f.managed.id, ['selected-real-source'])).rejects.toThrow('data source is not assigned')
+    await expect(f.manager.setSessionSources(f.managed.id, ['selected-real-source'])).resolves.toBeUndefined()
     await f.manager.setSuperAgentSessionFullControl(f.managed.id, false)
     expect(() => f.manager.updateWorkingDirectory(f.managed.id, outside)).toThrow('working directory is outside')
     await expect(f.manager.setSessionSources(f.managed.id, ['selected-real-source'])).rejects.toThrow('data source is not assigned')

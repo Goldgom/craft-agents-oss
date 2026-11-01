@@ -81,11 +81,12 @@ export interface ISessionManager {
   // ---------------------------------------------------------------------------
 
   setSessionPermissionMode(sessionId: string, mode: PermissionMode): void
-  applySessionPolicy(sessionId: string, policy: import('@tokenbird/shared/super-agent').SuperAgentSessionPolicy): Promise<void>
+  applySessionPolicy(sessionId: string, policy: import('@tokenbird/shared/super-agent').SuperAgentSessionPolicy, options?: import('@tokenbird/shared/super-agent').SuperAgentPreparationOptions): Promise<void>
   setSuperAgentSessionFullControl(sessionId: string, fullControl: boolean): Promise<void>
   setSuperAgentFullControl(workspaceId: string, fullControl: boolean): Promise<void>
   clearSuperAgentPermissionGrants(workspaceId: string): void
-  ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void>
+  ensureSuperAgentSessionSettings(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }, options?: import('@tokenbird/shared/super-agent').SuperAgentPreparationOptions): Promise<void>
+  getSuperAgentPreparationBlockers(sessionId: string): string[]
   setSessionThinkingLevel(sessionId: string, level: ThinkingLevel): void
   hasSuperAgentBrowserSupport?(workspaceId: string): boolean
   updateWorkingDirectory(sessionId: string, path: string): void

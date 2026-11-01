@@ -74,7 +74,7 @@ test.each(['manual', 'node'] as const)('full control starts a %s script without 
   f.config.environment.kind = 'sandbox'; f.config.environment.sandbox = { runtime: 'docker', image: 'node:22' };
   f.config.environment.fullControl = true;
   f.config.environment.permissions.runPrograms = false;
-  f.config.environment.safety = { autoReview: true, customRules: [{ toolName: 'script-run', effect: 'require-human', reason: 'Review programs' }] };
+  f.config.environment.safety = { autoReview: true, customRules: [{ toolName: 'script-run', effect: 'deny', reason: 'Must be ignored under full control' }] };
   f.config.scripts = [{ id: 'script', name: 'Script', path: 'script.js', args: [], nodeId: 'worker', timeoutSeconds: 5 }];
   await writeFile(join(f.workingDirectory, 'script.js'), 'console.log("direct entry");');
   await f.service.save('alpha', f.config);

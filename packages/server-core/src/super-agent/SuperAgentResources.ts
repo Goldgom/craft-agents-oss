@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { loadAllSkills } from '@tokenbird/shared/skills'
 import { isSourceUsable, loadWorkspaceSources } from '@tokenbird/shared/sources'
 import { isLocalMcpEnabled } from '@tokenbird/shared/workspaces'
@@ -6,7 +8,7 @@ import type { SuperAgentConfig } from '@tokenbird/shared/super-agent'
 
 /** Discovery contains descriptions and availability only, never credentials or launch commands. */
 export interface SuperAgentResourceCatalog {
-  skills: Array<{ slug: string; name: string; description: string }>
+  skills: Array<{ slug: string; name: string; description: string; path?: string; version?: string }>
   sources: Array<{ slug: string; name: string; description: string; type: string; available: boolean; status?: string }>
 }
 
@@ -27,7 +29,8 @@ export function describeSuperAgentResources(workspaceRoot: string, config: Super
   const localMcpEnabled = isLocalMcpEnabled(workspaceRoot)
   return {
     skills: loadAllSkills(skillWorkspaceRoot, config.environment.workingDirectory)
-      .map(skill => ({ slug: skill.slug, name: skill.metadata.name, description: skill.metadata.description.slice(0, 2_000) })),
+      .map(skill => ({ slug: skill.slug, name: skill.metadata.name, description: skill.metadata.description.slice(0, 2_000),
+        path: join(skill.path, 'SKILL.md'), version: createHash('sha256').update(skill.content).digest('hex') })),
     sources: loadWorkspaceSources(workspaceRoot).filter(source => config.architecture === 'dynamic' || config.sourceSlugs.includes(source.config.slug))
       .map(source => ({ slug: source.config.slug, name: source.config.name, description: (source.config.tagline ?? source.config.provider).slice(0, 2_000),
         type: source.config.type, available: isSourceUsable(source) && (source.config.mcp?.transport !== 'stdio' || localMcpEnabled),

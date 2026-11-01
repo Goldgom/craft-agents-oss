@@ -1,10 +1,11 @@
+import { legacyDynamicConfig as rebuildSuperAgentConfig } from './SuperAgentTestSupport'
 import { expect, test } from 'bun:test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { loadSkillBySlug } from '@tokenbird/shared/skills'
 import { loadWorkspaceSources, SourceServerBuilder } from '@tokenbird/shared/sources'
 import { McpClientPool } from '@tokenbird/shared/mcp'
-import { loadSuperAgentDocument, rebuildSuperAgentConfig, withSuperAgentOrchestrator, type SuperAgentSnapshot } from '@tokenbird/shared/super-agent'
+import { loadSuperAgentDocument, withSuperAgentOrchestrator, type SuperAgentSnapshot } from '@tokenbird/shared/super-agent'
 import { describeSuperAgentResources } from './SuperAgentResources'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
@@ -18,7 +19,7 @@ async function fixture() {
     resolveNodeSkills: (_workspace, config, node) => (node.skillSlugs ?? []).map(slug => {
       const skill = loadSkillBySlug(join(f.root, 'alpha'), slug, config.environment.workingDirectory)
       if (!skill) throw new Error(`Missing skill ${slug}`)
-      return { slug, content: skill.content }
+      return { slug, content: skill.content, path: join(skill.path, 'SKILL.md') }
     }),
   })
   const skillPath = join(f.root, 'alpha', 'skills', 'resource-research')
@@ -59,7 +60,8 @@ test('orchestrator discovers actual catalogs and distributes resources before di
   const running = await until(() => f.service.get('alpha'), s => s.state.tasks[0]?.status === 'running')
   const sessionId = running.state.tasks[0]!.sessionId!
   expect(f.host.options.get(sessionId)?.enabledSourceSlugs).toEqual(['research-mcp'])
-  expect(f.host.options.get(sessionId)?.agentSystemPrompt).toContain('ACTUAL_RESOURCE_RESEARCH_INSTRUCTIONS')
+  expect(f.host.options.get(sessionId)?.agentSystemPrompt).not.toContain('ACTUAL_RESOURCE_RESEARCH_INSTRUCTIONS')
+  expect(f.host.options.get(sessionId)?.agentSystemPrompt).toContain(JSON.stringify(join(f.root, 'alpha', 'skills', 'resource-research', 'SKILL.md')))
   expect(f.host.policies.get(sessionId)).toMatchObject({ allowSources: ['research-mcp'], allowSkills: ['super-agent-collaboration', 'resource-research'], allowSubagents: false, fullControl: false })
   expect(running.state.messages.find(message => message.fromNodeId === 'orchestrator' && message.actionReceipt)?.actionReceipt?.applied.map(action => action.type)).toEqual(['activate-resources', 'task'])
   expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).config?.nodes.find(node => node.id === 'worker')).toMatchObject({ sourceSlugs: ['research-mcp'], skillSlugs: ['resource-research'] })
@@ -83,7 +85,8 @@ test('worker activates resources and resumes the same task and session without a
   expect(resumed.state.tasks).toHaveLength(1)
   expect(resumed.state.tasks[0]?.sessionId).toBe(sessionId)
   expect(f.host.policies.get(sessionId)?.allowSources).toEqual(['research-mcp'])
-  expect(f.host.options.get(sessionId)?.agentSystemPrompt).toContain('ACTUAL_RESOURCE_RESEARCH_INSTRUCTIONS')
+  expect(f.host.options.get(sessionId)?.agentSystemPrompt).not.toContain('ACTUAL_RESOURCE_RESEARCH_INSTRUCTIONS')
+  expect(f.host.options.get(sessionId)?.agentSystemPrompt).toContain('resource-research')
   expect(f.host.sends.at(-1)?.message).toContain('preserve prior progress')
   f.host.complete(sessionId, 'Research completed with verified evidence')
   const completed = await until(() => f.service.get('alpha'), s => s.state.tasks[0]?.status === 'completed')
@@ -143,14 +146,14 @@ test('intent node cannot distribute resources and active workers keep their curr
   expect(result.state.messages.find(message => message.fromNodeId === 'orchestrator' && message.actionReceipt)?.actionReceipt?.rejected?.error).toContain('worker is idle')
 })
 
-test('oversized actual skill instructions fail before any source or skill binding is saved', async () => {
+test('large skill bodies remain readable by reference without filling the node prompt', async () => {
   const f = await fixture()
   await writeFile(join(f.root, 'alpha', 'skills', 'resource-research', 'SKILL.md'), '---\nname: Big skill\ndescription: Too big\n---\n' + 'x'.repeat(128_001))
   await f.service.save('alpha', f.config)
   await f.service.command('alpha', { type: 'chat', text: 'Prepare research' })
   const result = await finish(f, await working(f, 'main'), 'main', { activateResources: [activate()] })
-  expect(result.state.messages.find(message => message.fromNodeId === 'main' && message.actionReceipt)?.actionReceipt?.rejected?.error).toContain('128 KB')
-  expect(result.config?.nodes.find(node => node.id === 'worker')?.sourceSlugs).toEqual([])
+  expect(result.state.messages.find(message => message.fromNodeId === 'main' && message.actionReceipt)?.actionReceipt?.status).toBe('applied')
+  expect(result.config?.nodes.find(node => node.id === 'worker')?.sourceSlugs).toEqual(['research-mcp'])
 })
 
 test('a workspace that disables local MCP reports stdio sources as unavailable', async () => {
@@ -204,7 +207,7 @@ for (const dynamic of [false, true]) test(`${dynamic ? 'dynamic shared' : 'legac
     const worker = initial.state.tasks[0]!.nodeId, sessionId = initial.state.tasks[0]!.sessionId!
     if (dynamic) {
       expect(initial.config!.sourceSlugs).toEqual([])
-      expect(context(f.host.sends.at(-1)!.context).resourceCatalog.sources.some((source: { slug: string }) => source.slug === 'research-mcp')).toBe(true)
+      expect(context(f.host.sends.at(-1)!.context).resourceCatalog).toMatchObject({ tool: 'super_agent_resource_catalog', sourceCount: 4 })
       for (const slug of ['disabled-mcp', 'auth-mcp', 'missing-mcp']) {
         await expect(f.service.callNodeActionTool('alpha', sessionId, 'super_agent_resources', {
           requestId: `reject-${slug}`, ...activate(worker, [slug], []),
@@ -218,7 +221,7 @@ for (const dynamic of [false, true]) test(`${dynamic ? 'dynamic shared' : 'legac
     expect('resourceContinuation' in activated && activated.resourceContinuation).toBe(true)
     expect(f.host.policies.get(sessionId)!.allowSources).toEqual([])
     expect(pool.getTools('research-mcp')).toEqual([])
-    f.host.complete(sessionId, '')
+    f.host.complete(sessionId, 'Turn completed without a final assistant response.', 'error', { errorCode: 'empty_response', canRetry: true })
     await until(() => f.service.get('alpha'), s => s.state.tasks[0]?.status === 'queued')
     f.advance(2_000); await f.service.tick()
     const resumed = await working(f, worker)

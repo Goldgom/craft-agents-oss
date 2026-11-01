@@ -50,7 +50,8 @@ describe('compaction recovery', () => {
     const small = { ...model, id: 'luna-small', contextWindow: 16_384, maxTokens: 2_048 };
     const policy = createCompactionPolicy({ getModels: () => [small] });
     const signal = await activate(policy);
-    const source = '开头必须保留🙂\n' + '历史事实与约束。'.repeat(8_000) + '\n末尾待办 FINAL-123';
+    // Exercise multiple Unicode segments within the host's 12-request budget.
+    const source = '开头必须保留🙂\n' + '历史事实与约束。'.repeat(2_000) + '\n末尾待办 FINAL-123';
     const original: Context = { messages: [{ role: 'user', timestamp: 0, content: source }] };
     const before = structuredClone(original);
     const calls: Context[] = [];
@@ -107,11 +108,11 @@ describe('compaction recovery', () => {
           } else {
             await (session as unknown as { _runAutoCompaction(reason: string, retry: boolean): Promise<boolean> })._runAutoCompaction(reason, reason === 'overflow');
           }
-          expect(calls).toBe(recover ? 2 : 3);
+          expect(calls).toBe(2);
           expect(history.getEntries().slice(0, originals.length)).toEqual(originals);
           expect(history.getEntries().some(entry => entry.type === 'compaction')).toBe(recover);
           if (recover) expect(failure).toBeUndefined();
-          else expect(failure).toContain('token cap after 3');
+          else expect(failure).toContain('token cap after 2');
         } finally { unsubscribe(); session.dispose(); }
       });
     }

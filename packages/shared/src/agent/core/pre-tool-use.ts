@@ -709,7 +709,7 @@ function withPermissionModeContext(reason: string, sessionId: string, effectiveM
 
 /** Keep the original tool call suspended while a missing node permission is reviewed. */
 export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): Promise<PreToolUseCheckResult> {
-  const frameworkBlock = frameworkToolBlockReason(ctx.sessionId, ctx.toolName);
+  const frameworkBlock = isSessionReferenceReadTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory) ? undefined : frameworkToolBlockReason(ctx.sessionId, ctx.toolName);
   if (frameworkBlock) return { type: 'block', reason: frameworkBlock };
   const policy = await authorizeSessionPolicyTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory, undefined, ctx.invocationId);
   if (!policy.allowed) return { type: 'block', reason: policy.reason };
@@ -734,7 +734,7 @@ export async function runPreToolUseChecksWithPermissions(ctx: PreToolUseInput): 
 }
 
 export function runPreToolUseChecks(ctx: PreToolUseInput, deferDispatch?: (input: Record<string, unknown>) => void): PreToolUseCheckResult {
-  const frameworkBlock = frameworkToolBlockReason(ctx.sessionId, ctx.toolName);
+  const frameworkBlock = isSessionReferenceReadTool(ctx.sessionId, ctx.toolName, ctx.input, ctx.workingDirectory) ? undefined : frameworkToolBlockReason(ctx.sessionId, ctx.toolName);
   if (frameworkBlock) return { type: 'block', reason: frameworkBlock };
   const {
     toolName,
@@ -818,7 +818,7 @@ export function runPreToolUseChecks(ctx: PreToolUseInput, deferDispatch?: (input
   // ============================================================
   // 3. PREREQUISITE CHECK (guide.md before source tools)
   // ============================================================
-  if (prerequisiteManager && !isSessionReferenceReadTool(sessionId, toolName, input, workingDirectory)) {
+  if (prerequisiteManager && !fullControl && !isSessionReferenceReadTool(sessionId, toolName, input, workingDirectory)) {
     // Allow Bash through if it's reading a pending skill file (clears the prerequisite)
     if (toolName === 'Bash' && prerequisiteManager.trackBashSkillRead(input)) {
       // Prerequisite cleared — fall through to remaining pipeline steps

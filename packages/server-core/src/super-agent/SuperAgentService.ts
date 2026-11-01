@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { z } from 'zod'
@@ -10,13 +10,16 @@ import type { CreateSessionOptions, Session, SessionEvent } from '@tokenbird/sha
 import type { SessionCompletionEvent } from '../sessions/SessionManager'
 import { EMPTY_RESPONSE_ERROR_CODE } from '../sessions/session-turn-completion'
 import { buildSuperAgentNodePrompt } from './SuperAgentPrompt'
-import { appendSuperAgentReport, buildDynamicNodePrompt, readSuperAgentArea, recordSuperAgentEvent } from './SuperAgentDynamic'
-import { rebuildSuperAgentConfig, superAgentWorkList } from '@tokenbird/shared/super-agent'
+import { appendSuperAgentReport, buildDynamicNodePrompt, effectiveSuperAgentReports, readSuperAgentArea, recordSuperAgentEvent } from './SuperAgentDynamic'
+import { contextPreview, readContextPage, type SuperAgentReadQuery } from './SuperAgentContext'
+import { maintainSuperAgentBoard, SuperAgentBoardError, type SuperAgentBoardArchiveWriter } from './SuperAgentBoard'
+import { SUPER_AGENT_BOARD_LIMIT, SUPER_AGENT_BOARD_SOFT_LIMIT, SUPER_AGENT_BOARD_BYTES, SUPER_AGENT_BOARD_RETRY_MS, superAgentBoardBytes } from '@tokenbird/shared/super-agent/board'
+import { activeSuperAgentNodes, rebuildSuperAgentConfig, hasPlanningTopology, withSuperAgentPlanner, canSuperAgentCommunicate, superAgentReportRecipient, superAgentWorkList, awaitSuperAgentPreparation, type SuperAgentPreparationOptions, type SuperAgentPreparation } from '@tokenbird/shared/super-agent'
 import { hasSuperAgentResponseLoop, isSuperAgentAcknowledgment, normalizeSuperAgentResponse, superAgentResponseProgressKey } from './SuperAgentResponseGuard'
 import { createSuperAgentArchive, restoreSuperAgentArchive, updateSuperAgentMemory } from './SuperAgentLibrary'
 import { compactionUsageKey, DEFAULT_CONTEXT_COMPACTION, needsAutoCompaction, saveCompactionMemory, SUPER_AGENT_COMPACT_INSTRUCTIONS } from './SuperAgentCompaction'
 import { finiteUsage, statisticsForNode, recordTurnStatistics } from './SuperAgentStatistics'
-import { fingerprintArtifact, markArtifactStale, operationFingerprint, taskPriority } from './SuperAgentContinuity'
+import { fingerprintArtifact, markArtifactStale, operationFingerprint, operationResourceClaims, taskPriority } from './SuperAgentContinuity'
 import { operationReceipt, terminalProgramResult } from './SuperAgentOperationReceipts'
 import { installSuperAgentSkill } from './SuperAgentSkillInstall'
 import type { SuperAgentWorkflow } from './MicrosoftAgentWorkflow'
@@ -34,7 +37,8 @@ import {
   emptyContinuityMetrics,
   superAgentDependencySatisfied,
   superAgentTaskBlocker,
-  superAgentResourcesConflict,
+  superAgentTaskCompleted,
+  superAgentResourceBlockers,
   type SuperAgentTaskContract,
   type SuperAgentTask,
   loadSuperAgentDocument,
@@ -88,9 +92,10 @@ export interface SuperAgentSessionHost {
   deleteSession?(sessionId: string, guard?: { workspaceId: string; lastMessageAt: number; onlyIdle: true; superAgentReset?: true }): Promise<void>
   getSuperAgentSessionIds?(workspaceId: string, nodeId?: string): string[]
   /** Mandatory for execution. Absence fails closed; prompts are not a security boundary. */
-  applySessionPolicy?(sessionId: string, policy: SuperAgentSessionPolicy): Promise<void> | void
+  applySessionPolicy?(sessionId: string, policy: SuperAgentSessionPolicy, options?: SuperAgentPreparationOptions): Promise<void> | void
   /** Reconcile mode and instructions on existing sessions without losing their transcripts. */
-  ensureSuperAgentSessionSettings?(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }): Promise<void>
+  ensureSuperAgentSessionSettings?(sessionId: string, settings: { permissionMode: 'allow-all'; agentSystemPrompt: string }, options?: SuperAgentPreparationOptions): Promise<void>
+  getSuperAgentPreparationBlockers?(sessionId: string): string[]
   setSessionThinkingLevel?(sessionId: string, level: ThinkingLevel): void
   /** Apply explicit control changes to current and former node sessions in this workspace. */
   setSuperAgentFullControl?(workspaceId: string, fullControl: boolean): Promise<void>
@@ -98,6 +103,7 @@ export interface SuperAgentSessionHost {
 }
 
 export interface SuperAgentServiceDeps {
+  archiveBoard?: SuperAgentBoardArchiveWriter
   rebuildArchitecture?: boolean
   accessResources?: (workspaceId: string, operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'save-credentials' | 'test-automation' | 'replay-automation', value?: unknown) => Promise<unknown>
   host: SuperAgentSessionHost
@@ -107,7 +113,7 @@ export interface SuperAgentServiceDeps {
   /** Resolved framework traits help the coordinator name a worker for specialized tasks. */
   describeNodeBackend?: (node: SuperAgentNode) => Record<string, unknown> | undefined
   describeNodeSkills?: (workspaceId: string, config: SuperAgentConfig, node: SuperAgentNode) => Array<{ slug: string; name: string; description: string }>
-  resolveNodeSkills?: (workspaceId: string, config: SuperAgentConfig, node: SuperAgentNode) => Array<{ slug: string; content: string }>
+  resolveNodeSkills?: (workspaceId: string, config: SuperAgentConfig, node: SuperAgentNode) => Array<{ slug: string; content: string; path?: string; name?: string; description?: string }>
   describeResources?: (workspaceId: string, config: SuperAgentConfig) => SuperAgentResourceCatalog
   checkReadiness?: (workspaceId: string, config: SuperAgentConfig, force?: boolean) => Promise<SuperAgentReadiness>
   /** Runs after a successful save, outside the workspace lock (e.g. retire containers). */
@@ -196,6 +202,7 @@ export class SuperAgentService {
   private readonly resetting = new Set<string>()
   private readonly unassignedSessions = new Map<string, Set<string>>()
   private readonly preparingTurns = new Map<string, string>()
+  private readonly preparations = new Map<string, { attemptId: string; controller: AbortController; pending: number; timer?: ReturnType<typeof setTimeout> }>()
   /** Streaming deltas and live approval state never enter the durable control file. */
   private readonly activities = new Map<string, Map<string, SuperAgentNodeActivity>>()
   private readonly permissions = new Map<string, Map<string, SuperAgentPermissionRequest>>()
@@ -271,22 +278,32 @@ export class SuperAgentService {
     return createHash('sha256').update(JSON.stringify(config ?? null)).digest('hex')
   }
 
+  private readonly applyingSettings = new Set<string>()
+  private readonly settingsApplyErrors = new Map<string, string>()
+
+  private hasActiveExecution(document: SuperAgentDocument): boolean {
+    return document.state.nodes.some(node => ['working', 'preparing'].includes(node.status))
+      || document.pendingTurns.some(turn => turn.startedAt != null)
+      || document.state.scripts.some(script => script.status === 'running')
+  }
+
   async accessSettings(workspaceId: string, value: unknown, sessionId?: string): Promise<unknown> {
     const request = SuperAgentSettingsSchema.parse(value)
     const prepared = await this.serial(workspaceId, async () => {
       const document = await this.load(workspaceId)
       const active = sessionId ? this.activeNode(document, sessionId) : undefined
-      if (active && active.node.role !== 'coordinator' && !(document.config?.architecture === 'dynamic' && active.node.role === 'orchestrator' && request.action === 'get')) throw new Error('Only the interaction node may edit team settings')
-      const revision = this.settingsRevision(document.config)
+      if (active && active.node.role !== 'coordinator' && !(document.config?.architecture === 'dynamic' && ['orchestrator', 'planner'].includes(active.node.role) && request.action === 'get')) throw new Error('Only the interaction node may edit team settings')
+      const savedConfig = document.pendingConfig ?? document.config
+      const revision = this.settingsRevision(savedConfig)
       if (request.action === 'get') {
         if (request.changes || request.expectedRevision) throw new Error('get accepts no changes or expectedRevision')
-        return { result: { config: document.config ? structuredClone(document.config) : null, revision, pending: this.settingsUpdates.has(workspaceId) } }
+        return { result: { config: savedConfig ? structuredClone(savedConfig) : null, revision, pending: !!document.pendingConfig || this.settingsUpdates.has(workspaceId) } }
       }
       if (!document.config) throw new Error('Configure Super Agent in the setup page before editing settings')
       if (!request.expectedRevision || request.expectedRevision !== revision) throw new Error('Super Agent settings changed or revision is missing; call get before updating')
       if (!request.changes || !Object.keys(request.changes).length) throw new Error('Provide at least one setting to change')
       if ('version' in request.changes) throw new Error('The configuration format version cannot be edited')
-      const config = validateSuperAgentConfig({ ...document.config, ...request.changes })
+      const config = validateSuperAgentConfig({ ...savedConfig, ...request.changes })
       if (active && (config.environment.credentialAccess !== false) !== (document.config.environment.credentialAccess !== false)) {
         throw new Error('Credential vault access must be changed by the user in Super Agent settings')
       }
@@ -315,19 +332,25 @@ export class SuperAgentService {
   }
 
   async save(workspaceId: string, value: SuperAgentConfig, expectedRevision?: string): Promise<SuperAgentSnapshot> {
+    let deferred = false
     let config = validateSuperAgentConfig(value)
     if (config.architecture !== 'dynamic' && config.workflow?.independentReview && config.nodes.filter(node => node.role === 'worker').length < 2) throw new Error('Independent review requires at least two worker nodes')
     const snapshot = await this.serial(workspaceId, async () => {
       if (this.resetting.has(workspaceId)) throw new Error('Super Agent reset is in progress')
       const document = await this.load(workspaceId)
       const previous = document.config
+      if (hasPlanningTopology(previous) && config.architecture === 'dynamic') config = validateSuperAgentConfig(withSuperAgentPlanner(config))
       // Dynamic worker identities are host-owned and survive unrelated settings edits.
       if (previous?.architecture === 'dynamic' && config.architecture === 'dynamic') {
+        for (const node of previous.nodes.filter(node => !node.dynamic)) if (!config.nodes.some(candidate => candidate.id === node.id && candidate.role === node.role)) throw new Error('Permanent node identities are stable; edit names and model settings without replacing IDs')
         config = { ...config, nodes: [...config.nodes.filter(node => !node.dynamic), ...previous.nodes.filter(node => node.dynamic)] }
+        if (hasPlanningTopology(config)) config = withSuperAgentPlanner(config)
+        config = validateSuperAgentConfig(config)
       }
+      const topologyChanged = previous?.architecture === 'dynamic' && !hasPlanningTopology(previous) && hasPlanningTopology(config)
       const onlyDynamicLimitsChanged = previous?.architecture === 'dynamic' && config.architecture === 'dynamic'
         && JSON.stringify({ ...previous, maxConcurrentSubagents: config.maxConcurrentSubagents, reportCheckSeconds: config.reportCheckSeconds }) === JSON.stringify(config)
-      if (expectedRevision && this.settingsRevision(previous) !== expectedRevision) throw new Error('Super Agent settings changed; read them again before updating')
+      if (expectedRevision && this.settingsRevision(document.pendingConfig ?? previous) !== expectedRevision) throw new Error('Super Agent settings changed; read them again before updating')
       if (this.deps.upgradeArchitecture && !document.pendingTurns.length
         && !document.state.nodes.some(node => ['working', 'preparing', 'recovering'].includes(node.status))
         && !document.state.scripts.some(script => ['running', 'untracked'].includes(script.status) || script.resultPending || script.resultQueuedAt != null)) {
@@ -338,9 +361,6 @@ export class SuperAgentService {
       const onlyControlChanged = fullControlChanged && JSON.stringify(withoutControl(previous!)) === JSON.stringify(withoutControl(config))
       const onlyIntervalChanged = !!previous && previous.idleInspectionMinutes !== config.idleInspectionMinutes
         && JSON.stringify({ ...previous, idleInspectionMinutes: config.idleInspectionMinutes }) === JSON.stringify(config)
-      if ((!onlyDynamicLimitsChanged && !onlyIntervalChanged && (!onlyControlChanged || config.environment.kind === 'sandbox')) && (document.pendingTurns.length || document.state.scripts.some(script => script.status === 'running'))) {
-        throw new Error('Stop active and queued work before changing Super Agent settings')
-      }
       if (document.state.scripts.some(script => (script.resultPending || script.resultQueuedAt != null) && !config.scripts.some(item => item.id === script.scriptId))) {
         throw new Error('Wait for pending script results to reach the coordinator before removing their registrations')
       }
@@ -351,6 +371,19 @@ export class SuperAgentService {
         if (!readiness.ready) throw new Error(readiness.checks.filter(check => !check.ok).map(check => check.detail).join('\n'))
       }
       if (config.environment.kind === 'folder') await this.folder(config.environment.workingDirectory)
+      if (this.hasActiveExecution(document) && (!onlyControlChanged || config.environment.kind === 'sandbox')
+        && !onlyDynamicLimitsChanged && !onlyIntervalChanged) {
+        // Persist the desired config without replacing active runtimes or retiring
+        // their environments. Dispatch resumes with these settings at the boundary.
+        const pending = document.pendingConfig
+        document.pendingConfig = config
+        try { await this.commit(workspaceId, document) }
+        catch (error) { document.pendingConfig = pending; throw error }
+        deferred = true
+        this.settingsApplyErrors.delete(workspaceId)
+        return this.snapshot(workspaceId, document)
+      }
+      const previousPending = document.pendingConfig
       if (fullControlChanged) {
         if (!this.deps.host.setSuperAgentFullControl) throw new Error('This execution host cannot update Super Agent control permissions')
         try { await this.deps.host.setSuperAgentFullControl(workspaceId, config.environment.fullControl === true) }
@@ -365,6 +398,12 @@ export class SuperAgentService {
           throw error
         }
       }
+      const topologyBackup = topologyChanged ? structuredClone(document) : undefined
+      if (topologyChanged) {
+        const directory = join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'history')
+        await mkdir(directory, { recursive: true })
+        await writeFile(join(directory, `topology-v1-${this.now()}-${randomUUID()}.json`), JSON.stringify(document), { flag: 'wx', mode: 0o600 })
+      }
       const environmentChanged = JSON.stringify(previous?.environment) !== JSON.stringify(config.environment)
       const previousNodes = document.state.nodes
       const previousScripts = document.state.scripts
@@ -377,7 +416,9 @@ export class SuperAgentService {
       })
       document.state.scripts = config.scripts.map(script => document.state.scripts.find(item => item.scriptId === script.id) ?? { scriptId: script.id, status: 'idle' })
       document.config = config
-      document.failedTurns = (document.failedTurns ?? []).filter(turn => config.nodes.some(node => node.id === turn.nodeId && sameNodeSessionIdentity(previous?.nodes.find(item => item.id === node.id), node))
+      if (topologyChanged) this.initializePlanningState(document)
+      document.pendingConfig = undefined
+      document.failedTurns = (document.failedTurns ?? []).filter(turn => config.nodes.some(node => node.id === turn.nodeId && (topologyChanged || sameNodeSessionIdentity(previous?.nodes.find(item => item.id === node.id), node)))
         && previous && superAgentPermissionEnvironmentKey(previous.environment) === superAgentPermissionEnvironmentKey(config.environment))
       if (!onlyControlChanged && !onlyIntervalChanged) {
         this.activities.delete(workspaceId)
@@ -391,13 +432,16 @@ export class SuperAgentService {
         document.config = fullControlChanged && !config.environment.fullControl
           ? { ...previous!, environment: { ...previous!.environment, fullControl: false } } : previous
         document.state.nodes = previousNodes
+        document.pendingConfig = previousPending
         document.state.scripts = previousScripts
         document.failedTurns = previousFailedTurns
+        if (topologyBackup) { document.state = topologyBackup.state; document.pendingTurns = topologyBackup.pendingTurns; document.failedTurns = topologyBackup.failedTurns; document.chainCounts = topologyBackup.chainCounts }
         if (fullControlChanged && config.environment.fullControl) await this.deps.host.setSuperAgentFullControl!(workspaceId, false).catch(() => undefined)
         throw error
       }
       return this.snapshot(workspaceId, document)
     })
+    if (deferred) { this.schedule(workspaceId); return snapshot }
     try { await this.deps.onConfigChanged?.(workspaceId, config) }
     catch (error) {
       // The config is already committed. Report cleanup failure without turning
@@ -452,6 +496,24 @@ export class SuperAgentService {
       if (command.type === 'history-cleanup' || command.type === 'history-compact' || command.type === 'history-delete-sessions') {
         return this.cleanupHistory(workspaceId, document, command)
       }
+      if (command.type === 'board-cleanup' || command.type === 'board-upsert') {
+        // Keep active turn/runtime object identities; maintenance may run while workers execute.
+        const previousBoard = structuredClone(document.state.board)
+        const previousMaintenance = document.state.boardMaintenance
+        document.state.lastUserActivityAt = this.now()
+        document.state.allIdleSince = this.now()
+        try {
+          if (command.type === 'board-cleanup') await this.maintainBoard(workspaceId, document, { force: true })
+          else await this.upsertBoard(workspaceId, document, command.item, 'user', command.expectedRevision)
+        } catch (error) {
+          if (error instanceof SuperAgentBoardError) await this.commit(workspaceId, document)
+          throw error
+        }
+        try { await this.commit(workspaceId, document) }
+        catch (error) { document.state.board = previousBoard; document.state.boardMaintenance = previousMaintenance; throw error }
+        this.schedule(workspaceId)
+        return this.snapshot(workspaceId, document)
+      }
       document.state.lastUserActivityAt = this.now()
       document.state.allIdleSince = this.now()
       switch (command.type) {
@@ -459,11 +521,20 @@ export class SuperAgentService {
         case 'continuous-work':
           if (command.enabled) document.recoverySuspended = false
           document.config!.continuousWork = command.enabled
+          if (document.pendingConfig) document.pendingConfig.continuousWork = command.enabled
           if (!command.enabled) {
             const retired = document.pendingTurns.filter(turn => turn.backgroundInspection && turn.startedAt == null)
             document.pendingTurns = document.pendingTurns.filter(turn => !retired.includes(turn))
             for (const turn of retired) {
               const runtime = document.state.nodes.find(node => node.nodeId === turn.nodeId)
+              const control = this.preparations.get(`${workspaceId}:${turn.nodeId}`)
+              clearTimeout(control?.timer)
+              control?.controller.abort(new Error('Background inspection stopped'))
+              if (runtime?.preparation?.turnId === turn.id) {
+                runtime.preparation.status = 'failed'
+                runtime.preparation.cleanupPending = this.preparationBlockers(workspaceId, document, turn.nodeId).length > 0
+                runtime.preparation.completedAt = this.now()
+              }
               if (runtime && ((runtime.status === 'preparing' && this.preparingTurns.get(`${workspaceId}:${turn.nodeId}`) === turn.id)
                 || (runtime.status === 'recovering' && turn.retryAt != null))) {
                 runtime.status = 'idle'; runtime.activeTaskId = undefined; runtime.retryAt = undefined; runtime.retryAttempt = undefined; runtime.retryDeadline = undefined
@@ -485,6 +556,15 @@ export class SuperAgentService {
         }
         case 'automation-work': {
           const source = `automation:${command.automationId}:${command.runId}`
+          if (hasPlanningTopology(document.config)) {
+            if (!document.state.requests?.some(request => request.sourceTurnId === source)) {
+              if ((document.state.requests?.length ?? 0) >= 100) throw new Error('Request history is full')
+              const request = { id: this.id('request'), text: command.text, sourceTurnId: source, createdAt: this.now() }
+              document.state.requests = [...(document.state.requests ?? []), request]
+              this.enqueue(document, this.planner(document).id, 'message', `Authorized automation request ${request.id}. Read super_agent_work_list area=requests id=${request.id} view=detail and plan only its authorized work.`)
+            }
+            break
+          }
           if (!(document.state.intents ?? []).some(intent => intent.sourceTurnId === source)) {
             const intent = { id: this.id('goal'), revision: 1, status: 'active' as const, goal: command.text, constraints: [], deliverables: [], acceptanceCriteria: [], createdAt: this.now(), sourceTurnId: source }
             document.state.intents = [...(document.state.intents ?? []), intent]
@@ -517,7 +597,6 @@ export class SuperAgentService {
         case 'task-resume': this.resumeTask(document, command.taskId, true); document.recoverySuspended = false; break
         case 'inspect': this.inspect(document); document.recoverySuspended = false; break
         case 'message': this.routeMessage(document, command.fromNodeId, command.toNodeId, command.body, 0); break
-        case 'board-upsert': this.upsertBoard(document, command.item, 'user', command.expectedRevision); break
         case 'board-delete': {
           const item = document.state.board.find(item => item.id === command.id)
           if (!item) throw new Error('Shared board item does not exist')
@@ -527,10 +606,14 @@ export class SuperAgentService {
           break
         }
         case 'cancel':
-          if (!command.taskId) document.config!.continuousWork = false
+          if (!command.taskId) {
+            document.config!.continuousWork = false
+            if (document.pendingConfig) document.pendingConfig.continuousWork = false
+          }
           await this.cancel(workspaceId, document, command.taskId); recordSuperAgentEvent(document, 'work', 'user', this.now(), command.taskId); break
         case 'script-run': await this.startScript(workspaceId, document, command.scriptId, {}, command.approval); break
         case 'script-stop': await this.stopScript(workspaceId, document, command.scriptId); break
+        case 'node-recover': await this.recoverPreparation(workspaceId, document, command.nodeId, true); break
         case 'node-refresh': await this.refreshNode(workspaceId, document, command.nodeId); break
         case 'node-reset': await this.resetNode(workspaceId, document, command.nodeId); break
         case 'permission-response': await this.respondToPermission(workspaceId, document, command.requestId, command.allowed, command.remember); break
@@ -570,6 +653,9 @@ export class SuperAgentService {
         }
         if (document.config && !preserveConfig) document.config.continuousWork = false
         // Fence queued work before waiting for preparation outside the lock.
+        for (const [key, control] of this.preparations) if (key.startsWith(`${workspaceId}:`)) {
+          control.controller.abort(new Error('Super Agent reset requested'))
+        }
         document.pendingTurns = []; document.failedTurns = []; document.chainCounts = {}
         for (const task of document.state.tasks) {
           if (['queued', 'running'].includes(task.status)) { task.status = 'cancelled'; task.completedAt = this.now() }
@@ -595,6 +681,11 @@ export class SuperAgentService {
       })
       // Preparation may itself need the workspace lock. Drain it outside the lock.
       await Promise.all([...this.dispatches.values()].filter(item => item.workspaceId === workspaceId).map(item => item.promise))
+      const cleanupDeadline = Date.now() + 10_000
+      while ([...this.preparations].some(([key, control]) => key.startsWith(`${workspaceId}:`) && control.pending > 0)) {
+        if (Date.now() >= cleanupDeadline) throw new Error('Previous preparation is still stopping; retry reset after the operation ends')
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
       return await this.serial(workspaceId, async () => {
         const document = await this.load(workspaceId)
         const sessionIds = new Set([
@@ -692,11 +783,17 @@ export class SuperAgentService {
       const cleanup = planSuperAgentHistoryCleanup(document.state, command.before, command.keepRecentMessages)
       result.tasks = cleanup.removed.tasks.length; result.messages = cleanup.removed.messages.length
       result.plans = cleanup.removed.plans.length; result.scriptLogs = cleanup.removed.scriptLogs.length
-      if (result.tasks + result.messages + result.plans + result.scriptLogs + cleanup.removed.operations.length + cleanup.removed.artifacts.length + cleanup.removed.intents.length) {
+      const unreadReports = (document.state.reports ?? []).some(report => report.sequence > (hasPlanningTopology(document.config) ? document.state.reportCursors?.[report.recipientNodeId ?? ''] ?? 0 : document.state.consumedReportSequence ?? 0))
+      const retiredRequests = (document.state.requests ?? []).filter(request => !unreadReports && request.createdAt < command.before
+        && !cleanup.state.intents?.some(goal => goal.sourceRequestId === request.id || goal.status === 'active')
+        && !cleanup.state.plans.some(plan => !['completed', 'cancelled'].includes(plan.status))
+        && !document.failedTurns?.some(turn => turn.text.includes(request.id) || (turn.sourceTurnId ?? turn.id) === request.sourceTurnId))
+      if (retiredRequests.length) cleanup.state.requests = document.state.requests?.filter(request => !retiredRequests.some(retired => retired.id === request.id))
+      if (retiredRequests.length + result.tasks + result.messages + result.plans + result.scriptLogs + cleanup.removed.operations.length + cleanup.removed.artifacts.length + cleanup.removed.intents.length) {
         const directory = join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'history')
         await mkdir(directory, { recursive: true })
         result.archivePath = join(directory, `${this.now()}-${randomUUID()}.json`)
-        await writeFile(result.archivePath, JSON.stringify({ version: 1, workspaceId, archivedAt: this.now(), sourceRevision: document.state.revision, ...cleanup.removed }, null, 2), { encoding: 'utf8', flag: 'wx' })
+        await writeFile(result.archivePath, JSON.stringify({ version: 1, workspaceId, archivedAt: this.now(), sourceRevision: document.state.revision, ...cleanup.removed, ...(retiredRequests.length ? { requests: retiredRequests } : {}) }, null, 2), { encoding: 'utf8', flag: 'wx' })
       }
       document.state = cleanup.state
       if (document.config?.architecture === 'dynamic') {
@@ -821,7 +918,7 @@ export class SuperAgentService {
       }
       if (operations.length >= 2000) throw new Error('Operation history is full; archive settled work before dispatching more operations')
       operations.push({ id: this.id('op'), key, taskId: task?.id, turnId: turn.id, nodeId: node.id, sessionId,
-        invocationId: request.invocationId, toolName: request.toolName, status: 'prepared', createdAt: this.now(), updatedAt: this.now() })
+        invocationId: request.invocationId, toolName: request.toolName, resourceClaims: operationResourceClaims(request.toolName, request.input), status: 'prepared', createdAt: this.now(), updatedAt: this.now() })
       try { await this.commit(workspaceId, document) }
       catch (error) { operations.pop(); throw error }
     })
@@ -838,20 +935,30 @@ export class SuperAgentService {
 
         return turn.id
       })
-      if (!this.deps.accessResources) throw new Error('Scoped resources are unavailable')
-      const resources = await this.deps.accessResources(workspaceId, 'get') as Awaited<ReturnType<import('./SuperAgentResourceStore').SuperAgentResourceStore['snapshot']>>
+      const resourceQuery = parsed.actions.queryResources!
+      if (resourceQuery.area !== 'skills' && !this.deps.accessResources) throw new Error('Scoped resources are unavailable')
+      const resources = resourceQuery.area === 'skills' ? undefined
+        : await this.deps.accessResources!(workspaceId, 'get') as Awaited<ReturnType<import('./SuperAgentResourceStore').SuperAgentResourceStore['snapshot']>>
       return this.serial(workspaceId, async () => {
         const document = await this.load(workspaceId)
         if (this.activeNode(document, sessionId).turn.id !== turnId) throw new Error('The resource query turn has ended')
-        const query = parsed.actions.queryResources!, offset = query.offset ?? 0, limit = query.limit ?? 100
-        const items = query.area === 'sources' ? resources.sources.map(({ config }) => ({ slug: config.slug, name: config.name, type: config.type, provider: config.provider, description: config.tagline, enabled: config.enabled, status: config.connectionStatus }))
-          : query.area === 'credentials' ? resources.credentials
-          : query.area === 'history' ? resources.history
-          : Object.entries(resources.automations.automations).flatMap(([event, matchers]) => matchers.map(matcher => ({ event, id: matcher.id, name: matcher.name, enabled: matcher.enabled !== false, cron: matcher.cron, timezone: matcher.timezone,
+        const query = parsed.actions.queryResources!
+        const items = query.area === 'skills' ? this.deps.describeResources?.(workspaceId, this.configured(document)).skills ?? []
+          : query.area === 'sources' ? resources!.sources.map(({ config }) => ({ slug: config.slug, name: config.name, type: config.type, provider: config.provider, description: config.tagline, enabled: config.enabled, status: config.connectionStatus }))
+          : query.area === 'credentials' ? resources!.credentials
+          : query.area === 'history' ? resources!.history
+          : Object.entries(resources!.automations.automations).flatMap(([event, matchers]) => matchers.map(matcher => ({ event, id: matcher.id, name: matcher.name, enabled: matcher.enabled !== false, cron: matcher.cron, timezone: matcher.timezone,
             actions: matcher.actions.map(action => action.type === 'prompt' ? { type: action.type, prompt: action.prompt } : action.type === 'script' ? { type: action.type, script: action.script, runtime: action.runtime, timeoutMs: action.timeoutMs } : { type: action.type }) })))
-        return { requestId: parsed.requestId, receipt: { turnId, status: 'applied' as const, applied: [], createdAt: this.now() }, data: { credentialWorkspaceId: resources.credentialWorkspaceId, savedCredentialWorkspaceId: workspaceId, items: items.slice(offset, offset + limit), total: items.length, nextOffset: offset + limit < items.length ? offset + limit : null } }
+        return { requestId: parsed.requestId, receipt: { turnId, status: 'applied' as const, applied: [], createdAt: this.now() }, data: { credentialWorkspaceId: resources?.credentialWorkspaceId, savedCredentialWorkspaceId: workspaceId, ...readContextPage<unknown>(items, query) } }
       })
     }
+    if (toolName === 'super_agent_health' && parsed.actions.health?.action === 'get') return this.serial(workspaceId, async () => {
+      const document = await this.load(workspaceId)
+      const { node, turn } = this.activeNode(document, sessionId)
+      const selected = parsed.actions.health!.nodeId
+      if (node.role === 'worker' && selected && selected !== node.id) throw new Error('Workers may inspect their own health only')
+      return { requestId: parsed.requestId, receipt: { turnId: turn.id, status: 'applied' as const, applied: [], createdAt: this.now() }, data: this.preparationHealth(workspaceId, document, node.role === 'worker' ? node.id : selected) }
+    })
     if (toolName === 'super_agent_work_list' || toolName === 'super_agent_reports') return this.serial(workspaceId, async () => {
       const document = await this.load(workspaceId)
       const { node } = this.activeNode(document, sessionId)
@@ -867,6 +974,7 @@ export class SuperAgentService {
       const previous = calls.find(call => call.requestId === parsed.requestId)
       if (previous) {
         if (previous.fingerprint !== fingerprint) throw new Error('requestId already used with different parameters; read its receipt and use a new ID for new work')
+        turn.completionCallId = previous.receipt.status === 'applied' ? previous.requestId : undefined
         await this.commit(workspaceId, document)
         return structuredClone(previous)
       }
@@ -883,8 +991,12 @@ export class SuperAgentService {
       // Return rejected calls directly so the model can correct this call,
       // without spawning a separate paid repair turn. Script runtime failures
       // retain their original host state and operation outcomes.
-      if (result.error && !result.receipt.applied.length) throw new Error(result.receipt.rejected!.error)
+      if (result.error && !result.receipt.applied.length) {
+        if (result.error instanceof SuperAgentBoardError) await this.commit(workspaceId, document)
+        throw new Error(result.receipt.rejected!.error)
+      }
       calls.push(call)
+      turn.completionCallId = result.error ? undefined : call.requestId
       await this.commit(workspaceId, document)
       this.schedule(workspaceId)
       return structuredClone(call)
@@ -946,7 +1058,7 @@ export class SuperAgentService {
         operation.status = 'reconciled'; operation.updatedAt = this.now()
         operation.reconciliation = { evidenceTaskId: evidence.id, note: update.note, outcome: update.outcome }
         if (target && !document.state.operations?.some(item => item.taskId === target.id && ['prepared', 'running', 'unknown'].includes(item.status))) {
-          target.phase = target.status === 'completed' ? 'submitted' : 'executing'
+          target.phase = target.status === 'completed' || target.output?.trim() ? 'submitted' : 'executing'
         }
         await this.settleRecoveryPlans(document)
       } else {
@@ -1011,13 +1123,14 @@ export class SuperAgentService {
     if (document.state.operations?.some(operation => operation.taskId === task.id && ['unknown', 'running', 'prepared'].includes(operation.status))) throw new Error('Verify unknown operation outcomes before resuming')
     if (document.state.scripts.some(script => script.taskId === task.id && ['running', 'untracked'].includes(script.status))) throw new Error('Reconcile the prior script process before resuming')
     const goal = document.state.intents?.find(goal => goal.id === task.goalId)
+    const plan = document.state.plans.find(plan => plan.id === task.planId)
+    if (hasPlanningTopology(document.config) && plan && task.planRevision !== (plan.contractRevision ?? plan.revision)) return false
     if (goal && (goal.status === 'cancelled' || task.goalRevision !== (goal.revision ?? 1))) throw new Error('Goal changed; the orchestrator must update the task contract')
     const limit = document.config?.execution?.maxResumeAttempts ?? 3
     if (!manual && (task.attempt ?? 0) >= limit) return false
     if (manual) task.attempt = 0
     task.status = 'queued'; task.phase = 'executing'; task.waiting = undefined; task.error = undefined; task.completedAt = undefined
     task.attempt = (task.attempt ?? 0) + 1
-    const plan = document.state.plans.find(plan => plan.id === task.planId)
     if (plan && plan.status !== 'cancelled') { plan.status = 'active'; plan.revision++; plan.note = 'Resuming from the saved checkpoint.' }
     this.enqueue(document, task.nodeId, 'task', task.instructions, task.id)
     ;(document.state.metrics ??= emptyContinuityMetrics()).resumptions++
@@ -1065,14 +1178,16 @@ export class SuperAgentService {
 
   private enqueuePlannerSummary(document: SuperAgentDocument, text: string, depth = 0, chainId?: string): void {
     if (document.config?.architecture === 'dynamic') { recordSuperAgentEvent(document, 'runtime', 'system', this.now()); return }
-    const planner = this.planner(document)
+    const planner = this.dispatcher(document)
     const pending = document.pendingTurns.find(turn => turn.nodeId === planner.id && turn.kind === 'summary' && turn.startedAt == null && !turn.retryAttempt && (!chainId || turn.chainId === chainId))
     if (pending && pending.text.length + text.length + 30 < MAX_OUTPUT) { pending.text += `\n\n--- Next event ---\n${text}`; pending.depth = Math.max(pending.depth, depth); return }
     if (document.pendingTurns.length < MAX_PENDING_TURNS) this.enqueue(document, planner.id, 'summary', text, undefined, depth, chainId)
   }
 
   /** Read full shared entries under the invoking session's current team identity. */
-  async getNodeSharedData(workspaceId: string, sessionId: string, query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }) {
+  async getNodeSharedData(workspaceId: string, sessionId: string, query?: SuperAgentReadQuery & {
+    goalId?: string; taskId?: string; itemIds?: string[]; area?: 'board' | 'tasks' | 'plans' | 'requirements' | 'artifacts' | 'nodes'
+  }) {
     return this.serial(workspaceId, async () => {
       const document = await this.load(workspaceId)
       const config = this.configured(document)
@@ -1087,17 +1202,22 @@ export class SuperAgentService {
       const sharedTasks = document.state.tasks.filter(task => (config.architecture === 'dynamic' || node.role === 'orchestrator' || task.id === current?.id || current?.dependsOn?.includes(task.id))
         && (!query?.goalId || task.goalId === query.goalId) && (!query?.taskId || task.id === query.taskId))
       const board = document.state.board.filter(item => !query?.itemIds || query.itemIds.includes(item.id))
-      const offset = Math.max(0, query?.offset ?? 0), limit = Math.min(100, Math.max(1, query?.limit ?? 100))
-      return structuredClone({ board: query ? board.slice(offset, offset + limit) : board, boardCount: board.length,
-        ...(query ? { offset, nextOffset: offset + limit < board.length ? offset + limit : null } : {}),
-        artifacts: document.state.artifacts?.filter(artifact => sharedTasks.some(task => task.id === artifact.taskId)),
-        ...(config.nodes.some(item => item.role === 'orchestrator') ? { coordination: {
-          intents: document.state.intents ?? [],
-          tasks: sharedTasks, plans: document.state.plans.filter(plan => config.architecture === 'dynamic' || node.role !== 'worker' || plan.id === current?.planId),
-        } } : {}),
-        nodes: config.nodes.map(node => ({ id: node.id, name: node.name, role: node.role, description: node.description })),
-        runtime: document.state.nodes.map(node => ({ nodeId: node.nodeId, sessionId: node.sessionId, status: node.status })),
-      })
+      const area = query?.area ?? (query?.taskId ? 'tasks' : 'board')
+      const areas = { board, tasks: sharedTasks,
+        plans: document.state.plans.filter(plan => (!query?.goalId || plan.goalId === query.goalId)
+          && (config.architecture === 'dynamic' || node.role !== 'worker' || plan.id === current?.planId)),
+        requirements: (document.state.intents ?? []).filter(goal => !query?.goalId || goal.id === query.goalId),
+        artifacts: (document.state.artifacts ?? []).filter(artifact => sharedTasks.some(task => task.id === artifact.taskId)),
+        nodes: config.nodes.map(node => ({ id: node.id, name: node.name, role: node.role, description: node.description })) }
+      const page = readContextPage<unknown>(areas[area], query)
+      return structuredClone({ revision: document.state.revision, area, ...page,
+        board: area === 'board' ? page.items as typeof board : [], boardCount: board.length,
+        boardLimit: SUPER_AGENT_BOARD_LIMIT, boardMaintenance: document.state.boardMaintenance,
+        coordination: { tasks: area === 'tasks' ? page.items as typeof sharedTasks : [],
+          plans: area === 'plans' ? page.items as typeof areas.plans : [],
+          intents: area === 'requirements' ? page.items as typeof areas.requirements : [] },
+        artifacts: area === 'artifacts' ? page.items as typeof areas.artifacts : [],
+        nodes: area === 'nodes' ? page.items as typeof areas.nodes : [] })
     })
   }
 
@@ -1131,10 +1251,15 @@ export class SuperAgentService {
     await Promise.allSettled([...this.documents.keys()].map(workspaceId => this.serial(workspaceId, async () => {
       const document = this.documents.get(workspaceId)!
       if (!document.config || this.resetting.has(workspaceId)) return
+      // Host housekeeping is independent of model health, task recovery and idle inspections.
+      if (scanContinuity && await this.maintainBoard(workspaceId, document)) await this.commit(workspaceId, document)
       if (this.expirePermissionDeadlines(workspaceId, document)) await this.commit(workspaceId, document)
+      await this.scanPreparations(workspaceId, document)
       await this.reconcileStartedTurns(workspaceId, document)
       await this.reconcileQueuedTasks(workspaceId, document)
-      if (scanContinuity) await this.scanContinuity(workspaceId, document)
+      if (scanContinuity) {
+        await this.scanContinuity(workspaceId, document)
+      }
       await this.expireRecoveryWindows(workspaceId, document)
       if (this.flushDynamicEvents(document)) await this.commit(workspaceId, document)
       if (this.flushScriptResults(document)) await this.commit(workspaceId, document)
@@ -1144,7 +1269,7 @@ export class SuperAgentService {
       if (document.config.continuousWork) {
         await this.checkContinuousWork(workspaceId, document)
       } else if (document.config.architecture !== 'dynamic' && this.now() - activity >= interval && this.hasActivityToInspect(document)
-        && !document.pendingTurns.some(turn => turn.nodeId === this.planner(document).id)) {
+        && !document.pendingTurns.some(turn => turn.nodeId === this.dispatcher(document).id)) {
         this.inspect(document)
         await this.commit(workspaceId, document)
       }
@@ -1189,7 +1314,7 @@ export class SuperAgentService {
     // Preserve a planner's terminal checkpoint for explicit recovery; a new
     // summary must not hide an authentication failure or expired result delivery.
     if (!document.config || document.recoverySuspended
-      || document.failedTurns?.some(turn => turn.nodeId === this.planner(document).id)
+      || document.failedTurns?.some(turn => turn.nodeId === this.dispatcher(document).id)
       || document.state.messages.some(message => message.permission?.status === 'pending')
       || document.pendingTurns.some(turn => turn.startedAt != null || this.taskReady(document, turn))
       || document.state.scripts.some(script => script.status === 'running')) return false
@@ -1309,7 +1434,7 @@ export class SuperAgentService {
       this.stoppedTurnObservations.delete(turn)
       // Recover only text observed in this attempt, never an earlier session answer.
       const recoveredText = this.recoverableTurnText(document, turn)
-      if (session?.workspaceId === workspaceId && recoveredText && turn.kind !== 'compact') {
+      if (session?.workspaceId === workspaceId && recoveredText !== undefined && turn.kind !== 'compact') {
         await this.finishTurn(workspaceId, document, turn, { sessionId: sessionId!, workspaceId,
           reason: 'complete', finalText: recoveredText })
         runtime.sessionId = undefined
@@ -1319,7 +1444,7 @@ export class SuperAgentService {
       const state = !session ? 'is unavailable' : session.workspaceId !== workspaceId
         ? 'belongs to a different workspace' : 'has stopped processing'
       const notice = `Node session ${sessionId ?? '(missing)'} ${state}, but its turn completion notification was not received. The result is unknown. Review the original session and existing artifacts before deciding what remains; do not replay this turn or reuse an earlier answer as its result.`
-      const coordinatorId = this.planner(document).id
+      const coordinatorId = this.dispatcher(document).id
       const previousTurns = new Set(document.pendingTurns.map(turn => turn.id))
       await this.finishTurn(workspaceId, document, turn, { sessionId: sessionId ?? '', workspaceId, reason: 'error', errorCode: 'outcome_unknown', canRetry: false, finalText: notice })
       // A delayed terminal event for this session must not complete a later turn.
@@ -1354,7 +1479,7 @@ export class SuperAgentService {
     }
     if (!retired.length) return
     const notice = `Retired obsolete queued tasks; these were never dispatched:\n${retired.join('\n')}\nReview the latest goal and existing results. Arrange only remaining authorized work with valid dependencies; do not bypass cancelled dependencies or repeat completed work. If blocked by missing input, permissions or external conditions, explain the specific blocker and the next user action through the interaction node.`
-    this.message(document, 'system', this.planner(document).id, 'message', notice)
+    this.message(document, 'system', this.dispatcher(document).id, 'message', notice)
     if (document.pendingTurns.length < MAX_PENDING_TURNS) this.enqueuePlannerSummary(document, notice, 0)
     await this.commit(workspaceId, document)
   }
@@ -1380,6 +1505,11 @@ export class SuperAgentService {
       }
       return
     }
+    // A failed foreground turn needs its existing recovery route. Idle timers must
+    // not turn unchanged evidence into another fresh paid retry budget.
+    if (document.failedTurns?.some(turn => turn.nodeId === this.dispatcher(document).id && !turn.backgroundInspection)) return
+    const progressKey = superAgentResponseProgressKey(document)
+    if (document.state.lastInspectionProgressKey === progressKey) return
     const lastActivity = Math.max(document.state.lastUserActivityAt, document.state.lastInspectionAt ?? 0,
       ...document.state.nodes.map(node => node.lastCompletedAt ?? node.lastStartedAt ?? 0),
       ...document.state.scripts.map(script => Math.max(script.completedAt ?? 0, script.startedAt ?? 0)))
@@ -1395,6 +1525,7 @@ export class SuperAgentService {
 
   async cleanup(): Promise<void> {
     this.closed = true
+    for (const attempt of this.preparations.values()) { clearTimeout(attempt.timer); attempt.controller.abort(new Error('Service shutting down')) }
     this.settingsUpdates.clear()
     this.deps.workflow?.close()
     if (this.timer) clearInterval(this.timer)
@@ -1563,6 +1694,7 @@ export class SuperAgentService {
       case 'tool_start':
         turn.hasToolActivity = true
         turn.responseComplete = false
+        turn.completionCallId = undefined
         turn.pendingToolUseIds = [...new Set([...(turn.pendingToolUseIds ?? []), event.toolUseId])]
         ;(document.state.metrics ??= emptyContinuityMetrics()).toolCalls++
         const statisticsNode = document.config?.nodes.find(node => node.id === turn.nodeId)
@@ -1675,8 +1807,7 @@ export class SuperAgentService {
   private async notifyBlockedOperation(workspaceId: string, document: SuperAgentDocument, node: SuperAgentNode,
     turn: SuperAgentPendingTurn, activity: SuperAgentNodeActivity, toolName: string, result: string): Promise<void> {
     const marker = result.indexOf('Super Agent policy:')
-    if (marker < 0 || result.includes('permission was denied or expired')) return
-    activity.status = 'error'
+    if (marker < 0 || result.includes('permission was denied or expired') || result.includes('Action Gate was denied, cancelled or expired')) return
     const reason = result.slice(marker, marker + 2_000)
     let notices = this.blockedNotices.get(activity)
     if (!notices) { notices = new Set(); this.blockedNotices.set(activity, notices) }
@@ -1684,6 +1815,15 @@ export class SuperAgentService {
     if (notices.has(key) || notices.size >= MAX_MODEL_ACTIONS) return
     notices.add(key)
     const coordinator = this.coordinator(document)
+    // A rejected role-specific tool call is returned to the model for correction.
+    // Keep the failed tool entry, but let the active turn recover before reporting a task failure.
+    if (document.config?.architecture === 'dynamic' && node.role === 'coordinator'
+      && reason.startsWith('Super Agent policy: interaction ')) {
+      this.message(document, 'system', node.id, 'message', `${toolName}: ${reason}`, turn.taskId)
+      await this.commit(workspaceId, document)
+      return
+    }
+    activity.status = 'error'
     const notice = `${node.name} was blocked from ${toolName}: ${reason}\nReview the node's setup or choose a supported operation; this failure does not grant additional access.`
     if (document.config?.architecture === 'dynamic' && node.role !== 'coordinator') appendSuperAgentReport(document, node, turn, { kind: 'failure', content: notice }, this.now())
     else this.message(document, 'system', coordinator.id, 'error', notice, turn.taskId)
@@ -1777,6 +1917,152 @@ export class SuperAgentService {
     if (!delivered) throw new Error('The original operation is no longer waiting for permission')
   }
 
+  private preparationHealth(workspaceId: string, document: SuperAgentDocument, nodeId?: string) {
+    const active = new Set(activeSuperAgentNodes(this.configured(document), document.state).map(node => node.id))
+    return { checkedAt: this.now(), recoverySuspended: document.recoverySuspended === true,
+      nodes: document.state.nodes.filter(node => nodeId ? node.nodeId === nodeId : active.has(node.nodeId)).slice(0, 40).map(node => {
+        const pending = document.pendingTurns.filter(turn => turn.nodeId === node.nodeId)
+        const started = pending.find(turn => turn.startedAt != null)
+        return { nodeId: node.nodeId, status: node.status, preparation: node.preparation, error: contextExcerpt(node.error, 500),
+          cleanupBlockers: this.preparationBlockers(workspaceId, document, node.nodeId),
+          pendingTurns: pending.length, oldestQueuedAt: pending[0]?.createdAt,
+          queueBlockers: pending.filter(turn => turn.startedAt == null && turn.taskId).slice(0, 10).map(turn => {
+            const task = document.state.tasks.find(task => task.id === turn.taskId)!
+            return { taskId: task.id, blocker: superAgentTaskBlocker(document.state, task),
+              resourceBlockers: superAgentResourceBlockers(document.state, task), waiting: task.waiting }
+          }),
+          execution: started ? { turnId: started.id, taskId: started.taskId, startedAt: started.startedAt } : null }
+      }) }
+  }
+
+  private async recoverPreparation(workspaceId: string, document: SuperAgentDocument, nodeId: string, manual = false): Promise<void> {
+    const runtime = document.state.nodes.find(node => node.nodeId === nodeId)
+    const preparation = runtime?.preparation
+    if (!runtime || !preparation || preparation.status === 'completed' || runtime.status === 'working') throw new Error('Only failed or expired preparations can be recovered')
+    if (document.recoverySuspended) throw new Error('Work was stopped by the user; resume it before recovering preparation')
+    if (preparation.status === 'preparing') {
+      if (!manual && this.now() < preparation.deadlineAt) throw new Error('Preparation is still within its deadline')
+      this.preparations.get(`${workspaceId}:${nodeId}`)?.controller.abort(new Error('Preparation recovery requested'))
+      preparation.status = 'cancelling'
+      await this.commit(workspaceId, document)
+      return
+    }
+    if (this.preparationBlockers(workspaceId, document, nodeId).length || this.launching.has(`${workspaceId}:${nodeId}`)) throw new Error('Previous preparation is still stopping; a second attempt will not start')
+    if (!manual && preparation.attempt > (document.config?.execution?.preparationMaxRetries ?? 2)) throw new Error('Automatic preparation recovery budget exhausted; inspect the recorded failure before a manual retry')
+    const turn = document.pendingTurns.find(turn => turn.id === preparation.turnId)
+    if (!turn || turn.startedAt != null) throw new Error('Original preparation is no longer recoverable')
+    if ((document.state.operations ?? []).some(operation => (operation.turnId === turn.id || operation.taskId != null && operation.taskId === turn.taskId) && ['prepared', 'running', 'unknown'].includes(operation.status))) throw new Error('Reconcile unknown operations before continuing')
+    if (manual) turn.preparationAttempt = 0
+    preparation.status = 'retrying'; preparation.cleanupPending = false
+    runtime.status = 'recovering'; runtime.error = undefined; runtime.retryAt = turn.retryAt = this.now()
+    await this.commit(workspaceId, document)
+    void this.preparationDiagnostic(workspaceId, nodeId, { ...preparation }, manual ? 'manual-retry' : 'ai-retry')
+  }
+
+  private preparationBlockers(workspaceId: string, document: SuperAgentDocument, nodeId: string): string[] {
+    const runtime = document.state.nodes.find(node => node.nodeId === nodeId)
+    return [
+      ...(this.preparations.get(`${workspaceId}:${nodeId}`)?.pending ? ['preparation-operation-pending'] : []),
+      ...(runtime?.sessionId ? this.deps.host.getSuperAgentPreparationBlockers?.(runtime.sessionId) ?? [] : []),
+    ]
+  }
+
+  private async preparationDiagnostic(workspaceId: string, nodeId: string, preparation: SuperAgentPreparation, event: string): Promise<void> {
+    // Always available in packaged builds. No prompt, tool arguments or credentials.
+    const directory = join(this.deps.rootForWorkspace(workspaceId), 'super-agent')
+    try {
+      await mkdir(directory, { recursive: true })
+      const path = join(directory, 'preparation-diagnostics.jsonl')
+      if (((await stat(path).catch(() => null))?.size ?? 0) > 2 * 1024 * 1024) await rename(path, `${path}.prev`)
+      await appendFile(path, `${JSON.stringify({ at: this.now(), nodeId, attemptId: preparation.attemptId, turnId: preparation.turnId,
+        attempt: preparation.attempt, stage: preparation.stage, status: preparation.status, event,
+        elapsedMs: this.now() - preparation.startedAt, stageElapsedMs: this.now() - preparation.stageStartedAt })}\n`)
+    } catch { /* Diagnostic failures must not own preparation liveness. */ }
+  }
+
+  private async preparationStep<T>(workspaceId: string, document: SuperAgentDocument, nodeId: string, turn: SuperAgentPendingTurn,
+    control: { attemptId: string; controller: AbortController; pending: number }, stage: SuperAgentPreparation['stage'], work: () => Promise<T> | T): Promise<T> {
+    await this.serial(workspaceId, async () => {
+      control.controller.signal.throwIfAborted()
+      const runtime = document.state.nodes.find(node => node.nodeId === nodeId)
+      if (this.closed || runtime?.preparation?.attemptId !== control.attemptId || !document.pendingTurns.includes(turn)) throw new Error('Preparation superseded')
+      runtime.preparation.stage = stage; runtime.preparation.stageStartedAt = this.now()
+      await this.commit(workspaceId, document)
+      void this.preparationDiagnostic(workspaceId, nodeId, { ...runtime.preparation }, 'stage-start')
+    })
+    control.controller.signal.throwIfAborted()
+    control.pending++
+    const operation = Promise.resolve().then(() => { control.controller.signal.throwIfAborted(); return work() })
+    void operation.then(() => { control.pending-- }, () => { control.pending-- })
+    const result = await awaitSuperAgentPreparation(operation, control.controller.signal)
+    control.controller.signal.throwIfAborted()
+    if (this.closed || document.state.nodes.find(node => node.nodeId === nodeId)?.preparation?.attemptId !== control.attemptId || !document.pendingTurns.includes(turn)) throw new Error('Preparation superseded')
+    return result
+  }
+
+  private async failPreparation(workspaceId: string, document: SuperAgentDocument, nodeId: string, turn: SuperAgentPendingTurn, cause: unknown): Promise<void> {
+    const runtime = document.state.nodes.find(node => node.nodeId === nodeId)!
+    const preparation = runtime.preparation!
+    const control = this.preparations.get(`${workspaceId}:${nodeId}`)
+    clearTimeout(control?.timer)
+    const reason = cause instanceof Error ? cause.message : 'Preparation failed'
+    const permanent = /This execution host (?:does not support|cannot)|This host cannot|Assigned node skill instructions exceed|Node session is not owned/.test(reason)
+    control?.controller.abort(cause)
+    preparation.error = `Preparation failed at ${preparation.stage}: ${reason}`.slice(0, 2000)
+    preparation.completedAt = this.now()
+    preparation.cleanupPending = this.preparationBlockers(workspaceId, document, nodeId).length > 0
+    const safe = !(document.state.operations ?? []).some(operation => (operation.turnId === turn.id || operation.taskId != null && operation.taskId === turn.taskId) && ['prepared', 'running', 'unknown'].includes(operation.status))
+    const retry = !permanent && safe && preparation.attempt <= (document.config?.execution?.preparationMaxRetries ?? 2) && !document.recoverySuspended
+    preparation.status = retry && !preparation.cleanupPending ? 'retrying' : 'failed'
+    runtime.status = retry && !preparation.cleanupPending ? 'recovering' : 'error'
+    runtime.error = `${preparation.error}${preparation.cleanupPending ? '\nWaiting for the previous operation or runtime cleanup to stop; a second attempt will not start.' : ''}`
+    turn.recoveryError = runtime.error
+    turn.retryAt = retry ? this.now() + (preparation.attempt === 1 ? 5000 : 30_000) : undefined
+    runtime.retryAt = turn.retryAt; runtime.retryAttempt = preparation.attempt
+    const task = document.state.tasks.find(task => task.id === turn.taskId)
+    if (task && task.status === 'running') { task.status = 'queued'; task.phase = 'waiting' }
+    const coordinator = this.coordinator(document)
+    // A broken planner must not own the diagnostic queue. Wake the interaction
+    // session directly once, rather than recursively assigning repair workers.
+    if (nodeId !== coordinator.id && document.pendingTurns.length < MAX_PENDING_TURNS
+      && !document.pendingTurns.some(item => item.nodeId === coordinator.id && item.text.startsWith('Host preparation diagnostic:'))) {
+      this.enqueue(document, coordinator.id, 'summary', `Host preparation diagnostic: node ${nodeId}, stage ${preparation.stage}, attempt ${preparation.attempt}, cleanupPending=${preparation.cleanupPending}. Use super_agent_health to inspect and safely recover. Preserve existing tasks and unknown operations. Do not promise execution before the host records a start. No new user authorization is needed for an already authorized safe retry.`)
+    }
+    this.message(document, 'system', coordinator.id, 'error', runtime.error, turn.taskId)
+    await this.commit(workspaceId, document)
+    void this.preparationDiagnostic(workspaceId, nodeId, { ...preparation }, 'failed')
+    if (permanent && !preparation.cleanupPending) await this.finishTurn(workspaceId, document, turn, {
+      sessionId: runtime.sessionId ?? '', workspaceId, reason: 'error', canRetry: false, finalText: preparation.error,
+    })
+  }
+
+  private async scanPreparations(workspaceId: string, document: SuperAgentDocument): Promise<void> {
+    let changed = false
+    for (const runtime of document.state.nodes) {
+      const preparation = runtime.preparation
+      if (!preparation || preparation.status === 'completed') continue
+      const control = this.preparations.get(`${workspaceId}:${runtime.nodeId}`)
+      if (preparation.status === 'preparing') {
+        if (this.now() >= preparation.deadlineAt) control?.controller.abort(new Error(`Preparation deadline exceeded at ${preparation.stage}`))
+        else if (!preparation.warningAt && this.now() - preparation.startedAt >= Math.min(60_000, (preparation.deadlineAt - preparation.startedAt) / 2)) {
+          preparation.warningAt = this.now(); changed = true
+          void this.preparationDiagnostic(workspaceId, runtime.nodeId, { ...preparation }, 'slow')
+        }
+      }
+      if (preparation.cleanupPending && !this.preparationBlockers(workspaceId, document, runtime.nodeId).length) {
+        preparation.cleanupPending = false; changed = true
+        const turn = document.pendingTurns.find(turn => turn.id === preparation.turnId)
+        if (!turn) { runtime.preparation = undefined; if (runtime.status !== 'working') runtime.status = 'idle'; continue }
+        const unsafe = (document.state.operations ?? []).some(operation => (operation.turnId === turn?.id || operation.taskId != null && operation.taskId === turn?.taskId) && ['prepared', 'running', 'unknown'].includes(operation.status))
+        if (turn?.retryAt != null && !unsafe && preparation.attempt <= (document.config?.execution?.preparationMaxRetries ?? 2) && !document.recoverySuspended) {
+          preparation.status = 'retrying'; runtime.status = 'recovering'; runtime.retryAt = Math.max(this.now(), runtime.retryAt ?? 0)
+          turn.retryAt = runtime.retryAt
+        }
+      }
+    }
+    if (changed) await this.commit(workspaceId, document)
+  }
+
   private async expireRecoveryWindows(workspaceId: string, document: SuperAgentDocument): Promise<void> {
     for (const turn of [...document.pendingTurns]) {
       if (turn.retryDeadline == null || this.now() < turn.retryDeadline || turn.startedAt != null
@@ -1794,6 +2080,7 @@ export class SuperAgentService {
     const runtime = document.state.nodes.find(item => item.nodeId === nodeId)
     if (!node || !runtime) throw new Error('Unknown node')
     if (!['error', 'recovering'].includes(runtime.status)) throw new Error('Only abnormal nodes can be reset')
+    if (this.preparationBlockers(workspaceId, document, nodeId).length) throw new Error('Previous preparation is still stopping; retry reset after cleanup finishes')
     if (this.launching.has(`${workspaceId}:${nodeId}`) || document.pendingTurns.some(turn => turn.nodeId === nodeId && turn.startedAt != null)) throw new Error('Node is still busy; wait for it to stop before resetting')
     if (!this.deps.host.getSessions || !this.deps.host.deleteSession) throw new Error('This host cannot reset Super Agent sessions')
     const tasks = document.state.tasks.filter(task => task.nodeId === nodeId)
@@ -1860,7 +2147,7 @@ export class SuperAgentService {
     if (session && session.workspaceId !== workspaceId) throw new Error('Node session is not owned by this workspace')
     if (session?.isProcessing) throw new Error('Node is still busy; wait for it to stop before refreshing')
     const failed = document.failedTurns?.find(turn => turn.nodeId === nodeId)
-    const pending = document.pendingTurns.find(turn => turn.nodeId === nodeId && (turn.retryAt != null || (failed?.scriptRunId && turn.scriptRunId === failed.scriptRunId)))
+    const pending = document.pendingTurns.find(turn => turn.nodeId === nodeId && (runtime.preparation?.turnId === turn.id || turn.retryAt != null || (failed?.scriptRunId && turn.scriptRunId === failed.scriptRunId)))
     const checkpoint = pending ?? failed
     const task = document.state.tasks.find(item => item.id === checkpoint?.taskId)
     if (checkpoint?.taskId && (!task || (!pending && task.status !== 'failed') || (pending && !['queued', 'running'].includes(task.status)))) throw new Error('This task is no longer recoverable')
@@ -1870,6 +2157,8 @@ export class SuperAgentService {
     if (checkpoint?.scriptRunId && (!script || script.resultReportedAt != null)) throw new Error('This script result is no longer recoverable')
     if (checkpoint?.backgroundInspection && !document.config!.continuousWork) throw new Error('Background inspection is disabled')
     if (checkpoint && !pending && document.pendingTurns.length >= MAX_PENDING_TURNS) throw new Error('Super Agent turn queue is full')
+    if (runtime.preparation && this.preparationBlockers(workspaceId, document, nodeId).length) throw new Error('Previous preparation is still stopping; retry after cleanup finishes')
+    runtime.preparation = undefined
     runtime.status = 'idle'; runtime.error = undefined; runtime.activeTaskId = undefined
     runtime.retryAt = undefined; runtime.retryAttempt = undefined; runtime.retryDeadline = undefined
     if (!session) runtime.sessionId = undefined
@@ -1880,7 +2169,8 @@ export class SuperAgentService {
     if (!pending && checkpoint.toolCalls) turn.toolCalls = structuredClone(checkpoint.toolCalls)
     turn.scriptRunId = checkpoint.scriptRunId; turn.backgroundInspection = checkpoint.backgroundInspection
     turn.reportThrough = checkpoint.reportThrough; turn.eventThrough = checkpoint.eventThrough
-    turn.startedAt = undefined; turn.retryAttempt = 0; turn.emptyResponseRetryAttempt = 0
+    turn.senderNodeId = checkpoint.senderNodeId; turn.sourceTurnId = checkpoint.sourceTurnId ?? checkpoint.id
+    turn.startedAt = undefined; turn.retryAttempt = 0; turn.emptyResponseRetryAttempt = 0; turn.preparationAttempt = 0
     turn.retryAt = this.now(); turn.retryDeadline = this.now() + SUPER_AGENT_RECOVERY_WINDOW_MS
     turn.manualRecovery = true; turn.recoveryError = undefined
     runtime.status = 'recovering'; runtime.activeTaskId = turn.taskId
@@ -1947,7 +2237,7 @@ export class SuperAgentService {
         const task = document.state.tasks.find(task => task.id === turn.taskId)
         if (turn.toolCalls?.length) {
           const receipt: SuperAgentActionReceipt = { turnId: turn.id, status: 'applied', applied: turn.toolCalls.flatMap(call => call.receipt.applied), createdAt: turn.toolCalls[0]!.receipt.createdAt }
-          const record = this.message(document, turn.nodeId, this.planner(document).id, 'error', `The model turn was interrupted after collaboration calls committed. Preserve these actions; do not replay them. Action receipt: ${JSON.stringify(receipt)}`, turn.taskId)
+          const record = this.message(document, turn.nodeId, hasPlanningTopology(document.config) ? document.config.nodes.find(node => node.id === turn.nodeId)?.role === 'coordinator' ? turn.nodeId : superAgentReportRecipient(document.config, document.config.nodes.find(node => node.id === turn.nodeId)!) : this.dispatcher(document).id, 'error', `The model turn was interrupted after collaboration calls committed. Preserve these actions; do not replay them. Action receipt: ${JSON.stringify(receipt)}`, turn.taskId)
           record.actionReceipt = receipt
           if (task) task.actionReceipt = receipt
         }
@@ -1970,7 +2260,21 @@ export class SuperAgentService {
       }
       if (this.flushScriptResults(document)) recovered = true
       for (const runtime of document.state.nodes) {
-        if (runtime.status === 'preparing') { runtime.status = 'idle'; runtime.activeTaskId = undefined; recovered = true }
+        if (runtime.status === 'preparing' || runtime.preparation?.cleanupPending) {
+          const preparation = runtime.preparation
+          const turn = document.pendingTurns.find(turn => turn.id === preparation?.turnId)
+          const unsafe = (document.state.operations ?? []).some(operation => (operation.turnId === turn?.id || operation.taskId != null && operation.taskId === turn?.taskId) && ['prepared', 'running', 'unknown'].includes(operation.status))
+          const retry = !!turn && !unsafe && preparation!.attempt <= (document.config.execution?.preparationMaxRetries ?? 2) && !document.recoverySuspended
+            && (preparation!.status === 'preparing' || preparation!.status === 'cancelling' || turn.retryAt != null)
+          runtime.status = retry || !preparation ? 'idle' : 'error'; runtime.activeTaskId = undefined
+          if (preparation) {
+            preparation.cleanupPending = this.preparationBlockers(workspaceId, document, runtime.nodeId).length > 0
+            preparation.status = retry && !preparation.cleanupPending ? 'retrying' : 'failed'
+            turn && (turn.preparationAttempt = Math.max(turn.preparationAttempt ?? 0, preparation.attempt))
+            if (!retry) runtime.error = preparation.error ?? 'Preparation interrupted; automatic recovery budget exhausted or operation outcome unknown. Inspect before manual retry.'
+          }
+          recovered = true
+        }
         if (runtime.status !== 'working' || document.pendingTurns.some(turn => turn.nodeId === runtime.nodeId && turn.startedAt != null)) continue
         const session = runtime.sessionId ? await this.deps.host.getSession(runtime.sessionId) : null
         if (session && session.workspaceId !== workspaceId) throw new Error('Node session is not owned by this workspace')
@@ -1983,8 +2287,27 @@ export class SuperAgentService {
       const task = document.state.tasks.find(task => task.id === operation.taskId)
       if (task) task.phase = 'outcome-unknown'
     }
+    for (const task of document.state.tasks) if (task.status === 'completed' && task.phase === 'outcome-unknown'
+      && document.state.operations?.some(operation => operation.taskId === task.id && ['prepared', 'running', 'unknown'].includes(operation.status))) {
+      task.status = 'failed'
+      task.error = 'Verify unknown operation outcomes before continuing; the submitted result is retained.'
+      if (document.state.metrics) document.state.metrics.completedTasks = Math.max(0, document.state.metrics.completedTasks - 1)
+      recovered = true
+    }
     if (document.config?.continuousWork) for (const task of document.state.tasks) if (task.status === 'failed' && task.checkpoint && task.phase !== 'outcome-unknown') {
       try { if (this.resumeTask(document, task.id)) recovered = true } catch { /* Keep the blocker and unknown result for diagnosis. */ }
+    }
+    // Recover narrow impact scopes from matching original host receipts, never from model claims.
+    const scopeSessions = new Map<string, Awaited<ReturnType<SuperAgentSessionHost['getSession']>>>()
+    for (const operation of document.state.operations ?? []) {
+      if (operation.resourceClaims || operation.status !== 'unknown' || operation.toolName !== 'mcp__session__computer_use') continue
+      try {
+        if (!scopeSessions.has(operation.sessionId)) scopeSessions.set(operation.sessionId, await this.deps.host.getSession(operation.sessionId))
+        const receipt = operationReceipt(operation, scopeSessions.get(operation.sessionId) ?? null, workspaceId)
+        if (receipt.availability !== 'available' || receipt.inputTruncated || !receipt.inputJson) continue
+        const claims = operationResourceClaims(operation.toolName, JSON.parse(receipt.inputJson))
+        if (claims) { operation.resourceClaims = claims; recovered = true }
+      } catch { /* Missing or malformed historical evidence retains the conservative lock. */ }
     }
     if (await this.settleRecoveryPlans(document)) recovered = true
     if (this.upgradeIdleTeam(document)) recovered = true
@@ -1997,7 +2320,52 @@ export class SuperAgentService {
     return document
   }
 
+  /** Called only at an execution boundary; durable work is never recreated. */
+  private initializePlanningState(document: SuperAgentDocument): void {
+    const managers = new Set(document.config!.nodes.filter(node => node.role === 'coordinator' || node.role === 'orchestrator').map(node => node.id))
+    const planner = this.planner(document)
+    if (!document.state.nodes.some(node => node.nodeId === planner.id)) document.state.nodes.push({ nodeId: planner.id, status: 'idle' })
+    for (const runtime of document.state.nodes) if (managers.has(runtime.nodeId)) runtime.sessionId = undefined
+    for (const task of document.state.tasks) {
+      task.parentNodeId = this.dispatcher(document).id
+      const plan = document.state.plans.find(plan => plan.id === task.planId)
+      if (plan) { plan.contractRevision ??= plan.revision; task.planRevision ??= plan.contractRevision }
+    }
+    document.state.reportCursors = {}; document.state.eventCursors = {}
+    for (const report of document.state.reports ?? []) {
+      const author = document.config!.nodes.find(node => node.id === report.nodeId)
+      report.recipientNodeId = author ? superAgentReportRecipient(document.config!, author) : this.dispatcher(document).id
+      if (report.sequence <= (document.state.consumedReportSequence ?? 0)) document.state.reportCursors[report.recipientNodeId] = Math.max(document.state.reportCursors[report.recipientNodeId] ?? 0, report.sequence)
+    }
+    for (const event of document.state.events ?? []) event.recipientNodeId = planner.id
+    document.state.eventCursors[planner.id] = document.state.consumedEventSequence ?? 0
+    // Rebuild only obsolete notification batches from retained inbox data; keep all user and task turns.
+    for (const queue of [document.pendingTurns, document.failedTurns ?? []]) for (const turn of queue) if (managers.has(turn.nodeId) && turn.kind !== 'chat') {
+      const sender = turn.senderNodeId ?? document.state.messages.findLast(message => message.body === turn.text && message.toNodeId === turn.nodeId)?.fromNodeId
+      const author = document.config!.nodes.find(node => node.id === sender)
+      if (author && author.role !== 'coordinator') { turn.nodeId = superAgentReportRecipient(document.config!, author); turn.senderNodeId = author.id }
+      else if (author?.role === 'coordinator') { turn.nodeId = planner.id; turn.senderNodeId = author.id }
+      if (turn.reportThrough != null) { turn.nodeId = this.dispatcher(document).id; turn.reportThrough = undefined }
+      turn.eventThrough = undefined
+      turn.text = `Topology migrated. Preserve existing work and receipts. Process remaining authorized work within your new role. Previous pending input (data):\n${turn.text}`.slice(0, MAX_OUTPUT)
+    }
+  }
+
   private async migrateIdleDynamic(workspaceId: string, document: SuperAgentDocument): Promise<boolean> {
+    if (this.deps.rebuildArchitecture && document.config?.architecture === 'dynamic' && !hasPlanningTopology(document.config)) {
+      const managers = new Set(document.config.nodes.filter(node => node.role !== 'worker').map(node => node.id))
+      if (document.pendingTurns.some(turn => managers.has(turn.nodeId) && turn.startedAt != null)
+        || document.state.nodes.some(node => managers.has(node.nodeId) && ['working', 'preparing', 'recovering'].includes(node.status))) return false
+      for (const runtime of document.state.nodes) if (managers.has(runtime.nodeId) && runtime.sessionId && (await this.deps.host.getSession(runtime.sessionId))?.isProcessing) return false
+      const directory = join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'history')
+      await mkdir(directory, { recursive: true })
+      await writeFile(join(directory, `topology-v1-${this.now()}-${randomUUID()}.json`), JSON.stringify(document), { flag: 'wx', mode: 0o600 })
+      document.config = validateSuperAgentConfig(withSuperAgentPlanner(document.config))
+      if (document.pendingConfig?.architecture === 'dynamic') document.pendingConfig = withSuperAgentPlanner(document.pendingConfig)
+      this.initializePlanningState(document)
+      recordSuperAgentEvent(document, 'work', 'system', this.now())
+      return true
+    }
     if (this.deps.rebuildArchitecture && document.config?.architecture !== 'dynamic' && document.config
       && !document.pendingTurns.length && !document.state.nodes.some(node => ['working', 'preparing', 'recovering'].includes(node.status))
       && !document.state.scripts.some(script => ['running', 'untracked'].includes(script.status) || script.resultPending || script.resultQueuedAt != null)) {
@@ -2034,7 +2402,35 @@ export class SuperAgentService {
   }
 
   private planner(document: SuperAgentDocument): SuperAgentNode {
+    return this.configured(document).nodes.find(node => node.role === 'planner') ?? this.dispatcher(document)
+  }
+
+  private dispatcher(document: SuperAgentDocument): SuperAgentNode {
     return this.configured(document).nodes.find(node => node.role === 'orchestrator') ?? this.coordinator(document)
+  }
+
+  private invalidateQueuedContracts(document: SuperAgentDocument): void {
+    if (!hasPlanningTopology(document.config)) return
+    for (const task of document.state.tasks) {
+      const plan = document.state.plans.find(plan => plan.id === task.planId)
+      const goal = document.state.intents?.find(goal => goal.id === task.goalId)
+      const stale = !plan || !goal || goal.status === 'cancelled' || task.goalRevision !== (goal.revision ?? 1) || task.planRevision !== (plan.contractRevision ?? plan.revision)
+      if (!stale) continue
+      for (const report of document.state.reports ?? []) if (report.taskId === task.id) report.verification = 'stale'
+      if (task.status !== 'queued' || document.state.nodes.some(node => node.activeTaskId === task.id && ['preparing', 'working'].includes(node.status))
+        || document.state.operations?.some(operation => operation.taskId === task.id && ['prepared', 'running', 'unknown'].includes(operation.status))
+        || document.state.scripts.some(script => script.taskId === task.id && ['running', 'untracked'].includes(script.status))) continue
+      task.status = 'failed'; task.phase = 'waiting'; task.error = 'Goal or plan contract changed; preserved old evidence. Dispatch only remaining work under the current contract.'
+      document.pendingTurns = document.pendingTurns.filter(turn => turn.taskId !== task.id || turn.startedAt != null)
+    }
+    // Invalidate every downstream aggregation, including summaries spanning goals.
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const report of document.state.reports ?? []) if (report.verification !== 'stale' && report.sourceReportIds?.some(id => document.state.reports?.some(source => source.id === id && source.verification === 'stale'))) {
+        report.verification = 'stale'; changed = true
+      }
+    }
   }
 
   private taskReady(document: SuperAgentDocument, turn: SuperAgentPendingTurn): boolean {
@@ -2043,6 +2439,8 @@ export class SuperAgentService {
     if (task.phase === 'waiting') return false
     const blocker = superAgentTaskBlocker(document.state, task)
     if (blocker && !(turn.manualRecovery && blocker.code === 'planBlocked' && !blocker.permanent)) return false
+    const plan = document.state.plans.find(plan => plan.id === task.planId)
+    if (hasPlanningTopology(document.config) && plan && task.planRevision !== (plan.contractRevision ?? plan.revision)) return false
     const goal = document.state.intents?.find(goal => goal.id === task.goalId)
     if (goal && (goal.status === 'cancelled' || task.goalRevision !== (goal.revision ?? 1))) return false
     const occupied = document.state.nodes.filter(node => node.activeTaskId && node.activeTaskId !== task.id && (document.config?.architecture === 'dynamic' ? ['working', 'preparing'] : ['working', 'preparing', 'recovering']).includes(node.status)).length
@@ -2051,11 +2449,7 @@ export class SuperAgentService {
       const dependency = document.state.tasks.find(item => item.id === id)
       return !!dependency && (task.reviewOf === id
         ? dependency.status === 'completed' && (!dependency.actionReceipt || dependency.actionReceipt.status === 'applied') : superAgentDependencySatisfied(dependency))
-    }) && !document.state.tasks.some(other => other.id !== task.id && (other.status === 'running'
-      || document.state.operations?.some(operation => operation.taskId === other.id && ['prepared', 'running', 'unknown'].includes(operation.status))
-      || document.state.scripts.some(script => script.taskId === other.id && ['running', 'untracked'].includes(script.status))
-      || document.state.nodes.some(node => node.status === 'preparing' && node.activeTaskId === other.id))
-      && superAgentResourcesConflict(task.resources ?? [], other.resources ?? []))
+    }) && superAgentResourceBlockers(document.state, task).length === 0
   }
 
   private configured(document: SuperAgentDocument): SuperAgentConfig {
@@ -2073,7 +2467,7 @@ export class SuperAgentService {
     const chain = chainId ?? id
     if ((document.chainCounts[chain] ?? 0) >= MAX_CHAIN_TURNS) throw new Error('Communication chain call budget reached; wait for user input')
     document.chainCounts[chain] = (document.chainCounts[chain] ?? 0) + 1
-    const turn: SuperAgentPendingTurn = { id, nodeId, kind, text: (this.configured(document).nodes.find(node => node.id === nodeId)?.role === 'orchestrator' && ['summary', 'inspection', 'script'].includes(kind) ? text.replaceAll('through super_agent_deliver', 'through super_agent_message to the interaction node').replaceAll('through userReply', 'through messages to the interaction node').replaceAll('填写 userReply', '发给意图主节点').replaceAll('省略 userReply', '不要向用户发送例行通知') : text).slice(0, MAX_OUTPUT), taskId, createdAt: this.now(), depth, chainId: chain }
+    const turn: SuperAgentPendingTurn = { id, nodeId, kind, text: (!hasPlanningTopology(document.config) && this.configured(document).nodes.find(node => node.id === nodeId)?.role === 'orchestrator' && ['summary', 'inspection', 'script'].includes(kind) ? text.replaceAll('through super_agent_deliver', 'through super_agent_message to the interaction node').replaceAll('through userReply', 'through messages to the interaction node').replaceAll('填写 userReply', '发给意图主节点').replaceAll('省略 userReply', '不要向用户发送例行通知') : text).slice(0, MAX_OUTPUT), taskId, createdAt: this.now(), depth, chainId: chain }
     document.pendingTurns.push(turn)
     document.state.allIdleSince = undefined
     return turn
@@ -2086,7 +2480,7 @@ export class SuperAgentService {
     return message
   }
 
-  private addTask(document: SuperAgentDocument, command: SuperAgentTaskContract, depth = 0, chainId?: string): void {
+  private addTask(document: SuperAgentDocument, command: SuperAgentTaskContract, depth = 0, chainId?: string): string {
     if (!command.reviewOf && this.configured(document).workflow?.independentReview) {
       if (!command.acceptanceCriteria?.length) throw new Error('This workflow requires explicit acceptanceCriteria for every output task; add verifiable criteria before assigning work')
       if (this.configured(document).architecture !== 'dynamic' && this.configured(document).nodes.filter(node => node.role === 'worker').length < 2) throw new Error('Independent review requires at least two worker nodes')
@@ -2111,7 +2505,7 @@ export class SuperAgentService {
       const entry = config.modelPool?.find(entry => entry.id === command.modelEntryId && entry.enabled)
       if (!entry || !command.thinkingLevel) throw new Error('Choose an enabled modelEntryId and explicit thinkingLevel')
       if (!entry.supportedThinkingLevels.includes(command.thinkingLevel)) throw new Error(`Unsupported thinkingLevel; choose one of: ${entry.supportedThinkingLevels.join(', ')}`)
-      dynamicWorker = { id: this.id('subagent'), role: 'worker', dynamic: true, modelEntryId: entry.id,
+      dynamicWorker = { id: this.id('subagent'), role: 'worker', parentNodeId: hasPlanningTopology(config) ? this.dispatcher(document).id : undefined, dynamic: true, modelEntryId: entry.id,
         name: command.title, avatar: '◈', description: '', llmConnection: entry.llmConnection,
         model: entry.model, agentRuntime: entry.agentRuntime, thinkingLevel: command.thinkingLevel, thinkingMode: 'task',
         intelligenceRating: Math.max(1, Math.min(5, Math.round(entry.intelligenceScore / 20))), workPreferences: '', maxCallsPerMinute: entry.maxCallsPerMinute,
@@ -2128,15 +2522,29 @@ export class SuperAgentService {
     if (goal?.status === 'cancelled') throw new Error('The goal is cancelled')
     if (plan?.goalId && command.goalId && plan.goalId !== command.goalId) throw new Error('Task and plan must reference the same goal')
     if (plan?.goalId && plan.goalRevision !== (goal?.revision ?? 1)) throw new SuperAgentGoalContractError(`Refresh the plan contract after the goal changes: plan ${plan.id}, goal ${goalId}, current goal revision ${goal?.revision ?? 1}. Update the plan instructions for the current goal before assigning new tasks.`)
+    if (hasPlanningTopology(config) && (command.planRevision !== (plan?.contractRevision ?? plan?.revision) || command.goalRevision !== (goal?.revision ?? 1))) throw new SuperAgentGoalContractError('Dispatch must name the current published planRevision and goalRevision')
     if (command.goalCriteria?.some(index => !goal || index >= goal.acceptanceCriteria.length)) throw new Error('Goal criterion index is outside the current goal')
     if (command.reviewOf && document.state.tasks.find(task => task.id === command.reviewOf)?.nodeId === worker.id) throw new Error('Independent review requires another worker')
+    // Different IDs do not make identical work new. Failed/cancelled/stale work
+    // may be explicitly retried; an existing active or valid completed result is reused.
+    const duplicate = document.state.tasks.find(task => task.goalId === goalId && task.goalRevision === (goal ? goal.revision ?? 1 : undefined)
+      && task.planId === plan?.id && task.planRevision === (hasPlanningTopology(config) ? plan?.contractRevision ?? plan?.revision : undefined)
+      && task.title === command.title && task.instructions === command.instructions
+      && task.modelEntryId === command.modelEntryId && task.thinkingLevel === command.thinkingLevel
+      && (config.architecture === 'dynamic' || task.nodeId === worker.id)
+      && task.reviewOf === command.reviewOf && task.requiresIndependentReview === command.requiresIndependentReview
+      && ['dependsOn', 'resources', 'acceptanceCriteria', 'requiredCapabilities', 'goalCriteria'].every(key =>
+        JSON.stringify(task[key as keyof SuperAgentTask] ?? []) === JSON.stringify(command[key as keyof SuperAgentTaskContract] ?? []))
+      && (['queued', 'running'].includes(task.status) || superAgentTaskCompleted(document.state, task)))
+    if (duplicate) return duplicate.id
     if (document.state.tasks.length >= 500) throw new Error('Super Agent task history is full; archive finished work using history cleanup before adding tasks')
     if (document.pendingTurns.length >= MAX_PENDING_TURNS) throw new Error('Super Agent turn queue is full')
     if (chainId && (document.chainCounts[chainId] ?? 0) >= MAX_CHAIN_TURNS) throw new Error('Communication chain call budget reached; wait for user input')
+    if (hasPlanningTopology(config) && (!plan || !goal)) throw new SuperAgentGoalContractError('Dispatcher requires a current published plan and goal from the background planner')
     // Every assignment has a durable plan, including tasks entered directly in the UI.
     if (!plan) {
       const planId = this.id('plan')
-      this.upsertPlan(document, { id: planId, goalId, title: command.title, instructions: command.instructions, status: 'planned', priority: 3, note: '' }, this.planner(document).id, 0)
+      this.upsertPlan(document, { id: planId, goalId, title: command.title, instructions: command.instructions, status: 'planned', priority: 3, note: '' }, this.dispatcher(document).id, 0)
       plan = document.state.plans.find(item => item.id === planId)!
     }
     if (dynamicWorker) {
@@ -2148,21 +2556,27 @@ export class SuperAgentService {
       resources: worker.presetProfile === 'computerUse' || worker.capabilities?.includes('computerUse')
         ? [...new Set([...(command.resources ?? []), 'host-desktop'])] : command.resources,
       acceptanceCriteria: command.acceptanceCriteria, requiresIndependentReview: command.requiresIndependentReview, reviewOf: command.reviewOf,
-      id: command.id ?? this.id('task'), planId: plan.id, nodeId: worker.id, status: 'queued', createdAt: this.now() }
+      id: command.id ?? this.id('task'), parentNodeId: hasPlanningTopology(config) ? this.dispatcher(document).id : undefined, planRevision: hasPlanningTopology(config) ? plan.contractRevision ?? plan.revision : undefined, planId: plan.id, nodeId: worker.id, status: 'queued', createdAt: this.now() }
     document.state.tasks.push(task)
-    this.message(document, this.planner(document).id, worker.id, 'task', `${task.title}\n${task.instructions}`, task.id)
+    this.message(document, this.dispatcher(document).id, worker.id, 'task', `${task.title}\n${task.instructions}`, task.id)
     this.enqueue(document, worker.id, 'task', task.instructions, task.id, depth, chainId)
-    if (plan) this.upsertPlan(document, { ...plan, status: 'active' }, this.planner(document).id, plan.revision, true)
+    if (plan) this.upsertPlan(document, { ...plan, status: 'active' }, this.dispatcher(document).id, plan.revision, true)
+    return task.id
   }
 
   private routeMessage(document: SuperAgentDocument, fromNodeId: string, toNodeId: string, body: string, depth: number, chainId?: string): boolean {
     const config = this.configured(document)
-    if (config.architecture === 'dynamic' && (toNodeId === this.coordinator(document).id || toNodeId === 'all')) throw new Error('Send user-facing information through the report area, not direct interaction messages')
-    if (fromNodeId === this.coordinator(document).id && this.planner(document).role === 'orchestrator'
-      && toNodeId !== this.planner(document).id) throw new Error('The intent node hands off work only to the orchestrator')
+    if (hasPlanningTopology(config)) {
+      const sender = config.nodes.find(node => node.id === fromNodeId)
+      const target = config.nodes.find(node => node.id === toNodeId)
+      if (!sender || !target || !canSuperAgentCommunicate(config, sender, target)) throw new Error('Communication violates the main / planner / dispatcher / owned worker topology')
+    }
+    if (!hasPlanningTopology(config) && config.architecture === 'dynamic' && (toNodeId === this.coordinator(document).id || toNodeId === 'all')) throw new Error('Send user-facing information through the report area, not direct interaction messages')
+    if (!hasPlanningTopology(config) && fromNodeId === this.coordinator(document).id && this.dispatcher(document).role === 'orchestrator'
+      && toNodeId !== this.dispatcher(document).id) throw new Error('The intent node hands off work only to the orchestrator')
     if (!config.nodes.some(node => node.id === fromNodeId) || (toNodeId !== 'all' && !config.nodes.some(node => node.id === toNodeId))) throw new Error('Communication participants must be configured nodes')
     if (fromNodeId === toNodeId) throw new Error('A node cannot message itself')
-    if (config.nodes.find(node => node.id === fromNodeId)?.role === 'worker' && toNodeId === this.planner(document).id
+    if (config.nodes.find(node => node.id === fromNodeId)?.role === 'worker' && toNodeId === this.dispatcher(document).id
       && isSuperAgentAcknowledgment(body)) return false
     const progressKey = superAgentResponseProgressKey(document)
     const normalized = normalizeSuperAgentResponse(body)
@@ -2183,7 +2597,7 @@ export class SuperAgentService {
       document.state.nodes.find(node => node.nodeId === fromNodeId)!.repeatedResponses = undefined
       return true
     }
-    this.enqueue(document, toNodeId, 'message', body, undefined, depth, chainId)
+    this.enqueue(document, toNodeId, 'message', body, undefined, depth, chainId).senderNodeId = fromNodeId
     this.message(document, fromNodeId, toNodeId, 'message', body).responseProgressKey = progressKey
     document.state.nodes.find(node => node.nodeId === fromNodeId)!.repeatedResponses = undefined
     return true
@@ -2202,25 +2616,58 @@ export class SuperAgentService {
     this.message(document, 'system', nodeId, 'message', 'Repeated responses without new evidence were suppressed. The next turn will use a fresh model context and the current durable team state; do not replay completed work.')
   }
 
-  private upsertBoard(document: SuperAgentDocument, input: { id?: string; title: string; content: string }, actor: string, expectedRevision?: number): void {
+  private async maintainBoard(workspaceId: string, document: SuperAgentDocument, options: { force?: boolean; pressure?: boolean; preserveIds?: string[] } = {}): Promise<boolean> {
+    const previousIssue = document.state.boardMaintenance?.issue?.code
+    const changed = await maintainSuperAgentBoard({ workspaceId, document, ...options,
+      root: this.deps.rootForWorkspace(workspaceId), now: this.now(), writeArchive: this.deps.archiveBoard })
+    if (changed && (document.state.boardMaintenance?.lastArchived || previousIssue !== document.state.boardMaintenance?.issue?.code)) recordSuperAgentEvent(document, 'board', 'system', this.now())
+    return changed
+  }
+
+  private async upsertBoard(workspaceId: string, document: SuperAgentDocument, input: { id?: string; title: string; content: string; pinned?: boolean; expiresAt?: number }, actor: string, expectedRevision?: number, taskId?: string): Promise<void> {
     const current = input.id ? document.state.board.find(item => item.id === input.id) : undefined
     if (expectedRevision != null && expectedRevision !== (current?.revision ?? 0)) throw new SuperAgentConflictError(current?.revision ?? 0)
-    if (!current && document.state.board.length >= 256) throw new Error('The shared board is full')
-    const item: SuperAgentBoardItem = { id: input.id ?? this.id('board'), title: input.title, content: input.content, revision: (current?.revision ?? 0) + 1, updatedBy: actor, updatedAt: this.now() }
-    if (current && current.title === item.title && current.content === item.content) return
+    if (current && current.title === input.title && current.content === input.content
+      && (input.pinned === undefined || current.pinned === input.pinned)
+      && (input.expiresAt === undefined || current.expiresAt === input.expiresAt)) return
+    const item: SuperAgentBoardItem = { ...current, id: input.id ?? this.id('board'), title: input.title, content: input.content,
+      revision: (current?.revision ?? 0) + 1, updatedBy: actor, updatedAt: this.now(),
+      ...(taskId ? { taskId } : {}),
+      ...(input.pinned !== undefined ? { pinned: input.pinned } : {}), ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}) }
+    const projected = () => [...document.state.board.filter(entry => entry.id !== item.id), item]
+    if (document.state.board.length >= SUPER_AGENT_BOARD_SOFT_LIMIT || superAgentBoardBytes(projected()) > SUPER_AGENT_BOARD_BYTES) {
+      // Preserve the edited record and references introduced by this write, before archiving.
+      const preserve = [item.id, ...document.state.board.filter(entry => item.content.includes(entry.id)).map(entry => entry.id)]
+      await this.maintainBoard(workspaceId, document, { pressure: true, preserveIds: preserve })
+    }
+    const projectedBytes = superAgentBoardBytes(projected())
+    if (projected().length > SUPER_AGENT_BOARD_LIMIT || projectedBytes > SUPER_AGENT_BOARD_BYTES
+      && (!current || projectedBytes >= superAgentBoardBytes(document.state.board))) {
+      const previous = document.state.boardMaintenance
+      const code = previous?.issue?.code === 'archive_failed' ? 'archive_failed' : 'capacity'
+      const message = code === 'archive_failed' ? previous!.issue!.message
+        : `Shared board has reached ${SUPER_AGENT_BOARD_LIMIT} entries or its 8 MiB content budget. Protected/recent entries were retained. The host will recheck and clean up automatically. Reuse an existing topic id for updates; do not blindly retry creating new entries.`
+      document.state.boardMaintenance = { status: code === 'archive_failed' ? 'retrying' : 'blocked', checkedAt: previous?.checkedAt ?? this.now(), archived: previous?.archived ?? 0,
+        lastArchived: previous?.lastArchived ?? 0, archivePath: previous?.archivePath,
+        issue: { ...previous?.issue, code, message, attempts: previous?.issue?.attempts ?? 0,
+          retryAt: previous?.issue?.retryAt ?? this.now() + SUPER_AGENT_BOARD_RETRY_MS } }
+      throw new SuperAgentBoardError(code, message)
+    }
     if (current) Object.assign(current, item)
     else document.state.board.push(item)
+    if (document.state.boardMaintenance?.issue?.code === 'capacity' && document.state.board.length < SUPER_AGENT_BOARD_LIMIT
+      && superAgentBoardBytes(document.state.board) < SUPER_AGENT_BOARD_BYTES) document.state.boardMaintenance = { ...document.state.boardMaintenance, status: 'ready', issue: undefined }
     recordSuperAgentEvent(document, 'board', actor, this.now(), item.id)
   }
 
   private upsertPlan(document: SuperAgentDocument, input: Omit<SuperAgentPlanItem, 'id' | 'revision' | 'updatedBy' | 'updatedAt'> & { id?: string }, actor: string, expectedRevision: number, preserveContract = false): void {
-    if (input.status === 'completed' && this.planner(document).role === 'orchestrator') {
-      const tasks = document.state.tasks.filter(task => task.planId === input.id)
+    const current = input.id ? document.state.plans.find(item => item.id === input.id) : undefined
+    if (input.status === 'completed' && this.dispatcher(document).role === 'orchestrator') {
+      const tasks = document.state.tasks.filter(task => task.planId === input.id && (!hasPlanningTopology(document.config) || task.planRevision === (current?.contractRevision ?? current?.revision) && task.goalRevision === current?.goalRevision))
       if (!tasks.length || tasks.some(task => !superAgentDependencySatisfied(task))) throw new Error('Plan completion requires successful tasks and any explicitly requested reviews')
       if (document.state.operations?.some(operation => tasks.some(task => task.id === operation.taskId)
         && ['prepared', 'running', 'unknown'].includes(operation.status))) throw new Error('Verify unsettled operation outcomes before completing the plan')
     }
-    const current = input.id ? document.state.plans.find(item => item.id === input.id) : undefined
     if (expectedRevision !== (current?.revision ?? 0)) throw new SuperAgentConflictError(current?.revision ?? 0, `Plan ${input.id ?? '(new)'}`)
     if (!current && document.state.plans.length >= 256) throw new Error('The plan list is full')
     if (current && ['completed', 'cancelled'].includes(input.status) && document.state.tasks.some(task => task.planId === current.id && ['queued', 'running'].includes(task.status))) throw new Error('Stop or finish linked work before closing its plan')
@@ -2237,10 +2684,15 @@ export class SuperAgentService {
       && current.title === input.title && current.instructions === input.instructions && current.status === input.status
       && current.priority === input.priority && current.note === input.note.slice(0, 4_000)
       && JSON.stringify(current.blocker) === JSON.stringify(blocker)) return
+    const keepContract = preserveContract || !!current && current.goalRevision === goalRevision && current.title === input.title && current.instructions === input.instructions
     const item: SuperAgentPlanItem = { id: input.id ?? this.id('plan'), goalId, goalRevision,
-      title: input.title, instructions: input.instructions, status: input.status, priority: input.priority, note: input.note.slice(0, 4_000), blocker, revision: (current?.revision ?? 0) + 1, updatedBy: actor, updatedAt: this.now() }
+      title: input.title, instructions: input.instructions, status: input.status, priority: input.priority, note: input.note.slice(0, 4_000), blocker, revision: (current?.revision ?? 0) + 1, ...(hasPlanningTopology(document.config) ? { contractRevision: keepContract && current ? current.contractRevision ?? current.revision : (current?.revision ?? 0) + 1 } : {}), updatedBy: actor, updatedAt: this.now() }
     if (current) Object.assign(current, item)
     else document.state.plans.push(item)
+    if (!preserveContract) {
+      this.invalidateQueuedContracts(document)
+      recordSuperAgentEvent(document, 'work', actor, this.now(), item.id)
+    }
     if (goal && item.status === 'completed') {
       const plans = document.state.plans.filter(plan => plan.goalId === goal.id)
       const completed = document.state.tasks.filter(task => task.goalId === goal.id && task.goalRevision === (goal.revision ?? 1) && superAgentDependencySatisfied(task))
@@ -2250,12 +2702,13 @@ export class SuperAgentService {
   }
 
   private inspect(document: SuperAgentDocument, continuous = false): void {
-    const coordinator = this.planner(document)
+    const coordinator = this.dispatcher(document)
     if (document.pendingTurns.some(turn => turn.nodeId === coordinator.id && turn.kind === 'inspection')) return
     const turn = this.enqueue(document, coordinator.id, 'inspection', continuous
-      ? `持续工作后台自检：所有节点、队列和受管脚本已连续空闲至少 ${document.config!.idleInspectionMinutes} 分钟。根据已有团队记录转交仍可推进的用户需求，具体分析、执行和核验交工作节点。已完成或取消的工作不要重复执行；受阻计划仅在阻碍已解除时恢复，不擅自扩展授权目标。无事可做或没有变化时保持静默，省略 userReply，不输出自检结论、等待说明或重复阻碍。仅有新交付、需要用户补充信息或决定时填写 userReply。`
+      ? `持续工作后台自检：所有节点、队列和受管脚本已连续空闲至少 ${document.config!.idleInspectionMinutes} 分钟。根据已有团队记录转交仍可推进的用户需求，具体分析、执行和核验交工作节点。已完成或取消的工作不要重复执行；受阻计划仅在阻碍已解除时恢复，不擅自扩展授权目标。排队任务先看 queueBlockers，不重复轮询健康。无事可做或没有变化时，后台规划/派工协调调用 super_agent_finish_turn 收尾，不写重复报告；交互节点用 super_agent_deliver reply=""。这只结束本轮，不完成任务或解除未知操作。`
       : 'Inspect worker and script statuses, identify blocked work and summarize results for the user. Do not invent new goals or perform worker work yourself.')
     turn.backgroundInspection = continuous
+    if (continuous) document.state.lastInspectionProgressKey = superAgentResponseProgressKey(document)
     document.state.lastInspectionAt = this.now()
   }
 
@@ -2269,16 +2722,38 @@ export class SuperAgentService {
     if (this.closed || this.resetting.has(workspaceId) || this.settingsUpdates.has(workspaceId)) return
     const document = this.documents.get(workspaceId)
     if (!document?.config) return
+    if (document.pendingConfig) {
+      if (!this.hasActiveExecution(document) && !this.applyingSettings.has(workspaceId)) {
+        this.applyingSettings.add(workspaceId)
+        void this.save(workspaceId, document.pendingConfig, this.settingsRevision(document.pendingConfig))
+          .catch(error => this.serial(workspaceId, async () => {
+            const detail = error instanceof Error ? error.message : String(error)
+            if (this.settingsApplyErrors.get(workspaceId) === detail) return
+            this.settingsApplyErrors.set(workspaceId, detail)
+            this.message(document, 'system', 'user', 'error', `Saved settings could not be applied yet: ${detail}`)
+            await this.commit(workspaceId, document)
+          }).catch(() => undefined))
+          .finally(() => { this.applyingSettings.delete(workspaceId); if (!document.pendingConfig) this.schedule(workspaceId) })
+      }
+      return
+    }
+    if (this.applyingSettings.has(workspaceId)) return
     for (const node of document.config.nodes) {
       const key = `${workspaceId}:${node.id}`
       const runtime = document.state.nodes.find(item => item.nodeId === node.id)!
       if (runtime.status === 'working' || runtime.status === 'preparing' || this.launching.has(key)) continue
+      if (runtime.preparation?.status === 'failed' && document.pendingTurns.some(turn => turn.id === runtime.preparation?.turnId)
+        || runtime.preparation?.cleanupPending || this.preparations.get(key)?.pending) continue
       if (runtime.retryAt != null && this.now() < runtime.retryAt) continue
       if (document.pendingTurns.some(turn => turn.nodeId === node.id && turn.retryDeadline != null && this.now() >= turn.retryDeadline && turn.startedAt == null)) continue
       if (runtime.lastStartedAt != null && this.now() - runtime.lastStartedAt < 60_000 / node.maxCallsPerMinute) continue
       if (!document.pendingTurns.some(turn => turn.nodeId === node.id)) continue
       this.launching.add(key)
-      const promise = this.dispatch(workspaceId, node.id).finally(() => { this.launching.delete(key); this.preparingTurns.delete(key); this.dispatches.delete(key) })
+      const promise = this.dispatch(workspaceId, node.id).finally(() => {
+        this.launching.delete(key); this.preparingTurns.delete(key); this.dispatches.delete(key)
+        const preparation = this.preparations.get(key)
+        if (preparation) { clearTimeout(preparation.timer); if (!preparation.pending) this.preparations.delete(key) }
+      })
       this.dispatches.set(key, { workspaceId, promise })
       void promise.catch(() => undefined)
     }
@@ -2287,7 +2762,7 @@ export class SuperAgentService {
   private async dispatch(workspaceId: string, nodeId: string): Promise<void> {
     const reserved = await this.serial(workspaceId, async () => {
       const document = this.documents.get(workspaceId)
-      if (!document?.config || this.closed) return null
+      if (!document?.config || document.pendingConfig || this.applyingSettings.has(workspaceId) || this.closed) return null
       const config = document.config
       const node = config.nodes.find(node => node.id === nodeId)
       const runtime = document.state.nodes.find(item => item.nodeId === nodeId)
@@ -2296,55 +2771,89 @@ export class SuperAgentService {
           - (taskPriority(document, b.taskId) - Math.floor((this.now() - b.createdAt) / 60_000)) || a.createdAt - b.createdAt)
       let turn = pending.find(turn => turn.retryAt != null) ?? pending.find(turn => turn.kind === 'compact') ?? (node?.role === 'coordinator' ? pending.find(turn => turn.kind === 'chat') ?? pending[0] : pending[0])
       if (!node || !runtime || !turn || runtime.status === 'working' || runtime.status === 'preparing') return null
+      if (hasPlanningTopology(config) && turn.senderNodeId) {
+        const sender = config.nodes.find(item => item.id === turn.senderNodeId)
+        if (!sender || !canSuperAgentCommunicate(config, sender, node)) {
+          document.pendingTurns = document.pendingTurns.filter(item => item.id !== turn.id)
+          ;(document.failedTurns ??= []).push({ ...turn, recoveryError: 'Queued message violates the current role topology; original input retained for review' })
+          runtime.status = 'error'; runtime.error = 'Queued communication violates role topology'
+          await this.commit(workspaceId, document)
+          return null
+        }
+      }
       if (turn.retryAt != null && this.now() < turn.retryAt) return null
       if (turn.retryDeadline != null && this.now() >= turn.retryDeadline) return null
       if (runtime.lastStartedAt != null && this.now() - runtime.lastStartedAt < 60_000 / node.maxCallsPerMinute) return null
-      const existing = runtime.sessionId ? await this.deps.host.getSession(runtime.sessionId) : null
-      if (existing?.isProcessing) return null
-      if (existing?.workspaceId === workspaceId && turn.kind !== 'compact' && !turn.retryAttempt
-        && needsAutoCompaction(config, existing.tokenUsage)
-        && runtime.lastAutoCompactUsage !== compactionUsageKey(existing.id, existing.tokenUsage)
-        && document.pendingTurns.length < MAX_PENDING_TURNS) {
-        turn = this.enqueue(document, nodeId, 'compact', '/compact')
-        runtime.lastAutoCompactUsage = compactionUsageKey(existing.id, existing.tokenUsage)
-      }
       if (config.architecture === 'dynamic' && node.role === 'worker' && document.state.nodes.filter(other => other.nodeId !== node.id && ['working', 'preparing'].includes(other.status) && config.nodes.some(entry => entry.id === other.nodeId && entry.role === 'worker')).length >= (config.maxConcurrentSubagents ?? 4)) return null
       const connected = [...this.documents.values()].flatMap(team => team.state.nodes.filter(runtime => team.config?.nodes.some(other => other.id === runtime.nodeId && other.llmConnection === node.llmConnection)))
       const preparing = connected.filter(runtime => runtime.status === 'preparing').length
       if (connected.filter(runtime => ['preparing', 'working'].includes(runtime.status)).length >= (config.execution?.connectionConcurrency ?? 30)) return null
       const starts = [...this.documents.values()].flatMap(team => team.state.connectionStarts ?? []).filter(start => start.connection === node.llmConnection && this.now() - start.at < 60_000).length
       if (starts + preparing >= (config.execution?.connectionCallsPerMinute ?? 600)) return null
-      if (turn.kind === 'compact' && existing?.workspaceId === workspaceId && (config.contextCompaction ?? DEFAULT_CONTEXT_COMPACTION).saveToMemory) {
-        saveCompactionMemory(document.state, node, existing.id, this.now())
-      }
       document.failedTurns = (document.failedTurns ?? []).filter(item => item.nodeId !== nodeId)
       runtime.status = 'preparing'; runtime.error = undefined; runtime.activeTaskId = turn.taskId
       runtime.retryAt = undefined
       this.preparingTurns.set(`${workspaceId}:${nodeId}`, turn.id)
+      const timeout = (config.environment.kind === 'sandbox' ? config.execution?.sandboxPreparationTimeoutSeconds ?? 600 : config.execution?.preparationTimeoutSeconds ?? 120) * 1000
+      const attemptId = this.id('prepare')
+      turn.preparationAttempt = (turn.preparationAttempt ?? 0) + 1
+      runtime.preparation = { attemptId, turnId: turn.id, attempt: turn.preparationAttempt, stage: 'environment', status: 'preparing', startedAt: this.now(), stageStartedAt: this.now(), deadlineAt: this.now() + timeout }
+      const control = { attemptId, controller: new AbortController(), pending: 0, timer: undefined as ReturnType<typeof setTimeout> | undefined }
+      control.timer = setTimeout(() => control.controller.abort(new Error('Preparation deadline exceeded')), timeout)
+      control.timer.unref?.()
+      this.preparations.set(`${workspaceId}:${nodeId}`, control)
+
       // The turn is still unstarted during preparation. A restart can safely
       // resume it, and unrelated session completions cannot claim its output.
       await this.commit(workspaceId, document)
-      return { document, config, node, runtime, turn, existing }
+      return { document, config, node, runtime, turn }
     })
     if (!reserved) return
-    const { document, config, node, runtime, turn, existing } = reserved
+    const { document, config, node, runtime } = reserved
+    let turn = reserved.turn
+    const control = this.preparations.get(`${workspaceId}:${nodeId}`)!
+    const options = { signal: control.controller.signal }
+    const step = <T>(stage: SuperAgentPreparation['stage'], work: () => Promise<T> | T) => this.preparationStep(workspaceId, document, nodeId, turn, control, stage, work)
     try {
       if (!this.deps.host.applySessionPolicy) throw new Error('This execution host does not support Super Agent tool permissions')
+      const existing = await step('session', () => runtime.sessionId ? this.deps.host.getSession(runtime.sessionId) : Promise.resolve(null))
+      if (existing?.isProcessing) throw new Error('Node session is still busy')
+      await this.serial(workspaceId, async () => {
+        options.signal.throwIfAborted()
+        if (existing?.workspaceId === workspaceId && turn.kind !== 'compact' && !turn.retryAttempt
+          && needsAutoCompaction(config, existing.tokenUsage)
+          && runtime.lastAutoCompactUsage !== compactionUsageKey(existing.id, existing.tokenUsage)
+          && document.pendingTurns.length < MAX_PENDING_TURNS) {
+          turn.preparationAttempt = Math.max(0, (turn.preparationAttempt ?? 1) - 1)
+          turn = this.enqueue(document, nodeId, 'compact', '/compact')
+          turn.preparationAttempt = 1
+          runtime.preparation!.turnId = turn.id
+          runtime.preparation!.attempt = 1
+          runtime.activeTaskId = undefined
+          this.preparingTurns.set(`${workspaceId}:${nodeId}`, turn.id)
+          runtime.lastAutoCompactUsage = compactionUsageKey(existing.id, existing.tokenUsage)
+        }
+        if (turn.kind === 'compact' && existing?.workspaceId === workspaceId && (config.contextCompaction ?? DEFAULT_CONTEXT_COMPACTION).saveToMemory) {
+          saveCompactionMemory(document.state, node, existing.id, this.now())
+        }
+        await this.commit(workspaceId, document)
+      })
       // SDK startup happens before the turn clock starts, so liveness checks
       // cannot mistake a cold workflow process for a lost model completion.
-      if (config.architecture !== 'dynamic') await this.deps.workflow?.prepare?.()
+      if (config.architecture !== 'dynamic') await step('environment', () => this.deps.workflow?.prepare?.())
       if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
-      const environment = this.deps.prepareEnvironment ? await this.deps.prepareEnvironment(workspaceId, config.environment) : await this.environment(workspaceId, config.environment)
+      const environment = await step('environment', () => this.deps.prepareEnvironment ? this.deps.prepareEnvironment(workspaceId, config.environment) : this.environment(workspaceId, config.environment))
       if (!environment.status.available) throw new Error(environment.status.detail)
       if (node.role === 'worker' && config.requirements && this.deps.checkReadiness) {
-        const readiness = await this.deps.checkReadiness(workspaceId, config)
+        const readiness = await step('environment', () => this.deps.checkReadiness!(workspaceId, config))
         if (!readiness.ready) throw new Error(readiness.checks.filter(check => !check.ok).map(check => check.detail).join('\n'))
       }
       const sourceSlugs = node.sourceSlugs.filter(slug => config.sourceSlugs.includes(slug))
       if (existing && existing.workspaceId !== workspaceId) throw new Error('Node session is not owned by this workspace')
       if (this.closed || (this.resetting.has(workspaceId) && !document.pendingTurns.some(item => item.id === turn.id))) return
       if (!existing) {
-        const session = await this.deps.host.createSession(workspaceId, {
+        const session = await step('session', async () => {
+          const created = await this.deps.host.createSession(workspaceId, {
           name: `${config.name} · ${node.name}`,
           hidden: true,
           llmConnection: node.llmConnection,
@@ -2355,6 +2864,11 @@ export class SuperAgentService {
           enabledSourceSlugs: sourceSlugs,
           agentSystemPrompt: this.nodePrompt(workspaceId, config, node, turn.text),
         }, { resourceScope: config.architecture === 'dynamic' ? 'super-agent' : undefined })
+          let owned = this.unassignedSessions.get(workspaceId)
+          if (!owned) { owned = new Set(); this.unassignedSessions.set(workspaceId, owned) }
+          owned.add(created.id)
+          return created
+        })
         let unassigned = this.unassignedSessions.get(workspaceId)
         if (!unassigned) { unassigned = new Set(); this.unassignedSessions.set(workspaceId, unassigned) }
         unassigned.add(session.id)
@@ -2386,31 +2900,37 @@ export class SuperAgentService {
         // A folder/VM control toggle can occur while environment preparation is
         // awaiting I/O. Reconcile the latest setting, never a reserved old flag.
         const currentConfig = this.configured(document)
-        await this.deps.host.applySessionPolicy(runtime.sessionId!, {
-          architecture: config.architecture, resourceScope: config.architecture === 'dynamic' ? 'super-agent' : undefined,
+        await step('policy', () => mkdir(join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'context'), { recursive: true }))
+        await step('policy', () => this.deps.host.applySessionPolicy!(runtime.sessionId!, {
+          architecture: config.architecture, roleTopologyVersion: config.roleTopologyVersion, resourceScope: config.architecture === 'dynamic' ? 'super-agent' : undefined,
           nodeId, role: node.role, rootPath: environment.workingDirectory,
-          fullControl: node.role === 'worker' && currentConfig.environment.fullControl === true,
+          fullControl: node.role !== 'coordinator' && currentConfig.environment.fullControl === true,
           credentialAccess: (config.architecture !== 'dynamic' || node.role !== 'coordinator') && currentConfig.environment.credentialAccess !== false,
           actionGates: this.deps.actionGates,
           safety: currentConfig.environment.safety,
           userIntent: document.state.messages.filter(message => message.fromNodeId === 'user' && message.kind === 'chat').slice(-4).map(message => message.body).join('\n').slice(-64_000),
           ...currentConfig.environment.permissions,
-          readFiles: node.role === 'orchestrator' && config.architecture === 'dynamic' || node.role === 'worker' && currentConfig.environment.permissions.readFiles,
+          contextDataRoot: join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'context'),
+          compactionModel: currentConfig.contextCompaction?.models?.[node.llmConnection],
+          readFiles: (node.role === 'orchestrator' || node.role === 'planner') && config.architecture === 'dynamic' || node.role === 'worker' && currentConfig.environment.permissions.readFiles,
           writeFiles: node.role === 'worker' && currentConfig.environment.permissions.writeFiles,
           runPrograms: node.role === 'worker' && currentConfig.environment.permissions.runPrograms,
           allowSources: sourceSlugs, allowSkills: [...new Set([SUPER_AGENT_COLLABORATION_SKILL, ...(node.skillSlugs ?? [])])], agentRuntime: node.agentRuntime, allowSubagents: false,
           containerExecutor: environment.containerExecutor,
-        })
+        }, options))
         if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
         if (document.config !== currentConfig) continue
         if (!this.deps.host.ensureSuperAgentSessionSettings) throw new Error('This execution host cannot reconcile Super Agent session mode and instructions')
-        await this.deps.host.ensureSuperAgentSessionSettings(runtime.sessionId!, {
+        await step('settings', () => this.deps.host.ensureSuperAgentSessionSettings!(runtime.sessionId!, {
           permissionMode: 'allow-all', agentSystemPrompt: this.nodePrompt(workspaceId, currentConfig, node, turn.text),
-        })
+        }, options))
         if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
         if (document.config === currentConfig) break
       }
+      const preparedSession = await step('ready', () => this.deps.host.getSession(runtime.sessionId!))
       const prompt = await this.serial(workspaceId, async () => {
+        options.signal.throwIfAborted()
+        if (runtime.preparation?.attemptId !== control.attemptId) return null
         if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return null
         if (turn.retryDeadline != null && this.now() >= turn.retryDeadline) {
           await this.finishTurn(workspaceId, document, turn, { sessionId: runtime.sessionId ?? '', workspaceId,
@@ -2418,9 +2938,12 @@ export class SuperAgentService {
             finalText: `Automatic recovery stopped after 10 minutes. Refresh this node to try again.\n${turn.recoveryError ?? ''}` })
           return null
         }
-        const session = await this.deps.host.getSession(runtime.sessionId!)
+        const session = preparedSession
         if (!session || session.workspaceId !== workspaceId) throw new Error('Node session is not owned by this workspace')
         if (session.isProcessing) throw new Error('Node session was used outside its queue during environment preparation')
+        runtime.preparation!.status = 'completed'; runtime.preparation!.completedAt = this.now()
+        turn.preparationAttempt = 0
+        clearTimeout(control.timer)
         runtime.lastStartedAt = this.now()
         runtime.status = 'working'
         if (this.deps.workflow) runtime.workflow = { turnId: turn.id, events: [] }
@@ -2431,6 +2954,7 @@ export class SuperAgentService {
         turn.responseText = undefined
         turn.responseTurnId = undefined
         turn.responseComplete = false
+        turn.completionCallId = undefined
         turn.usageBaseline = { outputTokens: finiteUsage(session.tokenUsage?.outputTokens), costUsd: finiteUsage(session.tokenUsage?.costUsd) }
         turn.retryAt = undefined
         const task = document.state.tasks.find(task => task.id === turn.taskId)
@@ -2449,12 +2973,13 @@ export class SuperAgentService {
         const recovery = turn.repetitionRecoveryAttempt
           ? 'The previous response degenerated into repetition and was rejected before its control actions were applied. This is a fresh model context for the same authorized turn. Read the durable task checkpoint, artifacts and original operation receipts first; resume only unfinished work. Never repeat completed tools, scripts or unknown operations. Return one concise result or one valid action block; do not echo instructions, past replies or acknowledgment exchanges.\n\n'
           : turn.retryAttempt || turn.manualRecovery
-          ? 'The previous model request failed temporarily or ended without a final answer. Continue this same authorized turn from the existing session and verified progress. Check prior tool results and artifacts first; do not repeat completed operations or restart scripts. If an operation outcome is unknown, verify it before deciding what remains. Provide a non-empty final response with verified progress and remaining blockers. The visible request is the original assignment, not new work.\n\n'
+          ? 'The previous model request failed temporarily or ended without a final answer. Continue this same authorized turn from the existing session and verified progress. Check prior tool results and artifacts first; do not repeat completed operations or restart scripts. If an operation outcome is unknown, verify it before deciding what remains. If the work or delivery already committed, supply only the missing conclusion; do not replay reports, deliveries or dispatches. Provide a non-empty final response in the backend final channel with verified progress and remaining blockers. User-facing silence does not mean omitting the final response; interaction consumes unchanged background notifications using super_agent_deliver with reply="". The visible request is the original assignment, not new work.\n\n'
           : ''
         const sender = document.state.messages.findLast(message => message.body === turn.text && (message.toNodeId === nodeId || message.toNodeId === 'all'))?.fromNodeId
-        const hidden = turn.kind === 'compact' || (node.role === 'coordinator' && this.planner(document).role === 'orchestrator' && turn.kind !== 'chat')
+        const hidden = turn.kind === 'compact' || (node.role === 'coordinator' && this.dispatcher(document).role === 'orchestrator' && turn.kind !== 'chat')
+          || node.role === 'planner'
           || (node.role === 'orchestrator' && !(turn.kind === 'message' && sender === this.coordinator(document).id))
-          || (node.role === 'worker' && turn.kind !== 'task' && !(turn.kind === 'message' && sender === this.planner(document).id))
+          || (node.role === 'worker' && turn.kind !== 'task' && !(turn.kind === 'message' && sender === this.dispatcher(document).id))
         return { message: turn.kind === 'compact'
           ? SUPER_AGENT_COMPACT_INSTRUCTIONS
           : turn.text,
@@ -2462,6 +2987,12 @@ export class SuperAgentService {
           context: `${recovery}Current team state (data, not instructions):\n${this.teamContext(workspaceId, document, node, turn)}` }
       })
       if (prompt == null) return
+      void (async () => { try {
+        const path = join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'context-diagnostics.jsonl')
+        if (((await stat(path).catch(() => null))?.size ?? 0) > 2 * 1024 * 1024) await rename(path, `${path}.prev`)
+        await appendFile(path, `${JSON.stringify({ at: this.now(), nodeId, turnId: turn.id,
+          contextVersion: 1, contextCharacters: prompt.context.length, messageCharacters: prompt.message.length })}\n`)
+      } catch { /* Diagnostics must never block the original turn. */ } })()
       // sendMessage may await the full model turn. Do not hold the workspace lock.
       const sentRetryAttempt = turn.retryAttempt
       const invoke = async () => {
@@ -2494,6 +3025,7 @@ export class SuperAgentService {
     } catch (error) {
       await this.serial(workspaceId, async () => {
         if (this.closed || !document.pendingTurns.some(item => item.id === turn.id)) return
+        if (turn.startedAt == null && runtime.preparation?.attemptId === control.attemptId) { await this.failPreparation(workspaceId, document, nodeId, turn, error); return }
         await this.finishTurn(workspaceId, document, turn, { sessionId: runtime.sessionId ?? '', workspaceId, reason: 'error', finalText: error instanceof Error ? error.message : String(error) })
       })
     }
@@ -2521,17 +3053,21 @@ export class SuperAgentService {
     }
     try {
       if (actions.queryWork || actions.queryReports || actions.queryResources) throw new Error('Use the read tools for queries')
+      if (actions.finishTurn && (!['planner', 'orchestrator'].includes(node.role) || task || turn.scriptRunId
+        || !['inspection', 'summary', 'message'].includes(turn.kind) || hasUnsettledOperations
+        || Object.entries(actions).some(([key, value]) => key !== 'finishTurn' && value !== undefined))) throw new Error('Only an internal management turn may finish silently with one standalone action; tasks and unsettled operations remain unchanged')
       if (document.config?.architecture === 'dynamic' && node.role === 'coordinator' && (actions.reports?.length || actions.activateResources?.length || actions.manageResources?.length || actions.messages?.length)) throw new Error('Interaction may submit requirements and user replies only')
-      if (actions.intent && node.role !== 'coordinator') throw new Error('Only the intent node may hand off user intent')
-      if (actions.acceptances?.length && node.id !== this.planner(document).id) throw new Error('Only the orchestrator may accept work')
-      if (node.role === 'coordinator' && this.planner(document).role === 'orchestrator' && (actions.tasks?.length || actions.plans?.length || actions.board?.length || actions.messages?.some(message => message.toNodeId !== this.planner(document).id))) throw new Error('The intent node only hands off intent to the orchestrator and communicates with the user')
+      if (actions.intent && node.role !== (hasPlanningTopology(document.config) ? 'planner' : 'coordinator')) throw new Error('Only the intent node may hand off user intent')
+      if (hasPlanningTopology(document.config) && node.role === 'planner' && actions.manageResources?.length) throw new Error('Resource changes belong to dispatch or execution, not planning')
+      if (actions.acceptances?.length && node.id !== this.dispatcher(document).id) throw new Error('Only the orchestrator may accept work')
+      if (node.role === 'coordinator' && this.dispatcher(document).role === 'orchestrator' && (actions.tasks?.length || actions.plans?.length || actions.board?.length || actions.messages?.some(message => message.toNodeId !== this.dispatcher(document).id))) throw new Error('The intent node only hands off intent to the orchestrator and communicates with the user')
       if (actions.userReply !== undefined && node.role !== 'coordinator') throw new Error('Only the interaction node may reply to the user')
       if (node.role === 'coordinator') userReply = this.visibleText(actions.userReply ?? '')
       if (actions.userDelivery) {
         if (node.role !== 'coordinator') throw new Error('Only the interaction node may deliver to the user')
         if (!userReply) throw new Error('userDelivery requires a non-empty userReply')
         const artifacts = await Promise.all([...new Set(actions.userDelivery.artifactIds ?? [])].map(async id => {
-          if (document.config?.architecture === 'dynamic' && !(document.state.reports ?? []).some(report => report.verification !== 'stale' && report.artifactIds.includes(id))) throw new Error('Interaction may deliver only artifacts referenced by current reports')
+          if (document.config?.architecture === 'dynamic' && !(document.state.reports ?? []).some(report => report.verification !== 'stale' && (!hasPlanningTopology(document.config) || report.recipientNodeId === node.id) && report.artifactIds.includes(id))) throw new Error('Interaction may deliver only artifacts referenced by current reports')
           const artifact = document.state.artifacts?.find(item => item.id === id)
           if (!artifact || artifact.missing) throw new Error(`Delivery artifact ${id} is unavailable; register and verify the file before delivering it`)
           const file = await fingerprintArtifact(document.config!.environment.workingDirectory, artifact.path)
@@ -2542,11 +3078,14 @@ export class SuperAgentService {
       }
       if (node.role === 'worker' && actions.activateResources?.length
         && (actions.activateResources.length !== 1 || Object.entries(actions).some(([key, value]) => key !== 'activateResources' && value !== undefined))) throw new Error('Worker resource activation must be one standalone action; the host resumes the current assignment after activation')
-      if ((actions.manageResources?.length ?? 0) + (actions.reports?.length ?? 0) + (actions.activateResources?.length ?? 0) + (actions.intent ? 1 : 0) + (actions.acceptances?.length ?? 0) + (actions.tasks?.length ?? 0) + (actions.plans?.length ?? 0) + (actions.messages?.length ?? 0) + (actions.board?.length ?? 0) + (actions.runScripts?.length ?? 0) + (actions.registerScripts?.length ?? 0) > MAX_MODEL_ACTIONS) throw new Error('Too many communication actions in one turn')
+      if ((actions.manageResources?.length ?? 0) + (actions.reports?.length ?? 0) + (actions.activateResources?.length ?? 0) + (actions.submitRequest ? 1 : 0) + (actions.intent ? 1 : 0) + (actions.acceptances?.length ?? 0) + (actions.tasks?.length ?? 0) + (actions.plans?.length ?? 0) + (actions.messages?.length ?? 0) + (actions.board?.length ?? 0) + (actions.runScripts?.length ?? 0) + (actions.registerScripts?.length ?? 0) + (actions.health ? 1 : 0) + (actions.finishTurn ? 1 : 0) > MAX_MODEL_ACTIONS) throw new Error('Too many communication actions in one turn')
       remaining = [
+        ...(actions.finishTurn ? [{ type: 'finish-turn', targetId: node.id }] : []),
+        ...(actions.submitRequest ? [{ type: 'submit-request', targetId: this.planner(document).id }] : []),
+        ...(actions.health ? [{ type: 'preparation-recover', targetId: actions.health.nodeId }] : []),
         ...(actions.manageResources ?? []).map(input => ({ type: 'manage-resources', targetId: input.operation })),
         ...(actions.reports ?? []).map(input => ({ type: 'report', targetId: input.taskId })),
-        ...(actions.intent ? [{ type: 'intent', targetId: this.planner(document).id }] : []),
+        ...(actions.intent ? [{ type: 'intent', targetId: this.dispatcher(document).id }] : []),
         ...(actions.acceptances ?? []).map(input => ({ type: 'acceptance', targetId: input.taskId })),
         ...(actions.plans ?? []).map(input => ({ type: 'plan-upsert', targetId: input.id })),
         ...(actions.board ?? []).map(input => ({ type: 'board-upsert', targetId: input.id })),
@@ -2556,12 +3095,29 @@ export class SuperAgentService {
         ...(actions.registerScripts ?? []).map(input => ({ type: 'register-script', targetId: input.id })),
         ...(actions.runScripts ?? []).map(targetId => ({ type: 'script-run', targetId })),
       ].map((action, index) => ({ id: `${turn.id}_${offset + index}`, type: action.type, ...(action.targetId ? { targetId: action.targetId.trim() } : {}) }))
+      if (actions.finishTurn) await apply('finish-turn', node.id, () => {})
+      if (actions.submitRequest) await apply('submit-request', this.planner(document).id, () => {
+        if (!hasPlanningTopology(document.config) || node.role !== 'coordinator' || turn.kind !== 'chat') throw new Error('Only the main node may submit its original user chat request')
+        const existing = document.state.requests?.find(request => request.sourceTurnId === (turn.sourceTurnId ?? turn.id))
+        if (existing) return existing.id
+        if ((document.state.requests?.length ?? 0) >= 100) throw new Error('Request history is full; archive finished work before adding requests')
+        const request = { id: this.id('request'), text: turn.text, sourceTurnId: turn.sourceTurnId ?? turn.id, createdAt: this.now() }
+        document.state.requests = [...(document.state.requests ?? []), request]
+        // Raw text is stored once. The planner retrieves the lossless request by ID.
+        this.enqueue(document, this.planner(document).id, 'message', `New authorized user request ${request.id}. Read it with super_agent_work_list area=requests id=${request.id} view=detail; analyze the original request and attachment references, then maintain its goals and plans.`, undefined, turn.depth + 1, turn.chainId).senderNodeId = node.id
+        return request.id
+      })
+      if (actions.health) await apply('preparation-recover', actions.health.nodeId, async () => {
+        if (actions.health!.action !== 'recover' || !actions.health!.nodeId) throw new Error('recover requires nodeId; use the health read tool for get')
+        if (node.role === 'worker' && actions.health!.nodeId !== node.id) throw new Error('Workers may recover their own preparation only')
+        await this.recoverPreparation(workspaceId, document, actions.health!.nodeId)
+      })
       if (actions.plans?.length && node.id !== this.planner(document).id) throw new Error('Only the coordinator may maintain plans')
       for (const input of actions.manageResources ?? []) await apply('manage-resources', input.operation, async () => {
         if (!this.deps.accessResources) throw new Error('Shared resources are unavailable')
         if (node.role === 'coordinator' && document.config?.architecture === 'dynamic') throw new Error('Delegate resource changes to the background node or a worker')
-        if (input.operation === 'save-credentials' && document.config?.environment.credentialAccess === false) throw new Error('Credential access is disabled')
-        if (input.operation === 'import' && document.config?.environment.credentialAccess === false) throw new Error('Credential access is disabled')
+        if (!document.config?.environment.fullControl && input.operation === 'save-credentials' && document.config?.environment.credentialAccess === false) throw new Error('Credential access is disabled')
+        if (!document.config?.environment.fullControl && input.operation === 'import' && document.config?.environment.credentialAccess === false) throw new Error('Credential access is disabled')
         const resources = await this.deps.accessResources(workspaceId, input.operation, input.value) as { sources: Array<{ config: { slug: string } }> }
         const existing = new Set(resources.sources.map(source => source.config.slug))
         document.config!.sourceSlugs = [...existing]
@@ -2569,15 +3125,21 @@ export class SuperAgentService {
         for (const target of document.config!.nodes) target.sourceSlugs = target.sourceSlugs.filter(slug => existing.has(slug))
       })
       for (const report of actions.reports ?? []) await apply('report', report.taskId, () => appendSuperAgentReport(document, node, turn, report, this.now()).id)
-      if (actions.intent) await apply('intent', this.planner(document).id, async () => {
-        if (this.planner(document).id === node.id) throw new Error('Configure an orchestrator before handing off intent')
+      if (actions.intent) await apply('intent', this.dispatcher(document).id, async () => {
+        if (!hasPlanningTopology(document.config) && this.dispatcher(document).id === node.id) throw new Error('Configure an orchestrator before handing off intent')
         const { id, expectedRevision, ...input } = actions.intent!
+        if (hasPlanningTopology(document.config) && !document.state.requests?.some(request => request.id === input.sourceRequestId)) throw new Error('Planner goals require an authorized sourceRequestId')
         const existing = id ? document.state.intents?.find(goal => goal.id === id) : undefined
         if (id && !existing) throw new Error('Unknown goal identity')
         if (!existing && (document.state.intents?.length ?? 0) >= 100) throw new Error('Goal history is full; archive delivered work before adding goals')
         if (existing && expectedRevision !== (existing.revision ?? 1)) throw new Error('Goal changed; read its current revision before updating')
-        const intent = { ...input, id: existing?.id ?? this.id('intent'), revision: (existing ? existing.revision ?? 1 : 0) + 1, status: input.status ?? 'active' as const, createdAt: existing?.createdAt ?? this.now(), sourceTurnId: turn.id }
-        if (document.config?.architecture !== 'dynamic') this.routeMessage(document, node.id, this.planner(document).id, JSON.stringify(actions.intent), turn.depth + 1, turn.chainId)
+        const sourceRequestId = input.sourceRequestId ?? existing?.sourceRequestId
+        const sameContract = existing && existing.goal === input.goal && existing.sourceRequestId === sourceRequestId
+          && ['constraints', 'deliverables', 'acceptanceCriteria'].every(key => JSON.stringify(existing[key as 'constraints']) === JSON.stringify(input[key as 'constraints']))
+        const status = input.status ?? (sameContract ? existing?.status : undefined) ?? 'active' as const
+        if (sameContract && (existing.status ?? 'active') === status) return existing.id
+        const intent = { ...input, sourceRequestId, id: existing?.id ?? this.id('intent'), revision: (existing ? existing.revision ?? 1 : 0) + 1, status, createdAt: existing?.createdAt ?? this.now(), sourceTurnId: turn.id }
+        if (document.config?.architecture !== 'dynamic') this.routeMessage(document, node.id, this.dispatcher(document).id, JSON.stringify(actions.intent), turn.depth + 1, turn.chainId)
         if (intent.status === 'cancelled') {
           for (const task of document.state.tasks.filter(task => task.goalId === intent.id && ['queued', 'running'].includes(task.status))) await this.cancel(workspaceId, document, task.id)
           for (const plan of document.state.plans.filter(plan => plan.goalId === intent.id)) { plan.status = 'cancelled'; plan.revision++; plan.updatedAt = this.now() }
@@ -2592,13 +3154,23 @@ export class SuperAgentService {
         }
         else document.state.intents = [...(document.state.intents ?? []), intent]
         for (const report of document.state.reports ?? []) if (report.goalId === intent.id && report.goalRevision !== intent.revision) report.verification = 'stale'
+        this.invalidateQueuedContracts(document)
         recordSuperAgentEvent(document, 'work', node.id, this.now(), intent.id)
         return intent.id
       })
       for (const input of actions.acceptances ?? []) await apply('acceptance', input.taskId, async () => {
         const target = document.state.tasks.find(task => task.id === input.taskId)
         const evidence = document.state.tasks.find(task => task.id === input.evidenceTaskId)
-        if (!target || target.status !== 'completed' || !evidence || evidence.status !== 'completed' || !evidence.output?.trim()
+        if (hasPlanningTopology(document.config) && (target?.parentNodeId !== node.id || evidence?.parentNodeId !== node.id)) throw new Error('Dispatcher may accept only its own worker evidence')
+        if (input.status === 'accepted') {
+          for (const checked of [target, evidence]) if (checked) {
+            const unsettled = document.state.operations?.filter(operation => operation.taskId === checked.id && ['unknown', 'running', 'prepared'].includes(operation.status)) ?? []
+            if (unsettled.length) throw new SuperAgentOperationOutcomeError(checked.id, unsettled)
+          }
+        }
+        const reconciledSubmission = target?.status === 'failed' && target.phase === 'submitted' && !!target.output?.trim()
+          && document.state.operations?.some(operation => operation.taskId === target.id && operation.status === 'reconciled')
+        if (!target || target.status !== 'completed' && !reconciledSubmission || !evidence || evidence.status !== 'completed' || !evidence.output?.trim()
           || (evidence.actionReceipt && evidence.actionReceipt.status !== 'applied') || (target.actionReceipt && target.actionReceipt.status !== 'applied')) throw new Error('Acceptance requires completed work and a successful evidence task report')
         if (target.requiresIndependentReview && (evidence.nodeId === target.nodeId || evidence.reviewOf !== target.id || !evidence.dependsOn?.includes(target.id))) throw new Error('Independent review must run on another worker and reference the target dependency')
         const goal = document.state.intents?.find(goal => goal.id === target.goalId)
@@ -2606,6 +3178,10 @@ export class SuperAgentService {
           && !document.state.tasks.some(dependency => dependency.id === id && superAgentDependencySatisfied(dependency)))) throw new SuperAgentGoalContractError(`Task ${target.id} has an unaccepted dependency; reconcile upstream acceptance before accepting this result.`)
         if (input.status === 'accepted' && goal && (target.goalRevision !== (goal.revision ?? 1)
           || evidence.goalId !== goal.id || evidence.goalRevision !== (goal.revision ?? 1))) throw new SuperAgentGoalContractError(`The submitted task uses an older goal contract or mismatched evidence: task ${target.id} has goal revision ${target.goalRevision ?? 'unset'}, evidence ${evidence.id} has goal ${evidence.goalId ?? 'unset'} revision ${evidence.goalRevision ?? 'unset'}, but goal ${goal.id} is at revision ${goal.revision ?? 1}. Preserve the historical result; assign verification under the current goal contract before accepting it. A rejected review may still be recorded.`)
+        if (input.status === 'accepted' && hasPlanningTopology(document.config)) for (const checked of [target, evidence]) {
+          const plan = document.state.plans.find(plan => plan.id === checked.planId)
+          if (!plan || checked.planRevision !== (plan.contractRevision ?? plan.revision)) throw new SuperAgentGoalContractError('Task evidence belongs to an older plan contract; retain it and verify under the current plan before acceptance')
+        }
         if (input.status === 'accepted') for (const checked of target.id === evidence.id ? [target] : [target, evidence]) {
           const unsettled = document.state.operations?.filter(operation => operation.taskId === checked.id && ['unknown', 'running', 'prepared'].includes(operation.status)) ?? []
           if (unsettled.length) throw new SuperAgentOperationOutcomeError(checked.id, unsettled)
@@ -2622,6 +3198,10 @@ export class SuperAgentService {
         if (previous?.status === 'accepted' && !sameEvidence && input.status === 'accepted' && document.state.tasks.some(task => task.dependsOn?.includes(target.id)
           && task.reviewOf !== target.id && (task.startedAt != null || document.state.nodes.some(node => node.activeTaskId === task.id && node.status === 'preparing')))) throw new SuperAgentGoalContractError(`Accepted evidence already has dispatched dependents; create a new versioned task instead of changing its acceptance: task ${target.id}. Rejection of an incorrect acceptance is allowed and invalidates downstream results.`)
         if (sameEvidence && previous?.note === input.note) return
+        if (input.status === 'accepted' && reconciledSubmission) {
+          target.status = 'completed'; target.error = undefined
+          ;(document.state.metrics ??= emptyContinuityMetrics()).completedTasks++
+        }
         target.acceptance = { status: input.status, evidenceTaskId: evidence.id, note: input.note, reviewedBy: node.id, reviewedAt: this.now(), artifactHashes: hashes.length ? hashes : undefined }
         if (previous?.status === 'accepted' && input.status === 'rejected') await this.invalidateAcceptanceDependents(workspaceId, document, target)
       })
@@ -2635,10 +3215,10 @@ export class SuperAgentService {
         })
       }
       for (const input of actions.board ?? []) {
-        await apply('board-upsert', input.id, () => {
-          const checked = validateSuperAgentCommand({ type: 'board-upsert', item: { id: input.id, title: input.title, content: input.content }, expectedRevision: input.expectedRevision })
+        await apply('board-upsert', input.id, async () => {
+          const checked = validateSuperAgentCommand({ type: 'board-upsert', item: { id: input.id, title: input.title, content: input.content, pinned: input.pinned, expiresAt: input.expiresAt }, expectedRevision: input.expectedRevision })
           if (checked.type !== 'board-upsert') throw new Error('Invalid board action')
-          this.upsertBoard(document, checked.item, node.id, checked.expectedRevision)
+          await this.upsertBoard(workspaceId, document, checked.item, node.id, checked.expectedRevision, task?.id)
           return checked.item.id ?? document.state.board.at(-1)!.id
         })
       }
@@ -2658,11 +3238,11 @@ export class SuperAgentService {
           }
         })
       }
-      if (actions.tasks?.length && node.id !== this.planner(document).id) throw new Error('Only the coordinator may assign worker tasks')
+      if (actions.tasks?.length && node.id !== this.dispatcher(document).id) throw new Error('Only the coordinator may assign worker tasks')
       const chainExhausted = turn.depth >= MAX_CHAIN_DEPTH || (document.chainCounts[turn.chainId] ?? 0) >= MAX_CHAIN_TURNS
       // Continuous work advances existing actionable plans across task phases.
       // Node-to-node replies retain their original bounded communication chain.
-      const continuePlans = document.config!.continuousWork === true && node.id === this.planner(document).id
+      const continuePlans = document.config!.continuousWork === true && node.id === this.dispatcher(document).id
         && !!actions.tasks?.length && actions.tasks.every(input => input.planId
           && document.state.plans.some(plan => plan.id === input.planId && ['planned', 'active'].includes(plan.status)))
       if (turn.depth >= MAX_CHAIN_DEPTH && ((actions.messages?.length ?? 0) || (actions.runScripts?.length ?? 0)
@@ -2670,10 +3250,9 @@ export class SuperAgentService {
       for (const input of actions.tasks ?? []) {
         await apply('task', input.nodeId, () => {
           const checked = validateSuperAgentCommand({ type: 'task', ...input })
-          if (checked.type === 'task') this.addTask(document, checked,
+          if (checked.type === 'task') return this.addTask(document, checked,
             chainExhausted && continuePlans ? 0 : turn.depth + 1,
             chainExhausted && continuePlans ? undefined : turn.chainId)
-          return document.state.tasks.at(-1)!.id
         })
       }
       for (const input of actions.messages ?? []) {
@@ -2724,7 +3303,29 @@ export class SuperAgentService {
     // Stream fragments remain usable for a text-only turn. With tools, require
     // a completed answer after the last tool start, or an explicit delivery receipt.
     if (turn.responseText?.trim() && (turn.responseComplete || (turn.hasToolActivity === false && !turn.toolCalls?.length))) return turn.responseText
-    return turn.toolCalls?.findLast(call => call.userReply?.trim() && call.receipt.status === 'applied')?.userReply
+    // Only an explicit terminal receipt from this attempt can replace prose.
+    // Empty delivery is intentional silence, not a missing response. Reads,
+    // dispatches and progress reports alone never complete assigned work.
+    const call = turn.toolCalls?.at(-1)
+    if (!call || call.requestId !== turn.completionCallId || call.receipt.status !== 'applied') return
+    if (call.receipt.applied.some(action => action.type === 'finish-turn')) return ''
+    if (call.userReply !== undefined) return call.userReply
+    if (call.resourceContinuation) return ''
+    const reportId = call.receipt.applied.findLast(action => action.type === 'report')?.targetId
+    const report = reportId && document.state.reports?.find(item => item.id === reportId && item.nodeId === turn.nodeId)
+    // A current, committed management call can reuse identical evidence without
+    // waking its recipient. Its receipt closes this attempt silently; old report
+    // prose never becomes a new task result or user delivery.
+    if (report && report.turnId !== turn.id) {
+      const role = document.config?.nodes.find(node => node.id === turn.nodeId)?.role
+      if (!turn.taskId && (role === 'planner' || role === 'orchestrator')) return ''
+      return
+    }
+    if (report && (!turn.taskId || report.taskId === turn.taskId && report.kind === 'final')) {
+      // Report bodies are evidence, never another executable action block.
+      const text = this.visibleText(report.content)
+      if (text.trim()) return text
+    }
   }
 
   private async finishTurn(workspaceId: string, document: SuperAgentDocument, turn: SuperAgentPendingTurn, event: SessionCompletionEvent): Promise<void> {
@@ -2735,8 +3336,8 @@ export class SuperAgentService {
       runtime.lastAutoCompactUsage = compactionUsageKey(event.sessionId, session?.tokenUsage ?? event.tokenUsage)
     }
     const recoveredText = this.recoverableTurnText(document, turn)
-    if (turn.kind !== 'compact' && recoveredText
-      && (event.errorCode === EMPTY_RESPONSE_ERROR_CODE || (event.reason === 'complete' && !event.finalText?.trim()))) {
+    if (turn.kind !== 'compact' && recoveredText !== undefined
+      && (event.reason === 'error' && event.errorCode === EMPTY_RESPONSE_ERROR_CODE || (event.reason === 'complete' && !event.finalText?.trim()))) {
       event = { ...event, reason: 'complete', errorCode: undefined, canRetry: false, finalText: recoveredText }
     }
     recordTurnStatistics(document, node, turn, event, this.now())
@@ -2837,23 +3438,23 @@ export class SuperAgentService {
     const task = document.state.tasks.find(task => task.id === turn.taskId)
     if (task) {
       const waiting = success && task.phase === 'waiting'
-      task.status = waiting ? 'queued' : success ? 'completed' : event.reason === 'interrupted' ? 'cancelled' : 'failed'
+      task.status = waiting ? 'queued' : success && !hasUnsettledOperations ? 'completed' : event.reason === 'interrupted' ? 'cancelled' : 'failed'
       task.phase = waiting ? 'waiting' : hasUnsettledOperations ? 'outcome-unknown' : success ? 'submitted' : task.phase
-      task.output = success ? output : undefined; task.error = success ? undefined : runtime.error; task.completedAt = this.now()
+      task.output = success ? output : undefined; task.error = hasUnsettledOperations ? `${success ? '' : `${runtime.error ?? ''}\n`}Verify unknown operation outcomes before continuing; preserve the stage result.` : success ? undefined : runtime.error; task.completedAt = this.now()
       const metrics = document.state.metrics ??= emptyContinuityMetrics()
       metrics.executionMs += Math.max(0, this.now() - (turn.startedAt ?? this.now()))
-      if (success && !waiting) metrics.completedTasks++
+      if (success && !waiting && !hasUnsettledOperations) metrics.completedTasks++
       const plan = document.state.plans.find(item => item.id === task.planId)
       // A sibling task may already have blocked this shared plan. A successful
       // result cannot resolve that blocker; the coordinator must review it.
-      if (plan && (!success || plan.status !== 'blocked')) this.upsertPlan(document, { ...plan, status: success ? 'active' : 'blocked', note: success ? '工作节点已提交结果，等待依据验证节点报告确认目标状态。' : task.error ?? '工作被中断，请检查结果后再安排。' }, node.id, plan.revision, true)
+      if (plan && (!success || hasUnsettledOperations || plan.status !== 'blocked')) this.upsertPlan(document, { ...plan, status: success && !hasUnsettledOperations ? 'active' : 'blocked', note: hasUnsettledOperations ? task.error! : success ? '工作节点已提交结果，等待依据验证节点报告确认目标状态。' : task.error ?? '工作被中断，请检查结果后再安排。' }, node.id, plan.revision, true)
     }
     // Successful internal turns stay in team history. User replies are selected
     // explicitly after validating the control block, never from live reasoning.
     let userReply = node.role === 'coordinator' && success
       && (turn.kind === 'chat' || (turn.kind === 'inspection' && !turn.backgroundInspection)) ? output : ''
     let userDelivery: SuperAgentMessage['delivery']
-    const resultMessage = this.message(document, node.id, !success && node.role === 'coordinator' ? 'user' : this.planner(document).id,
+    const resultMessage = this.message(document, node.id, node.role === 'coordinator' ? success ? node.id : 'user' : hasPlanningTopology(document.config) ? superAgentReportRecipient(document.config!, node) : this.dispatcher(document).id,
       success ? turn.kind === 'inspection' ? 'inspection' : task ? 'result' : node.role === 'worker' && turn.kind === 'message' ? 'message' : 'chat' : 'error', output || (success ? '' : runtime.error!), turn.taskId)
     let receipt: SuperAgentActionReceipt | undefined
     let suppressedMessageActions = 0
@@ -2885,7 +3486,7 @@ export class SuperAgentService {
         const notice = `Communication action rejected: ${receipt.rejected.error}\nAction receipt: ${JSON.stringify(receipt)}`
         this.message(document, 'system', node.id, 'error', notice)
         const coordinator = this.coordinator(document)
-        if (node.id !== coordinator.id) this.message(document, 'system', coordinator.id, 'error', notice, task?.id)
+        if (node.id !== coordinator.id) this.message(document, 'system', hasPlanningTopology(document.config) ? superAgentReportRecipient(document.config!, node) : coordinator.id, 'error', notice, task?.id)
         // Repair schema/framing errors and refresh revisions in a bounded turn;
         // never overwrite concurrent edits or repeat actions already committed.
         const repairable = error instanceof SuperAgentConflictError || error instanceof SuperAgentGoalContractError || error instanceof SuperAgentOperationOutcomeError || error instanceof SuperAgentActionProtocolError
@@ -2917,11 +3518,20 @@ export class SuperAgentService {
       suppressedMessageActions += calls.reduce((sum, call) => sum + call.suppressedMessageActions, 0)
       resourceContinuation ||= calls.some(call => call.resourceContinuation)
       const delivery = calls.findLast(call => call.userReply !== undefined)
-      if (success && !rejected && delivery) { userReply = delivery.userReply!; userDelivery = delivery.userDelivery }
+      if (success && !rejected && delivery && node.role === 'coordinator') { userReply = delivery.userReply!; userDelivery = delivery.userDelivery }
       if (success && resourceContinuation && task) {
         if (task.status === 'completed') document.state.metrics!.completedTasks--
         task.status = 'queued'; task.phase = undefined; task.completedAt = undefined; task.output = undefined
       }
+    }
+    const latestReport = task ? (document.state.reports ?? []).findLast(report => report.turnId === turn.id && report.taskId === task.id) : undefined
+    if (task?.status === 'completed' && latestReport && latestReport.kind !== 'final' && !resourceContinuation) {
+      document.state.metrics!.completedTasks--
+      task.status = 'failed'
+      task.phase = hasUnsettledOperations ? 'outcome-unknown' : 'waiting'
+      task.error = 'The worker ended with a stage, question or failure report without a final result or registered wait. Preserve the result and arrange only the remaining work.'
+      const plan = document.state.plans.find(plan => plan.id === task.planId)
+      if (plan) this.upsertPlan(document, { ...plan, status: 'blocked', note: task.error }, node.id, plan.revision, true)
     }
     if (task && receipt) task.actionReceipt = receipt
     if (receipt) resultMessage.actionReceipt = receipt
@@ -2948,7 +3558,7 @@ export class SuperAgentService {
     const exhausted = turn.depth >= MAX_CHAIN_DEPTH || (document.chainCounts[turn.chainId] ?? 0) >= MAX_CHAIN_TURNS
     const continuePlan = document.config!.continuousWork === true && !!task?.planId
       && document.state.plans.some(plan => plan.id === task.planId && ['planned', 'active', 'blocked'].includes(plan.status))
-    const automaticEvidenceReady = !!task && success && !!task.output?.trim() && !hasUnsettledOperations
+    const automaticEvidenceReady = !!task && task.status === 'completed' && success && !!task.output?.trim() && !hasUnsettledOperations
       && (!receipt || receipt.status === 'applied')
       && Object.entries(document.operationRecovery ?? {}).some(([operationId, recovery]) => recovery.evidenceTaskId === task.id
         && document.state.operations?.some(operation => operation.id === operationId && operation.status === 'unknown'))
@@ -2956,7 +3566,7 @@ export class SuperAgentService {
     if (task && !resourceContinuation && !automaticEvidenceReady && document.pendingTurns.length < MAX_PENDING_TURNS && (!exhausted || continuePlan)) {
       this.enqueuePlannerSummary(document, `Worker ${node.name} finished task ${task.title} (${task.status}).${receipt ? `\nAction receipt (actual host outcome): ${JSON.stringify(receipt)}\nRejected actions were not committed; do not accept the worker's claim that they succeeded.` : ''}\n${contextExcerpt(task.output ?? task.error, MAX_OUTPUT - 8_000) ?? ''}\nRelay new deliverables or essential user decisions through super_agent_deliver; otherwise remain silent. Workers handle all analysis and verification. Do not repeat completed work.${task.planId ? `\nReview linked plan ${task.planId}: use worker-provided verification evidence before marking it completed; assign missing verification to a worker, or record remaining steps and blockers using its current revision.` : ''}${document.config!.continuousWork ? '\nContinuous work is enabled: maintain the plan list and dispatch the next actionable step within the authorized goals.' : ''}`, exhausted ? 0 : turn.depth + 1, exhausted ? undefined : turn.chainId)
     }
-    const coordinatorId = this.planner(document).id
+    const coordinatorId = this.dispatcher(document).id
     const messageReviewQueued = document.pendingTurns.some(item => item.nodeId === coordinatorId && item.startedAt == null
       && item.chainId === turn.chainId && ['summary', 'message'].includes(item.kind))
     const continueMessagePlan = document.config!.continuousWork === true
@@ -2977,23 +3587,27 @@ export class SuperAgentService {
     }
     if (document.config?.architecture === 'dynamic') {
       const batchFailed = !success || receipt?.status === 'rejected' || receipt?.status === 'partially_applied'
-        || turn.reportThrough != null && !turn.toolCalls?.some(call => call.userReply !== undefined)
+        || node.role === 'coordinator' && turn.reportThrough != null && !turn.toolCalls?.some(call => call.userReply !== undefined)
       if (batchFailed && (turn.reportThrough != null || turn.eventThrough != null)
         && !document.pendingTurns.some(item => item.nodeId === node.id)) {
         document.failedTurns ??= []
         if (!document.failedTurns.some(item => item.nodeId === node.id)) document.failedTurns.push({ ...turn, startedAt: undefined, recoveryError: 'Notification handling did not complete; resume this node to retry the unread batch.' })
         runtime.status = 'error'; runtime.error = 'Notification handling did not complete; unread data is retained. Refresh this node to retry.'
       }
-      if (success && receipt?.status === 'applied' && turn.toolCalls?.some(call => call.userReply !== undefined) && node.role === 'coordinator' && turn.reportThrough != null) document.state.consumedReportSequence = Math.max(document.state.consumedReportSequence ?? 0, turn.reportThrough)
-      if (success && (!receipt || receipt.status === 'applied') && node.role === 'orchestrator' && turn.eventThrough != null) document.state.consumedEventSequence = Math.max(document.state.consumedEventSequence ?? 0, turn.eventThrough)
-      if (node.role === 'worker' && !!task && !resourceContinuation && output && !(document.state.reports ?? []).some(report => report.turnId === turn.id)) {
-        try { appendSuperAgentReport(document, node, turn, { taskId: task?.id, kind: success ? 'stage' : 'failure', content: output.slice(0, 32000), artifactIds: task?.artifactIds }, this.now()) }
+      if (hasPlanningTopology(document.config) && !batchFailed) {
+        if (turn.reportThrough != null) (document.state.reportCursors ??= {})[node.id] = Math.max(document.state.reportCursors?.[node.id] ?? 0, turn.reportThrough)
+        if (turn.eventThrough != null) (document.state.eventCursors ??= {})[node.id] = Math.max(document.state.eventCursors?.[node.id] ?? 0, turn.eventThrough)
+      }
+      if (!hasPlanningTopology(document.config) && success && receipt?.status === 'applied' && turn.toolCalls?.some(call => call.userReply !== undefined) && node.role === 'coordinator' && turn.reportThrough != null) document.state.consumedReportSequence = Math.max(document.state.consumedReportSequence ?? 0, turn.reportThrough)
+      if (!hasPlanningTopology(document.config) && success && (!receipt || receipt.status === 'applied') && node.role === 'orchestrator' && turn.eventThrough != null) document.state.consumedEventSequence = Math.max(document.state.consumedEventSequence ?? 0, turn.eventThrough)
+      if (node.role === 'worker' && (!!task || hasPlanningTopology(document.config) && turn.kind === 'message' && !redundantWorkerResult) && !resourceContinuation && output && !(document.state.reports ?? []).some(report => report.turnId === turn.id)) {
+        try { appendSuperAgentReport(document, node, turn, { taskId: task?.id, kind: success ? task ? 'final' : 'stage' : 'failure', content: output.slice(0, 32000), artifactIds: task?.artifactIds }, this.now()) }
         catch (error) {
           // Keep the completed task and its output durable even if the report area
           // rejects an append. The planner can relay that evidence after capacity frees.
           const notice = `Task result is retained, but report submission failed: ${superAgentActionErrorMessage(error)}`
           runtime.error = notice
-          this.message(document, 'system', this.planner(document).id, 'error', notice, task.id)
+          this.message(document, 'system', this.dispatcher(document).id, 'error', notice, task?.id)
         }
       }
       this.flushDynamicEvents(document)
@@ -3048,6 +3662,17 @@ export class SuperAgentService {
         operation.status = 'unknown'; operation.updatedAt = this.now()
       }
       const runtime = document.state.nodes.find(item => item.nodeId === turn.nodeId)!
+      if (runtime.preparation?.turnId === turn.id && runtime.preparation.status !== 'completed') {
+        const control = this.preparations.get(`${workspaceId}:${turn.nodeId}`)
+        clearTimeout(control?.timer)
+        control?.controller.abort(new Error('Work stopped by the user'))
+        runtime.preparation.status = 'failed'
+        runtime.preparation.completedAt = this.now()
+        runtime.preparation.cleanupPending = this.preparationBlockers(workspaceId, document, turn.nodeId).length > 0
+        runtime.preparation.error = 'Work stopped by the user'
+        runtime.status = runtime.preparation.cleanupPending ? 'error' : 'idle'
+        runtime.activeTaskId = undefined
+      }
       if (runtime.status === 'recovering' && turn.retryAttempt != null) {
         runtime.status = 'idle'; runtime.activeTaskId = undefined; runtime.retryAt = undefined; runtime.retryAttempt = undefined; runtime.retryDeadline = undefined; runtime.error = undefined
         this.activities.get(workspaceId)?.delete(runtime.nodeId)
@@ -3103,7 +3728,7 @@ export class SuperAgentService {
     const config = this.configured(document)
     const target = config.nodes.find(node => node.id === input.nodeId)
     if (!target || target.role !== 'worker') throw new Error('Resources can only be activated for an existing worker')
-    if (actor.id !== this.planner(document).id && (actor.role !== 'worker' || actor.id !== target.id)) throw new Error('Only the orchestrator may distribute resources; workers may activate resources only for themselves')
+    if (actor.id !== this.dispatcher(document).id && (actor.role !== 'worker' || actor.id !== target.id)) throw new Error('Only the orchestrator may distribute resources; workers may activate resources only for themselves')
     const catalog = this.deps.describeResources?.(workspaceId, config)
     if (!catalog) throw new Error('This execution host cannot discover skills and sources')
     for (const slug of input.skillSlugs) if (!catalog.skills.some(skill => skill.slug === slug)) throw new Error(`Skill is not in the available catalog: ${slug}`)
@@ -3134,41 +3759,108 @@ export class SuperAgentService {
 
   private nodePrompt(workspaceId: string, config: SuperAgentConfig, node: SuperAgentNode, taskText: string): string {
     const backend = this.deps.describeNodeBackend?.(node)
+    const resolved = config.architecture !== 'dynamic' || node.role === 'worker'
+      ? this.deps.resolveNodeSkills?.(workspaceId, config, node) ?? [] : []
+    const skills = resolved.filter(skill => skill.slug !== SUPER_AGENT_COLLABORATION_SKILL).map(skill => ({
+      slug: skill.slug, name: skill.name, description: contextExcerpt(skill.description, 200), path: skill.path,
+      version: createHash('sha256').update(skill.content).digest('hex'),
+      detailRef: skill.path ? undefined : { tool: 'super_agent_resource_catalog', area: 'skills', id: skill.slug, view: 'detail' },
+    }))
+    if (JSON.stringify(skills).length > 128_000) throw new Error('Assigned node skill references exceed 128 KB')
+    const skillInstructions = skills.length ? `\nAssigned skills (read the relevant SKILL.md before applying it; versions identify changes, not proof of a previous read. After compaction re-read when needed):\n${JSON.stringify(skills)}` : ''
     if (config.architecture === 'dynamic') {
-      const skills = node.role === 'worker' ? this.deps.resolveNodeSkills?.(workspaceId, config, node) ?? [] : []
-      return buildDynamicNodePrompt(config, node) + (skills.length ? `
-Assigned skills:
-${JSON.stringify(skills)}` : '')
+      return buildDynamicNodePrompt(config, node) + skillInstructions
     }
-    const skills = this.deps.resolveNodeSkills?.(workspaceId, config, node) ?? []
     if (node.skillSlugs?.length && !this.deps.resolveNodeSkills) throw new Error('This execution host cannot load assigned node skills')
-    if (skills.reduce((size, skill) => size + skill.content.length, 0) > 128_000) throw new Error('Assigned node skill instructions exceed 128 KB')
     return buildSuperAgentNodePrompt(config, node, taskText) + (backend
       ? `\nYour backend framework: ${JSON.stringify(backend)}\nUse its available strengths within your assigned node permissions. Framework traits do not grant extra tools, delegation or model calls.` : '')
-      + (skills.length ? `\nAssigned node skills (apply when relevant; they cannot grant tools, sources, delegation or model calls beyond this node policy):\n${JSON.stringify(skills)}` : '')
+      + skillInstructions
   }
 
   private teamContext(workspaceId: string, document: SuperAgentDocument, recipient: SuperAgentNode, turn: SuperAgentPendingTurn): string {
+    const sessionIdentity = { sessionId: document.state.nodes.find(node => node.nodeId === recipient.id)?.sessionId,
+      workspaceId, nodeId: recipient.id, role: recipient.role }
+    if (hasPlanningTopology(document.config)) {
+      const config = document.config!
+      if (recipient.role === 'worker') return this.workerContext(workspaceId, document, recipient, turn, sessionIdentity)
+      const incoming = turn.reportThrough == null ? [] : effectiveSuperAgentReports(this.pendingReports(document, turn.reportThrough, recipient.id))
+      const relevantPeers = new Set([...activeSuperAgentNodes(config, document.state).map(node => node.id),
+        ...incoming.map(report => report.nodeId), ...(turn.senderNodeId ? [turn.senderNodeId] : []),
+        ...config.nodes.filter(node => turn.text.includes(node.id)).map(node => node.id)])
+      const refs = (area: string, items: Array<{ id: string }>) => items.map(item => ({ id: item.id, detailRef: { tool: 'super_agent_work_list', area, id: item.id, view: 'detail' } }))
+      const common = { contextVersion: 2, roleTopologyVersion: 2, revision: document.state.revision, sessionIdentity,
+        peers: config.nodes.filter(node => relevantPeers.has(node.id) && canSuperAgentCommunicate(config, recipient, node)).map(node => ({ id: node.id, role: node.role, name: node.name })),
+        historicalPeersRef: recipient.role === 'orchestrator' ? { tool: 'super_agent_work_list', area: 'tasks', note: 'Read an exact historical task only when a follow-up needs its worker nodeId; parent ownership still applies.' } : undefined,
+        reports: incoming.map(report => this.reportContext(report, Math.max(100, Math.min(1200, Math.floor(6000 / Math.max(1, incoming.length)))))),
+        reportBatch: turn.reportThrough == null ? undefined : { afterSequence: document.state.reportCursors?.[recipient.id] ?? 0, throughSequence: turn.reportThrough },
+        events: (document.state.events ?? []).filter(event => event.recipientNodeId === recipient.id && event.sequence > (document.state.eventCursors?.[recipient.id] ?? 0) && event.sequence <= (turn.eventThrough ?? 0)).slice(0, 20),
+        turn: { id: turn.id, kind: turn.kind }, workDetailsTool: 'super_agent_work_list',
+      }
+      if (recipient.role === 'coordinator') return JSON.stringify({ ...common,
+        workCounts: { requirements: document.state.intents?.length ?? 0, plans: document.state.plans.length, tasks: document.state.tasks.length },
+        resultDelivery: 'Only planner reports enter this inbox. Forward new user requests unchanged with super_agent_submit_request.' })
+      const goals = (document.state.intents ?? []).filter(goal => goal.status === 'active').slice(-8)
+      const plans = document.state.plans.filter(plan => !['completed', 'cancelled'].includes(plan.status)).slice(-12)
+      const contracts = { goals: goals.map(goal => ({ id: goal.id, revision: goal.revision, sourceRequestId: goal.sourceRequestId, goal: contextExcerpt(goal.goal, 300), detailRef: { tool: 'super_agent_work_list', area: 'requirements', id: goal.id, view: 'detail' } })),
+        plans: plans.map(plan => ({ id: plan.id, goalId: plan.goalId, goalRevision: plan.goalRevision, revision: plan.revision, planRevision: plan.contractRevision ?? plan.revision, title: plan.title, status: plan.status, detailRef: { tool: 'super_agent_work_list', area: 'plans', id: plan.id, view: 'detail' } })) }
+      if (recipient.role === 'planner') return JSON.stringify({ ...common, ...contracts,
+        requests: refs('requests', (document.state.requests ?? []).filter(request => turn.text.includes(request.id)).slice(-8)),
+        resultDelivery: 'Analyze original requests; publish goals and plans. Summarize dispatcher reports to main using super_agent_report with sourceReportIds. No worker contact or dispatch.' })
+      return JSON.stringify({ ...common, ...contracts,
+        modelPool: config.modelPool?.filter(entry => entry.enabled).map(entry => ({ id: entry.id, name: entry.name, model: entry.model, intelligenceScore: entry.intelligenceScore, capabilityNotes: contextExcerpt(entry.capabilityNotes, 250), supportedThinkingLevels: entry.supportedThinkingLevels })),
+        maxConcurrentSubagents: config.maxConcurrentSubagents,
+        tasks: document.state.tasks.filter(task => task.parentNodeId === recipient.id && ['queued', 'running', 'failed'].includes(task.status)).slice(-12).map(task => ({ id: task.id, nodeId: task.nodeId, planId: task.planId, planRevision: task.planRevision, status: task.status, phase: task.phase, completed: superAgentTaskCompleted(document.state, task), blocker: task.status === 'queued' ? superAgentTaskBlocker(document.state, task) : undefined, acceptance: task.acceptance?.status, detailRef: { tool: 'super_agent_work_list', area: 'tasks', id: task.id, view: 'detail' } })),
+        resultDelivery: 'Dispatch only current planner contracts. Accept own worker evidence; report stages, questions and plan issues to planner with sourceReportIds. No main contact or plan editing.' })
+    }
     if (document.config?.architecture === 'dynamic') {
       const work = superAgentWorkList(document.state)
-      if (recipient.role === 'coordinator') return JSON.stringify({ workList: {
-        requirements: work.requirements.slice(-8).map(goal => ({ id: goal.id, revision: goal.revision, status: goal.status, goal: contextExcerpt(goal.goal, 1000), constraints: goal.constraints.map(value => contextExcerpt(value, 200)), deliverables: goal.deliverables.map(value => contextExcerpt(value, 200)), acceptanceCriteria: goal.acceptanceCriteria.map(value => contextExcerpt(value, 200)) })),
+      if (recipient.role === 'coordinator') {
+        const reports = effectiveSuperAgentReports(this.pendingReports(document, turn.reportThrough))
+        return JSON.stringify({ contextVersion: 1, revision: document.state.revision, sessionIdentity, workList: {
+        requirements: [...work.requirements].sort((a, b) => Number(turn.text.includes(b.id)) - Number(turn.text.includes(a.id))
+          || Number(['completed', 'cancelled'].includes(a.status ?? '')) - Number(['completed', 'cancelled'].includes(b.status ?? ''))).slice(0, 8)
+          .map(goal => ({ ...contextPreview(goal, 500), detailRef: { tool: 'super_agent_work_list', area: 'requirements', id: goal.id, view: 'detail' } })),
         plans: work.plans.slice(-12).map(plan => ({ id: plan.id, goalId: plan.goalId, revision: plan.revision, title: plan.title, status: plan.status })),
         tasks: work.tasks.slice(-20).map(task => ({ id: task.id, title: task.title, nodeId: task.nodeId, planId: task.planId, goalId: task.goalId, goalRevision: task.goalRevision, status: task.status })),
         total: { requirements: work.requirements.length, plans: work.plans.length, tasks: work.tasks.length }, detailTool: 'super_agent_work_list' },
-        reports: this.pendingReports(document).filter(report => turn.reportThrough == null || report.sequence <= turn.reportThrough).map(report => ({ ...report, content: contextExcerpt(report.content, 24000), truncated: report.content.length > 24000 })),
+        reports: reports.map(report => this.reportContext(report, Math.max(80, Math.min(1200, Math.floor(6000 / Math.max(1, reports.length)))))),
+        reportBatch: turn.reportThrough == null ? undefined : { id: `${turn.id}:${turn.reportThrough}`, afterSequence: document.state.consumedReportSequence ?? 0, throughSequence: turn.reportThrough },
         consumedReportSequence: document.state.consumedReportSequence ?? 0, reportThrough: turn.reportThrough,
         userReplies: document.state.messages.filter(message => message.toNodeId === 'user' && message.userFacing).slice(-6).map(message => contextExcerpt(message.body, 1000)),
         turn: { id: turn.id, kind: turn.kind } })
+      }
+      if (recipient.role === 'orchestrator') {
+        const config = document.config
+        const active = activeSuperAgentNodes(config, document.state)
+        return JSON.stringify({ contextVersion: 1, revision: document.state.revision, sessionIdentity,
+          workListRef: { path: join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'context', 'work-list.jsonl'), revision: document.state.revision,
+            format: 'JSONL; one requirement, plan or task per line. Search by id/status; read only relevant lines. Use super_agent_work_list when host paths are unavailable.' },
+          workCounts: { requirements: work.requirements.length, plans: work.plans.length, tasks: work.tasks.length },
+          nodes: active.map(node => ({ id: node.id, role: node.role, name: node.name })),
+          runtime: document.state.nodes.filter(runtime => active.some(node => node.id === runtime.nodeId)).map(runtime => ({ nodeId: runtime.nodeId, status: runtime.status, activeTaskId: runtime.activeTaskId })),
+          tasks: document.state.tasks.filter(task => ['queued', 'running', 'failed'].includes(task.status)).slice(-12).map(task => ({ id: task.id, nodeId: task.nodeId, status: task.status, title: contextExcerpt(task.title, 200) })),
+          modelPool: config.modelPool?.filter(entry => entry.enabled).map(entry => ({ id: entry.id, name: entry.name, model: entry.model, llmConnection: entry.llmConnection,
+            intelligenceScore: entry.intelligenceScore, capabilityNotes: contextExcerpt(entry.capabilityNotes, 250), capabilityNotesTruncated: (entry.capabilityNotes?.length ?? 0) > 250,
+            supportedThinkingLevels: entry.supportedThinkingLevels })),
+          modelPoolDetailsTool: 'super_agent_settings action=get', maxConcurrentSubagents: config.maxConcurrentSubagents,
+          reports: (document.state.reports ?? []).filter(report => report.sequence > (document.state.consumedReportSequence ?? 0)).slice(-8).map(report => ({
+            id: report.id, sequence: report.sequence, taskId: report.taskId, kind: report.kind, verification: report.verification, content: contextExcerpt(report.content, 500), truncated: report.content.length > 500 })),
+          reportDetailsTool: 'super_agent_reports', boardCount: document.state.board.length, boardDetailsTool: 'collaboration_board',
+          interactionNodeId: this.coordinator(document).id, orchestrationNodeId: recipient.id,
+          resultDelivery: 'Submit results through super_agent_report; the report timer wakes the interaction node.',
+          turn: { id: turn.id, kind: turn.kind, taskId: turn.taskId },
+        })
+      }
+      if (recipient.role === 'worker') return this.workerContext(workspaceId, document, recipient, turn, sessionIdentity)
     }
     const coordinator = recipient.role !== 'worker'
     const config = this.configured(document)
     const userReplies = document.state.messages.filter(message => message.toNodeId === 'user' && message.userFacing)
       .slice(-5).map(message => ({ id: message.id, body: contextExcerpt(message.body, 1_200), delivery: message.delivery
         ? { kind: message.delivery.kind, artifacts: message.delivery.artifacts.map(artifact => ({ id: artifact.id, sha256: artifact.sha256 })) } : undefined }))
-    if (recipient.role === 'coordinator' && this.planner(document).role === 'orchestrator') {
-      const managerIds = new Set([recipient.id, this.planner(document).id])
-      return JSON.stringify({ interactionNodeId: recipient.id, orchestrationNodeId: this.planner(document).id,
+    if (recipient.role === 'coordinator' && this.dispatcher(document).role === 'orchestrator') {
+      const managerIds = new Set([recipient.id, this.dispatcher(document).id])
+      return JSON.stringify({ interactionNodeId: recipient.id, orchestrationNodeId: this.dispatcher(document).id,
         userReplies,
         intents: document.state.intents?.slice(-3),
         nodes: config.nodes.filter(node => managerIds.has(node.id)).map(node => ({ id: node.id, name: node.name, role: node.role })),
@@ -3183,7 +3875,7 @@ ${JSON.stringify(skills)}` : '')
       })
     }
     const currentTask = document.state.tasks.find(task => task.id === turn.taskId)
-    const nodes = config.nodes.filter(node => coordinator || node.id === recipient.id || node.role !== 'worker')
+    const nodes = activeSuperAgentNodes(config, document.state).filter(node => coordinator || node.id === recipient.id || node.role !== 'worker')
     const nodeIds = new Set(nodes.map(node => node.id))
     const relevantTasks = document.state.tasks.filter(task => coordinator || task.id === turn.taskId)
     const referencedTasks = relevantTasks.filter(task => turn.text.includes(task.id))
@@ -3204,27 +3896,25 @@ ${JSON.stringify(skills)}` : '')
       && ['message', 'error'].includes(message.kind) && !(message.body && turn.text.includes(message.body)))
       .slice(coordinator ? -6 : -3)
     const permissions = [...(this.permissions.get(workspaceId)?.values() ?? [])].filter(request => request.status === 'pending' && (coordinator || request.nodeId === recipient.id))
-    return JSON.stringify({ nodes: nodes.map(node => ({ id: node.id, name: node.name, role: node.role, capabilities: node.capabilities, thinkingLevel: node.thinkingLevel, thinkingMode: node.thinkingMode,
+    return JSON.stringify({ sessionIdentity, nodes: nodes.map(node => ({ id: node.id, name: node.name, role: node.role, capabilities: node.capabilities, thinkingLevel: node.thinkingLevel, thinkingMode: node.thinkingMode,
         ...(coordinator ? { description: contextExcerpt(node.description, 300), model: node.model, intelligenceRating: node.intelligenceRating, workPreferences: contextExcerpt(node.workPreferences, 200), sourceSlugs: node.sourceSlugs, skillSlugs: node.skillSlugs ?? [], abilityProfileIds: node.abilityProfileIds,
-          backendFramework: this.deps.describeNodeBackend?.(node),
-          skillCatalog: this.deps.describeNodeSkills?.(workspaceId, config, node),
+          backendFramework: this.deps.describeNodeBackend?.(node), skillCatalog: this.deps.describeNodeSkills?.(workspaceId, config, node),
           scheduling: nodeSchedulingState(document, node, this.now()) } : {}) })),
       intents: document.state.intents?.slice(-3),
       ...(coordinator ? { userReplies } : {}),
       resourceCatalog: this.deps.describeResources?.(workspaceId, config),
-      ...(config.architecture === 'dynamic' && coordinator ? { modelPool: config.modelPool, maxConcurrentSubagents: config.maxConcurrentSubagents, reports: (document.state.reports ?? []).slice(-30), workList: superAgentWorkList(document.state) } : {}),
       workflow: config.workflow,
       library: {
         memoryCount: document.state.memories?.length ?? 0, archiveCount: document.state.archives?.length ?? 0,
         memories: searchSuperAgentLibrary(document.state.memories ?? [], turn.text).slice(0, 6).map(item => ({ id: item.id, title: item.title, category: item.category, revision: item.revision, content: contextExcerpt(item.content, 700) })),
         archives: searchSuperAgentLibrary(document.state.archives ?? [], turn.text).slice(0, 6).map(item => ({ id: item.id, title: item.title, versionLabel: item.versionLabel, description: contextExcerpt(item.description, 300), fileCount: item.files.length })),
       },
-      interactionNodeId: this.coordinator(document).id, orchestrationNodeId: this.planner(document).id,
+      interactionNodeId: hasPlanningTopology(document.config) ? undefined : this.coordinator(document).id, orchestrationNodeId: this.dispatcher(document).id,
       executionMode: 'allow-all',
       turn: { id: turn.id, kind: turn.kind, taskId: turn.taskId,
-        fromNodeId: turn.kind === 'task' ? this.planner(document).id
+        fromNodeId: turn.kind === 'task' ? this.dispatcher(document).id
           : document.state.messages.findLast(message => message.body === turn.text && (message.toNodeId === recipient.id || message.toNodeId === 'all'))?.fromNodeId },
-      resultDelivery: config.architecture === 'dynamic' ? 'Submit results through super_agent_report; the report timer wakes the interaction node.' : this.planner(document).role === 'orchestrator' ? 'Only the coordinator can use userReply. The orchestrator sends useful conclusions or clarification questions to interactionNodeId using messages.' : undefined,
+      resultDelivery: config.architecture === 'dynamic' ? 'Submit results through super_agent_report; the report timer wakes the interaction node.' : this.dispatcher(document).role === 'orchestrator' ? 'Only the coordinator can use userReply. The orchestrator sends useful conclusions or clarification questions to interactionNodeId using messages.' : undefined,
       communicationBudget: { remainingHops: Math.max(0, MAX_CHAIN_DEPTH - turn.depth), remainingTurns: Math.max(0, MAX_CHAIN_TURNS - (document.chainCounts[turn.chainId] ?? 0)) },
       ...(coordinator ? { continuousWork: config.continuousWork === true, idleInspectionMinutes: config.idleInspectionMinutes, planCount: document.state.plans.length,
         abilityProfiles: config.abilityProfiles.map(profile => ({ id: profile.id, name: profile.name, description: contextExcerpt(profile.description, 200) })) } : {}),
@@ -3256,21 +3946,98 @@ ${JSON.stringify(skills)}` : '')
     })
   }
 
-  private pendingReports(document: SuperAgentDocument) {
-    const pending = (document.state.reports ?? []).filter(report => report.sequence > (document.state.consumedReportSequence ?? 0))
+  private reportContext(report: NonNullable<SuperAgentDocument['state']['reports']>[number], limit = 1200) {
+    return { ...report, content: contextExcerpt(report.content, limit), truncated: report.content.length > limit,
+      complete: report.content.length <= limit,
+      detailRef: { tool: 'super_agent_reports', id: report.id, view: 'detail', contentOffset: 0 } }
+  }
+
+  private workerContext(workspaceId: string, document: SuperAgentDocument, node: SuperAgentNode,
+    turn: SuperAgentPendingTurn, sessionIdentity: Record<string, unknown>): string {
+    const config = this.configured(document)
+    const task = document.state.tasks.find(task => task.id === turn.taskId)
+      ?? document.state.tasks.findLast(task => task.nodeId === node.id)
+    const goal = document.state.intents?.find(goal => goal.id === task?.goalId)
+    const taskRef = task ? { tool: 'collaboration_board', area: 'tasks', id: task.id, view: 'detail' } : undefined
+    const dependencies = document.state.tasks.filter(item => task?.dependsOn?.includes(item.id))
+    const board = document.state.board.filter(item => turn.text.includes(item.id) || task?.instructions.includes(item.id))
+    const catalog = this.deps.describeResources?.(workspaceId, config)
+    return JSON.stringify({ contextVersion: 1, revision: document.state.revision, sessionIdentity,
+      turn: { id: turn.id, kind: turn.kind, taskId: turn.taskId },
+      interactionNodeId: hasPlanningTopology(document.config) ? undefined : this.coordinator(document).id, orchestrationNodeId: this.dispatcher(document).id,
+      task: task ? { id: task.id, title: task.title, goalId: task.goalId, goalRevision: task.goalRevision,
+        status: task.status, phase: task.phase, planId: task.planId, detailRef: taskRef,
+        instructions: turn.text === task.instructions ? undefined : contextExcerpt(task.instructions, 600),
+        instructionsTruncated: turn.text !== task.instructions && task.instructions.length > 600,
+        acceptanceCriteria: contextPreview({ values: task.acceptanceCriteria ?? [] }, 300),
+        checkpoint: task.checkpoint ? { revision: task.checkpoint.revision, completedStepCount: task.checkpoint.completedSteps.length,
+          completedSteps: task.checkpoint.completedSteps.slice(-3).map(step => contextExcerpt(step, 120)),
+          nextStep: contextExcerpt(task.checkpoint.nextStep, 500), note: contextExcerpt(task.checkpoint.note, 200),
+          truncated: true, detailRef: taskRef } : undefined,
+        waiting: task.waiting ? contextPreview(task.waiting, 300) : undefined,
+        output: task.output ? contextExcerpt(task.output, 500) : undefined } : undefined,
+      goal: goal ? { ...contextPreview(goal, 500), detailRef: { tool: 'super_agent_work_list', area: 'requirements', id: goal.id, view: 'detail' } } : undefined,
+      dependencies: dependencies.slice(0, 8).map(item => ({ id: item.id, status: item.status, acceptance: item.acceptance?.status })),
+      dependencyCount: dependencies.length,
+      artifacts: (document.state.artifacts ?? []).filter(item => item.taskId === task?.id || task?.dependsOn?.includes(item.taskId)).slice(0, 8)
+        .map(item => ({ id: item.id, taskId: item.taskId, path: item.path, sha256: item.sha256, revision: item.revision })),
+      operations: document.state.operations?.filter(item => item.taskId === task?.id && ['unknown', 'running', 'prepared'].includes(item.status)).slice(-8)
+        .map(item => ({ id: item.id, toolName: item.toolName, status: item.status })),
+      board: board.slice(0, 4).map(item => ({ id: item.id, title: item.title, revision: item.revision,
+        detailRef: { tool: 'collaboration_board', area: 'board', id: item.id, view: 'detail' } })),
+      boardCount: document.state.board.length, boardTool: 'collaboration_board',
+      messages: document.state.messages.filter(message => (message.toNodeId === node.id || message.toNodeId === 'all')
+        && ['message', 'error'].includes(message.kind) && message.body && !turn.text.includes(message.body)).slice(-3)
+        .map(message => ({ fromNodeId: message.fromNodeId, kind: message.kind, body: contextExcerpt(message.body, 400) })),
+      resourceCatalog: { tool: 'super_agent_resource_catalog', skillCount: catalog?.skills.length ?? 0, sourceCount: catalog?.sources.length ?? 0 },
+      environment: { kind: config.environment.kind, workingDirectory: config.environment.workingDirectory,
+        fullControl: config.environment.fullControl === true,
+        credentialAccess: config.environment.fullControl === true || config.environment.credentialAccess !== false,
+        actionGates: this.deps.actionGates === true && !config.environment.fullControl,
+        safety: config.environment.fullControl ? undefined : config.environment.safety,
+        nodePermissions: superAgentNodePermissions(config.environment, node.role),
+        permissionsRole: node.role,
+        sourceSlugs: node.sourceSlugs, skillSlugs: node.skillSlugs ?? [] },
+    })
+  }
+
+  private pendingReports(document: SuperAgentDocument, throughSequence?: number, recipientNodeId = this.coordinator(document).id) {
+    const pending = (document.state.reports ?? []).filter(report => (!hasPlanningTopology(document.config) || report.recipientNodeId === recipientNodeId) && report.sequence > (hasPlanningTopology(document.config) ? document.state.reportCursors?.[recipientNodeId] ?? 0 : document.state.consumedReportSequence ?? 0)
+      && report.sequence <= (throughSequence ?? Infinity))
+    // A pinned batch must not shrink when verification changes or new reports arrive.
+    if (throughSequence != null) return pending
     const batch: typeof pending = []
     let characters = 0
     for (const report of pending) {
-      if (batch.length >= 100 || batch.length && characters + report.content.length > 24000) break
-      batch.push(report); characters += report.content.length
+      const size = JSON.stringify(this.reportContext(report)).length
+      if (batch.length >= 20 || batch.length && characters + size > 8000) break
+      batch.push(report); characters += size
     }
     return batch
   }
 
   private flushDynamicEvents(document: SuperAgentDocument): boolean {
     if (document.config?.architecture !== 'dynamic' || document.recoverySuspended) return false
+    if (hasPlanningTopology(document.config)) {
+      let changed = false
+      const checkReports = this.now() - (document.state.lastReportCheckAt ?? 0) >= (document.config.reportCheckSeconds ?? 5) * 1000
+      if (checkReports) document.state.lastReportCheckAt = this.now()
+      for (const node of document.config.nodes.filter(node => node.role !== 'worker')) {
+        if (document.failedTurns?.some(turn => turn.nodeId === node.id) || document.pendingTurns.some(turn => turn.nodeId === node.id)) continue
+        const events = (document.state.events ?? []).filter(event => event.recipientNodeId === node.id && event.sequence > (document.state.eventCursors?.[node.id] ?? 0)).slice(0, 20)
+        const reports = (node.role !== 'coordinator' || checkReports) ? this.pendingReports(document, undefined, node.id) : []
+        if (!events.length && !reports.length) continue
+        const turn = this.enqueue(document, node.id, 'summary', node.role === 'coordinator'
+          ? 'Process the pinned planner reportBatch. Deliver useful new conclusions or questions via super_agent_deliver; otherwise consume silently with reply="".'
+          : 'Process the pinned incoming events and reportBatch. Read only needed detail references. Advance remaining work within your role; do not acknowledge unchanged state or repeat completed operations.')
+        if (events.length) turn.eventThrough = events.at(-1)!.sequence
+        if (reports.length) turn.reportThrough = reports.at(-1)!.sequence
+        changed = true
+      }
+      return changed
+    }
     let changed = false
-    const planner = this.planner(document)
+    const planner = this.dispatcher(document)
     const sequence = document.state.eventSequence ?? 0
     if (sequence > (document.state.consumedEventSequence ?? 0) && !document.failedTurns?.some(turn => turn.nodeId === planner.id) && !document.pendingTurns.some(turn => turn.nodeId === planner.id)) {
       const turn = this.enqueue(document, planner.id, 'summary', 'Internal work data changed. Read the current work list, shared board and reports; plan only the remaining authorized work.')
@@ -3280,7 +4047,7 @@ ${JSON.stringify(skills)}` : '')
       document.state.lastReportCheckAt = this.now()
       const reports = this.pendingReports(document)
       if (reports.length && !document.failedTurns?.some(turn => turn.nodeId === this.coordinator(document).id) && !document.pendingTurns.some(turn => turn.nodeId === this.coordinator(document).id)) {
-        const turn = this.enqueue(document, this.coordinator(document).id, 'summary', 'New reports are available. Read super_agent_reports and the work list. Deliver useful new results or concrete questions; otherwise consume silently with super_agent_deliver reply="".')
+        const turn = this.enqueue(document, this.coordinator(document).id, 'summary', 'Process the pinned reportBatch in the current context. complete=true reports are already provided in full; read detailRef only for missing facts needed for delivery. Deliver useful new results or concrete questions; otherwise consume silently with super_agent_deliver reply="".')
         turn.reportThrough = reports.at(-1)!.sequence; changed = true
       }
     }
@@ -3309,7 +4076,7 @@ ${JSON.stringify(skills)}` : '')
   }
 
   private async snapshot(workspaceId: string, document: SuperAgentDocument): Promise<SuperAgentSnapshot> {
-    return structuredClone({ config: document.config, state: document.state,
+    return structuredClone({ config: document.pendingConfig ?? document.config, state: document.state,
       inspectionPending: document.pendingTurns.some(turn => turn.kind === 'inspection' && !turn.backgroundInspection),
       interactionPending: document.pendingTurns.some(turn => turn.nodeId === document.config?.nodes.find(node => node.role === 'coordinator')?.id),
       recoverySuspended: document.recoverySuspended === true,
@@ -3336,6 +4103,21 @@ ${JSON.stringify(skills)}` : '')
     document.state.connectionStarts = document.state.connectionStarts?.filter(start => this.now() - start.at < 60_000)
     document.state.revision++
     await saveSuperAgentDocument(this.deps.rootForWorkspace(workspaceId), document)
+    // A disposable, searchable projection. The durable document remains authoritative.
+    const directory = join(this.deps.rootForWorkspace(workspaceId), 'super-agent', 'context')
+    await mkdir(directory, { recursive: true })
+    const work = superAgentWorkList(document.state)
+    const records = [
+      { type: 'metadata', revision: document.state.revision },
+      ...work.requirements.map(value => ({ type: 'requirement', ...value })),
+      ...work.plans.map(value => ({ type: 'plan', ...value })),
+      ...work.tasks.map(value => ({ type: 'task', ...value })),
+    ]
+    const temporary = join(directory, `work-list-${randomUUID()}.tmp`)
+    try {
+      await writeFile(temporary, records.map(record => JSON.stringify(record)).join('\n') + '\n', { mode: 0o600, flag: 'wx' })
+      await rename(temporary, join(directory, 'work-list.jsonl'))
+    } catch (error) { await unlink(temporary).catch(() => undefined); throw error }
     if (this.deps.onChanged) this.deps.onChanged(workspaceId, await this.snapshot(workspaceId, document))
   }
 
@@ -3345,7 +4127,7 @@ ${JSON.stringify(skills)}` : '')
     const root = await this.folder(environment.workingDirectory)
     const lexical = resolve(root, script.path)
     const within = (path: string) => { const child = relative(root, path); return child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child) }
-    const unrestricted = !this.deps.actionGates && environment.fullControl === true && environment.kind !== 'sandbox'
+    const unrestricted = environment.fullControl === true && environment.kind !== 'sandbox'
     if (!unrestricted && !within(lexical)) throw new Error('Scripts must be inside the configured working folder')
     const canonical = await realpath(lexical)
     if (!unrestricted && !within(canonical)) throw new Error('Script symlinks may not leave the configured working folder')
@@ -3424,7 +4206,7 @@ ${JSON.stringify(skills)}` : '')
       const script = document.config!.scripts.find(item => item.id === runtime.scriptId) ?? { id: runtime.scriptId, name: runtime.scriptId }
       // This system event starts its own bounded chain. It carries correlation in
       // its text, not taskId: accepting the summary must not re-settle its task.
-      const turn = this.enqueue(document, this.planner(document).id, 'summary', `${this.scriptResultText(script, runtime)}\nThis asynchronous script result does not complete the original assignment again. Assign artifact verification to a worker if needed, then update the linked plan from its report. Relay only new useful results through userReply; otherwise remain silent. Failed, stopped or untracked runs require diagnosis; never rerun a script unless assigned authorized recovery work.`)
+      const turn = this.enqueue(document, this.dispatcher(document).id, 'summary', `${this.scriptResultText(script, runtime)}\nThis asynchronous script result does not complete the original assignment again. ${hasPlanningTopology(document.config) ? 'Assign artifact verification to an owned worker if needed; report only new stage evidence or plan issues to the background planner via super_agent_report. The planner owns plan changes and forwards user results.' : 'Assign artifact verification to a worker if needed, then update the linked plan from its report. Relay only new useful results through userReply; otherwise remain silent.'} Failed, stopped or untracked runs require diagnosis; never rerun a script unless assigned authorized recovery work.`)
       turn.scriptRunId = runtime.runId
       runtime.resultPending = false; runtime.resultQueuedAt = this.now(); runtime.resultDeliveryAttempts = (runtime.resultDeliveryAttempts ?? 0) + 1; changed = true
     }
@@ -3448,7 +4230,7 @@ ${JSON.stringify(skills)}` : '')
     if (plan && plan.status !== 'cancelled') this.upsertPlan(document, { ...plan, status: 'blocked', note: `Script result review is incomplete: ${runtime.resultDeliveryError}` }, 'system', plan.revision, true)
     if ((runtime.resultDeliveryAttempts ?? 0) >= MAX_SCRIPT_RESULT_ATTEMPTS) {
       const notice = `Script ${runtime.scriptId} result (${runtime.runId}) could not be reviewed after ${MAX_SCRIPT_RESULT_ATTEMPTS} delivery attempts. The result is retained and automatic delivery is suspended. ${runtime.resultDeliveryError}\nAn explicit user continuation or inspection can resume result delivery; do not restart the script automatically.`
-      this.message(document, 'system', this.planner(document).id, 'error', notice, runtime.taskId)
+      this.message(document, 'system', this.dispatcher(document).id, 'error', notice, runtime.taskId)
       this.message(document, 'system', 'user', 'error', notice, runtime.taskId)
     }
     return true
@@ -3475,7 +4257,7 @@ ${JSON.stringify(skills)}` : '')
   }
 
   private notifyScript(document: SuperAgentDocument, script: SuperAgentScript, text: string, result?: SuperAgentScriptRuntime): void {
-    const coordinator = this.planner(document)
+    const coordinator = this.dispatcher(document)
     const target = script.nodeId ?? coordinator.id
     if (result) {
       if (result.resultPending || result.resultQueuedAt != null || result.resultReportedAt != null) { this.flushScriptResults(document); return }
@@ -3518,7 +4300,7 @@ ${JSON.stringify(skills)}` : '')
       const approvedContent = this.deps.actionGates ? await readFile(path) : undefined
       if (this.deps.actionGates) {
         const restriction = config.environment.safety?.customRules.find(rule => rule.toolName.toLowerCase() === 'script-run' && rule.effect === 'deny')
-        if (restriction) throw new Error(`Custom rule: ${restriction.reason}`)
+        if (restriction && !config.environment.fullControl && !approval) throw new Error(`Custom rule requires user approval: ${restriction.reason}`)
         if (!config.environment.fullControl && (!approval || approval.operation !== superAgentScriptOperation(config.environment, script)
           || approval.sha256 !== createHash('sha256').update(approvedContent!).digest('hex'))) throw new Error('Action Gate: script content, arguments or environment changed; refresh and approve the current script')
       }

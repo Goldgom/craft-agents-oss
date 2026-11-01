@@ -17,13 +17,15 @@ const skillSlug = slug.refine(value => !/[\\/:\0]/.test(value) && value !== '.' 
 const ConfigSchema = z.object({
   version: z.literal(1),
   architecture: z.literal('dynamic').optional(),
+  roleTopologyVersion: z.literal(2).optional(),
   maxConcurrentSubagents: z.number().int().min(1).max(30).optional(),
   reportCheckSeconds: z.number().int().min(1).max(3600).optional(),
   modelPool: z.array(SuperAgentModelEntrySchema).min(1).max(100).optional(),
   name,
   avatar,
   nodes: z.array(z.object({
-    id, role: z.enum(['coordinator', 'orchestrator', 'worker']), name, avatar,
+    id, role: z.enum(['coordinator', 'planner', 'orchestrator', 'worker']), name, avatar,
+    parentNodeId: id.optional(),
     dynamic: z.boolean().optional(), modelEntryId: id.optional(),
     description: z.string().max(4_000),
     llmConnection: slug, model: slug,
@@ -38,15 +40,18 @@ const ConfigSchema = z.object({
     abilityProfileIds: z.array(id).max(100),
     capabilities: z.array(slug).max(32).optional(),
     presetProfile: slug.optional(), thinkingMode: z.enum(['fixed', 'task']).optional(),
-  }).strict()).min(2).max(502),
+  }).strict()).min(2).max(503),
   idleInspectionMinutes: z.number().finite().int().min(1).max(1_440),
   workflow: z.object({ pattern: z.enum(['lightweight', 'development', 'research', 'deliverables', 'incident']),
     maxParallelTasks: z.number().int().min(1).max(30), independentReview: z.boolean() }).strict().optional(),
   continuousWork: z.boolean().default(true),
-  contextCompaction: z.object({ enabled: z.boolean(), tokenThreshold: z.number().int().min(8000).max(2_000_000), saveToMemory: z.boolean() }).strict().optional(),
+  contextCompaction: z.object({ enabled: z.boolean(), tokenThreshold: z.number().int().min(8000).max(2_000_000), saveToMemory: z.boolean(), models: z.record(z.string().min(1).max(200), z.string().min(1).max(200)).optional() }).strict().optional(),
   requirements: z.object({ programs: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,63}$/)).max(32), browser: z.boolean() }).strict().optional(),
   execution: z.object({ connectionConcurrency: z.number().int().min(1).max(30), connectionCallsPerMinute: z.number().int().min(1).max(600),
-    stallMinutes: z.number().int().min(1).max(1440), maxResumeAttempts: z.number().int().min(0).max(20) }).strict().optional(),
+    stallMinutes: z.number().int().min(1).max(1440), maxResumeAttempts: z.number().int().min(0).max(20),
+    preparationTimeoutSeconds: z.number().int().min(10).max(600).optional(),
+    sandboxPreparationTimeoutSeconds: z.number().int().min(30).max(3600).optional(),
+    preparationMaxRetries: z.number().int().min(0).max(2).optional() }).strict().optional(),
   environment: z.object({
     kind: z.enum(['folder', 'sandbox', 'vm']),
     workingDirectory: z.string().trim().min(1).max(4_096),
@@ -81,7 +86,8 @@ export function validateSuperAgentConfig(value: unknown): SuperAgentConfig {
   if (config.nodes.filter(node => node.role === 'coordinator').length !== 1) throw new Error('Super Agent requires exactly one coordinator')
   if (config.architecture === 'dynamic') {
     if (!config.modelPool?.some(entry => entry.enabled)) throw new Error('Enable at least one subagent model')
-    if (config.nodes.filter(node => node.role === 'orchestrator').length !== 1) throw new Error('Dynamic Super Agent requires exactly one background node')
+    if (config.nodes.filter(node => node.role === 'orchestrator').length !== 1) throw new Error('Dynamic Super Agent requires exactly one dispatch node')
+    if (config.roleTopologyVersion === 2 && config.nodes.filter(node => node.role === 'planner').length !== 1) throw new Error('The planning topology requires exactly one background planner')
     if (config.nodes.some(node => node.role === 'worker' && !node.dynamic)) throw new Error('Dynamic workers must be created by the scheduler')
     unique(config.modelPool.map(entry => entry.id), 'model entries')
     for (const entry of config.modelPool) {
@@ -89,6 +95,12 @@ export function validateSuperAgentConfig(value: unknown): SuperAgentConfig {
     }
   } else if (!config.nodes.some(node => node.role === 'worker')) throw new Error('Super Agent requires at least one worker')
   if (config.nodes.filter(node => node.role === 'orchestrator').length > 1) throw new Error('Super Agent supports one orchestrator')
+  if (config.nodes.some(node => node.role === 'planner') && (config.roleTopologyVersion !== 2 || config.architecture !== 'dynamic')) throw new Error('Planner requires the planning topology')
+  if (config.roleTopologyVersion === 2 && config.architecture !== 'dynamic') throw new Error('Planning topology requires dynamic architecture')
+  if (config.roleTopologyVersion === 2) for (const node of config.nodes) {
+    if (node.role === 'worker' && !config.nodes.some(parent => parent.role === 'orchestrator' && parent.id === node.parentNodeId)) throw new Error('Every worker requires its dispatch parent')
+    if (node.role !== 'worker' && node.parentNodeId) throw new Error('Only workers have a dispatch parent')
+  }
   unique(config.nodes.map(node => node.id), 'node identifiers')
   unique(config.abilityProfiles.map(profile => profile.id), 'ability profile identifiers')
   unique(config.scripts.map(script => script.id), 'script identifiers')
@@ -119,7 +131,7 @@ const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('chat'), text, attachments: z.array(z.object({ name: z.string().min(1).max(255), mimeType: z.string().max(200), text: z.string().max(20_000_000).optional(), base64: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/).max(28_000_000).optional() }).strict().refine(file => file.text !== undefined || file.base64 !== undefined, 'Attachment content is required')).max(10).optional() }).strict(),
   z.object({ type: z.literal('resources'), operation: z.enum(['get', 'export', 'import', 'save-sources', 'save-automations', 'save-credentials', 'test-automation', 'replay-automation']), value: z.unknown().optional() }).strict(),
   z.object({ type: z.literal('automation-work'), text, automationId: slug, runId: slug }).strict(),
-  z.object({ type: z.literal('task'), id: id.optional(), title: name, instructions: text, nodeId: id.optional(), planId: id.optional(),
+  z.object({ type: z.literal('task'), planRevision: z.number().int().min(1).optional(), goalRevision: z.number().int().min(1).optional(), id: id.optional(), title: name, instructions: text, nodeId: id.optional(), planId: id.optional(),
     modelEntryId: id.optional(),
     thinkingLevel: z.enum(THINKING_LEVEL_IDS).optional(),
     goalId: id.optional(), requiredCapabilities: z.array(slug).max(32).optional(),
@@ -133,6 +145,7 @@ const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('cancel'), taskId: id.optional() }).strict(),
   z.object({ type: z.literal('inspect') }).strict(),
   z.object({ type: z.literal('node-refresh'), nodeId: id }).strict(),
+  z.object({ type: z.literal('node-recover'), nodeId: id }).strict(),
   z.object({ type: z.literal('node-reset'), nodeId: id, confirmed: z.literal(true) }).strict(),
   z.object({ type: z.literal('history-cleanup'), before: z.number().finite().min(0), keepRecentMessages: z.number().int().min(0).max(500), expectedRevision: z.number().int().min(0) }).strict(),
   z.object({ type: z.literal('history-compact'), nodeIds: z.array(id).min(1).max(32), expectedRevision: z.number().int().min(0) }).strict(),
@@ -140,7 +153,9 @@ const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('permission-response'), requestId: z.string().trim().min(1).max(200), allowed: z.boolean(), remember: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('permission-revoke'), grantId: id }).strict(),
   z.object({ type: z.literal('message'), fromNodeId: id, toNodeId: z.union([id, z.literal('all')]), body: text }).strict(),
-  z.object({ type: z.literal('board-upsert'), item: z.object({ id: id.optional(), title: name, content: text }).strict(), expectedRevision: z.number().int().min(0).optional() }).strict(),
+  z.object({ type: z.literal('board-upsert'), item: z.object({ id: id.optional(), title: name, content: text,
+    pinned: z.boolean().optional(), expiresAt: z.number().finite().min(0).optional() }).strict(), expectedRevision: z.number().int().min(0).optional() }).strict(),
+  z.object({ type: z.literal('board-cleanup') }).strict(),
   z.object({ type: z.literal('board-delete'), id, expectedRevision: z.number().int().min(0).optional() }).strict(),
   z.object({ type: z.literal('script-run'), scriptId: id, approval: z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), operation: z.string().min(1).max(64_000) }).strict().optional() }).strict(),
   z.object({ type: z.literal('script-stop'), scriptId: id }).strict(),

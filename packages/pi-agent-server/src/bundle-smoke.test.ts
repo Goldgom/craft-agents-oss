@@ -122,7 +122,7 @@ function driveBundle(
 }
 
 describe('pi-agent-server bundle', () => {
-  it.each(['coordinator', 'orchestrator', 'worker'] as const)('exposes and executes real role tools at the model endpoint (%s)', async role => {
+  it.each(['coordinator', 'planner', 'orchestrator', 'worker'] as const)('exposes and executes real role tools at the model endpoint (%s)', async role => {
     const { getToolDefsAsJsonSchema } = await import('@tokenbird/session-tools-core')
     let dispatches = 0
     const tools = getToolDefsAsJsonSchema({ prefix: 'mcp__session__' })
@@ -133,6 +133,7 @@ describe('pi-agent-server bundle', () => {
       workingDirectory: scratchDir, plansFolderPath: join(scratchDir, 'plans'),
       providerType: 'pi_compat', authType: 'api_key', browserToolOnly: true,
       interactionOnly: role !== 'worker', superAgentRole: role,
+      superAgentArchitecture: 'dynamic', superAgentRoleTopologyVersion: 2,
       baseUrl: 'https://node-tools.invalid/v1', customEndpoint: { api: 'openai-completions' },
       customModels: [`node-tools-${role}`], piAuth: { provider: 'openai', credential: { type: 'api_key', key: 'dummy-offline' } },
     }], out => out.includes('Node tool completed.'), [
@@ -153,9 +154,18 @@ describe('pi-agent-server bundle', () => {
     const advertised = output.split('\n').map(line => { try { return JSON.parse(line) } catch { return null } }).find(item => item?.type === 'test_node_tools')
     expect(advertised).toBeDefined()
     if (role === 'coordinator') {
-      expect(advertised.tools).toContain('mcp__session__super_agent_intent')
+      expect(advertised.tools).toContain('mcp__session__super_agent_submit_request')
+      expect(advertised.tools).not.toContain('mcp__session__super_agent_intent')
       expect(advertised.tools).not.toContain('mcp__session__super_agent_dispatch')
+      for (const name of ['super_agent_work_list', 'super_agent_reports', 'super_agent_health', 'super_agent_settings']) expect(advertised.tools).toContain(`mcp__session__${name}`)
+      for (const name of ['get_session_info', 'collaboration_board', 'saved_credentials', 'super_agent_message']) expect(advertised.tools).not.toContain(`mcp__session__${name}`)
+    } else if (role === 'planner') {
+      expect(advertised.tools).toContain('mcp__session__super_agent_intent')
+      expect(advertised.tools).toContain('mcp__session__super_agent_plan')
+      expect(advertised.tools).not.toContain('mcp__session__super_agent_dispatch')
+      expect(advertised.tools).not.toContain('mcp__session__super_agent_accept')
     } else if (role === 'orchestrator') {
+      expect(advertised.tools).not.toContain('mcp__session__super_agent_plan')
       expect(advertised.tools).toContain('mcp__session__super_agent_resources')
       expect(advertised.tools).not.toContain('mcp__session__super_agent_deliver')
     } else {

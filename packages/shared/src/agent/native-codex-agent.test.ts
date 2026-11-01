@@ -136,6 +136,38 @@ describe('NativeCodexAgent protocol adaptation', () => {
     agent.destroy();
   });
 
+  it('advertises only permitted interaction routes through Codex transport aliases', () => {
+    const agent = createAgent();
+    setSessionExecutionPolicy('test-session', { architecture: 'dynamic', nodeId: 'main', role: 'coordinator', rootPath: process.cwd(),
+      readFiles: false, writeFiles: false, runPrograms: false, browser: false, allowSources: [], allowSubagents: false });
+    try {
+      const names = agent['buildDynamicTools']().map(tool => tool.name);
+      expect(names).toHaveLength(7);
+      for (const name of ['super_agent_intent', 'super_agent_deliver', 'super_agent_work_list', 'super_agent_reports', 'super_agent_health', 'super_agent_resource_catalog', 'super_agent_settings']) {
+        expect(names).toContain(`tokenbird__session__${name}`);
+        expect(agent['nativeToolAliases'].get(`tokenbird__session__${name}`)).toBe(`mcp__session__${name}`);
+      }
+      for (const name of ['get_session_info', 'collaboration_board', 'saved_credentials', 'super_agent_message', 'super_agent_dispatch']) {
+        expect(names).not.toContain(`tokenbird__session__${name}`);
+        expect(agent['nativeToolAliases'].has(`tokenbird__session__${name}`)).toBe(false);
+      }
+    } finally { clearSessionExecutionPolicy('test-session'); agent.destroy(); }
+  });
+
+  it.each(['coordinator', 'planner', 'orchestrator', 'worker'] as const)('preserves v2 role ownership through Codex transport aliases (%s)', role => {
+    const agent = createAgent();
+    setSessionExecutionPolicy('test-session', { architecture: 'dynamic', roleTopologyVersion: 2, nodeId: role, role,
+      rootPath: process.cwd(), fullControl: true, readFiles: true, writeFiles: true, runPrograms: true, browser: true, allowSources: [], allowSubagents: false });
+    try {
+      const names = agent['buildDynamicTools']().map(tool => tool.name);
+      const expected = role === 'coordinator' ? ['super_agent_submit_request', 'super_agent_deliver']
+        : role === 'planner' ? ['super_agent_intent', 'super_agent_plan'] : role === 'orchestrator' ? ['super_agent_dispatch', 'super_agent_accept'] : [];
+      for (const name of ['super_agent_submit_request', 'super_agent_intent', 'super_agent_plan', 'super_agent_dispatch', 'super_agent_accept', 'super_agent_deliver']) {
+        expect(names.includes(`tokenbird__session__${name}`)).toBe(expected.includes(name));
+      }
+    } finally { clearSessionExecutionPolicy('test-session'); agent.destroy(); }
+  });
+
   it('uses a clean home for managed policy nodes without copying global login credentials', async () => {
     const agent = createAgent({ authType: 'api_key', connectionSlug: 'openai-managed' });
     setSessionExecutionPolicy('test-session', { nodeId: 'worker', role: 'worker', rootPath: process.cwd(),

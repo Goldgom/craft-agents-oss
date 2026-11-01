@@ -308,6 +308,8 @@ export interface CoreBackendConfig {
  * Options for the chat method.
  */
 export interface ChatOptions {
+  /** Trusted runtime state, distinct from user text and persisted UI messages. */
+  hostContext?: import('../core/host-context.ts').HostContext;
   /** Retry flag (internal use for session recovery) */
   isRetry?: boolean;
   /** Override thinking level for this message only */

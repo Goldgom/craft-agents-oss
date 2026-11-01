@@ -6,7 +6,7 @@ import { MICROSOFT_AGENT_WORKFLOW_SOURCE } from './MicrosoftAgentWorkflowSource'
 export interface SuperAgentWorkflowInput {
   nodeId: string
   kind: string
-  nodes: Array<{ id: string; role: 'coordinator' | 'orchestrator' | 'worker' }>
+  nodes: Array<{ id: string; role: 'coordinator' | 'planner' | 'orchestrator' | 'worker' }>
 }
 
 export interface SuperAgentWorkflow {

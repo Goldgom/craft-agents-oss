@@ -23,6 +23,8 @@ describe('Super Agent user interaction', () => {
 
     advance(60_001)
     await service.tick()
+    expect(host.sends).toHaveLength(1)
+    await service.command('alpha', { type: 'inspect' })
     await until(() => service.get('alpha'), snapshot => snapshot.state.nodes[0]?.status === 'working')
     host.complete(sessionId, 'Internal deliberation\n' + actions({ userReply: '请提供目标模型版本，以便工作节点继续。' }))
     const answered = await until(() => service.get('alpha'), snapshot => snapshot.state.nodes[0]?.status === 'idle')
@@ -30,6 +32,8 @@ describe('Super Agent user interaction', () => {
     expect((await loadSuperAgentDocument(join(root, 'alpha'))).state.messages.at(-1)).toMatchObject({ toNodeId: 'user', userFacing: true })
     advance(60_001)
     await service.tick()
+    expect(host.sends).toHaveLength(2)
+    await service.command('alpha', { type: 'inspect' })
     await until(() => service.get('alpha'), snapshot => snapshot.state.nodes[0]?.status === 'working')
     host.complete(sessionId, actions({ userReply: '请提供目标模型版本，以便工作节点继续。' }))
     const unchanged = await until(() => service.get('alpha'), snapshot => snapshot.state.nodes[0]?.status === 'idle')

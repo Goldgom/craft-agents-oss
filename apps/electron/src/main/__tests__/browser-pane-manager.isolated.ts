@@ -21,6 +21,7 @@ const mockIpcMainHandle = mock(() => {})
 function createMockWebContents() {
   const listeners: Record<string, Function[]> = {}
   let currentUrl = 'about:blank'
+  let backgroundThrottling = true
   return {
     id: nextWebContentsId++,
     userAgent: 'Mock Chrome Electron/99.0.0',
@@ -55,6 +56,8 @@ function createMockWebContents() {
     stop: mock(() => {}),
     setUserAgent: mock(() => {}),
     setBackgroundColor: mock(() => {}),
+    getBackgroundThrottling: mock(() => backgroundThrottling),
+    setBackgroundThrottling: mock((allowed: boolean) => { backgroundThrottling = allowed }),
     capturePage: mock(async () => {
       const img = {
         isEmpty: () => false,
@@ -679,7 +682,7 @@ describe('BrowserPaneManager', () => {
     await manager.navigate('nav-2', 'tokenbird agents browser tools')
     const instance = (manager as any).instances.get('nav-2')
     expect(instance.pageView.webContents.loadURL).toHaveBeenCalledWith(
-      'https://www.bing.com/search?q=craft%20agents%20browser%20tools'
+      'https://www.bing.com/search?q=tokenbird%20agents%20browser%20tools'
     )
   })
 
@@ -1234,6 +1237,80 @@ describe('BrowserPaneManager', () => {
   })
 
   describe('agent control overlay', () => {
+    it('keeps hidden task timers unthrottled across navigation, hide/show and tool updates, then restores them', () => {
+      const id = manager.createForSession('timer-session', { show: false })
+      const instance = (manager as any).instances.get(id)
+      const page = instance.pageView.webContents
+      const manualId = manager.createInstance('manual-timers')
+      const manual = (manager as any).instances.get(manualId)
+      expect(page.getBackgroundThrottling()).toBe(true)
+
+      manager.setAgentControl('timer-session', { displayName: 'Batch browser script' })
+      expect(page.getBackgroundThrottling()).toBe(false)
+      expect(instance.isVisible).toBe(false)
+      expect(instance.window.show).not.toHaveBeenCalled()
+      expect(manual.pageView.webContents.getBackgroundThrottling()).toBe(true)
+      expect(instance.toolbarView.webContents.getBackgroundThrottling()).toBe(true)
+
+      instance.pageView.webContents._emit('did-stop-loading')
+      instance.window._emit('hide')
+      instance.window._emit('show')
+      manager.setAgentControl('timer-session', { displayName: 'Next browser tool' })
+      expect(page.getBackgroundThrottling()).toBe(false)
+      expect(page.setBackgroundThrottling.mock.calls).toEqual([[false]])
+
+      manager.clearAgentControl('timer-session')
+      expect(page.getBackgroundThrottling()).toBe(true)
+      expect(page.setBackgroundThrottling.mock.calls).toEqual([[false], [true]])
+    })
+
+    it.each(['instance', 'visuals', 'unbind', 'unbind-all', 'destroy', 'closed'] as const)(
+      'restores task timer throttling on %s cleanup', async cleanup => {
+        const id = manager.createForSession('timer-cleanup')
+        const instance = (manager as any).instances.get(id)
+        manager.setAgentControl('timer-cleanup', {})
+        expect(instance.pageView.webContents.getBackgroundThrottling()).toBe(false)
+
+        if (cleanup === 'instance') manager.clearAgentControlForInstance(id, 'timer-cleanup')
+        if (cleanup === 'visuals') await manager.clearVisualsForSession('timer-cleanup')
+        if (cleanup === 'unbind') manager.unbindSession(id)
+        if (cleanup === 'unbind-all') manager.unbindAllForSession('timer-cleanup')
+        if (cleanup === 'destroy') manager.destroyInstance(id)
+        if (cleanup === 'closed') instance.window._emit('closed')
+
+        expect(instance.pageView.webContents.getBackgroundThrottling()).toBe(true)
+      },
+    )
+
+    it('releases the previous session control on rebind and restores an already unthrottled page unchanged', () => {
+      const id = manager.createForSession('timer-owner')
+      const instance = (manager as any).instances.get(id)
+      const page = instance.pageView.webContents
+      manager.setAgentControl('timer-owner', {})
+      manager.bindSession(id, 'timer-owner')
+      expect(page.getBackgroundThrottling()).toBe(false)
+
+      manager.bindSession(id, 'timer-new-owner')
+      expect(instance.agentControl).toBeNull()
+      expect(page.getBackgroundThrottling()).toBe(true)
+      page.setBackgroundThrottling(false)
+      manager.setAgentControl('timer-new-owner', {})
+      manager.clearAgentControl('timer-new-owner')
+      expect(page.getBackgroundThrottling()).toBe(false)
+    })
+
+    it('does not release another session timer policy and tolerates destroyed page cleanup', () => {
+      const id = manager.createForSession('timer-owner')
+      const instance = (manager as any).instances.get(id)
+      const page = instance.pageView.webContents
+      manager.setAgentControl('timer-owner', {})
+      expect(manager.clearAgentControlForInstance(id, 'another-session').released).toBe(false)
+      expect(page.getBackgroundThrottling()).toBe(false)
+      page.isDestroyed = mock(() => true)
+      expect(() => manager.destroyInstance(id)).not.toThrow()
+      expect(page.setBackgroundThrottling.mock.calls).toEqual([[false]])
+    })
+
     it('setAgentControl activates native overlay on bound instance', async () => {
       manager.createInstance('ac-1')
       manager.bindSession('ac-1', 'sess-1')

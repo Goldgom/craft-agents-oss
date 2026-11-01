@@ -313,9 +313,9 @@ export function getSessionScopedTools(
 
   // Always create a fresh MCP server wrapper to avoid "Already connected to a transport"
   // race condition when queries are sent back-to-back (see comment on sessionToolsCache).
-  const role = getSessionExecutionPolicy(sessionId)?.role;
-  const visibleTools = filterInteractionTools(tools, false, role);
-  assertSuperAgentTools(visibleTools, role);
+  const policy = getSessionExecutionPolicy(sessionId);
+  const visibleTools = filterInteractionTools(tools, false, policy?.role, policy?.architecture, policy?.roleTopologyVersion);
+  assertSuperAgentTools(visibleTools, policy?.role, policy?.architecture, policy?.roleTopologyVersion);
   return createSdkMcpServer({
     name: 'session',
     version: '1.0.0',

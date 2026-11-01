@@ -20,6 +20,7 @@ import type { AgentEvent } from '@tokenbird/core/types';
 import type { FileAttachment } from '../utils/files.ts';
 import { expandPath, getBundledAssetsDir } from '../utils/paths.ts';
 import { buildTransferredSessionContext } from './conversation-summary.ts';
+import { formatHostContext } from './core/host-context.ts';
 import type { ThinkingLevel } from './thinking-levels.ts';
 import { DEFAULT_THINKING_LEVEL, normalizeThinkingLevel } from './thinking-levels.ts';
 import type { PermissionMode } from './mode-manager.ts';
@@ -667,7 +668,10 @@ export abstract class BaseAgent implements AgentBackend {
     if (!policy) return;
     const resourceDirectories = sources.filter(source => policy.fullControl || policy.allowSources.includes(source.config.slug)).map(source => source.folderPath);
     const paths = resourceDirectories.map(path => join(path, 'guide.md'));
-    for (const slug of policy.allowSkills ?? []) {
+    const skillSlugs = policy.fullControl
+      ? loadAllSkills(policy.skillWorkspaceRootPath ?? this.config.workspace.rootPath, this.config.session?.workingDirectory).map(skill => skill.slug)
+      : policy.allowSkills ?? [];
+    for (const slug of skillSlugs) {
       const skill = loadSkillBySlug(policy.skillWorkspaceRootPath ?? this.config.workspace.rootPath, slug, this.config.session?.workingDirectory);
       if (skill) { paths.push(join(skill.path, 'SKILL.md')); resourceDirectories.push(skill.path); }
     }
@@ -679,7 +683,9 @@ export abstract class BaseAgent implements AgentBackend {
     try {
       if (skillsRoot) {
         for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
-          if (entry.isDirectory() && (policy.allowSkills === undefined || policy.allowSkills.includes(entry.name))) {
+          // The system prompt advertises built-in skills independently of node
+          // bindings. Reading their instructions must always be possible.
+          if (entry.isDirectory()) {
             paths.push(join(skillsRoot, entry.name, 'SKILL.md'));
             resourceDirectories.push(join(skillsRoot, entry.name));
           }
@@ -992,7 +998,7 @@ ${formattedMessages}
     const workspaceRoot = this.config.workspace?.rootPath ?? this.workingDirectory;
     const projectRoot = this.config.session?.workingDirectory;
     const policy = getSessionExecutionPolicy(this._sessionId);
-    const skills = loadAllSkills(policy?.skillWorkspaceRootPath ?? workspaceRoot, projectRoot).filter(skill => !policy || policy.allowSkills?.includes(skill.slug));
+    const skills = loadAllSkills(policy?.skillWorkspaceRootPath ?? workspaceRoot, projectRoot).filter(skill => !policy || policy.fullControl || policy.allowSkills?.includes(skill.slug));
     const skillSlugs = skills.map(s => s.slug);
 
     this.debug(`[extractSkillPaths] Available skills: ${skillSlugs.join(', ')}`);
@@ -1064,6 +1070,8 @@ ${formattedMessages}
    * then delegates to chatImpl. All skill logic is handled here — chatImpl
    * never sees skill paths.
    */
+  protected readonly usesTransientHostContext: boolean = false;
+
   async *chat(
     message: string,
     attachments?: FileAttachment[],
@@ -1099,7 +1107,12 @@ ${formattedMessages}
     const directive = this.formatSkillDirective(skillPaths);
     const migrationContext = this.config.getAgentRuntimeMigrationContext?.();
     const messageParts = [branchSeedContext, transferredSessionContext, migrationContext, directive, cleanMessage].filter(Boolean);
-    const effectiveMessage = messageParts.join('\n\n');
+    let effectiveMessage = messageParts.join('\n\n');
+    // Backends with a request-time projection keep this data out of user history.
+    // Native SDKs without that hook receive the same bounded state as a tail block.
+    if (options?.hostContext && !this.usesTransientHostContext) {
+      effectiveMessage += `\n\n${formatHostContext(options.hostContext)}`;
+    }
 
     // Capture the raw user message for source-activation auto-retry. `cleanMessage`
     // has skill paths stripped but otherwise matches what the user typed — exactly

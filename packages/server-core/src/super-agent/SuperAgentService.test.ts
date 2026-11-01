@@ -299,7 +299,9 @@ describe('Super Agent execution defaults and orchestration instructions', () => 
     expect(host.cancelled).toEqual([])
     const approved = await until(() => service.get('alpha'), value => value.permissionRequests?.[0]?.status === 'approved')
     expect(approved.activity!.find(activity => activity.nodeId === 'worker')!.status).toBe('working')
-    await expect(service.save('alpha', { ...approved.config!, name: 'Another team name' })).rejects.toThrow('Stop active')
+    const saved = await service.save('alpha', { ...approved.config!, name: 'Another team name' })
+    expect(saved.config!.name).toBe('Another team name')
+    expect(saved.state.nodes).toEqual(approved.state.nodes)
     const disabled = await service.save('alpha', { ...approved.config!, environment: { ...approved.config!.environment, fullControl: false } })
     expect(disabled.state.nodes.find(node => node.nodeId === 'worker')!.sessionId).toBe(sessionId)
     expect(host.policies.get(sessionId)).toMatchObject({ fullControl: false, writeFiles: false })
@@ -912,6 +914,7 @@ describe('Super Agent configuration and scheduling', () => {
         host.complete(active.sessionId!, `<super_agent_actions>{"messages":[{"toNodeId":"${recipient}","body":"Reply A ${round} ${active.nodeId}"},{"toNodeId":"${recipient}","body":"Reply B ${round} ${active.nodeId}"}]}</super_agent_actions>`)
       }
       advance(1_001); await service.tick()
+      await until(() => service.get('alpha'), snapshot => snapshot.state.nodes.every(node => node.status !== 'preparing' && (node.status !== 'working' || host.sessions.get(node.sessionId!)?.isProcessing)))
       const document = await loadSuperAgentDocument(join(fixtures[fixtures.length - 1]!.root, 'alpha'))
       if (!document.pendingTurns.length) break
     }
@@ -972,7 +975,7 @@ describe('continuous work and durable plans', () => {
     }
   })
 
-  test('changes the interval during active work without replacing sessions, cancelling work or relaxing other edit guards', async () => {
+  test('changes the interval during active work and defers other edits without cancelling work', async () => {
     const { service, host, config, advance } = await fixture()
     config.execution = { connectionConcurrency: 30, connectionCallsPerMinute: 600, stallMinutes: 1440, maxResumeAttempts: 3 }
     await service.save('alpha', { ...config, continuousWork: true, idleInspectionMinutes: 60 })
@@ -982,7 +985,7 @@ describe('continuous work and durable plans', () => {
     expect(changed.state.nodes).toEqual(running.state.nodes)
     expect(changed.state.tasks).toEqual(running.state.tasks)
     expect(host.cancelled).toHaveLength(0)
-    await expect(service.save('alpha', { ...changed.config!, name: 'Different team', idleInspectionMinutes: 5 })).rejects.toThrow('Stop active and queued work')
+    await service.save('alpha', { ...changed.config!, name: 'Different team' })
     advance(20 * 60_000); await service.tick()
     expect(host.sends).toHaveLength(1)
     host.complete(running.state.tasks[0]!.sessionId!, 'Implementation verified')
@@ -1105,7 +1108,7 @@ describe('continuous work and durable plans', () => {
     expect(saved.pendingTurns[0]!.chainId).not.toBe('chain_boundary')
   })
 
-  test('defaults on, preserves an explicit off switch, and repeats only after the configured idle period', async () => {
+  test('defaults on, preserves an explicit off switch, and inspects unchanged idle evidence only once', async () => {
     const { service, host, config, advance } = await fixture()
     expect(validateSuperAgentConfig(config).continuousWork).toBe(false)
     const { continuousWork: _explicitSwitch, ...legacy } = config
@@ -1129,8 +1132,9 @@ describe('continuous work and durable plans', () => {
     advance(idleMs - 1); await service.tick()
     expect(host.sends).toHaveLength(1)
     advance(1); await service.tick()
-    snapshot = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
-    expect(host.sends).toHaveLength(2)
+    snapshot = await service.get('alpha')
+    expect(host.sends).toHaveLength(1)
+    expect(snapshot.state.nodes[0]!.status).toBe('idle')
     expect(snapshot.state.tasks).toHaveLength(0)
   })
 
@@ -1177,10 +1181,11 @@ describe('continuous work and durable plans', () => {
     await service.save('alpha', { ...config, continuousWork: true })
     let release!: () => void
     const preparation = new Promise<void>(resolve => { release = resolve })
+    let began = false
     const createSession = host.createSession.bind(host)
-    host.createSession = async (workspaceId, options) => { await preparation; return createSession(workspaceId, options) }
+    host.createSession = async (workspaceId, options) => { began = true; await preparation; return createSession(workspaceId, options) }
     advance(idleMs); await service.tick()
-    await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'preparing')
+    await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'preparing' && began)
     const snapshot = await service.command('alpha', { type: 'continuous-work', enabled: false })
     expect(snapshot.state.nodes[0]!.status).toBe('idle')
     release()

@@ -47,7 +47,7 @@ export type SuperAgentPresetProfile = keyof typeof DEFAULT_SUPER_AGENT_SKILLS
 
 export function defaultNodeSkills(profile: string | undefined, role: SuperAgentNode['role']): string[] {
   const key = profile && Object.hasOwn(DEFAULT_SUPER_AGENT_SKILLS, profile) ? profile as SuperAgentPresetProfile
-    : role === 'coordinator' ? 'intentLead' : role === 'orchestrator' ? 'dailyLead' : 'dailyWorker'
+    : role === 'coordinator' ? 'intentLead' : role === 'planner' ? 'dailyLead' : role === 'orchestrator' ? 'dailyLead' : 'dailyWorker'
   return [SUPER_AGENT_COLLABORATION_SKILL, ...DEFAULT_SUPER_AGENT_SKILLS[key]]
 }
 

@@ -202,6 +202,9 @@ class SessionPersistenceQueue {
     }
   }
 
+  /** True while a disk write still owns this session's persistence slot. */
+  isWriting(sessionId: string): boolean { return this.writeInProgress.has(sessionId) }
+
   /**
    * Strict completion boundary for the snapshot visible when flush is called.
    * Timer-triggered writes use this same serialized path. A pending or failed

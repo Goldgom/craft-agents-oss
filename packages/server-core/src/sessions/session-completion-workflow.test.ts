@@ -30,6 +30,59 @@ function gate() {
   return { promise: new Promise<void>(resolve => { release = resolve }), release: () => release() }
 }
 
+test('Super Agent owns empty-response recovery while ordinary chat keeps its retry error', async () => {
+  for (const managedNode of [false, true]) {
+    const { manager, managed, completions, events } = setup()
+    managed.messages = [{ id: 'user', role: 'user', content: 'Continue', timestamp: 1 }]
+    if (managedNode) managed.executionPolicy = { nodeId: 'main' }
+    await manager.onProcessingStopped('session', 'complete')
+    expect(completions[0]).toMatchObject({ reason: 'error', errorCode: 'empty_response', canRetry: true })
+    expect(events.filter(e => e.type === 'typed_error')).toHaveLength(managedNode ? 0 : 1)
+    expect(managed.messages.filter((m: any) => m.role === 'error')).toHaveLength(managedNode ? 0 : 1)
+  }
+})
+
+test('SessionManager and Super Agent settle an empty final with a silent delivery exactly once', async () => {
+  const f = await superAgentFixture()
+  await f.service.save('alpha', f.config)
+  await f.service.command('alpha', { type: 'chat', text: 'Only relay changed results' })
+  await until(() => f.service.get('alpha'), () => f.host.sends.length === 1)
+  const sid = f.host.sends[0]!.sessionId
+  await f.service.callNodeActionTool('alpha', sid, 'super_agent_deliver', { requestId: 'silent', reply: '' })
+  const { manager, managed, events } = setup(sid)
+  managed.messages = [{ id: 'user', role: 'user', content: 'Only relay changed results', timestamp: 1 }]
+  managed.executionPolicy = f.host.policies.get(sid)
+  manager.setProcessing = (_: unknown, value: boolean) => { f.host.sessions.get(sid)!.isProcessing = value }
+  manager.emitSessionComplete = (event: SessionCompletionEvent) => { for (const listener of f.host.listeners) listener(event) }
+  await manager.onProcessingStopped(sid, 'complete')
+  const result = await until(() => f.service.get('alpha'), s => s.state.nodes[0]?.status === 'idle')
+  expect(events.some(e => e.type === 'typed_error')).toBe(false)
+  expect(result.state.messages.some(m => m.toNodeId === 'user' && m.kind === 'error')).toBe(false)
+  expect(f.host.sends).toHaveLength(1)
+})
+
+test('a spawned session leaves the active list only after genuine completion without waiting work', async () => {
+  for (const state of [{}, { pendingAuthRequest: { requestId: 'auth' } }, { backgroundTaskRegistry: new Map([['bg', { status: 'running' }]]) }]) {
+    const { manager, managed, completions } = setup()
+    Object.assign(managed, { parentSessionId: 'parent', sessionStatus: 'todo', ...state })
+    manager.setSessionStatus = async (_id: string, status: string) => { managed.sessionStatus = status }
+    manager.emitUnreadSummaryChanged = () => {}
+    await manager.onProcessingStopped('session', 'complete')
+    await Promise.resolve()
+    expect(completions).toHaveLength(1)
+    expect(managed.sessionStatus).toBe(Object.keys(state).length ? 'todo' : 'done')
+  }
+})
+
+test('retired children do not leave invisible unread badges; orphan results remain discoverable', () => {
+  const { manager, managed } = setup()
+  managed.parentSessionId = 'parent'; managed.sessionStatus = 'done'; managed.isProcessing = false; managed.hasUnread = true
+  manager.sessions.set('parent', { id: 'parent', workspace: { id: 'alpha' } })
+  expect(manager.getUnreadSummary().totalUnreadSessions).toBe(0)
+  manager.sessions.delete('parent')
+  expect(manager.getUnreadSummary().totalUnreadSessions).toBe(1)
+})
+
 test('browser cleanup and read-state persistence cannot hold completion hostage', async () => {
   const { manager, completions, events } = setup()
   const browser = gate(); const metadata = gate()

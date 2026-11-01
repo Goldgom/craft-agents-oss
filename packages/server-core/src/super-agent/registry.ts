@@ -68,6 +68,16 @@ export async function validateSuperAgentCatalog(workspaceId: string, config: Sup
     for (const slug of node.sourceSlugs) if (!sources.has(slug)) throw new Error(`Data source not found: ${slug}`)
   }
   for (const slug of config.sourceSlugs) if (!sources.has(slug)) throw new Error(`Data source not found: ${slug}`)
+  for (const [slug, model] of Object.entries(config.contextCompaction?.models ?? {})) {
+    const connection = getLlmConnection(slug)
+    if (!connection) throw new Error(`Compression AI connection not found: ${slug}`)
+    if (connection.authType !== 'none' && !await credentials.hasLlmCredentials(slug, connection.authType)) throw new Error(`Sign in to the compression AI connection: ${connection.name}`)
+    const models = connection.models?.length ? connection.models : getModelsForProviderType(connection.providerType, connection.piAuthProvider)
+    const available = new Set(models.map(item => typeof item === 'string' ? item : item.id))
+    if (!available.size && connection.defaultModel) available.add(connection.defaultModel)
+    const group = connection.oauthProvider === 'tokennest' ? connection.channelGroups?.find(group => group.id === connection.channelGroup) : undefined
+    if (isImageGenerationModelId(model) || !available.has(model) || (group?.models?.length && !group.models.includes(model))) throw new Error(`Compression model ${model} is not available in ${connection.name}'s configured group`)
+  }
   if (!config.environment.fullControl && config.environment.kind === 'sandbox' && config.environment.permissions.runPrograms && !config.environment.permissions.readFiles) {
     throw new Error('Sandbox programs require file read permission')
   }
@@ -128,7 +138,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       return [...new Set([SUPER_AGENT_COLLABORATION_SKILL, ...(node.skillSlugs ?? [])])].map(slug => {
         const skill = loadSkillBySlug(workspace.rootPath, slug, config.environment.workingDirectory)
         if (!skill) throw new Error(`Skill not found: ${slug}`)
-        return { slug, content: skill.content }
+        return { slug, content: skill.content, path: join(skill.path, 'SKILL.md'), name: skill.metadata.name, description: skill.metadata.description }
       })
     },
     host: {
@@ -147,18 +157,23 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       onSessionEvent: listener => host.onSessionEvent(listener),
       respondToPermission: (sessionId, requestId, allowed, alwaysAllow) => host.respondToPermission(sessionId, requestId, allowed, alwaysAllow),
       getSessionFinalText: sessionId => host.getSessionFinalText(sessionId),
-      ensureSuperAgentSessionSettings: (sessionId, settings) => host.ensureSuperAgentSessionSettings(sessionId, settings),
+      ensureSuperAgentSessionSettings: (sessionId, settings, options) => host.ensureSuperAgentSessionSettings(sessionId, settings, options),
+      getSuperAgentPreparationBlockers: sessionId => host.getSuperAgentPreparationBlockers(sessionId),
       setSessionThinkingLevel: (sessionId, level) => host.setSessionThinkingLevel(sessionId, level),
       setSuperAgentFullControl: (workspaceId, fullControl) => host.setSuperAgentFullControl(workspaceId, fullControl),
       clearSuperAgentPermissionGrants: workspaceId => host.clearSuperAgentPermissionGrants(workspaceId),
-      applySessionPolicy: async (sessionId, policy) => {
+      applySessionPolicy: async (sessionId, policy, options) => {
+        options?.signal?.throwIfAborted()
         if (!host.applySessionPolicy) throw new Error('This host does not support Super Agent execution policies')
         const session = await host.getSession(sessionId)
+        options?.signal?.throwIfAborted()
         if (!session) throw new Error('Node session not found')
         const environment = environmentConfigs.get(session.workspaceId)
         if (!environment) throw new Error('Node environment has not been validated')
         const executor = await environments.prepareSession(session.workspaceId, environment, policy)
-        await host.applySessionPolicy(sessionId, { ...policy, ...(policy.resourceScope === 'super-agent' ? { skillWorkspaceRootPath: getWorkspaceByNameOrId(session.workspaceId)?.rootPath } : {}), containerExecutor: executor })
+        options?.signal?.throwIfAborted()
+        await host.applySessionPolicy(sessionId, { ...policy, ...(policy.resourceScope === 'super-agent' ? { skillWorkspaceRootPath: getWorkspaceByNameOrId(session.workspaceId)?.rootPath } : {}), containerExecutor: executor }, options)
+        options?.signal?.throwIfAborted()
         setSessionOperationRecorder(sessionId, request => service.prepareNodeOperation(session.workspaceId, sessionId, request))
       },
     },

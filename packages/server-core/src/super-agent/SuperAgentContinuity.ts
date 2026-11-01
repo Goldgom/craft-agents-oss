@@ -4,6 +4,14 @@ import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { SuperAgentDocument, SuperAgentTask } from '@tokenbird/shared/super-agent'
 
+/** Only audited desktop observation/navigation can narrow a task-wide lock.
+ * Typing, clicks and keys can write project data through another application. */
+export function operationResourceClaims(toolName: string, input: Record<string, unknown>): string[] | undefined {
+  if (!['computer_use', 'mcp__session__computer_use'].includes(toolName.toLowerCase())) return
+  return ['status', 'screenshot', 'position', 'windows', 'snapshot', 'focus', 'move', 'wait'].includes(String(input.action))
+    ? ['host-desktop'] : undefined
+}
+
 /** Bounded streaming, realpath confinement, and a second stat avoid accepting a moving file. */
 export async function fingerprintArtifact(root: string, path: string): Promise<{ path: string; sha256: string }> {
   const base = await realpath(root)

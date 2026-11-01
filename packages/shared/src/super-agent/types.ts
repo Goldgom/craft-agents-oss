@@ -12,8 +12,10 @@ export interface SuperAgentNode {
   /** Created for one assignment, rather than a user-configured permanent worker. */
   dynamic?: boolean
   modelEntryId?: string
+  /** Host-assigned dispatch owner; never supplied by a worker. */
+  parentNodeId?: string
   id: string
-  role: 'coordinator' | 'orchestrator' | 'worker'
+  role: 'coordinator' | 'planner' | 'orchestrator' | 'worker'
   name: string
   avatar: string
   description: string
@@ -85,6 +87,7 @@ export interface SuperAgentScript {
 export interface SuperAgentConfig {
   version: 1
   architecture?: 'dynamic'
+  roleTopologyVersion?: 2
   maxConcurrentSubagents?: number
   reportCheckSeconds?: number
   modelPool?: SuperAgentModelEntry[]
@@ -102,12 +105,15 @@ export interface SuperAgentConfig {
   /** Wake after idleInspectionMinutes of complete team inactivity. Defaults to true. */
   continuousWork?: boolean
   /** Checked between node turns; omitted legacy settings enable the defaults. */
-  contextCompaction?: { enabled: boolean; tokenThreshold: number; saveToMemory: boolean }
+  contextCompaction?: { enabled: boolean; tokenThreshold: number; saveToMemory: boolean; models?: Record<string, string> }
   execution?: {
     connectionConcurrency: number
     connectionCallsPerMinute: number
     stallMinutes: number
     maxResumeAttempts: number
+    preparationTimeoutSeconds?: number
+    sandboxPreparationTimeoutSeconds?: number
+    preparationMaxRetries?: number
   }
   requirements?: { programs: string[]; browser: boolean }
   environment: SuperAgentEnvironment
@@ -130,6 +136,8 @@ export interface SuperAgentActionReceipt {
 }
 
 export interface SuperAgentTask {
+  parentNodeId?: string
+  planRevision?: number
   modelEntryId?: string
   thinkingLevel?: ThinkingLevel
   id: string
@@ -173,6 +181,7 @@ export interface SuperAgentTask {
 
 export interface SuperAgentNodeRuntime {
   nodeId: string
+  preparation?: import('./preparation').SuperAgentPreparation
   /** Prevent repeated compaction of an unchanged provider usage snapshot, including after restart. */
   lastAutoCompactUsage?: string
   /** Consecutive suppressed duplicate responses; rotate the model context after two. */
@@ -223,9 +232,15 @@ export interface SuperAgentBoardItem {
   revision: number
   updatedBy: string
   updatedAt: number
+  /** Stable contracts stay until explicitly unpinned. Task ownership is assigned by the host. */
+  pinned?: boolean
+  expiresAt?: number
+  taskId?: string
 }
 
 export interface SuperAgentPlanItem {
+  /** Last planner-published contract; host status changes preserve it. */
+  contractRevision?: number
   id: string
   goalId?: string
   goalRevision?: number
@@ -271,6 +286,9 @@ export interface SuperAgentScriptRuntime {
 }
 
 export interface SuperAgentState {
+  requests?: SuperAgentUserRequest[]
+  reportCursors?: Record<string, number>
+  eventCursors?: Record<string, number>
   reports?: SuperAgentReport[]
   reportSequence?: number
   consumedReportSequence?: number
@@ -284,6 +302,7 @@ export interface SuperAgentState {
   tasks: SuperAgentTask[]
   messages: SuperAgentMessage[]
   board: SuperAgentBoardItem[]
+  boardMaintenance?: import('./board').SuperAgentBoardMaintenance
   /** Workspace libraries survive runtime history cleanup and node session replacement. */
   memories?: SuperAgentMemory[]
   archives?: SuperAgentArchive[]
@@ -298,11 +317,14 @@ export interface SuperAgentState {
   permissionGrants?: SuperAgentPermissionGrant[]
   lastUserActivityAt: number
   lastInspectionAt?: number
+  /** Evidence fingerprint for bounded idle inspections; timestamps alone do not reopen work. */
+  lastInspectionProgressKey?: string
   allIdleSince?: number
 }
 
 /** User-facing intent is handed to planning without granting new authority. */
 export interface SuperAgentIntent {
+  sourceRequestId?: string
   id: string
   revision?: number
   status?: 'active' | 'delivered' | 'cancelled'
@@ -315,6 +337,8 @@ export interface SuperAgentIntent {
 }
 
 export interface SuperAgentTaskContract {
+  planRevision?: number
+  goalRevision?: number
   modelEntryId?: string
   thinkingLevel?: ThinkingLevel
   id?: string
@@ -438,6 +462,7 @@ export type SuperAgentCommand =
   | { type: 'cancel'; taskId?: string }
   | { type: 'inspect' }
   | { type: 'node-refresh'; nodeId: string }
+  | { type: 'node-recover'; nodeId: string }
   | { type: 'node-reset'; nodeId: string; confirmed: true }
   | { type: 'history-cleanup'; before: number; keepRecentMessages: number; expectedRevision: number }
   | { type: 'history-compact'; nodeIds: string[]; expectedRevision: number }
@@ -445,18 +470,24 @@ export type SuperAgentCommand =
   | { type: 'permission-response'; requestId: string; allowed: boolean; remember?: boolean }
   | { type: 'permission-revoke'; grantId: string }
   | { type: 'message'; fromNodeId: string; toNodeId: string; body: string }
-  | { type: 'board-upsert'; item: { id?: string; title: string; content: string }; expectedRevision?: number }
+  | { type: 'board-upsert'; item: { id?: string; title: string; content: string; pinned?: boolean; expiresAt?: number }; expectedRevision?: number }
+  | { type: 'board-cleanup' }
   | { type: 'board-delete'; id: string; expectedRevision?: number }
   | { type: 'script-run'; scriptId: string; approval?: { sha256: string; operation: string } }
   | { type: 'script-stop'; scriptId: string }
 
 /** The execution host must enforce this before model tools are dispatched. */
 export interface SuperAgentSessionPolicy {
+  roleTopologyVersion?: 2
   architecture?: 'dynamic'
   /** Host-selected resource workspace; never accepted from model tool arguments. */
   resourceScope?: 'super-agent'
   /** Host-selected shared skill catalog; sources and credentials retain their own scope. */
   skillWorkspaceRootPath?: string
+  /** Host-owned read-only team record directory, never a write permission. */
+  contextDataRoot?: string
+  /** Dedicated compaction preset on this node's own AI connection. */
+  compactionModel?: string
   nodeId: string
   role: SuperAgentNode['role']
   rootPath: string
@@ -501,6 +532,9 @@ export interface SuperAgentModelEntry {
 }
 
 export interface SuperAgentReport {
+  recipientNodeId?: string
+  planId?: string
+  planRevision?: number
   id: string
   sequence: number
   nodeId: string
@@ -512,16 +546,25 @@ export interface SuperAgentReport {
   content: string
   verification: 'unverified' | 'verified' | 'stale'
   artifactIds: string[]
+  sourceReportIds?: string[]
   supersedes?: string
   createdAt: number
 }
 
 export interface SuperAgentWorkEvent {
+  recipientNodeId?: string
   id: string
   sequence: number
   kind: 'work' | 'board' | 'report' | 'runtime' | 'automation'
   actor: string
   targetId?: string
   revision: number
+  createdAt: number
+}
+
+export interface SuperAgentUserRequest {
+  id: string
+  text: string
+  sourceTurnId: string
   createdAt: number
 }

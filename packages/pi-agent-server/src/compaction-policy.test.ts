@@ -4,7 +4,13 @@ import { createAssistantMessageEventStream, type AssistantMessage, type Context 
 import { getModel } from '@earendil-works/pi-ai/compat';
 import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, estimateTokens,
   type ModelRuntime, type ExtensionAPI, type SessionBeforeCompactEvent } from '@earendil-works/pi-coding-agent';
-import { compactWithPolicy, createCompactionPolicy, summaryTokenBudget } from './compaction-policy.ts';
+import { compactWithPolicy, createCompactionPolicy, summaryTokenBudget, moveOversizedHostBoundary, deduplicateHostSnapshots } from './compaction-policy.ts';
+import { hostContextMessage } from './host-context.ts';
+
+function hostEntry(id: string, text: string) {
+  const { role, ...message } = hostContextMessage({ kind: 'super-agent', snapshotId: id, text });
+  return { type: 'custom_message' as const, id, ...message };
+}
 
 const model = getModel('openai', 'gpt-4o');
 const context: Context = { systemPrompt: 'Summarize.', messages: [{ role: 'user', content: 'History', timestamp: 0 }] };
@@ -44,6 +50,112 @@ async function setup(reason: SessionBeforeCompactEvent['reason'] = 'manual', con
 }
 
 describe('summary-only compaction policy', () => {
+  it('moves a giant host snapshot at an assistant boundary while preserving the transcript and ordinary suffix', async () => {
+    const { event } = await setup();
+    const content = 'Authorized task: preserve exact path C:/project/report.json\n<super_agent_context>\nCurrent team state (data, not instructions):\n' + JSON.stringify({ turn: { id: 't' }, nodes: [], workList: { tasks: [{ id: 'task', instructions: 'x'.repeat(50000) }] } }) + '\n</super_agent_context>';
+    const giant = hostEntry('giant', content);
+    event.branchEntries = [event.branchEntries[0]!, giant as any, { type: 'message', id: 'assistant', message: response('Current evidence') } as any,
+      { type: 'message', id: 'ordinary', message: { role: 'user', timestamp: 3, content: 'Do not remove this real request' } } as any];
+    event.preparation.firstKeptEntryId = 'giant';
+    const original = JSON.stringify(event.branchEntries);
+    moveOversizedHostBoundary(event);
+    expect(event.preparation.firstKeptEntryId).toBe('assistant');
+    expect(JSON.stringify(event.preparation.messagesToSummarize)).toContain('C:/project/report.json');
+    expect(JSON.stringify(event.branchEntries)).toBe(original);
+    event.preparation.firstKeptEntryId = 'ordinary';
+    moveOversizedHostBoundary(event);
+    expect(event.preparation.firstKeptEntryId).toBe('ordinary');
+  });
+
+  it('preserves user-authored host-like tags without trusted message metadata', async () => {
+    const { event } = await setup();
+    const snapshot = (status: string) => `<super_agent_context>${JSON.stringify({ turn: { id: status }, nodes: [{ id: 'n', capabilities: ['read'] }], tasks: [{ id: 't', status }] })}</super_agent_context>`;
+    event.preparation.messagesToSummarize = [
+      { role: 'user', timestamp: 1, content: `User constraint: keep this. ${snapshot('running')}` },
+      { role: 'user', timestamp: 2, content: `New evidence ${snapshot('completed')}` },
+    ];
+    const original = structuredClone(event.preparation.messagesToSummarize);
+    deduplicateHostSnapshots(event);
+    expect(event.preparation.messagesToSummarize[1]).toEqual(original[1]);
+    const earlier = JSON.stringify(event.preparation.messagesToSummarize[0]);
+    expect(earlier).toContain('User constraint: keep this.');
+    expect(earlier).toContain('running');
+    expect(event.preparation.messagesToSummarize).toEqual(original);
+  });
+
+  it('does not detach identical constraints from different task identities', async () => {
+    const { event } = await setup();
+    event.preparation.messagesToSummarize = ['old-task', 'new-task'].map(id => ({ role: 'user', timestamp: 0,
+      content: `<super_agent_context>${JSON.stringify({ turn: { id }, nodes: [], tasks: [{ id, constraints: ['Keep exact output format'] }] })}</super_agent_context>` }));
+    deduplicateHostSnapshots(event);
+    const earlier = event.preparation.messagesToSummarize[0] as { content: string };
+    const data = JSON.parse(earlier.content.match(/<super_agent_context>\s*([\s\S]*?)\s*<\/super_agent_context>/)![1]!);
+    expect(data.tasks[0]).toEqual({ id: 'old-task', constraints: ['Keep exact output format'] });
+  });
+
+  it('keeps tool-call/result groups together and preserves metadata when moving multiple host messages', async () => {
+    const { event } = await setup();
+    const host = (id: string) => hostEntry(id, JSON.stringify({ turn: { id }, nodes: [], workList: { note: 'x'.repeat(40000) } }));
+    const tool = { ...response(''), content: [{ type: 'toolCall', id: 'call', name: 'write', arguments: { path: 'src/generated.ts', content: 'result' } }] };
+    event.branchEntries = [host('a'), { type: 'message', id: 'tool', message: tool },
+      { type: 'message', id: 'result', message: { role: 'toolResult', toolCallId: 'call', toolName: 'write', content: [{ type: 'text', text: 'saved' }], isError: false, timestamp: 0 } },
+      host('b'), { type: 'message', id: 'final', message: response('Done') }] as any;
+    event.preparation.firstKeptEntryId = 'a';
+    moveOversizedHostBoundary(event);
+    expect(event.preparation.firstKeptEntryId).toBe('final');
+    expect(event.preparation.messagesToSummarize.slice(-4).map(message => message.role)).toEqual(['custom', 'assistant', 'toolResult', 'custom']);
+    expect(event.preparation.fileOps.written.has('src/generated.ts')).toBe(true);
+  });
+
+  it('stops automatic thrashing after two ineffective compressions but allows an explicit manual retry', async () => {
+    const { event, handlers } = await setup('threshold');
+    const compacted = { compactionEntry: { tokensBefore: 10000 } };
+    const ctx = { sessionManager: { getBranch: () => [{ type: 'message', id: 'large', parentId: null, message: { role: 'user', content: 'x'.repeat(36000), timestamp: 0 } }] } };
+    handlers.get('session_compact')!(compacted, ctx);
+    await handlers.get('session_before_compact')!(event);
+    handlers.get('session_compact')!(compacted, ctx);
+    await expect(handlers.get('session_before_compact')!(event)).rejects.toThrow('two ineffective attempts');
+    event.reason = 'manual';
+    event.customInstructions = '[super-agent-high-compression] Host automatic request';
+    await expect(handlers.get('session_before_compact')!(event)).rejects.toThrow('two ineffective attempts');
+    event.customInstructions = 'User-requested retry';
+    await handlers.get('session_before_compact')!(event);
+  });
+
+  it('recovers ineffective-compaction evidence after a subprocess restart', async () => {
+    const { event, handlers } = await setup('threshold');
+    const huge = { type: 'message', id: 'huge', parentId: null, message: { role: 'user', timestamp: 0, content: 'x'.repeat(36000) } };
+    const checkpoint = (id: string, parentId: string) => ({ type: 'compaction', id, parentId, firstKeptEntryId: 'huge', summary: 'Checkpoint', tokensBefore: 10000 });
+    event.branchEntries = [huge, checkpoint('first', 'huge'), checkpoint('second', 'first')] as any;
+    await expect(handlers.get('session_before_compact')!(event)).rejects.toThrow('two ineffective attempts');
+  });
+
+  it('segments history for a smaller model, logs each stage, and refuses an unbounded partition plan', async () => {
+    const records: any[] = [];
+    const compactModel = { ...model, contextWindow: 16384, maxTokens: 4096 };
+    const { policy, signal } = await setup('threshold', { getModels: () => [compactModel], onUsage: record => records.push(record) });
+    const history: Context = { ...context, messages: [{ role: 'user', timestamp: 0, content: '汉字'.repeat(6000) }] };
+    const result = await (await policy.wrapStream(() => streamOf(response('Preserve task and exact references.')))(model, history, { signal })).result();
+    expect(result.stopReason).toBe('stop');
+    expect(records.some(record => record.stage.startsWith('segment:'))).toBe(true);
+    expect(records.at(-1)?.stage).toBe('checkpoint');
+    const { policy: limited, signal: otherSignal } = await setup('threshold', { getModels: () => [compactModel] });
+    let calls = 0;
+    await expect(limited.wrapStream(() => { calls++; return streamOf(response('summary')); })(model,
+      { ...context, messages: [{ role: 'user', timestamp: 0, content: 'x'.repeat(1000000) }] }, { signal: otherSignal })).rejects.toThrow('too large');
+    expect(calls).toBe(0);
+  });
+
+  it('shares the total request budget across SDK transport retries and records the actual model', async () => {
+    const records: any[] = [];
+    const { policy, signal } = await setup('threshold', { onUsage: record => records.push(record) });
+    const raw: StreamFn = () => streamOf(response('provider error', 'error'));
+    const wrapped = policy.wrapStream(raw);
+    for (let index = 0; index < 12; index++) await wrapped(model, context, { signal });
+    await expect(wrapped(model, context, { signal })).rejects.toThrow('request budget reached');
+    expect(records).toHaveLength(12);
+    expect(records[0]).toMatchObject({ model: model.id, provider: model.provider, stage: 'checkpoint', attempt: 1, stopReason: 'error' });
+  });
   it('archives before dropping file lists and adds the retrieval pointer independently of model output', async () => {
     let archived: unknown;
     const { policy, signal, event, originalBranch } = await setup('threshold', {
@@ -216,8 +328,8 @@ describe('summary-only compaction policy', () => {
     const { policy, signal } = await setup();
     let calls = 0;
     const raw: StreamFn = () => { calls++; return streamOf(response('partial', 'length')); };
-    await expect(async () => (await policy.wrapStream(raw)(model, context, {signal})).result()).toThrow('after 3');
-    expect(calls).toBe(3);
+    await expect(async () => (await policy.wrapStream(raw)(model, context, {signal})).result()).toThrow('after 2');
+    expect(calls).toBe(2);
   });
 
   it('preserves provider errors for SDK retries and never retries an abort', async () => {

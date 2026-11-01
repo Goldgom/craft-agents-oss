@@ -479,6 +479,10 @@ export const CollaborationBoardReadSchema = z.object({
   action: z.literal('get').describe('Read the members, current shared board, files, and activity history'),
   goalId: z.string().max(64).optional(), taskId: z.string().max(64).optional(), itemIds: z.array(z.string().max(64)).max(100).optional(),
   offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(),
+  area: z.enum(['board', 'tasks', 'plans', 'requirements', 'artifacts', 'nodes']).optional(),
+  id: z.string().max(1000).optional(), search: z.string().max(200).optional(), view: z.enum(['summary', 'detail']).optional(),
+  contentOffset: z.number().int().min(0).optional(), maxChars: z.number().int().min(256).max(16000).optional(),
+  expectedHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export const SuperAgentTaskSchema = z.object({
   action: z.enum(['get', 'checkpoint', 'wait', 'artifact', 'reconcile', 'install-skill']), taskId: z.string().max(64).optional(),
@@ -917,12 +921,12 @@ The target session receives your message with a sender envelope containing your 
   collaboration_board: `Read the durable shared data board for the current collaboration.
 
 Use action=get before coordinating so you see the current goal, member list, work records, and recent request/report history.
-The server derives your member identity and serializes revisions; do not put secrets on the shared board.`,
+For Super Agent, defaults to bounded board summaries; area selects board/tasks/plans/requirements/artifacts/nodes. Filter by search/id and follow nextOffset. Full detail requires id and view=detail; split JSON uses nextContentOffset and expectedHash from the first page. Concatenate before parsing; read full details before replacing records. The server derives your member identity and serializes revisions; do not put secrets on the shared board.`,
 
   update_collaboration_board: `Create or replace an item on the durable shared data board for the current collaboration.
 
 Use action=set to publish structured JSON under a stable item ID. Recommended keys are goal.current, status.<memberId>, worklog.<memberId>.latest, and decision.<topic>.
-The server derives your member identity and serializes revisions; do not put secrets on the shared board.`,
+For Super Agent, defaults to bounded board summaries; area selects board/tasks/plans/requirements/artifacts/nodes. Filter by search/id and follow nextOffset. Full detail requires id and view=detail; split JSON uses nextContentOffset and expectedHash from the first page. Concatenate before parsing; read full details before replacing records. The server derives your member identity and serializes revisions; do not put secrets on the shared board.`,
 
   collaboration_file: `Publish or retrieve a durable shared file for the current collaboration.
 

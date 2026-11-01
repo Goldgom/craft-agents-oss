@@ -1,5 +1,24 @@
 import { expect, test } from 'bun:test'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
+import { rebuildSuperAgentConfig } from '@tokenbird/shared/super-agent'
+import { buildSuperAgentNodePrompt } from './SuperAgentPrompt'
+import { buildDynamicNodePrompt } from './SuperAgentDynamic'
+
+test('every node role distinguishes user silence from final completion and forbids replay during recovery', async () => {
+  const f = await superAgentFixture()
+  const dynamic = rebuildSuperAgentConfig(f.config)
+  for (const prompt of [
+    ...f.config.nodes.map(node => buildSuperAgentNodePrompt(f.config, node)),
+    ...dynamic.nodes.map(node => buildDynamicNodePrompt(dynamic, node)),
+  ]) {
+    expect(prompt).toContain('reply=""')
+    expect(prompt).toContain('非空的最终答复')
+    expect(prompt).toContain('final 通道')
+    expect(prompt).toContain('进度、阶段、问题或失败不能冒充 final')
+    expect(prompt).toContain('未知副作用先核验')
+    expect(prompt).toContain('程序不能重放')
+  }
+})
 
 test('workers display only coordinator input while peer and repair turns stay hidden', async () => {
   const f = await superAgentFixture()

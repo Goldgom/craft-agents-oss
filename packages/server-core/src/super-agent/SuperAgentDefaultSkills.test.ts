@@ -17,7 +17,7 @@ test('the orchestrator sees only bound skill descriptions and workers receive ac
     describeNodeSkills: (_workspace, config, node) => load(node.skillSlugs ?? [], join(f.root, 'alpha'), config.environment.workingDirectory)
       .map(skill => ({ slug: skill.slug, name: skill.metadata.name, description: skill.metadata.description })),
     resolveNodeSkills: (_workspace, config, node) => load(node.skillSlugs ?? [], join(f.root, 'alpha'), config.environment.workingDirectory)
-      .map(skill => ({ slug: skill.slug, content: skill.content })),
+      .map(skill => ({ slug: skill.slug, content: skill.content, path: join(skill.path, 'SKILL.md'), description: skill.metadata.description })),
   })
   f.config = withSuperAgentOrchestrator(f.config)
   f.config.nodes.find(node => node.role === 'coordinator')!.skillSlugs = ['intent-clarification']
@@ -52,7 +52,8 @@ test('the orchestrator sees only bound skill descriptions and workers receive ac
   expect(policy.allowSources).toEqual([])
   expect(policy.allowSubagents).toBe(false)
   const instructions = f.host.options.get(sessionId)!.agentSystemPrompt!
-  expect(instructions).toContain('CURRENT_WORKSPACE_DEVELOPMENT_INSTRUCTIONS')
-  expect(instructions).toContain('Assigned node skills')
+  expect(instructions).not.toContain('CURRENT_WORKSPACE_DEVELOPMENT_INSTRUCTIONS')
+  expect(instructions).toContain(JSON.stringify(join(override, 'SKILL.md')))
+  expect(instructions).toContain('Assigned skills')
   expect(instructions).not.toContain('# Research methods')
 })

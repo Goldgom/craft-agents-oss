@@ -1,5 +1,6 @@
+import { legacyDynamicConfig as rebuildSuperAgentConfig } from './SuperAgentTestSupport'
 import { expect, test } from 'bun:test'
-import { rebuildSuperAgentConfig, withSuperAgentOrchestrator } from '@tokenbird/shared/super-agent'
+import { withSuperAgentOrchestrator } from '@tokenbird/shared/super-agent'
 import { buildSuperAgentNodePrompt } from './SuperAgentPrompt'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
@@ -38,7 +39,9 @@ test('dynamic sessions receive outcome ownership at each actual role boundary wi
   expect(workerPrompt).toContain('实际注册 schema')
   expect(workerPrompt).toContain('不要把自己未完成的实现包装成外部限制')
   expect(workerPrompt).toContain('真实写入测试只在已有授权内执行')
-  expect(workerPrompt).toContain('WORKER_SOURCE_GUIDE')
+  expect(workerPrompt).not.toContain('WORKER_SOURCE_GUIDE')
+  expect(workerPrompt).toContain('source-authoring')
+  expect(workerPrompt).toContain('super_agent_resource_catalog')
   expect(f.host.policies.get(worker)).toMatchObject({ allowSubagents: false, fullControl: false })
 })
 

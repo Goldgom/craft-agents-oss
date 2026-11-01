@@ -172,7 +172,10 @@ describe('Super Agent complete reset', () => {
     await until(async () => began, value => value)
     const reset = service.command('alpha', { type: 'reset', confirmed: true })
     try {
-      await until(() => loadSuperAgentDocument(join(fixture.root, 'alpha')), document => !document.pendingTurns.length)
+      // Wait behind reset's serialized commit before reading its disk snapshot.
+      // Tight independent file polling can hold Windows rename locks mid-commit.
+      await service.get('alpha')
+      expect((await loadSuperAgentDocument(join(fixture.root, 'alpha'))).pendingTurns).toEqual([])
       await expect(service.command('alpha', { type: 'chat', text: 'Concurrent request' })).rejects.toThrow('reset is in progress')
     } finally { release() }
     await expect(reset).rejects.toThrow('Orphan deletion failed')

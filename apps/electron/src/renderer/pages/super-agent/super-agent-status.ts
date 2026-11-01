@@ -1,5 +1,5 @@
 import type { SuperAgentActivityEntry, SuperAgentSnapshot } from '@tokenbird/shared/super-agent'
-import { superAgentTaskBlocker } from '@tokenbird/shared/super-agent'
+import { activeSuperAgentNodes, superAgentTaskBlocker } from '@tokenbird/shared/super-agent'
 import type { PermissionRequest } from '../../../shared/types'
 
 export type SuperAgentWorkStatus = 'idle' | 'thinking' | 'working' | 'preparing' | 'recovering'
@@ -38,6 +38,7 @@ export function nodeWorkStatus(
   if (snapshot.state.scripts.some(script => script.status === 'running'
     && (snapshot.state.tasks.find(task => task.id === script.taskId)?.nodeId
       ?? snapshot.config?.scripts.find(config => config.id === script.scriptId)?.nodeId) === nodeId)) return 'working'
+  if (snapshot.state.operations?.some(operation => operation.nodeId === nodeId && ['prepared', 'running', 'unknown'].includes(operation.status))) return snapshot.recoverySuspended ? 'waiting' : 'recovering'
   const tasks = snapshot.state.tasks.filter(task => task.nodeId === nodeId)
   if (tasks.some(task => task.status === 'running' && task.phase !== 'waiting')) return 'working'
   if (tasks.some(task => task.status === 'queued' && task.phase !== 'waiting' && !superAgentTaskBlocker(snapshot.state, task))) return 'queued'
@@ -49,7 +50,7 @@ export function nodeWorkStatus(
 
 /** A busy worker keeps the team busy even when the coordinator is idle. */
 export function teamWorkStatus(snapshot: SuperAgentSnapshot, pendingPermissions: Map<string, PermissionRequest[]> = new Map()) {
-  const nodes = (snapshot.config?.nodes ?? []).map(node => ({
+  const nodes = (snapshot.config ? activeSuperAgentNodes(snapshot.config, snapshot.state) : []).map(node => ({
     nodeId: node.id, name: node.name, status: nodeWorkStatus(snapshot, node.id, pendingPermissions),
   }))
   const priority: SuperAgentWorkStatus[] = ['working', 'thinking', 'preparing', 'waiting_permission', 'recovering', 'error', 'queued', 'blocked', 'waiting']

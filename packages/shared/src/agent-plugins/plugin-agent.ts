@@ -193,12 +193,13 @@ export class PluginAgent extends BaseAgent {
         this.workingDirectory, this.config.systemPromptPreset, this.backendName, getCoAuthorPreference(), undefined,
         this.config.agentPrompt, this.config.modelPromptSettings, this.manifest.id), ...this.promptBuilder.buildStableContextParts()].join('\n\n');
       const framework = loadBackendFrameworkConfiguration(this.manifest.id) ?? defaultFrameworkConfiguration({ ...this.manifest, builtin: false });
+      const policy = getSessionExecutionPolicy(this._sessionId);
       const tools = this.manifest.capabilities.includes('hostTools')
         ? filterSuperAgentTools([...(framework.features.files === 'native' ? [] : LOCAL_AGENT_HOST_TOOLS),
           ...getSessionToolProxyDefs().filter(tool => getBrowserToolEnabled() || !tool.name.endsWith('browser_tool')),
-          ...(this.config.mcpPool?.getProxyToolDefs(this.getActiveSourceSlugs()) ?? [])], getSessionExecutionPolicy(this._sessionId)?.role)
+          ...(this.config.mcpPool?.getProxyToolDefs(this.getActiveSourceSlugs()) ?? [])], policy?.role, policy?.architecture, policy?.roleTopologyVersion)
           .filter(tool => !frameworkToolBlockReason(this._sessionId, tool.name)) : [];
-      assertSuperAgentTools(tools, getSessionExecutionPolicy(this._sessionId)?.role);
+      assertSuperAgentTools(tools, policy?.role, policy?.architecture, policy?.roleTopologyVersion);
       const context = this.promptBuilder.buildVolatileContextParts({ permissionMode: this.getPermissionMode() }, this.sourceManager.formatSourceState());
       request = client.request('agent/chat', { turnId: currentTurnId, message, attachments, systemPrompt,
         context, tools, model: this._model, thinkingLevel: options?.thinkingOverride ?? this._thinkingLevel,

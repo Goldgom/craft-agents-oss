@@ -59,6 +59,20 @@ describe('Super Agent shared permission management', () => {
     expect(await second.result).toBe(false)
   })
 
+  test('a declined Action Gate remains an approval decision instead of becoming an operation failure', async () => {
+    const team = await permissionTeam()
+    const request = await requestOperation(team, 'declined-gate')
+    await team.service.command('alpha', { type: 'permission-response', requestId: 'declined-gate', allowed: false })
+    expect(await request.result).toBe(false)
+    team.host.emit({ type: 'tool_result', sessionId: team.sessions.worker!, toolName: team.scope.toolName,
+      toolUseId: 'declined-tool', isError: true, result: 'Super Agent policy: Action Gate was denied, cancelled or expired' })
+    const snapshot = await team.service.get('alpha')
+    expect(snapshot.permissionRequests!.find(request => request.id === 'declined-gate')!.status).toBe('denied')
+    expect(snapshot.state.messages.some(message => message.toNodeId === 'user' && message.kind === 'error')).toBe(false)
+    expect(snapshot.activity!.find(activity => activity.nodeId === 'worker')!.status).toBe('working')
+    expect(snapshot.state.tasks.find(task => task.nodeId === 'worker')!.status).toBe('running')
+  })
+
   test('explicitly remembered operations are shared by nodes and survive a service restart', async () => {
     const team = await permissionTeam()
     const grant = await shareOperation(team)

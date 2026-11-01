@@ -10,11 +10,12 @@ const models = [
 ];
 const ids = (preferred?: string, list = models) => compactionModelCandidates(list, preferred).map(model => model.id);
 describe('connection compaction model priority', () => {
-  it('tries the saved model, names containing luna, haiku, then the final listed model', () => {
-    expect(ids('pi/main')).toEqual(['main', 'fast', 'gpt-luna', 'claude-haiku', 'tail']);
+  it('honors an explicit preset strictly and uses priority only when no preset exists', () => {
+    expect(ids('pi/main')).toEqual(['main']);
     expect(ids()).toEqual(['fast', 'gpt-luna', 'claude-haiku', 'tail']);
-    expect(ids('missing')).toEqual(ids());
-    expect(ids('tail')).toEqual(['tail', 'fast', 'gpt-luna', 'claude-haiku']);
+    expect(() => ids('missing')).toThrow('unavailable on this connection');
+    expect(() => ids('gpt-image-1')).toThrow('unavailable on this connection');
+    expect(ids('tail')).toEqual(['tail']);
   });
   it('falls back without inventing models and skips image-generation models', () => {
     expect(ids(undefined, models.filter(model => !/luna/i.test(model.id + model.name))))
@@ -25,7 +26,7 @@ describe('connection compaction model priority', () => {
   });
   it('deduplicates a preferred luna model and leaves the original list intact', () => {
     const before = structuredClone(models);
-    expect(ids('gpt-luna')).toEqual(['gpt-luna', 'fast', 'claude-haiku', 'tail']);
+    expect(ids('gpt-luna')).toEqual(['gpt-luna']);
     expect(models).toEqual(before);
   });
 });

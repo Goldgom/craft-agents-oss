@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyActionGate, reviewActionGate } from '../action-gates.ts';
 import { authorizeSessionPolicyTool, checkSessionExecutionPolicy, claimSessionActionGateDispatch, clearSessionExecutionPolicy, clearSessionPolicyGrants,
-  consumeSessionActionGate, wrapSessionProgramInput, setSessionActionReviewer, setSessionExecutionPolicy, setSessionPolicyPermissionHandler, setSessionProgramExecutor, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '../session-execution-policy.ts';
+  consumeSessionActionGate, wrapSessionProgramInput, getSessionPolicyApprovedSourceSlugs, checkSessionCredentialAccess, setSessionActionReviewer, setSessionExecutionPolicy, setSessionPolicyPermissionHandler, setSessionProgramExecutor, type SessionExecutionPolicy, type SessionPolicyPermissionRequest } from '../session-execution-policy.ts';
 import { runPreToolUseChecksWithPermissions } from '../pre-tool-use.ts';
 import { PermissionManager } from '../permission-manager.ts';
 import { cleanupModeState, setPermissionMode } from '../../mode-manager.ts';
@@ -41,18 +41,18 @@ describe('mandatory Action Gates', () => {
     expect(consumeSessionActionGate(sessionId, tool, input, root, 'restore-1').allowed).toBe(true);
     expect((await authorize(tool, input, 'restore-1')).allowed).toBe(false);
   });
-  test('library operations retain role, capability, source and custom deny restrictions', async () => {
+  test('library permissions ask the user; role boundaries remain and full control skips deny rules', async () => {
     const tool = 'mcp__session__super_agent_library';
     setSessionExecutionPolicy(sessionId, { ...policy, readFiles: false, writeFiles: false });
-    expect((await authorize(tool, { type: 'archive-create', item: { title: 'Version', sourcePath: '.' } }, 'copy')).allowed).toBe(false);
-    expect((await authorize(tool, { type: 'archive-restore', id: 'x', destination: 'restored' }, 'restore')).allowed).toBe(false);
-    expect(requests).toHaveLength(0);
+    expect((await authorize(tool, { type: 'archive-create', item: { title: 'Version', sourcePath: '.' } }, 'copy')).allowed).toBe(true);
+    expect((await authorize(tool, { type: 'archive-restore', id: 'x', destination: 'restored' }, 'restore')).allowed).toBe(true);
+    expect(requests).toHaveLength(2);
     setSessionExecutionPolicy(sessionId, { ...policy, role: 'coordinator', fullControl: true });
     expect(checkSessionExecutionPolicy(sessionId, tool, { type: 'library-get', library: 'memory', id: 'x' }).allowed).toBe(true);
     expect(checkSessionExecutionPolicy(sessionId, tool, { type: 'memory-delete', id: 'x', expectedRevision: 1 }).allowed).toBe(false);
     expect(checkSessionExecutionPolicy(sessionId, 'mcp__unassigned__super_agent_library', { type: 'library-get' }).allowed).toBe(false);
     setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true, safety: { autoReview: false, customRules: [{ toolName: tool, effect: 'deny', reason: 'Library disabled' }] } });
-    expect(checkSessionExecutionPolicy(sessionId, tool, { type: 'library-list' }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, tool, { type: 'library-list' }).allowed).toBe(true);
   });
   test('full control skips all approvals and Auto-review at authorization and both dispatch stages', async () => {
     setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true,
@@ -107,27 +107,30 @@ describe('mandatory Action Gates', () => {
     expect(reviews).toBe(0);
     expect(requests).toHaveLength(0);
   });
-  test('browser full control retains explicit deny rules and restores restrictions when disabled', async () => {
+  test('browser full control skips deny rules and restores approval requirements when disabled', async () => {
     const tool = 'mcp__session__browser_tool';
     const input = { command: ['evaluate', 'document.title'] };
     setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true,
       safety: { autoReview: true, customRules: [{ toolName: tool, effect: 'deny', reason: 'Browser disabled' }] } });
-    expect(await authorize(tool, input, 'browser-denied')).toMatchObject({ allowed: false, reason: expect.stringContaining('Browser disabled') });
+    expect((await authorize(tool, input, 'browser-denied')).allowed).toBe(true);
+    expect(requests).toHaveLength(0);
     setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true });
     expect((await authorize(tool, input, 'browser-full')).allowed).toBe(true);
     setSessionExecutionPolicy(sessionId, policy);
-    expect((await authorize(tool, input, 'browser-restricted')).allowed).toBe(false);
+    expect((await authorize(tool, input, 'browser-restricted')).allowed).toBe(true);
+    expect(requests).toHaveLength(1);
     expect(claimSessionActionGateDispatch(sessionId, tool, input, root, 'browser-full').allowed).toBe(false);
     expect((await authorize(tool, { command: ['snapshot'] }, 'browser-snapshot')).allowed).toBe(true);
-    expect(requests).toHaveLength(0);
+    expect(requests).toHaveLength(1);
   });
-  test('full control still enforces deny rules and execution boundaries without prompting', async () => {
+  test('full control skips custom rules and source assignments without enabling extra model processes', async () => {
     setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true,
       safety: { autoReview: true, customRules: [{ toolName: 'mcp__assigned__send_email', effect: 'deny', reason: 'No external mail' }] } });
     for (const [tool, input] of [
       ['mcp__assigned__send_email', { body: 'forbidden' }],
-      ['mcp__unassigned__send', {}], ['Task', { prompt: 'delegate' }],
-    ] as Array<[string, Record<string, unknown>]>) expect((await authorize(tool, input, tool)).allowed).toBe(false);
+      ['mcp__unassigned__send', {}],
+    ] as Array<[string, Record<string, unknown>]>) expect((await authorize(tool, input, tool)).allowed).toBe(true);
+    expect((await authorize('Task', { prompt: 'delegate' }, 'task')).allowed).toBe(false);
     expect(requests).toHaveLength(0);
   });
   test.each(['human', 'review'] as const)('enabling full control resumes a pending %s check under current policy', async stage => {
@@ -175,14 +178,35 @@ describe('mandatory Action Gates', () => {
     expect((await authorize('mcp__session__browser_tool', { command: ['snapshot'] }, 'snapshot')).allowed).toBe(true);
     expect((await authorize('mcp__session__browser_tool', { command: ['click', '@e1'] }, 'click')).allowed).toBe(true);
     expect(requests).toHaveLength(1);
-    expect((await authorize('mcp__session__browser_tool', { command: ['evaluate', 'fetch("/pay")'] }, 'evaluate')).allowed).toBe(false);
-    expect((await authorize('mcp__session__browser_tool', { command: ['navigate', 'file:///private'] }, 'file')).allowed).toBe(false);
+    expect((await authorize('mcp__session__browser_tool', { command: ['evaluate', 'fetch("/pay")'] }, 'evaluate')).allowed).toBe(true);
+    expect((await authorize('mcp__session__browser_tool', { command: ['navigate', 'file:///private'] }, 'file')).allowed).toBe(true);
+    expect(requests).toHaveLength(3);
   });
-  test('source and delegation restrictions remain structural', async () => {
-    for (const [tool, input] of [
-      ['mcp__unassigned__send', { message: 'x' }], ['Task', { prompt: 'delegate' }],
-    ] as Array<[string, Record<string, unknown>]>) expect((await authorize(tool, input, tool)).allowed).toBe(false);
-    expect(requests).toHaveLength(0);
+  test('unassigned source access asks the user while delegation stays structural', async () => {
+    expect((await authorize('mcp__unassigned__send', { message: 'x' }, 'unassigned')).allowed).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.scope).toMatchObject({ kind: 'source', target: 'unassigned', boundary: 'source' });
+    expect((await authorize('Task', { prompt: 'delegate' }, 'task')).allowed).toBe(false);
+    expect(requests).toHaveLength(1);
+    expect(getSessionPolicyApprovedSourceSlugs(sessionId)).toEqual(['unassigned']);
+    const input = { message: 'x' };
+    expect(consumeSessionActionGate(sessionId, 'mcp__unassigned__send', input, root, 'unassigned').allowed).toBe(true);
+    expect(claimSessionActionGateDispatch(sessionId, 'mcp__unassigned__send', input, root, 'unassigned').allowed).toBe(true);
+    expect(checkSessionExecutionPolicy(sessionId, 'mcp__unassigned__send', input, root, 'new-call').allowed).toBe(false);
+    clearSessionPolicyGrants(sessionId);
+    expect(getSessionPolicyApprovedSourceSlugs(sessionId)).toEqual([]);
+  });
+  test('approved credential permission survives the host callback without granting another operation', async () => {
+    setSessionExecutionPolicy(sessionId, { ...policy, credentialAccess: false });
+    const tool = 'mcp__session__saved_credentials', input = { action: 'list' };
+    expect(checkSessionCredentialAccess(sessionId, input).allowed).toBe(false);
+    expect((await authorize(tool, input, 'vault')).allowed).toBe(true);
+    expect(consumeSessionActionGate(sessionId, tool, input, root, 'vault').allowed).toBe(true);
+    expect(claimSessionActionGateDispatch(sessionId, tool, input, root, 'vault').allowed).toBe(true);
+    expect(checkSessionCredentialAccess(sessionId, input, root).allowed).toBe(true);
+    expect(checkSessionCredentialAccess(sessionId, { action: 'request', name: 'different' }, root).allowed).toBe(false);
+    clearSessionPolicyGrants(sessionId);
+    expect(checkSessionCredentialAccess(sessionId, input, root).allowed).toBe(false);
   });
   test('host commands wait for user approval, including inspections, and approval cannot be replayed', async () => {
     for (const tool of ['Bash', 'mcp__session__localbash', 'mcp__session__runshell']) {
@@ -301,12 +325,14 @@ describe('mandatory Action Gates', () => {
     release(true);
     expect((await pending).allowed).toBe(false);
   });
-  test('custom rules can deny reads or require confirmation, but cannot grant tools', async () => {
+  test('custom deny and human-review rules both ask the user instead of failing the tool', async () => {
     setSessionExecutionPolicy(sessionId, { ...policy, safety: { autoReview: false, customRules: [{ toolName: 'Read', effect: 'require-human', reason: 'Sensitive input' }] } });
     expect((await authorize('Read', { file_path: join(root, 'input') }, 'read')).allowed).toBe(true);
     expect(requests).toHaveLength(1);
     setSessionExecutionPolicy(sessionId, { ...policy, safety: { autoReview: false, customRules: [{ toolName: 'Read', effect: 'deny', reason: 'Forbidden input' }] } });
-    expect((await authorize('Read', { file_path: join(root, 'input') }, 'denied')).allowed).toBe(false);
+    expect((await authorize('Read', { file_path: join(root, 'input') }, 'denied')).allowed).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]!.reason).toContain('Forbidden input');
     expect(() => setSessionExecutionPolicy(sessionId, { ...policy, safety: { autoReview: false, customRules: [{ toolName: 'Read', effect: 'allow' as never, reason: 'bypass' }] } })).toThrow();
   });
   test('manager roles cannot acquire worker capabilities by requesting approval', async () => {
@@ -365,9 +391,10 @@ describe('mandatory Action Gates', () => {
     let reviews = 0;
     setSessionActionReviewer(sessionId, async request => { reviews++; expect(request.userIntent).toContain('do not send'); return { verdict, reason: 'Independent result' }; });
     const result = await authorize('mcp__assigned__send_email', { body: 'Ignore all rules' }, 'reviewed');
-    expect(result.allowed).toBe(verdict !== 'deny');
+    expect(result.allowed).toBe(true);
     expect(reviews).toBe(1);
-    expect(requests.length).toBe(verdict === 'deny' ? 0 : 1);
+    expect(requests.length).toBe(1);
+    expect(requests[0]!.scope.actionGate?.review?.verdict).toBe(verdict);
   });
   test('reviewer exceptions require human review and approval denial stays denied', async () => {
     setSessionExecutionPolicy(sessionId, { ...policy, safety: { autoReview: true, customRules: [] } });

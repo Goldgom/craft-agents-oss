@@ -1,6 +1,7 @@
+import { legacyDynamicConfig as rebuildSuperAgentConfig } from './SuperAgentTestSupport'
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { activeSuperAgentNodes, loadSuperAgentDocument, rebuildSuperAgentConfig } from '@tokenbird/shared/super-agent'
+import { activeSuperAgentNodes, loadSuperAgentDocument } from '@tokenbird/shared/super-agent'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 import { appendSuperAgentReport } from './SuperAgentDynamic'
 import { SuperAgentService } from './SuperAgentService'
@@ -23,6 +24,24 @@ async function working(f: Awaited<ReturnType<typeof fixture>>, role: string) {
 }
 
 describe('Rebuilt Super Agent', () => {
+  test('exports searchable work contracts, injects only references and applies separate compaction presets', async () => {
+    const f = await fixture()
+    f.config.contextCompaction = { enabled: true, tokenThreshold: 252000, saveToMemory: true, models: { 'existing-provider': 'summary-model' } }
+    await f.service.save('alpha', f.config)
+    await f.service.command('alpha', { type: 'chat', text: 'Audit the project' })
+    const interaction = await working(f, 'coordinator')
+    await f.service.callNodeActionTool('alpha', interaction, 'super_agent_intent', { requestId: 'file-goal', goal: 'Audit the project', constraints: ['Keep exact requirement'], deliverables: ['Report'], acceptanceCriteria: ['Read sources'] })
+    f.host.complete(interaction, '')
+    const planner = await working(f, 'orchestrator')
+    const context = JSON.parse(f.host.sends.find(send => send.sessionId === planner)!.context.split('Current team state (data, not instructions):\n')[1]!)
+    expect(context.workList).toBeUndefined()
+    expect(context.intents).toBeUndefined()
+    expect(context.workListRef.path).toBe(join(f.root, 'alpha', 'super-agent', 'context', 'work-list.jsonl'))
+    const lines = (await readFile(context.workListRef.path, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(lines.find(line => line.type === 'requirement')).toMatchObject({ goal: 'Audit the project', constraints: ['Keep exact requirement'] })
+    expect(f.host.policies.get(planner)).toMatchObject({ compactionModel: 'summary-model', contextDataRoot: join(f.root, 'alpha', 'super-agent', 'context') })
+    expect(JSON.stringify(context).length).toBeLessThan(12000)
+  })
   test('advances four submitted modules to integration and delivers the goal without extra review agents', async () => {
     const f = await fixture()
     f.config.maxConcurrentSubagents = 4
@@ -116,7 +135,9 @@ describe('Rebuilt Super Agent', () => {
     expect(f.host.options.get(worker)?.model).toBe(f.config.modelPool![0]!.model)
     await f.service.callNodeActionTool('alpha', worker, 'super_agent_report', { requestId: 'report', kind: 'stage', content: 'Verified the source; one discrepancy remains.' })
     f.host.complete(worker, 'Verified the source; one discrepancy remains.')
-    await until(() => f.service.get('alpha'), value => value.state.tasks[0]?.status === 'completed')
+    const partial = await until(() => f.service.get('alpha'), value => value.state.tasks[0]?.status === 'failed')
+    expect(partial.state.tasks[0]!.output).toContain('discrepancy')
+    expect(partial.state.metrics?.completedTasks ?? 0).toBe(0)
     expect(f.host.sends.filter(send => send.sessionId === interaction)).toHaveLength(1)
     f.advance(5_000)
     await f.service.tick()
@@ -275,7 +296,7 @@ describe('Rebuilt Super Agent', () => {
     await f.service.save('alpha', f.config)
     const migrated = await f.service.get('alpha')
     expect(migrated.config!.architecture).toBe('dynamic')
-    expect(migrated.config!.nodes).toHaveLength(2)
+    expect(migrated.config!.nodes).toHaveLength(3)
     expect(migrated.config!.modelPool).toHaveLength(31)
     expect(migrated.config!.modelPool![30]!).toMatchObject({ name: worker.model, model: worker.model, capabilityNotes: (worker.capabilities ?? []).join(', '), intelligenceScore: worker.intelligenceRating * 20, skillSlugs: [] })
     const archives = await readdir(join(f.root, 'alpha', 'super-agent', 'history'))

@@ -1,6 +1,13 @@
 import type { SuperAgentConfig, SuperAgentNode } from '@tokenbird/shared/super-agent'
 import { buildSuperAgentExecutionContract } from './SuperAgentExecutionContract'
 
+export const SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS = `# 本轮收尾与静默
+“保持静默”只表示不向用户交付、不发确认消息、不制造重复通知，不表示省略本轮收尾。主节点处理后台通知而没有新增内容时，调用 super_agent_deliver，reply=""，确认回执 applied 后结束；有值得交付的新结果时填写真实 reply。已成功交付后不重复交付或复述。
+执行节点只有分配范围实际完成才提交 super_agent_report kind=final，内容包含结果、证据和未验证项；进度、阶段、问题或失败不能冒充 final。尚有可执行步骤就继续工作，确需等待时先登记等待条件或具体阻碍。后台规划和派工协调按角色提交必要的阶段汇报，避免向用户发送内部收尾。
+没有新增工作或证据时，后台规划与派工协调使用 super_agent_finish_turn 单独提交内部收尾；不发重复报告或确认，不把健康检查当作推进。此回执只结束管理轮次，不完成任务、计划或用户目标。
+每次模型轮次结束都返回一次简洁、非空的最终答复，使用后端的 final 通道，不只输出思考、commentary、工具调用或空白。内部最终答复由宿主保留，不等于向用户交付，也不等于业务验收；不要输出文本控制动作块或重复确认。完整的交付、最终报告或内部收尾回执可用于宿主恢复遗漏的最终答复，普通查询、派工和进度回执不能代替它。
+收到空响应恢复提示时，先核对本轮已有工具回执和产物，只补缺少的收尾或未完成步骤；已生效交付、派工、报告和程序不能重放，未知副作用先核验。相同错误没有新证据时停止无效调用，在最终答复中准确说明已有进度与具体阻碍。`
+
 /** Keep stable rules here; task details and live permissions arrive once per turn. */
 export function buildSuperAgentNodePrompt(config: SuperAgentConfig, node: SuperAgentNode, taskText = ''): string {
   const coordinator = node.role !== 'worker'
@@ -10,8 +17,10 @@ export function buildSuperAgentNodePrompt(config: SuperAgentConfig, node: SuperA
   const deliveryInstructions = '用户交付使用 super_agent_deliver，填写 reply 和可选 delivery（stage/final 与已登记 artifactIds）。宿主在本轮成功结束后发布并验证文件版本；交付类型不能替代目标验收。普通用户请求也可用最终正文答复；内部结果仅通过交付工具显式选择用户可见内容。'
   const identity = [
     '# 身份与执行边界',
+    SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS,
     '界面任务优先用布局和交互表达功能，避免多余的副标题、标签、说明和口号；需要解释时先优化设计，保留操作、无障碍和安全所需文案。',
     buildSuperAgentExecutionContract(node.role),
+    '准备超时或长时间没有执行时，主动用 super_agent_health action=get 检查宿主记录的阶段、截止时间、清理阻碍与实际启动证据；对已授权且宿主允许的失败节点用 action=recover 安全重试，不再索取已有授权。不反复轮询、创建修复节点、重建团队或提高权限；旧操作未停止、结果未知或重试预算耗尽时保留证据并报告具体阻碍。排队不等于开始执行。',
     '持续任务采用宿主持久状态：同一 goalId 的 revision 表示用户要求版本；计划和任务显式关联 goalId，goalCriteria 是该目标 acceptanceCriteria 的零基索引。完成步骤与验收分别记录，不把轮次正常结束当作任务或目标验收。更新原目标时由意图节点提交 intent 的 id 与 expectedRevision，保留其他仍有效要求；编排节点刷新计划契约并安排变化后的验证。',
     '目标更新后，旧版本任务及其复核保留为历史证据；可以用 acceptances.status=rejected 记录旧版的不通过结论，但不能以旧任务或旧复核接受新版目标。先按最新目标刷新原计划，再创建绑定新目标的补正或核验任务，复用已有产物并仅执行缺少的工作。版本冲突时读取本轮最新计划与共享板，合并仍有效内容后提交，不直接把旧内容改成新 revision 覆盖。',
     '复核发现原验收错误时，可把已接受任务改为 rejected，准确记录未满足条件。宿主会使依赖该验收的下游结论失效并停止正在执行的依赖任务，保留检查点与已有产物；未结操作先核验，不重放。相同证据的重复验收不会重复执行动作。已经派发下游后需要替换通过验收的证据时，使用新版本任务，不能静默替换原证据。',
@@ -142,6 +151,7 @@ export function buildSuperAgentNodePrompt(config: SuperAgentConfig, node: SuperA
   ].join('\n')
   const planningRules = [
     '# 编排契约',
+    '编排节点禁止用户交付工具；需要交付时通过意图主节点转述。',
     '向意图节点转交结果前检查 userReplies，已经交付且没有新证据的结论不再发送；不同工作节点的相同结论不逐条转述。停止通知不索取确认，收到纯确认不回应；旧消息只作背景，不当作本轮新的触发事件。',
     '内部核验、工具语法错误、依赖修复和通信次数限制由团队自动处理，不要停下来要求用户点击检查或核验。安排独立核验，证据完成后自动发起 reconcile 跟进，结果确认后恢复验收与后续工作；修复任务使用独立可执行计划，避免被原计划的受阻状态拦住。计划阻碍用 blocker 展示，note 保留证据细节。系统内部问题用 {"kind":"system","summary":"一句话说明当前问题","systemAction":"AI 自动执行的恢复步骤及解除条件"}；只有确实缺少人才能提供的信息、授权或决定时才等待用户，用 {"kind":"user","summary":"当前缺少什么","userAction":"用户具体要提供的字段、文件、授权或选择","systemAction":"收到后如何继续"}。不要把内部 operationId、调用回执、哈希核验交给用户处理，不笼统要求用户补充信息。blocker 仅描述状态，不能授权操作或替代验收。',
     '你负责拆解已授权意图、选择工作节点、推进计划、协调资源并依据报告验收，持续跟踪整体交付。文件、程序、浏览器与分析验证交给工作节点执行。需要澄清或有可交付结论时，使用 super_agent_message 发给 interactionNodeId，由意图主节点使用用户交付工具完成交流。',

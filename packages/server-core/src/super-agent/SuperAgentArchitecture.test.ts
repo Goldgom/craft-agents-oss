@@ -47,7 +47,7 @@ describe('separated Super Agent architecture', () => {
     const workerSession = await started(f, 'worker')
     expect(f.host.sends.findLast(send => send.sessionId === workerSession)!.message).toBe('Execute report and report actual evidence.')
     expect(f.host.options.get(workerSession)!.agentSystemPrompt).toContain('编排节点')
-    const shared = await f.service.getNodeSharedData('alpha', workerSession)
+    const shared = await f.service.getNodeSharedData('alpha', workerSession, { area: 'tasks' })
     expect(shared.coordination?.tasks.map(item => item.id)).toEqual(['report'])
     await finish(f, 'worker', 'Verified report.md, sources checked.')
     f.advance(2_000); await f.service.tick()

@@ -33,7 +33,7 @@ async function original(unknown = true, receipt?: string) {
   }
   if (!unknown) f.host.emit({ type: 'tool_result', sessionId, toolName: 'mcp__crm__update', toolUseId: 'original-call', result: 'Confirmed' })
   f.host.complete(sessionId, 'Submitted deliverable')
-  const snapshot = await until(() => f.service.get('alpha'), snapshot => snapshot.state.tasks[0]!.status === 'completed')
+  const snapshot = await until(() => f.service.get('alpha'), snapshot => snapshot.state.tasks[0]!.status === (unknown ? 'failed' : 'completed'))
   return { f, operationId: snapshot.state.operations![0]!.id, sessionId }
 }
 const accept = (evidenceTaskId = 'original') => ({ taskId: 'original', evidenceTaskId, status: 'accepted', note: 'Verified result' })
@@ -164,7 +164,7 @@ test.each([true, false])('evidence with its own unknown outcome cannot settle an
   await f.service.prepareNodeOperation('alpha', verifierSession, { toolName: 'mcp__crm__inspect', input: {}, invocationId: 'verification-call' })
   f.host.emit({ type: 'tool_result', sessionId: verifierSession, toolName: 'mcp__crm__inspect', toolUseId: 'verification-call', result: 'Transport failure', isError: true })
   f.host.complete(verifierSession, 'Claimed verification')
-  const checked = await until(() => f.service.get('alpha'), snapshot => snapshot.state.tasks.find(task => task.id === 'verify')?.status === 'completed')
+  const checked = await until(() => f.service.get('alpha'), snapshot => snapshot.state.tasks.find(task => task.id === 'verify')?.status === 'failed')
   const unknown = checked.state.operations!.find(operation => operation.taskId === 'verify')!
   expect(unknown.status).toBe('unknown')
   const rejected = await submitted(f, 'main', actions({ acceptances: [accept('verify')] }))
@@ -277,7 +277,8 @@ test('legacy system-blocked plans recover on restart and persist one evidence as
     expect(evidence.planId).not.toBe(plan.id)
     for (let scan = 0; scan < 3; scan++) { f.advance(2000); await service.tick() }
     expect((await service.get('alpha')).state.tasks).toHaveLength(2)
-    const sessionId = (await service.get('alpha')).state.nodes.find(node => node.nodeId === 'verifier')!.sessionId!
+    const executing = await until(() => service.get('alpha'), snapshot => snapshot.state.nodes.find(node => node.nodeId === 'verifier')?.status === 'working' && !!snapshot.state.nodes.find(node => node.nodeId === 'verifier')?.sessionId)
+    const sessionId = executing.state.nodes.find(node => node.nodeId === 'verifier')!.sessionId!
     f.host.complete(sessionId, 'Independent evidence confirms non-execution')
     await until(() => service.get('alpha'), snapshot => snapshot.state.tasks.find(task => task.id === evidence.id)?.status === 'completed')
     await until(() => loadSuperAgentDocument(join(f.root, 'alpha')), document => !!document.operationRecovery?.[operationId]?.followupTurnId)

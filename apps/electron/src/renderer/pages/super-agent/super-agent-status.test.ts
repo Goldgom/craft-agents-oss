@@ -23,6 +23,25 @@ const thinking: SuperAgentActivityEntry = { id: 'thought', kind: 'thinking', sta
 const tool: SuperAgentActivityEntry = { ...thinking, id: 'tool', kind: 'tool', toolName: 'Read' }
 
 describe('Super Agent current work status', () => {
+  it('removes finished dynamic nodes from the chat status details while retaining their evidence', () => {
+    const current = snapshot()
+    current.config!.architecture = 'dynamic'
+    current.config!.nodes[1]!.dynamic = true
+    current.state.tasks.push({ id: 'done', title: 'Done', instructions: '', nodeId: 'worker', status: 'completed', createdAt: 1, output: 'Saved evidence' })
+    expect(teamWorkStatus(current).nodes.map(node => node.nodeId)).toEqual(['main'])
+    expect(current.state.tasks[0]!.output).toBe('Saved evidence')
+    current.state.tasks[0]!.status = 'queued'
+    expect(teamWorkStatus(current).nodes.map(node => node.nodeId)).toEqual(['main', 'worker'])
+  })
+  it('retains a node with an unconfirmed operation and shows that work still needs reconciliation', () => {
+    const current = snapshot()
+    current.config!.architecture = 'dynamic'; current.config!.nodes[1]!.dynamic = true
+    current.state.operations = [{ id: 'op', key: 'a'.repeat(64), nodeId: 'worker', turnId: 'turn', sessionId: 'session-worker', invocationId: 'call', toolName: 'Bash', status: 'unknown', createdAt: 1, updatedAt: 1 }]
+    expect(teamWorkStatus(current).nodes.map(node => node.nodeId)).toContain('worker')
+    expect(nodeWorkStatus(current, 'worker')).toBe('recovering')
+    current.state.operations[0]!.status = 'reconciled'
+    expect(teamWorkStatus(current).nodes.map(node => node.nodeId)).not.toContain('worker')
+  })
   it('routes internal dependency problems to recovery and preserves runnable queue status', () => {
     const current = snapshot()
     current.state.tasks = [
@@ -133,11 +152,15 @@ describe('Super Agent current work status', () => {
 
   it('counts scripts that keep running after the node turn finishes', () => {
     const current = snapshot()
+    current.config!.architecture = 'dynamic'
+    current.config!.nodes[1]!.dynamic = true
     current.config!.scripts = [{ id: 'script', name: 'Script', path: 'test.py', args: [], nodeId: 'worker', timeoutSeconds: 60 }]
     current.state.scripts = [{ scriptId: 'script', status: 'running' }]
     expect(nodeWorkStatus(current, 'worker')).toBe('working')
     expect(teamWorkStatus(current).status).toBe('working')
+    expect(teamWorkStatus(current).nodes.map(node => node.nodeId)).toContain('worker')
     current.state.scripts[0].status = 'completed'
     expect(teamWorkStatus(current).status).toBe('idle')
+    expect(teamWorkStatus(current).nodes.map(node => node.nodeId)).not.toContain('worker')
   })
 })

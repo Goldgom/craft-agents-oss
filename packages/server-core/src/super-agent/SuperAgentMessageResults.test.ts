@@ -39,7 +39,9 @@ describe('Super Agent message-result liveness', () => {
     context.host.complete(context.host.sends[0]!.sessionId, 'The artifact passed independent verification.\n' + actions({ messages: [{ toNodeId: 'main', body: 'Verification report is ready.' }] }))
     const saved = await until(() => loadSuperAgentDocument(join(context.root, 'alpha')), value => value.pendingTurns.some(turn => turn.nodeId === 'main'))
     expect(saved.pendingTurns.filter(turn => turn.nodeId === 'main')).toHaveLength(1)
-    await until(() => context.service.get('alpha'), () => context.host.sends.length === 2)
+    // This fixture disables the production heartbeat. Drive scheduling while
+    // waiting, including when the worker dispatch is still releasing its slot.
+    await until(async () => { await context.service.tick(); return context.service.get('alpha') }, () => context.host.sends.length === 2)
     expect(context.host.sends[1]!.context).toContain('The artifact passed independent verification.')
   })
 

@@ -12,6 +12,7 @@ import { runPreToolUseChecks, runPreToolUseChecksWithPermissions } from '../pre-
 import { setPermissionMode, cleanupModeState, formatSessionState } from '../../mode-manager.ts';
 import { writeSessionJsonl, readSessionJsonl } from '../../../sessions/jsonl.ts';
 import type { StoredSession } from '../../../sessions/types.ts';
+import { frameworkToolBlockReason, registerFrameworkToolPolicy } from '../../../agent-plugins/framework-tool-policy.ts';
 
 const sessionId = 'super-agent-policy-test';
 let temp: string;
@@ -34,6 +35,25 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('rebuilt Super Agent role boundaries', () => {
+  test('internal finish is limited to planning and dispatch with or without full control', () => {
+    for (const fullControl of [false, true]) for (const role of ['coordinator', 'planner', 'orchestrator', 'worker'] as const) {
+      setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', roleTopologyVersion: 2, role, fullControl });
+      expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__super_agent_finish_turn', { requestId: 'finish', note: 'No new work' }).allowed).toBe(role === 'planner' || role === 'orchestrator');
+    }
+  });
+  test('reads only the host context projection outside the project, without allowing writes or escaping links', () => {
+    const context = join(temp, 'context'); mkdirSync(context);
+    const file = join(context, 'work-list.jsonl'); writeFileSync(file, '{"type":"task","id":"t1"}\n');
+    setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', role: 'orchestrator', contextDataRoot: context, compactionModel: 'summary-only' });
+    expect(getSessionExecutionPolicy(sessionId)?.compactionModel).toBe('summary-only');
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: file }).allowed).toBe(true);
+    expect(checkSessionExecutionPolicy(sessionId, 'Grep', { path: context, pattern: 't1' }).allowed).toBe(true);
+    expect(checkSessionExecutionPolicy(sessionId, 'Write', { file_path: file, content: 'forbidden' }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(outside, 'secret.txt') }).allowed).toBe(false);
+    symlinkSync(outside, join(context, 'escape'), 'junction');
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(context, 'escape', 'secret.txt') }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Grep', { path: context, pattern: 'secret' }).allowed).toBe(false);
+  });
   test('interaction can read work and reports, but cannot read files, board, credentials or internal tasks', () => {
     setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', resourceScope: 'super-agent', role: 'coordinator', fullControl: true, credentialAccess: true });
     for (const name of ['super_agent_work_list', 'super_agent_reports', 'super_agent_intent', 'super_agent_deliver', 'super_agent_settings']) {
@@ -46,10 +66,10 @@ describe('rebuilt Super Agent role boundaries', () => {
     expect(checkSessionCredentialAccess(sessionId, { action: 'list' }).allowed).toBe(false);
   });
 
-  test('background can read project files while retaining path and write boundaries', () => {
-    setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', role: 'orchestrator', fullControl: true });
+  test.each(['planner', 'orchestrator'] as const)('%s full control reads outside the project while retaining its role', role => {
+    setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', roleTopologyVersion: 2, role, fullControl: true });
     expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(root, 'allowed.txt') }).allowed).toBe(true);
-    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(outside, 'secret.txt') }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', { file_path: join(outside, 'secret.txt') }).allowed).toBe(true);
     expect(checkSessionExecutionPolicy(sessionId, 'Write', { file_path: join(root, 'allowed.txt'), content: 'changed' }).allowed).toBe(false);
     expect(checkSessionExecutionPolicy(sessionId, 'Bash', { command: 'echo forbidden' }).allowed).toBe(false);
   });
@@ -61,7 +81,7 @@ describe('explicit credential vault access', () => {
       for (const role of ['worker', 'coordinator', 'orchestrator'] as const) {
         for (const credentialAccess of [undefined, false, true]) {
           setSessionExecutionPolicy(sessionId, { ...policy, role, fullControl, credentialAccess, actionGates: true });
-          const allowed = credentialAccess === true;
+          const allowed = credentialAccess === true || fullControl && role === 'worker';
           for (const toolName of ['saved_credentials', 'mcp__session__saved_credentials']) {
             expect(checkSessionExecutionPolicy(sessionId, toolName, { action: 'list' }).allowed).toBe(allowed);
           }
@@ -109,18 +129,18 @@ describe('explicit credential vault access', () => {
     setSessionProgramExecutor(sessionId, { runtimePath: executable, containerId: 'tokenbird-super-test', workingDirectory: '/workspace' });
     expect(checkSessionCredentialAccess(sessionId, input).allowed).toBe(false);
     setSessionExecutionPolicy(sessionId, { ...policy, credentialAccess: false, fullControl: true, actionGates: true });
-    expect(checkSessionCredentialAccess(sessionId, { action: 'list' }).allowed).toBe(false);
+    expect(checkSessionCredentialAccess(sessionId, { action: 'list' }).allowed).toBe(true);
     clearSessionExecutionPolicy(sessionId);
     expect(checkSessionCredentialAccess(sessionId, { action: 'list' }).allowed).toBe(false);
   });
 });
 
 describe('node output paths in model context', () => {
-  test('node skill bindings and backend survive policy normalization; full control cannot select an unassigned skill', () => {
+  test('node skill bindings and backend survive normalization; full control can select any available skill', () => {
     for (const fullControl of [false, true]) {
       const saved = setSessionExecutionPolicy(sessionId, { ...policy, agentRuntime: 'pi', allowSkills: ['report'], fullControl })
       expect(saved).toMatchObject({ agentRuntime: 'pi', allowSkills: ['report'] })
-      expect(checkSessionExecutionPolicy(sessionId, 'Skill', { skill: 'workspace:private' }).allowed).toBe(false)
+      expect(checkSessionExecutionPolicy(sessionId, 'Skill', { skill: 'workspace:private' }).allowed).toBe(fullControl)
     }
     expect(() => setSessionExecutionPolicy(sessionId, { ...policy, allowSkills: 'bad' as never })).toThrow('Invalid')
   })
@@ -169,6 +189,25 @@ describe('node output paths in model context', () => {
 });
 
 describe('skill and source package reads', () => {
+  test('backend feature switches cannot block full control or the prerequisite skill read', async () => {
+    const release = registerFrameworkToolPolicy(sessionId, {}, {
+      history: 'host', utility: 'host', steering: 'host', files: 'disabled', sources: 'disabled', sessionTools: 'disabled', browser: 'disabled',
+    });
+    const guide = join(outside, 'SKILL.md'); writeFileSync(guide, '# Instructions');
+    const context = { toolName: 'Read', input: { file_path: guide }, sessionId, permissionMode: 'allow-all' as const,
+      workspaceRootPath: root, workspaceId: 'workspace', workingDirectory: root,
+      activeSourceSlugs: [], allSourceSlugs: [], hasSourceActivation: false,
+      permissionManager: new PermissionManager({ sessionId, workspaceId: 'workspace', workingDirectory: root }) };
+    try {
+      setSessionReferenceFiles(sessionId, [guide]);
+      expect((await runPreToolUseChecksWithPermissions(context)).type).toBe('modify');
+      setSessionExecutionPolicy(sessionId, { ...policy, fullControl: true, actionGates: true });
+      for (const tool of ['Write', 'mcp__unassigned__query', 'mcp__session__browser_tool']) expect(frameworkToolBlockReason(sessionId, tool)).toBeUndefined();
+      expect((await runPreToolUseChecksWithPermissions({ ...context, toolName: 'Write', input: { file_path: guide, content: 'updated' } })).type).toBe('modify');
+      setSessionExecutionPolicy(sessionId, policy);
+      expect(frameworkToolBlockReason(sessionId, 'Write')).toContain('disabled');
+    } finally { release(); }
+  });
   test('all roles can read references and discover package files in either control mode without approvals or prerequisite deadlocks', async () => {
     const packageRoot = join(outside, 'skill');
     mkdirSync(join(packageRoot, 'references'), { recursive: true });
@@ -507,15 +546,8 @@ describe('Super Agent permission ceiling', () => {
     let calls = 0;
     setSessionPolicyPermissionHandler(sessionId, async () => { calls++; return true; });
     for (const [tool, input] of [
-      ['mcp__unassigned__read', { path: outside }],
-      ['mcp__unassigned__write', { path: outside, content: 'x' }],
-      ['mcp__assigned__execute_code', { code: 'run code' }],
       ['mcp__session__call_llm', { prompt: 'delegate' }],
       ['mcp__session__spawn_session', {}],
-      ['mcp__session__sftp_transfer', { direction: 'download' }],
-      ['mcp__session__computer_use', { action: 'screenshot' }],
-      ['mcp__session__computer_use', { action: 'click', x: 100, y: 100 }],
-      ['mcp__session__browser_tool', { command: ['navigate', 'file:///etc/passwd'] }],
       ['Read', { file_path: `${root}/../outside/secret.txt` }],
       ['Bash', { command: 'echo x', run_in_background: true }],
     ] as const) expect((await authorizeSessionPolicyTool(sessionId, tool, input)).allowed).toBe(false);

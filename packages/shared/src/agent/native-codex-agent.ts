@@ -361,9 +361,9 @@ export class NativeCodexAgent extends BaseAgent {
     if (!getBrowserToolEnabled()) defs = defs.filter(def => def.name !== 'mcp__session__browser_tool');
     const sourceDefs = this.config.mcpPool?.getProxyToolDefs() ?? [];
     this.nativeToolAliases.clear();
-    const role = getSessionExecutionPolicy(this._sessionId)?.role;
-    const visibleTools = filterSuperAgentTools([...defs, ...sourceDefs], role).filter(def => !frameworkToolBlockReason(this._sessionId, def.name));
-    assertSuperAgentTools(visibleTools, role);
+    const policy = getSessionExecutionPolicy(this._sessionId);
+    const visibleTools = filterSuperAgentTools([...defs, ...sourceDefs], policy?.role, policy?.architecture, policy?.roleTopologyVersion).filter(def => !frameworkToolBlockReason(this._sessionId, def.name));
+    assertSuperAgentTools(visibleTools, policy?.role, policy?.architecture, policy?.roleTopologyVersion);
     return visibleTools.map(def => {
       // app-server reserves the mcp__ prefix for its own configured MCP servers.
       const nativeName = def.name.startsWith('mcp__') ? `tokenbird__${def.name.slice('mcp__'.length)}` : `tokenbird__${def.name}`;

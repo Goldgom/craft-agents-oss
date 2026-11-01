@@ -124,6 +124,28 @@ async function approveLocalShell(args: ShellExecArgs) {
 }
 
 describe('node permission lifecycle in SessionManager', () => {
+  test('restricted background outside reads emit a real approval and resume the same gated invocation', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, architecture: 'dynamic', role: 'orchestrator', readFiles: false, actionGates: true })
+    manager.attachNodePermissionHandler(managed)
+    const input = { file_path: join(outside, 'requested.txt') }
+    const pending = authorizeSessionPolicyTool(sessionId, 'Read', input, root, undefined, 'background-read')
+    const event = events.find((event): event is PermissionEvent => event.type === 'permission_request')!
+    expect(event.request.policyScope).toMatchObject({ kind: 'file_read', boundary: 'outside-environment' })
+    expect(events.some(event => event.type === 'error')).toBe(false)
+    expect(checkSessionExecutionPolicy(sessionId, 'Read', input, root, 'background-read').allowed).toBe(false)
+    expect(manager.respondToPermission(sessionId, event.request.requestId, true, false)).toBe(true)
+    expect((await pending).allowed).toBe(true)
+    expect(consumeSessionActionGate(sessionId, 'Read', input, root, 'background-read').allowed).toBe(true)
+    expect(claimSessionActionGateDispatch(sessionId, 'Read', input, root, 'background-read').allowed).toBe(true)
+    expect(claimSessionActionGateDispatch(sessionId, 'Read', input, root, 'background-read').allowed).toBe(false)
+  })
+
+  test('background full control reads outside without opening approval even with its read switch off', async () => {
+    managed.executionPolicy = setSessionExecutionPolicy(sessionId, { ...managed.executionPolicy!, architecture: 'dynamic', role: 'orchestrator', fullControl: true, readFiles: false, actionGates: true })
+    expect((await authorizeSessionPolicyTool(sessionId, 'Read', { file_path: join(outside, 'requested.txt') }, root)).allowed).toBe(true)
+    expect(events).toHaveLength(0)
+    expect(manager.pendingNodePermissions.size).toBe(0)
+  })
   test('shared permission revocation clears real operation grants only for the matching workspace', async () => {
     const input = { file_path: join(outside, 'requested.txt') }
     const first = beginPermission('Read', input)

@@ -57,6 +57,7 @@
       "default": "./src/super-agent/index.ts"
     },
     "./super-agent/history": "./src/super-agent/history.ts",
+    "./super-agent/board": "./src/super-agent/board.ts",
     "./skills": "./src/skills/index.ts",
     "./workspaces": "./src/workspaces/index.ts",
     "./utils": "./src/utils/index.ts",

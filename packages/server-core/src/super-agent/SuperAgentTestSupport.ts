@@ -6,6 +6,7 @@ import type { CreateSessionOptions, PermissionRequest, Session, SessionEvent } f
 import type { SessionCompletionEvent } from '../sessions/SessionManager'
 import type { SuperAgentConfig, SuperAgentSessionPolicy } from '@tokenbird/shared/super-agent'
 import type { ThinkingLevel } from '@tokenbird/shared/agent/thinking-levels'
+import { rebuildSuperAgentConfig } from '@tokenbird/shared/super-agent'
 import { SuperAgentService, type SuperAgentSessionHost, type SuperAgentServiceDeps } from './SuperAgentService'
 
 /** Shared deterministic host for the scheduler reliability regression suites. */
@@ -127,7 +128,7 @@ afterEach(async () => {
 })
 
 export async function superAgentFixture(options: Partial<Pick<SuperAgentServiceDeps,
-  'accessResources' | 'rebuildArchitecture' | 'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged' | 'workflow' | 'upgradeArchitecture' | 'actionGates' | 'checkReadiness' | 'resolveNodeSkills' | 'describeNodeBackend' | 'describeNodeSkills' | 'describeResources'>> = {}) {
+  'archiveBoard' | 'accessResources' | 'rebuildArchitecture' | 'spawnScript' | 'resolveEnvironment' | 'prepareEnvironment' | 'onConfigChanged' | 'onChanged' | 'workflow' | 'upgradeArchitecture' | 'actionGates' | 'checkReadiness' | 'resolveNodeSkills' | 'describeNodeBackend' | 'describeNodeSkills' | 'describeResources'>> = {}) {
   const root = await mkdtemp(join(tmpdir(), fixturePrefix))
   const workingDirectory = join(root, 'work')
   await mkdir(workingDirectory)
@@ -151,4 +152,10 @@ export async function until<T>(read: () => Promise<T>, ready: (value: T) => bool
     await new Promise<void>(resolve => setTimeout(resolve, 5))
   }
   throw new Error('Timed out waiting for service state')
+}
+
+/** Persisted pre-v2 dynamic teams remain readable until their safe migration boundary. */
+export function legacyDynamicConfig(config: SuperAgentConfig): SuperAgentConfig {
+  const { roleTopologyVersion: _version, ...rebuilt } = rebuildSuperAgentConfig(config)
+  return { ...rebuilt, nodes: rebuilt.nodes.filter(node => node.role !== 'planner') }
 }

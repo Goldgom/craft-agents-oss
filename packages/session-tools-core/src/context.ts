@@ -458,7 +458,9 @@ export interface SessionToolContext {
   sendCollaborationMessage?(targetMemberId: string, message: string): Promise<SendAgentMessageResult>;
 
   /** Read the collaboration shared board and durable activity history for this session. */
-  getCollaboration?(query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number }): Promise<unknown>;
+  getCollaboration?(query?: { goalId?: string; taskId?: string; itemIds?: string[]; offset?: number; limit?: number;
+    area?: 'board' | 'tasks' | 'plans' | 'requirements' | 'artifacts' | 'nodes'; id?: string; search?: string;
+    view?: 'summary' | 'detail'; contentOffset?: number; maxChars?: number; expectedHash?: string }): Promise<unknown>;
   superAgentAction?(toolName: string, args: Record<string, unknown>): Promise<unknown>;
   superAgentTask?(args: Record<string, unknown>): Promise<unknown>;
   superAgentSettings?(args: Record<string, unknown>): Promise<unknown>;

@@ -138,6 +138,7 @@ interface AgentControlState {
 interface AgentControlLockState {
   active: boolean
   previousResizable: boolean
+  previousBackgroundThrottling: boolean | null
 }
 
 interface BrowserInstance {
@@ -478,6 +479,7 @@ export class BrowserPaneManager implements IBrowserPaneManager {
       lockState: {
         active: false,
         previousResizable: this.getWindowResizable(window),
+        previousBackgroundThrottling: null,
       },
       nativeOverlayReady: false,
       themeColor: null,
@@ -1748,6 +1750,7 @@ export class BrowserPaneManager implements IBrowserPaneManager {
   bindSession(id: string, sessionId: string, options?: { workspaceId?: string | null }): void {
     const instance = this.instances.get(id)
     if (instance) {
+      if (instance.boundSessionId !== sessionId) this.clearAgentControlForInstance(id)
       instance.boundSessionId = sessionId
       instance.ownerType = 'session'
       instance.ownerSessionId = sessionId
@@ -1764,6 +1767,7 @@ export class BrowserPaneManager implements IBrowserPaneManager {
   unbindSession(id: string): void {
     const instance = this.instances.get(id)
     if (instance) {
+      this.clearAgentControlForInstance(id)
       instance.boundSessionId = null
       instance.ownerType = 'manual'
       // Preserve ownerSessionId as last-known owner for lifecycle targeting.
@@ -1775,6 +1779,7 @@ export class BrowserPaneManager implements IBrowserPaneManager {
   unbindAllForSession(sessionId: string): void {
     for (const instance of this.instances.values()) {
       if (instance.boundSessionId === sessionId) {
+        this.clearAgentControlForInstance(instance.id)
         instance.boundSessionId = null
         instance.ownerType = 'manual'
         // Keep ownerSessionId for post-turn lifecycle commands like `close` and `hide`.
@@ -2095,6 +2100,21 @@ export class BrowserPaneManager implements IBrowserPaneManager {
 
   private applyAgentControlLock(instance: BrowserInstance, active: boolean): void {
     const wantsLock = active && !!instance.agentControl?.active
+
+    // Hidden task pages must keep their timers running: Chromium otherwise
+    // stretches chained waits to one minute after extended background use.
+    // Capture once so navigation, hide/show and tool updates cannot overwrite
+    // the setting that must be restored when control is released.
+    const pageWc = instance.pageView.webContents
+    if (!pageWc.isDestroyed()) {
+      if (wantsLock && instance.lockState.previousBackgroundThrottling === null) {
+        instance.lockState.previousBackgroundThrottling = pageWc.getBackgroundThrottling()
+        pageWc.setBackgroundThrottling(false)
+      } else if (!wantsLock && instance.lockState.previousBackgroundThrottling !== null) {
+        pageWc.setBackgroundThrottling(instance.lockState.previousBackgroundThrottling)
+        instance.lockState.previousBackgroundThrottling = null
+      }
+    }
 
     if (wantsLock && !instance.lockState.active) {
       instance.lockState.previousResizable = this.getWindowResizable(instance.window)

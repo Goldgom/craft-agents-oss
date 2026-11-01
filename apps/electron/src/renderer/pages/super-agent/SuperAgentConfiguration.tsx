@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Check, LoaderCircle, Plus, Settings2, Sparkles, Trash2 } from 'lucide-react'
 import type { SuperAgentConfig, SuperAgentEnvironmentStatus } from '@tokenbird/shared/super-agent'
 import type { LlmConnectionWithStatus, LoadedSource } from '../../../shared/types'
@@ -12,6 +13,8 @@ import { AgentAvatar, AvatarEditor, EnvironmentEditor, FormField, FormSection, N
 import { applyPreset, configError, createNode, nodeModels, useSuperAgentText, withExecuteMode, type SuperAgentPreset } from './super-agent-ui'
 import { SuperAgentPresetPicker } from './SuperAgentPresetPicker'
 import { SuperAgentReadiness } from './SuperAgentReadiness'
+import { SuperAgentCompactionSettings } from './SuperAgentCompactionSettings'
+import { SuperAgentPreparationSettings } from './SuperAgentPreparationSettings'
 
 export function SuperAgentConfiguration({ config, connections, sources, skills = [], environmentStatus, onSave, onContinuousWork, onReset, onClearData, onOpenAiSettings, initialNodeId }: {
   config: SuperAgentConfig
@@ -27,6 +30,7 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
   initialNodeId?: string
 }) {
   const text = useSuperAgentText()
+  const { i18n } = useTranslation()
   const [draft, setDraft] = useState(() => withExecuteMode(structuredClone(config)))
   const [selectedNodeId, setSelectedNodeId] = useState(initialNodeId ?? config.nodes[0].id)
   const [section, setSection] = useState<'identity' | 'team' | 'environment'>(initialNodeId ? 'team' : 'identity')
@@ -113,15 +117,8 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
         {section === 'environment' && <>
           <EnvironmentEditor environment={draft.environment} status={environmentStatus} onChange={environment => patch({ environment })} />
           <SuperAgentReadiness config={draft} onChange={requirements => patch({ requirements })} />
-          <FormSection title={text('autoCompaction')}>
-            <p className="text-xs leading-5 text-muted-foreground">{text('autoCompactionHint')}</p>
-            <div className="flex items-center justify-between gap-4"><label htmlFor="auto-context-compaction">{text('autoCompaction')}</label>
-              <Switch id="auto-context-compaction" checked={draft.contextCompaction?.enabled ?? true} onCheckedChange={enabled => patch({ contextCompaction: { tokenThreshold: 252000, saveToMemory: true, ...draft.contextCompaction, enabled } })} /></div>
-            <FormField label={text('compactionThreshold')}><Input type="number" min={8000} max={2000000} step={1000} disabled={draft.contextCompaction?.enabled === false}
-              value={draft.contextCompaction?.tokenThreshold ?? 252000} onChange={event => patch({ contextCompaction: { enabled: true, saveToMemory: true, ...draft.contextCompaction, tokenThreshold: Number(event.target.value) } })} /></FormField>
-            <div className="flex items-center justify-between gap-4"><label htmlFor="compact-to-memory">{text('compactionMemory')}</label>
-              <Switch id="compact-to-memory" checked={draft.contextCompaction?.saveToMemory ?? true} onCheckedChange={saveToMemory => patch({ contextCompaction: { enabled: true, tokenThreshold: 252000, ...draft.contextCompaction, saveToMemory } })} /></div>
-          </FormSection>
+          <SuperAgentCompactionSettings config={draft} connections={connections} onChange={contextCompaction => patch({ contextCompaction })} />
+          <SuperAgentPreparationSettings config={draft} onChange={execution => patch({ execution })} />
           <FormSection title={text('continuity')}><div className="grid gap-4 sm:grid-cols-2">
             {(['connectionConcurrency', 'connectionCallsPerMinute', 'stallMinutes', 'maxResumeAttempts'] as const).map(key => {
               const defaults = { connectionConcurrency: 4, connectionCallsPerMinute: 60, stallMinutes: 15, maxResumeAttempts: 3 }
@@ -134,7 +131,7 @@ export function SuperAgentConfiguration({ config, connections, sources, skills =
       </fieldset>
       {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       <div className="flex items-center justify-end gap-3 border-t border-border/70 pt-5">
-        {saved && <span role="status" className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400"><Check className="size-3.5" />{text('completed')}</span>}
+        {saved && <span role="status" className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400"><Check className="size-3.5" />{i18n.language.startsWith('zh') ? '已保存，将在当前轮次结束后的下一轮对话生效' : 'Saved. Applies to the next conversation turn after active turns finish.'}</span>}
         <Button disabled={pending} onClick={() => void save()}>{pending ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}{text('save')}</Button>
       </div>
       {onClearData && <section className="space-y-3 rounded-xl border border-destructive/25 p-4">

@@ -30,7 +30,7 @@ test('new TokenNest teams start with configured available models without fixed w
   const text: SuperAgentText = key => key
   const config = createDynamicConfig([connection], text)
   expect(config.modelPool).toHaveLength(17)
-  expect(config.nodes.map(node => node.role)).toEqual(['coordinator', 'orchestrator'])
+  expect(config.nodes.map(node => node.role)).toEqual(['coordinator', 'planner', 'orchestrator'])
 })
 
 test('adding presets is idempotent, preserves user notes, scores, enablement and connection identity', () => {

@@ -34,6 +34,8 @@ export const OperationSchema = z.object({ id, key: z.string().regex(/^[a-f0-9]{6
   status: z.enum(['prepared', 'running', 'completed', 'unknown', 'reconciled']),
   createdAt: z.number(), updatedAt: z.number(), resultHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   resultIsError: z.boolean().optional(),
+  /** Host-audited impact scope; absence preserves legacy task-wide resource claims. */
+  resourceClaims: z.array(z.string().min(1).max(4096)).max(32).optional(),
   reconciliation: z.object({ evidenceTaskId: id, note: z.string().min(1).max(4000), outcome: z.enum(['completed', 'not-executed']) }).strict().optional(),
 }).strict()
 export const MetricsSchema = z.object({ modelTurns: z.number().int().min(0), toolCalls: z.number().int().min(0), retries: z.number().int().min(0),
@@ -60,7 +62,7 @@ export type SuperAgentMetrics = z.infer<typeof MetricsSchema>
 
 export const StatisticsSchema = z.object({
   since: z.number().min(0),
-  nodes: z.array(z.object({ nodeId: id, name: z.string(), role: z.enum(['coordinator', 'orchestrator', 'worker']), model: z.string(),
+  nodes: z.array(z.object({ nodeId: id, name: z.string(), role: z.enum(['coordinator', 'planner', 'orchestrator', 'worker']), model: z.string(),
     turns: z.number().int().min(0), toolCalls: z.number().int().min(0), failures: z.number().int().min(0),
     executionMs: z.number().min(0), outputTokens: z.number().min(0), costUsd: z.number().min(0),
     usageObservations: z.number().int().min(0), costObservations: z.number().int().min(0),

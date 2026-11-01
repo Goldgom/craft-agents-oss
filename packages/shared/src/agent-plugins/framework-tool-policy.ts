@@ -1,4 +1,5 @@
 import type { BackendFrameworkConfiguration } from './frameworks.ts';
+import { hasSessionFullControl } from '../agent/core/session-execution-policy.ts';
 
 const policies = new Map<string, { owner: object; features: BackendFrameworkConfiguration['features'] }>();
 export function registerFrameworkToolPolicy(sessionId: string, owner: object, features: BackendFrameworkConfiguration['features']): () => void {
@@ -7,6 +8,7 @@ export function registerFrameworkToolPolicy(sessionId: string, owner: object, fe
 }
 
 export function frameworkToolBlockReason(sessionId: string, toolName: string): string | undefined {
+  if (hasSessionFullControl(sessionId)) return;
   const features = policies.get(sessionId)?.features;
   if (!features) return;
   const name = toolName.replace(/^mcp__session__/, '');

@@ -1,6 +1,7 @@
+import { legacyDynamicConfig as rebuildSuperAgentConfig } from './SuperAgentTestSupport'
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { loadSuperAgentDocument, rebuildSuperAgentConfig } from '@tokenbird/shared/super-agent'
+import { loadSuperAgentDocument } from '@tokenbird/shared/super-agent'
 import { SESSION_TOOL_REGISTRY, type SessionToolContext } from '@tokenbird/session-tools-core'
 import { filterSuperAgentTools } from '@tokenbird/shared/agent/core/browser-tool-policy'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
@@ -20,6 +21,72 @@ async function interaction(credentialAccess?: boolean) {
 }
 
 describe('AI Super Agent settings', () => {
+  test('preserves a newer continuous-work toggle while other saved settings await activation', async () => {
+    const f = await configured()
+    await f.service.command('alpha', { type: 'chat', text: 'Continue' })
+    await until(() => f.service.get('alpha'), () => f.host.sends.length === 1)
+    await f.service.save('alpha', { ...f.config, name: 'Pending name', continuousWork: true })
+    const snapshot = await f.service.command('alpha', { type: 'continuous-work', enabled: false })
+    expect(snapshot.config!.name).toBe('Pending name')
+    expect(snapshot.config!.continuousWork).toBe(false)
+    expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).pendingConfig!.continuousWork).toBe(false)
+  })
+
+  test('waits for parallel active turns before retiring the old execution environment', async () => {
+    let reconciliations = 0
+    const f = await superAgentFixture({ onConfigChanged: async () => { reconciliations++ } })
+    await f.service.save('alpha', f.config)
+    await f.service.command('alpha', { type: 'chat', text: 'Discuss current work' })
+    await f.service.command('alpha', { type: 'task', title: 'Work', instructions: 'Execute' })
+    const running = await until(() => f.service.get('alpha'), () => f.host.sends.length === 2)
+    const next = { ...running.config!, environment: { ...running.config!.environment, permissions: { ...running.config!.environment.permissions, writeFiles: false } } }
+    await f.service.save('alpha', next)
+    expect(reconciliations).toBe(1)
+    const main = running.state.nodes.find(node => node.nodeId === 'main')!.sessionId!
+    f.host.complete(main, 'Current response')
+    await f.service.get('alpha')
+    expect(reconciliations).toBe(1)
+    expect(f.host.cancelled).toHaveLength(0)
+    const worker = running.state.nodes.find(node => node.nodeId === 'worker')!.sessionId!
+    f.host.complete(worker, 'Work complete')
+    f.advance(1001)
+    await f.service.tick()
+    await until(() => f.service.get('alpha'), () => reconciliations === 2)
+    expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).pendingConfig).toBeUndefined()
+  })
+
+  test('persists edits during a running turn and applies the latest model and policy before the queued turn', async () => {
+    const f = await configured()
+    await f.service.command('alpha', { type: 'chat', text: 'First conversation' })
+    const running = await until(() => f.service.get('alpha'), () => f.host.sends.length === 1)
+    const firstSession = f.host.sends[0]!.sessionId
+    const next = { ...running.config!, name: 'Updated team', nodes: running.config!.nodes.map(node => ({ ...node, model: 'next-model' })),
+      environment: { ...running.config!.environment, credentialAccess: false } }
+    const saved = await f.service.save('alpha', next)
+    expect(saved.config).toEqual(next)
+    expect(saved.state.nodes).toEqual(running.state.nodes)
+    expect(f.host.options.get(firstSession)!.model).toBe('existing-model')
+    expect(f.host.policies.get(firstSession)!.credentialAccess).toBe(true)
+    const persisted = await loadSuperAgentDocument(join(f.root, 'alpha'))
+    expect(persisted.pendingConfig).toEqual(next)
+    expect(persisted.config).toEqual(running.config)
+    const latest = { ...next, name: 'Latest team' }
+    await f.service.save('alpha', latest)
+    await f.service.command('alpha', { type: 'chat', text: 'Second conversation' })
+    expect(f.host.sends).toHaveLength(1)
+    expect(f.host.cancelled).toHaveLength(0)
+    f.host.complete(firstSession, 'First answer')
+    f.advance(1001)
+    await f.service.tick()
+    await until(() => f.service.get('alpha'), () => f.host.sends.length === 2)
+    const secondSession = f.host.sends[1]!.sessionId
+    expect(secondSession).not.toBe(firstSession)
+    expect(f.host.options.get(secondSession)!.model).toBe('next-model')
+    expect(f.host.options.get(secondSession)!.name).toContain('Latest team')
+    expect(f.host.policies.get(secondSession)!.credentialAccess).toBe(false)
+    expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).pendingConfig).toBeUndefined()
+  })
+
   for (const credentialAccess of [undefined, false, true]) {
     for (const kind of ['chat', 'task'] as const) {
       test(`${kind} reconciles legacy and explicit credential access ${credentialAccess}`, async () => {
@@ -129,14 +196,14 @@ describe('AI Super Agent settings', () => {
     expect((await f.service.get('alpha')).state.messages.some(m => m.body.includes('Settings update was not saved'))).toBe(true)
   })
 
-  test('rejects normal chat edits during work and worker access', async () => {
+  test('saves external edits during work and still rejects worker access', async () => {
     const f = await configured()
     await f.service.command('alpha', { type: 'task', title: 'Work', instructions: 'Execute' })
     const running = await until(() => f.service.get('alpha'), s => s.state.nodes[1]?.status === 'working')
     const before = await f.read()
-    await expect(f.service.accessSettings('alpha', { action: 'update', expectedRevision: before.revision, changes: { name: 'Busy' } })).rejects.toThrow('Stop active')
+    await f.service.accessSettings('alpha', { action: 'update', expectedRevision: before.revision, changes: { name: 'Busy' } })
     await expect(f.service.accessSettings('alpha', { action: 'get' }, running.state.nodes[1]!.sessionId!)).rejects.toThrow('interaction node')
-    expect((await f.read()).config.name).toBe(before.config.name)
+    expect((await f.service.get('alpha')).config!.name).toBe('Busy')
   })
 
   test('tool is registered, errors are returned, and visibility is restricted to the interaction node', async () => {
