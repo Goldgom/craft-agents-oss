@@ -3,7 +3,7 @@ import { useMemo, useEffect, useRef, useCallback, useState } from 'react'
 import i18n from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { ToolElapsed } from './ToolElapsed'
-import type { ToolDisplayMeta, AnnotationV1 } from '@tokenbird/core'
+import type { ToolDisplayMeta, AnnotationV1, Message } from '@tokenbird/core'
 import { normalizePath, pathStartsWith, stripPathPrefix } from '@tokenbird/core/utils'
 import { isParentTaskTool } from '@tokenbird/shared/utils/toolNames'
 import { motion, AnimatePresence } from 'motion/react'
@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { Markdown } from '../markdown'
+import { UserMessageBubble } from './UserMessageBubble'
 import { Spinner } from '../ui/LoadingIndicator'
 import { type IslandTransitionConfig } from '../ui'
 import { AnnotationIslandMenu } from '../annotations/AnnotationIslandMenu'
@@ -218,7 +219,7 @@ export const SIZE_CONFIG = {
 // ============================================================================
 
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
-export type ActivityType = 'tool' | 'thinking' | 'intermediate' | 'status' | 'plan'
+export type ActivityType = 'tool' | 'thinking' | 'intermediate' | 'agent-message' | 'status' | 'plan'
 export type AnnotationInteractionMode = 'interactive' | 'tooltip-only'
 
 // ============================================================================
@@ -244,6 +245,8 @@ export interface ActivityItem {
   toolUseId?: string  // For matching parent-child relationships
   toolInput?: Record<string, unknown>
   content?: string
+  /** Original incoming agent message, including attachments, badges and queue state. */
+  sourceMessage?: Message
   intent?: string
   /** Optional backing message id (used by plan activities for branching/annotations) */
   messageId?: string
@@ -736,17 +739,6 @@ function getPreviewText(
     return runningTask.toolInput.description as string
   }
 
-  // While still streaming, show the latest intermediate message content
-  // This gives visibility into what the LLM is "thinking"
-  if (isStreaming && !isComplete) {
-    const latestIntermediate = [...activities]
-      .reverse()
-      .find(a => a.type === 'intermediate' && a.content)
-    if (latestIntermediate?.content) {
-      return latestIntermediate.content
-    }
-  }
-
   // Get running and completed tools (not intermediate messages)
   const runningTools = activities.filter(a => a.status === 'running' && a.toolName)
   const errorCount = activities.filter(a => a.status === 'error').length
@@ -776,7 +768,7 @@ function getPreviewText(
     return `${i18n.t('turnCard.stepsCompleted')}${errorSuffix}`
   }
 
-  return i18n.t('turnCard.starting')
+  return i18n.t(isStreaming ? 'chat.processing.thinking' : 'turnCard.starting')
 }
 
 
@@ -872,6 +864,8 @@ export function ActivityStatusIcon({
 
 interface ActivityRowProps {
   activity: ActivityItem
+  onOpenFile?: (path: string) => void
+  onOpenUrl?: (url: string) => void
   /** Callback to open activity details in Monaco */
   onOpenDetails?: () => void
   /** Whether this is the last child at its depth level (for └ corner in tree view) */
@@ -901,8 +895,23 @@ function TreeViewConnector({ depth }: { depth: number; isLastChild?: boolean }) 
 }
 
 /** Single activity row in expanded view */
-function ActivityRow({ activity, onOpenDetails, isLastChild, sessionFolderPath, displayMode = 'detailed' }: ActivityRowProps) {
+function ActivityRow({ activity, onOpenDetails, onOpenFile, onOpenUrl, isLastChild, sessionFolderPath, displayMode = 'detailed' }: ActivityRowProps) {
   const depth = activity.depth || 0
+
+  // Mounted only after the shared thinking section is expanded.
+  if (activity.type === 'agent-message' && activity.sourceMessage) {
+    const message = activity.sourceMessage
+    return <div className="py-1">
+      <UserMessageBubble
+        content={message.content}
+        attachments={message.attachments}
+        badges={message.badges}
+        isQueued={message.isQueued}
+        onFileClick={onOpenFile}
+        onUrlClick={onOpenUrl}
+      />
+    </div>
+  }
 
   // Intermediate messages (LLM commentary) - render with dashed circle icon
   // Show "Thinking" while streaming, stripped markdown content when complete
@@ -1214,6 +1223,8 @@ function ActivityRow({ activity, onOpenDetails, isLastChild, sessionFolderPath, 
 
 interface ActivityGroupRowProps {
   group: ActivityGroup
+  onOpenFile?: (path: string) => void
+  onOpenUrl?: (url: string) => void
   /** Controlled expansion state for activity groups */
   expandedGroups?: Set<string>
   /** Callback when expansion changes */
@@ -1232,7 +1243,7 @@ interface ActivityGroupRowProps {
  * Renders a Task subagent with its child activities grouped together.
  * Provides visual containment and collapsible children.
  */
-function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExpandedGroupsChange, onOpenActivityDetails, animationIndex = 0, sessionFolderPath, displayMode = 'detailed' }: ActivityGroupRowProps) {
+function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExpandedGroupsChange, onOpenActivityDetails, onOpenFile, onOpenUrl, animationIndex = 0, sessionFolderPath, displayMode = 'detailed' }: ActivityGroupRowProps) {
   // Use local state if no controlled state provided
   const [localExpandedGroups, setLocalExpandedGroups] = useState<Set<string>>(new Set())
   const expandedGroups = externalExpandedGroups ?? localExpandedGroups
@@ -1368,6 +1379,8 @@ function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExp
                 >
                   <ActivityRow
                     activity={child}
+                    onOpenFile={onOpenFile}
+                    onOpenUrl={onOpenUrl}
                     onOpenDetails={onOpenActivityDetails ? () => onOpenActivityDetails(child) : undefined}
                     isLastChild={idx === group.children.length - 1}
                     sessionFolderPath={sessionFolderPath}
@@ -2967,6 +2980,7 @@ export const TurnCard = React.memo(function TurnCard({
           {/* Collapsed Header / Toggle */}
           <button
             onClick={toggleExpanded}
+            aria-expanded={isExpanded}
             className={cn(
               "flex items-center gap-2 w-full pl-2.5 pr-1.5 py-1.5 rounded-[8px] text-left",
               SIZE_CONFIG.fontSize,
@@ -3051,6 +3065,8 @@ export const TurnCard = React.memo(function TurnCard({
                         <ActivityGroupRow
                           key={item.parent.id}
                           group={item}
+                          onOpenFile={onOpenFile}
+                          onOpenUrl={onOpenUrl}
                           expandedGroups={expandedActivityGroups}
                           onExpandedGroupsChange={handleExpandedActivityGroupsChange}
                           onOpenActivityDetails={onOpenActivityDetails}
@@ -3071,6 +3087,8 @@ export const TurnCard = React.memo(function TurnCard({
                         >
                           <ActivityRow
                             activity={item}
+                            onOpenFile={onOpenFile}
+                            onOpenUrl={onOpenUrl}
                             onOpenDetails={onOpenActivityDetails ? () => onOpenActivityDetails(item) : undefined}
                             sessionFolderPath={sessionFolderPath}
                             displayMode={displayMode}
@@ -3094,6 +3112,8 @@ export const TurnCard = React.memo(function TurnCard({
                       >
                         <ActivityRow
                           activity={activity}
+                          onOpenFile={onOpenFile}
+                          onOpenUrl={onOpenUrl}
                           onOpenDetails={onOpenActivityDetails ? () => onOpenActivityDetails(activity) : undefined}
                           isLastChild={lastChildSet.has(activity.id)}
                           sessionFolderPath={sessionFolderPath}

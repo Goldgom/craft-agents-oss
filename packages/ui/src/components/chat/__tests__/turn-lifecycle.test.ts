@@ -315,13 +315,9 @@ describe('turn lifecycle scenarios', () => {
     })
   })
 
-  // Mirrors the messaging-gateway/renderer.ts lastAssistantText fallback (PR #779).
-  // When the Pi agent emits intermediate text + a tool call and then completes
-  // without a non-intermediate text_complete, the chat must not sit on "Thinking…"
-  // forever. The session.isProcessing=false signal triggers the existing
-  // "promote last intermediate text to response" branch in groupMessagesByTurn.
+  // Activity-only runs finish without exposing process commentary as an answer.
   describe('tool-terminated run — session-complete fallback', () => {
-    it('intermediate text + completed tool + session done → phase complete, intermediate promoted to response', () => {
+    it('intermediate text + completed tool + session done → phase complete, commentary stays folded', () => {
       resetCounters()
       turnIdCounter++
 
@@ -333,7 +329,8 @@ describe('turn lifecycle scenarios', () => {
       const turns = groupMessagesByTurn(messages, { isSessionProcessing: false })
       const turn = getLastAssistantTurn(turns)!
       expect(deriveTurnPhase(turn)).toBe('complete')
-      expect(turn.response?.text).toBe('Response text') // promoted from the intermediate
+      expect(turn.response).toBeUndefined()
+      expect(turn.activities).toContainEqual(expect.objectContaining({ type: 'intermediate', content: 'Response text' }))
     })
 
     it('intermediate text + completed tool + session still processing → phase awaiting', () => {

@@ -49,11 +49,12 @@ export function ActiveTasksBar({ tasks, sessionId, onKillTask, onInsertMessage, 
   }, [sessionId, setTasks])
 
   // Don't render if no tasks
-  if (tasks.length === 0) return null
+  const activeTasks = tasks.filter(task => task.status === 'running' || task.status === 'stale')
+  if (activeTasks.length === 0) return null
 
   return (
     <>
-      {tasks.map((task) => (
+      {activeTasks.map((task) => (
         <TaskActionMenu
           key={task.id}
           task={task}

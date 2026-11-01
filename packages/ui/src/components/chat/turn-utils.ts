@@ -9,6 +9,7 @@ import type { Message, StoredMessage, MessageRole } from '@tokenbird/core'
 import { isParentTaskTool } from '@tokenbird/shared/utils/toolNames'
 import { isRecoveryInfo } from '@tokenbird/shared/utils/recovery-info'
 import { storedToMessage } from '@tokenbird/core'
+import { parseAgentMessage } from './agent-message'
 
 export { storedToMessage }
 import type { ActivityItem, ActivityStatus, ActivityType, ResponseContent, TodoItem } from './TurnCard'
@@ -364,12 +365,8 @@ export interface GroupTurnsOptions {
   /**
    * Whether the session is still actively processing.
    *
-   * When `false`, the open turn (if any has activities) is marked complete
-   * before the final flush, so the existing "promote last intermediate text
-   * to response" branch fires and the chat doesn't sit on "Thinking…" forever
-   * when a turn ends on a tool call with no non-intermediate `text_complete`.
-   *
-   * Mirrors the messaging-gateway/renderer.ts lastAssistantText fallback.
+   * When `false`, finish the open activity turn without promoting process
+   * commentary to a final response or leaving a perpetual thinking indicator.
    */
   isSessionProcessing?: boolean
 }
@@ -378,7 +375,8 @@ export interface GroupTurnsOptions {
  * Groups messages into turns for TurnCard rendering
  *
  * Rules:
- * - User messages flush and start fresh context
+ * - Human user messages flush and start fresh context
+ * - Incoming agent messages belong to the current turn's folded activities
  * - Tool messages + intermediate assistant messages belong to current turn
  * - Final assistant message (non-streaming, non-intermediate) flushes the turn
  * - Error/status/info messages are standalone system turns
@@ -433,26 +431,6 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
         currentTurn.isComplete = true
       }
 
-      // If no response but we have intermediate text, promote the last one to response
-      // Don't do this for interrupted turns - respect user interruptions
-      // Don't do this for turns with plans - the plan is the final output
-      // Only promote when turn is complete (processing indicator hidden)
-      const hasPlan = currentTurn.activities.some(a => a.type === 'plan')
-      if (!interrupted && !hasPlan && !currentTurn.response && currentTurn.isComplete && currentTurn.activities.length > 0) {
-        // Find the last intermediate text activity (reverse to get most recent)
-        const lastTextActivity = [...currentTurn.activities]
-          .reverse()
-          .find(a => a.type === 'intermediate' && a.content)
-
-        if (lastTextActivity?.content) {
-          currentTurn.response = {
-            text: lastTextActivity.content,
-            isStreaming: false,
-            messageId: lastTextActivity.id,
-          }
-        }
-      }
-
       turns.push(currentTurn)
       currentTurn = null
     }
@@ -472,7 +450,31 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
       continue
     }
 
-    // User messages are their own turn
+    // Peer communication is process activity, not a human message or a turn boundary.
+    if (message.role === 'user' && parseAgentMessage(message.content)) {
+      if (!currentTurn) {
+        currentTurn = {
+          type: 'assistant',
+          turnId: message.turnId || message.id,
+          activities: [],
+          isStreaming: false,
+          isComplete: false,
+          timestamp: message.timestamp,
+        }
+      }
+      currentTurn.activities.push({
+        id: message.id,
+        type: 'agent-message',
+        status: 'completed',
+        content: message.content,
+        sourceMessage: message,
+        timestamp: message.timestamp,
+        depth: 0,
+      })
+      continue
+    }
+
+    // Human user messages are their own turn
     if (message.role === 'user') {
       // If there's a current turn, it's complete (something follows it)
       if (currentTurn) currentTurn.isComplete = true
@@ -725,11 +727,8 @@ export function groupMessagesByTurn(messages: Message[], options: GroupTurnsOpti
     }
   }
 
-  // Session-complete fallback (mirrors messaging-gateway/renderer.ts lastAssistantText fallback).
-  // When the session has stopped processing and the open turn has activities but never received
-  // a non-intermediate assistant final, mark it complete so the existing "promote last
-  // intermediate to response" branch in flushCurrentTurn fires. Without this the chat sits on
-  // "Thinking…" forever when a turn ends on a tool call.
+  // Finish activity-only runs when processing stops. Commentary stays folded even
+  // when the model ends on a tool call without sending a final answer.
   if (
     options.isSessionProcessing === false
     && currentTurn
@@ -817,7 +816,9 @@ export function formatTurnAsMarkdown(turn: AssistantTurn): string {
     lines.push('')
 
     for (const activity of turn.activities) {
-      if (activity.type === 'intermediate') {
+      if (activity.type === 'agent-message') {
+        lines.push('### Agent Message', '', activity.content ?? '', '')
+      } else if (activity.type === 'intermediate') {
         // Intermediate text (thinking/commentary)
         lines.push(`### 💭 Commentary`)
         lines.push('')
@@ -903,6 +904,10 @@ export function formatTurnAsMarkdown(turn: AssistantTurn): string {
  */
 export function formatActivityAsMarkdown(activity: ActivityItem): string {
   const lines: string[] = []
+
+  if (activity.type === 'agent-message') {
+    return ['# Agent Message', '', activity.content ?? ''].join('\n')
+  }
 
   if (activity.type === 'intermediate') {
     // Commentary/thinking

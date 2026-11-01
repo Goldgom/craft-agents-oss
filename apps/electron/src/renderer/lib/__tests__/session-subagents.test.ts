@@ -5,6 +5,11 @@ import { conversationListSessions, conversationSearchResults, sessionConversatio
 const session = (id: string, fields: Partial<SessionMeta> = {}): SessionMeta => ({ id, workspaceId: 'ws', ...fields })
 
 describe('subagent conversation presentation', () => {
+  it('removes finished children from live chat activity while preserving transcript search', () => {
+    const items = [session('main', { lastMessageAt: 1 }), session('child', { parentSessionId: 'main', sessionStatus: 'done', hasUnread: true, lastMessageAt: 20 })]
+    expect(conversationListSessions(items)).toEqual([items[0]!])
+    expect(conversationSearchResults(items, new Map([['child', { matchCount: 1, snippet: 'saved result' }]])).get('main')?.subagentMatchCount).toBe(1)
+  })
   it('keeps one parent row with live child activity and unread state without changing canonical metadata', () => {
     const parent = session('main', { name: 'Main', lastMessageAt: 1 })
     const child = session('child', { parentSessionId: 'main', isProcessing: true, lastMessageAt: 5, hasUnread: true })

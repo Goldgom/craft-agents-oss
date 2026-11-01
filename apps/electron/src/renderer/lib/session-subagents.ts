@@ -1,5 +1,9 @@
 import type { SessionMeta } from '../atoms/sessions'
 
+export function isFinishedSubagent(session: SessionMeta): boolean {
+  return !session.isProcessing && (session.sessionStatus === 'done' || session.sessionStatus === 'cancelled')
+}
+
 /** Resolve only accessible, same-workspace parents. Orphans stay discoverable. */
 export function sessionConversationId(session: SessionMeta, byId: ReadonlyMap<string, SessionMeta>): string {
   const path: string[] = []
@@ -21,6 +25,7 @@ export function conversationListSessions(items: SessionMeta[]): SessionMeta[] {
   const groups = new Map<string, SessionMeta[]>()
   for (const item of visible) {
     const root = sessionConversationId(item, byId)
+    if (root !== item.id && isFinishedSubagent(item)) continue
     const group = groups.get(root) ?? []
     group.push(item)
     groups.set(root, group)

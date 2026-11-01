@@ -161,7 +161,8 @@ export const subagentSessionsAtomFamily = atomFamily((parentId: string) => selec
     const parent = map.get(parentId)
     const branchRoot = parent ? sessionBranchRootId(parent, map) : undefined
     return [...map.values()].filter(session => {
-      if (session.hidden || session.id === parentId || session.workspaceId !== parent?.workspaceId || !session.parentSessionId) return false
+      if (session.hidden || session.id === parentId || session.workspaceId !== parent?.workspaceId || !session.parentSessionId
+        || (!session.isProcessing && (session.sessionStatus === 'done' || session.sessionStatus === 'cancelled'))) return false
       const owner = map.get(session.parentSessionId)
       return !!owner && !owner.hidden && sessionBranchRootId(owner, map) === branchRoot
     })
