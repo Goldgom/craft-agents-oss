@@ -3,7 +3,11 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { loadSuperAgentDocument, saveSuperAgentDocument } from '@tokenbird/shared/super-agent'
 import { SuperAgentService } from './SuperAgentService'
-import { operationReceipt } from './SuperAgentOperationReceipts'
+import { operationReceipt, terminalReceiptOutcome } from './SuperAgentOperationReceipts'
+import { archivedReceiptSession } from './SuperAgentReceiptArchive'
+import { readFile, writeFile } from 'node:fs/promises'
+import { messageToStored } from '@tokenbird/core/types'
+import { saveSession } from '@tokenbird/shared/sessions'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
 const actions = (value: unknown) => `<super_agent_actions>${JSON.stringify(value)}</super_agent_actions>`
@@ -37,6 +41,130 @@ async function original(unknown = true, receipt?: string) {
   return { f, operationId: snapshot.state.operations![0]!.id, sessionId }
 }
 const accept = (evidenceTaskId = 'original') => ({ taskId: 'original', evidenceTaskId, status: 'accepted', note: 'Verified result' })
+
+test('missing live receipts fall back to durable exact journals; unknown recovery is idempotent and never implies non-execution', async () => {
+  const { f, operationId, sessionId } = await original(true, 'Remote transport disconnected after dispatch')
+  f.host.sessions.get(sessionId)!.messages = []
+  await f.service.command('alpha', { type: 'task', id: 'verify', title: 'Verify', nodeId: 'verifier', instructions: `Verify ${operationId}` })
+  const verifier = await active(f, 'verifier')
+  const request = { action: 'recover', operationId, requestId: 'recover-1', note: 'Read original host evidence without replay' }
+  const recovered = await f.service.updateNodeTask('alpha', verifier, request)
+  if (recovered.action !== 'recover') throw new Error('Expected recovery receipt')
+  expect(recovered.operationReceipts[0]).toMatchObject({ availability: 'available', source: 'host-journal', result: 'Remote transport disconnected after dispatch' })
+  expect(recovered.operation).toMatchObject({ status: 'unknown' })
+  expect(recovered.recovery).toMatchObject({ requestId: 'recover-1', before: 'unknown', after: 'unknown', outcome: 'unknown', actorNodeId: 'verifier' })
+  await f.service.updateNodeTask('alpha', verifier, request)
+  await expect(f.service.updateNodeTask('alpha', verifier, { ...request, note: 'Changed intent' })).rejects.toThrow('request ID')
+  const saved = await loadSuperAgentDocument(join(f.root, 'alpha'))
+  expect(saved.state.operations![0]!.recovery).toHaveLength(1)
+  expect(saved.state.tasks[0]!.acceptance).toBeUndefined()
+  expect(f.host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(1)
+})
+
+test('unrelated workers cannot recover or read an operation and no journal body enters coordination state', async () => {
+  const { f, operationId } = await original(true, 'PRIVATE_ORIGINAL_RESULT')
+  await f.service.command('alpha', { type: 'task', id: 'unrelated', title: 'Other', nodeId: 'verifier', instructions: 'Unrelated work' })
+  const verifier = await active(f, 'verifier')
+  await expect(f.service.updateNodeTask('alpha', verifier, { action: 'recover', operationId, requestId: 'unauthorized', note: 'Claim visibility' })).rejects.toThrow('visible operation')
+  const saved = await loadSuperAgentDocument(join(f.root, 'alpha'))
+  expect(JSON.stringify(saved.state.operations)).not.toContain('PRIVATE_ORIGINAL_RESULT')
+})
+
+test.each(['succeeded', 'failed'] as const)('restart recovers legacy %s terminal evidence from the original archived session without accepting the task', async outcome => {
+  const { f, operationId, sessionId } = await original()
+  await f.service.cleanup()
+  const root = join(f.root, 'alpha')
+  const toolName = outcome === 'failed' ? 'Bash' : 'mcp__crm__update'
+  const result = outcome === 'failed' ? '[ERROR] [executed on server] cwd=C:\\work\nexit code 2\n\nSTDOUT:\ncompile failed' : 'Original successful output'
+  const document = await loadSuperAgentDocument(root)
+  document.pendingTurns = []; document.failedTurns = []
+  const operation = document.state.operations![0]!
+  operation.toolName = toolName; operation.resultHash = createHash('sha256').update(`${toolName}\n${result}`).digest('hex')
+  operation.inputHash = undefined // pre-journal legacy invocation
+  const input = { command: 'original-command' }
+  await saveSession({ id: sessionId, workspaceRootPath: root, createdAt: f.now(), lastUsedAt: f.now(), isArchived: true,
+    messages: [messageToStored({ id: 'original-archived-result', role: 'tool', content: '', timestamp: f.now(), toolName,
+      toolUseId: 'original-call', toolInput: input, toolResult: result, toolStatus: outcome === 'failed' ? 'error' : 'completed', isError: outcome === 'failed' })],
+    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, contextTokens: 0, costUsd: 0 } })
+  await saveSuperAgentDocument(root, document)
+  f.host.sessions.get(sessionId)!.messages = []
+  const service = new SuperAgentService({ host: f.host, rootForWorkspace: id => join(f.root, id), now: f.now, autoTick: false })
+  try {
+    const restored = await service.get('alpha')
+    expect(restored.state.operations![0]).toMatchObject({ id: operationId, status: 'completed', executionOutcome: outcome,
+      recovery: [expect.objectContaining({ source: 'session-archive', before: 'unknown', after: 'completed', outcome })] })
+    expect(restored.state.tasks[0]).toMatchObject({ status: 'failed', output: 'Submitted deliverable', phase: 'submitted' })
+    expect(restored.state.tasks[0]!.acceptance).toBeUndefined()
+    expect(restored.state.tasks).toHaveLength(1)
+    expect(f.host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(1)
+  } finally { await service.cleanup() }
+})
+
+test('journal corruption and changed transcript cannot restore a receipt using only its stored hash', async () => {
+  const { f, operationId, sessionId } = await original(true, 'Original error')
+  const path = join(f.root, 'alpha', 'super-agent', 'operation-receipts', `${operationId}.json`)
+  const journal = JSON.parse(await readFile(path, 'utf8'))
+  journal.result = 'Invented result'
+  await writeFile(path, JSON.stringify(journal))
+  f.host.sessions.get(sessionId)!.messages![0]!.toolResult = 'Changed transcript'
+  const op = (await f.service.get('alpha')).state.operations![0]!
+  await expect(archivedReceiptSession(join(f.root, 'alpha'), 'alpha', op)).rejects.toThrow('hash mismatch')
+  await f.service.command('alpha', { type: 'task', id: 'verify', title: 'Verify', nodeId: 'verifier', instructions: `Verify ${operationId}` })
+  const verifier = await active(f, 'verifier')
+  const recovered = await f.service.updateNodeTask('alpha', verifier, { action: 'recover', operationId, requestId: 'corruption-check', note: 'Inspect original evidence' })
+  if (recovered.action !== 'recover') throw new Error('Expected recovery receipt')
+  expect(recovered.operation.status).toBe('unknown')
+  expect(recovered.recovery).toMatchObject({ outcome: 'unknown', availability: 'hash-mismatch' })
+})
+
+test('host recovery refuses a still-active original session even with a matching terminal transcript', async () => {
+  const { f, operationId, sessionId } = await original()
+  const op = (await f.service.get('alpha')).state.operations![0]!
+  f.host.sessions.get(sessionId)!.messages = [{ id: 'terminal', role: 'tool', content: '', timestamp: f.now(),
+    toolName: op.toolName, toolUseId: op.invocationId, toolResult: 'Success', toolStatus: 'completed' }]
+  f.host.sessions.get(sessionId)!.isProcessing = true
+  await f.service.command('alpha', { type: 'task', id: 'verify', title: 'Verify', nodeId: 'verifier', instructions: `Verify ${operationId}` })
+  const verifier = await active(f, 'verifier')
+  const recovered = await f.service.updateNodeTask('alpha', verifier, { action: 'recover', operationId, requestId: 'active-check', note: 'Check terminal state' })
+  if (recovered.action !== 'recover') throw new Error('Expected recovery receipt')
+  expect(recovered.operation.status).toBe('unknown')
+  expect(recovered.recovery?.availability).toBe('execution-active-or-unconfirmed')
+})
+
+test('terminal classification trusts native read failures but never remote tools with lookalike names or pending results', () => {
+  const operation = { id: 'op1', key: '0'.repeat(64), turnId: 'turn', nodeId: 'worker', sessionId: 'session', invocationId: 'call',
+    toolName: 'Read', status: 'unknown' as const, createdAt: 1, updatedAt: 1 }
+  const session = { id: 'session', workspaceId: 'alpha', messages: [{ id: 'result', role: 'tool' as const, content: '', timestamp: 1,
+    toolName: 'Read', toolUseId: 'call', toolResult: 'File missing', toolStatus: 'error' as const, isError: true }] }
+  expect(terminalReceiptOutcome(operationReceipt(operation, session, 'alpha'))).toBe('failed')
+  expect(terminalReceiptOutcome(operationReceipt({ ...operation, toolName: 'mcp__external__Read' }, { ...session, messages: [{ ...session.messages[0]!, toolName: 'mcp__external__Read' }] }, 'alpha'))).toBe('unknown')
+  expect(terminalReceiptOutcome(operationReceipt(operation, { ...session, messages: [{ ...session.messages[0]!, toolStatus: 'executing' }] }, 'alpha'))).toBe('unknown')
+})
+
+test('a failed verifier repairs its own terminal shell call without a completed second verifier or automatic verifier chain', async () => {
+  const { f, operationId } = await original()
+  await f.service.command('alpha', { type: 'task', id: 'verify', title: 'Verify', nodeId: 'verifier', instructions: `Verify ${operationId}` })
+  const verifier = await active(f, 'verifier')
+  await f.service.prepareNodeOperation('alpha', verifier, { toolName: 'Bash', invocationId: 'verify-shell', input: { command: 'inspect-old-records' } })
+  f.host.complete(verifier, 'Inspection stopped; original business outcome still uncertain')
+  const failed = await until(() => f.service.get('alpha'), s => s.state.tasks.find(t => t.id === 'verify')?.status === 'failed')
+  const verificationOp = failed.state.operations!.find(o => o.invocationId === 'verify-shell')!
+  // A failed existing evidence task must be retained, not recursively verified by more workers.
+  f.advance(7000); await f.service.tick()
+  expect((await f.service.get('alpha')).state.tasks).toHaveLength(2)
+  f.host.sessions.get(verifier)!.messages = [{ id: 'shell-terminal', role: 'tool', content: '', timestamp: f.now(),
+    toolName: 'Bash', toolUseId: 'verify-shell', toolInput: { command: 'inspect-old-records' },
+    toolResult: '[ERROR] [executed on server]\nexit code 1\n\nSTDERR:\nsyntax error', toolStatus: 'error', isError: true }]
+  const manager = await active(f, 'main')
+  const recovered = await f.service.updateNodeTask('alpha', manager, { action: 'recover', operationId: verificationOp.id, requestId: 'repair-verifier', note: 'Original shell terminated; preserve failed verification' })
+  if (recovered.action !== 'recover') throw new Error('Expected recovery receipt')
+  expect(recovered.operation).toMatchObject({ status: 'completed', executionOutcome: 'failed' })
+  const state = (await f.service.get('alpha')).state
+  expect(state.tasks).toHaveLength(2)
+  expect(state.tasks.find(t => t.id === 'verify')).toMatchObject({ status: 'failed', output: 'Inspection stopped; original business outcome still uncertain' })
+  expect(state.operations!.find(o => o.id === operationId)!.status).toBe('unknown')
+  expect(state.tasks[0]!.acceptance).toBeUndefined()
+})
 
 test('unknown acceptance repairs through independent verification and a follow-up reconciliation without replay', async () => {
   const { f, operationId, sessionId } = await original()
@@ -104,7 +232,11 @@ test('independent verification reads original host receipts without replay and c
   expect(followup.operationReceipts?.[0]?.availability).toBe('available')
   await f.service.updateNodeTask('alpha', verifierSession, { action: 'reconcile', operationId, evidenceTaskId: 'verify',
     outcome: 'not-executed', note: 'Original receipt and independent external audit prove no dispatch' })
+  await f.service.updateNodeTask('alpha', verifierSession, { action: 'reconcile', operationId, evidenceTaskId: 'verify',
+    outcome: 'not-executed', note: 'Original receipt and independent external audit prove no dispatch' })
   expect((await f.service.get('alpha')).state.operations![0]!.reconciliation?.outcome).toBe('not-executed')
+  expect((await f.service.get('alpha')).state.operations![0]).toMatchObject({ executionOutcome: 'not-executed',
+    reconciliation: { actorNodeId: 'verifier', actorSessionId: verifierSession, evidenceHash: expect.stringMatching(/^[a-f0-9]{64}$/) } })
   expect(f.host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(1)
 })
 
@@ -131,7 +263,7 @@ test('large original receipts have explicit truncation and retain the original f
   const operation = (await f.service.get('alpha')).state.operations![0]!
   const session = f.host.sessions.get(sessionId)!
   session.messages![0]!.toolInput = { value: 'y'.repeat(20_000) }
-  const receipt = operationReceipt(operation, session, 'alpha')
+  const receipt = operationReceipt({ ...operation, inputHash: undefined }, session, 'alpha')
   expect(receipt).toMatchObject({ operationId, availability: 'available', resultTruncated: true, inputTruncated: true,
     resultHash: createHash('sha256').update(`mcp__crm__update\n${'x'.repeat(40_000)}`).digest('hex') })
   if (receipt.availability !== 'available') throw new Error('Expected receipt')

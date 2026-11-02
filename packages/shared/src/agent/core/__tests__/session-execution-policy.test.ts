@@ -35,6 +35,13 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('rebuilt Super Agent role boundaries', () => {
+  test('evidence-based recovery is available to internal roles without granting checkpoint writes or bypassing interaction boundaries', () => {
+    for (const fullControl of [false, true]) for (const role of ['coordinator', 'planner', 'orchestrator', 'worker'] as const) {
+      setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', roleTopologyVersion: 2, role, fullControl, readFiles: false, writeFiles: false });
+      expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__super_agent_task', { action: 'recover', operationId: 'op1', requestId: 'recover1', note: 'Read host evidence' }).allowed).toBe(role !== 'coordinator');
+      expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__super_agent_task', { action: 'checkpoint', taskId: 't1' }).allowed).toBe(role === 'worker');
+    }
+  });
   test('internal finish is limited to planning and dispatch with or without full control', () => {
     for (const fullControl of [false, true]) for (const role of ['coordinator', 'planner', 'orchestrator', 'worker'] as const) {
       setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', roleTopologyVersion: 2, role, fullControl });

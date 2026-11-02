@@ -29,3 +29,5 @@
 未知操作只在宿主原始证据支持时缩小资源占用：已审计的桌面观察、焦点或移动操作只占用桌面；点击、拖动、输入、按键及来源不明的工具仍保留原任务资源锁。历史证据缺失、截断或不可读取时保守保留原锁，不将错误自动认定为未执行。相关回归：`SuperAgentEfficiency.test.ts`、共享层 `scheduling.test.ts` 及角色策略 `session-execution-policy.test.ts`。
 
 浏览器长任务在智能体接管期间关闭任务页面的后台定时器限速，隐藏窗口也保持正常执行速度；释放控制、解绑、换绑或销毁时恢复接管前的设置。手动浏览页面保留原设置。此调度策略不授予操作权限、不跳过审批，也不改变所选执行环境；回归测试见 `apps/electron/src/main/__tests__/browser-pane-manager.isolated.ts`。
+
+`super_agent_task action=recover` 是宿主原回执恢复接口，后台规划、派工协调及拥有该操作可见性的执行节点可使用；主节点仍不能调用内部任务工具。恢复读取宿主私有回执和原会话存档，不授予任意文件读取/写入或跨工作区权限。只按真实终止证据结清指定调用，保留任务失败记录、输出、已发生写入和独立业务验收；活跃执行或证据不足时继续阻塞，其他未知操作锁保持。重复请求幂等并持久审计，不要求另一个验证任务先完成，不新增用户审批。完全控制仍不绕过这些身份、证据和进程约束。回归：`SuperAgentOperationRecovery.test.ts`、`SuperAgentEfficiency.test.ts`、`session-execution-policy.test.ts`。

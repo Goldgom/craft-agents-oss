@@ -34,9 +34,21 @@ export const OperationSchema = z.object({ id, key: z.string().regex(/^[a-f0-9]{6
   status: z.enum(['prepared', 'running', 'completed', 'unknown', 'reconciled']),
   createdAt: z.number(), updatedAt: z.number(), resultHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   resultIsError: z.boolean().optional(),
+  inputHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  executionOutcome: z.enum(['succeeded', 'failed', 'not-executed', 'unknown']).optional(),
+  /** Host evidence only. A terminal invocation does not imply business acceptance. */
+  recovery: z.array(z.object({
+    requestId: id, actorNodeId: id, actorSessionId: z.string().max(200), at: z.number(), note: z.string().min(1).max(4000),
+    authorization: z.literal('visible-operation-host-evidence'), before: z.string().max(32), after: z.string().max(32),
+    outcome: z.enum(['succeeded', 'failed', 'not-executed', 'unknown']),
+    availability: z.string().max(64), source: z.string().max(64).optional(), resultHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).strict()).max(32).optional(),
   /** Host-audited impact scope; absence preserves legacy task-wide resource claims. */
   resourceClaims: z.array(z.string().min(1).max(4096)).max(32).optional(),
-  reconciliation: z.object({ evidenceTaskId: id, note: z.string().min(1).max(4000), outcome: z.enum(['completed', 'not-executed']) }).strict().optional(),
+  reconciliation: z.object({ evidenceTaskId: id, note: z.string().min(1).max(4000), outcome: z.enum(['completed', 'not-executed']),
+    actorNodeId: id.optional(), actorSessionId: z.string().max(200).optional(), at: z.number().optional(),
+    requestId: id.optional(), evidenceHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).strict().optional(),
 }).strict()
 export const MetricsSchema = z.object({ modelTurns: z.number().int().min(0), toolCalls: z.number().int().min(0), retries: z.number().int().min(0),
   resumptions: z.number().int().min(0), stalls: z.number().int().min(0), completedTasks: z.number().int().min(0),
@@ -46,13 +58,14 @@ export const emptyContinuityMetrics = () => ({ modelTurns: 0, toolCalls: 0, retr
 /** Host validates ownership and current execution identity on every update. */
 export const SuperAgentTaskUpdateSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('get'), taskId: id.optional(), operationId: id.optional() }).strict(),
+  z.object({ action: z.literal('recover'), operationId: id, requestId: id, note: z.string().min(1).max(4000) }).strict(),
   z.object({ action: z.literal('checkpoint'), taskId: id, expectedRevision: z.number().int().min(0),
     completedSteps: z.array(z.string().min(1).max(500)).max(100), nextStep: z.string().min(1).max(4000), note: z.string().max(4000).default('') }).strict(),
   z.object({ action: z.literal('wait'), taskId: id, reason: z.string().min(1).max(4000), condition: WaitConditionSchema }).strict(),
   z.object({ action: z.literal('artifact'), taskId: id, id, path: z.string().min(1).max(4096), description: z.string().max(4000).default('') }).strict(),
   z.object({ action: z.literal('install-skill'), taskId: id, skillSlug: id, path: z.string().min(1).max(4096) }).strict(),
   z.object({ action: z.literal('reconcile'), operationId: id, evidenceTaskId: id,
-    outcome: z.enum(['completed', 'not-executed']), note: z.string().min(1).max(4000) }).strict(),
+    requestId: id.optional(), outcome: z.enum(['completed', 'not-executed']), note: z.string().min(1).max(4000) }).strict(),
 ])
 export type SuperAgentTaskUpdate = z.infer<typeof SuperAgentTaskUpdateSchema>
 export type SuperAgentCheckpoint = z.infer<typeof CheckpointSchema>

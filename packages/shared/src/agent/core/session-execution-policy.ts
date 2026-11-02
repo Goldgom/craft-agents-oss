@@ -707,7 +707,7 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   if (canonical === 'super_agent_task') {
     if (policy.architecture === 'dynamic' && policy.role === 'coordinator') return deny('use super_agent_work_list for work contracts');
     if (slug !== 'session') return deny('use the session continuity tool');
-    return policy.role === 'worker' || input.action === 'get' ? { allowed: true } : deny('only workers may update task checkpoints or artifacts');
+    return policy.role === 'worker' || ['get', 'recover'].includes(String(input.action)) ? { allowed: true } : deny('only workers may update task checkpoints or artifacts');
   }
   if (canonical === 'super_agent_settings') {
     if (policy.architecture === 'dynamic' && (policy.role === 'orchestrator' || policy.role === 'planner') && slug === 'session' && input.action === 'get') return { allowed: true };

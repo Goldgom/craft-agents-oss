@@ -39,16 +39,21 @@ test('health explains the actual resource lock and operation, rather than just a
   expect(result).toMatchObject({ data: { nodes: [{ status: 'idle', queueBlockers: [{ taskId: 'next', blocker: { code: 'resourceBusy' }, resourceBlockers: [{ taskId: 'old', operationIds: ['unknown'] }] }] }] } })
 })
 
-test('historical focus scope is recovered from the original host receipt without clearing unknown effects', async () => {
+test('historical terminal focus failure recovers only its own invocation and preserves unrelated unknown effects', async () => {
   const f = await superAgentFixture(), doc = await loadSuperAgentDocument(join(f.root, 'alpha'))
   doc.config = f.config; doc.state.nodes = f.config.nodes.map(node => ({ nodeId: node.id, status: 'idle' }))
   doc.state.tasks = [{ id: 'old', title: 'Old owner', instructions: '', nodeId: 'worker', status: 'failed', resources: ['build'], createdAt: 1 }]
   const result = 'Window no longer exists'
   f.host.sessions.set('old-session', { id: 'old-session', workspaceId: 'alpha', isProcessing: false, messages: [{ id: 'receipt', role: 'tool', content: result, timestamp: 1, toolName: 'mcp__session__computer_use', toolUseId: 'focus', toolInput: { action: 'focus', windowId: '12' }, toolResult: result, toolStatus: 'error', isError: true }] })
   doc.state.operations = [{ id: 'unknown', key: 'a'.repeat(64), taskId: 'old', nodeId: 'worker', turnId: 'old-turn', sessionId: 'old-session', invocationId: 'focus', toolName: 'mcp__session__computer_use', status: 'unknown', resultHash: createHash('sha256').update(`mcp__session__computer_use\n${result}`).digest('hex'), createdAt: 1, updatedAt: 1 }]
+  doc.state.operations.push({ ...doc.state.operations[0]!, id: 'other-unknown', invocationId: 'remote-write', toolName: 'mcp__media__write',
+    key: 'b'.repeat(64), resourceClaims: ['media'], resultHash: undefined })
   await saveSuperAgentDocument(join(f.root, 'alpha'), doc)
   const state = await f.service.get('alpha')
-  expect(state.state.operations![0]).toMatchObject({ status: 'unknown', resourceClaims: ['host-desktop'] })
+  expect(state.state.operations![0]).toMatchObject({ status: 'completed', executionOutcome: 'failed', resourceClaims: ['host-desktop'] })
+  expect(state.state.operations![1]).toMatchObject({ id: 'other-unknown', status: 'unknown', resourceClaims: ['media'] })
+  expect(state.state.tasks[0]!.status).toBe('failed')
+  expect(state.state.tasks[0]!.acceptance).toBeUndefined()
   await f.service.command('alpha', { type: 'task', id: 'build', title: 'Build', instructions: 'Compile the current source', nodeId: 'worker', resources: ['build'] })
   await until(() => f.service.get('alpha'), s => s.state.tasks.find(t => t.id === 'build')?.status === 'running')
   expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).state.operations![0]!.resourceClaims).toEqual(['host-desktop'])

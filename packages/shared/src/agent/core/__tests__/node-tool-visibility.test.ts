@@ -89,6 +89,11 @@ test('v2 tools separate raw intake, goal planning, dispatch and execution across
       const visible = filterSuperAgentTools(tools, role, 'dynamic', 2)
       expect(() => assertSuperAgentTools(visible, role, 'dynamic', 2)).not.toThrow()
       const names = visible.map(tool => tool.name.replace('mcp__session__', ''))
+      if (role !== 'coordinator') {
+        const recoveryTool = visible.find(tool => tool.name === 'mcp__session__super_agent_task')!
+        expect(recoveryTool).toBeDefined()
+        expect(checkSessionExecutionPolicy(sessionId, recoveryTool.name, { action: 'recover', operationId: 'op1', requestId: 'repair1', note: 'Original host receipts' }).allowed).toBe(true)
+      }
       const routes = ['super_agent_submit_request', 'super_agent_intent', 'super_agent_plan', 'super_agent_dispatch', 'super_agent_accept', 'super_agent_deliver']
       const allowed = role === 'coordinator' ? ['super_agent_submit_request', 'super_agent_deliver'] : role === 'planner'
         ? ['super_agent_intent', 'super_agent_plan'] : role === 'orchestrator' ? ['super_agent_dispatch', 'super_agent_accept'] : []

@@ -1,9 +1,23 @@
 import { describe, expect, test } from 'bun:test'
 import { SUPER_AGENT_ACTION_TOOLS, parseSuperAgentToolCall } from './super-agent-tools'
-import { getToolDefsAsJsonSchema, SESSION_TOOL_REGISTRY } from './tool-defs'
+import { getToolDefsAsJsonSchema, SESSION_TOOL_REGISTRY, SuperAgentTaskSchema } from './tool-defs'
 import type { SessionToolContext } from './context'
 
 describe('collaboration tool schemas and registry', () => {
+  test('advertises and forwards operation recovery through the actual registered continuity tool', async () => {
+    const args = { action: 'recover', operationId: 'op_original', requestId: 'restore-original', note: 'Check original host evidence' }
+    expect(SuperAgentTaskSchema.parse(args)).toEqual(args)
+    const schema = getToolDefsAsJsonSchema({ prefix: 'mcp__session__' }).find(tool => tool.name === 'mcp__session__super_agent_task')!
+    expect(JSON.stringify(schema.inputSchema)).toContain('recover')
+    expect(schema.inputSchema.properties).toHaveProperty('requestId')
+    let received: unknown
+    const response = await SESSION_TOOL_REGISTRY.get('super_agent_task')!.handler!({ superAgentTask: async (value: unknown) => {
+      received = value; return { operation: { id: 'op_original', status: 'unknown' }, recovery: { requestId: 'restore-original', outcome: 'unknown' } }
+    } } as SessionToolContext, args)
+    expect(received).toEqual(args)
+    expect(response.isError).not.toBe(true)
+    expect(JSON.stringify(response)).toContain('restore-original')
+  })
   test('advertises separate object schemas with required business fields', () => {
     const defs = getToolDefsAsJsonSchema({ prefix: 'mcp__session__' })
     for (const tool of SUPER_AGENT_ACTION_TOOLS) {

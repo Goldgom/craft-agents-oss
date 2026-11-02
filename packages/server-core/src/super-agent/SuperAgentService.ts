@@ -20,7 +20,8 @@ import { createSuperAgentArchive, restoreSuperAgentArchive, updateSuperAgentMemo
 import { compactionUsageKey, DEFAULT_CONTEXT_COMPACTION, needsAutoCompaction, saveCompactionMemory, SUPER_AGENT_COMPACT_INSTRUCTIONS } from './SuperAgentCompaction'
 import { finiteUsage, statisticsForNode, recordTurnStatistics } from './SuperAgentStatistics'
 import { fingerprintArtifact, markArtifactStale, operationFingerprint, operationResourceClaims, taskPriority } from './SuperAgentContinuity'
-import { operationReceipt, terminalProgramResult } from './SuperAgentOperationReceipts'
+import { operationReceipt, terminalReceiptOutcome } from './SuperAgentOperationReceipts'
+import { prepareReceipt, completeReceipt, archivedReceiptSession, diskReceiptSession } from './SuperAgentReceiptArchive'
 import { installSuperAgentSkill } from './SuperAgentSkillInstall'
 import type { SuperAgentWorkflow } from './MicrosoftAgentWorkflow'
 import { superAgentActionErrorMessage } from './SuperAgentActionErrors'
@@ -41,6 +42,7 @@ import {
   superAgentResourceBlockers,
   type SuperAgentTaskContract,
   type SuperAgentTask,
+  type SuperAgentOperation,
   loadSuperAgentDocument,
   saveSuperAgentDocument,
   clearSuperAgentHistory,
@@ -182,7 +184,7 @@ class SuperAgentGoalContractError extends Error {
 
 class SuperAgentOperationOutcomeError extends Error {
   constructor(taskId: string, operations: Array<{ id: string; toolName: string; status: string }>) {
-    super(`Unsettled operation outcomes must be verified before acceptance: task ${taskId}; ${operations.map(operation => `${operation.id} (${operation.toolName}: ${operation.status})`).join(', ')}. Preserve submitted work. Assign an independent verification task under the same goalId with these operation IDs in its instructions; read super_agent_task and obtain original execution receipts without replaying the operations. After the evidence task completes, send its worker a follow-up message to call action=reconcile with evidenceTaskId and the proven outcome. Keep uncertain outcomes unknown. Retry acceptance only after reconciliation; omit blocked acceptances when dispatching verification.`)
+    super(`Unsettled operation outcomes must be verified before acceptance: task ${taskId}; ${operations.map(operation => `${operation.id} (${operation.toolName}: ${operation.status})`).join(', ')}. Preserve submitted work. First use super_agent_task action=recover with operationId, stable requestId and note: the host checks original journal/session/archive receipts, without replay or a completed evidence task. This also repairs terminal operations of a failed verifier; never create a verification-of-verification chain. Only remaining uncertain external effects need an independent verification task under the same goalId with these operation IDs in its instructions. After the evidence task completes, call action=reconcile with evidenceTaskId and the proven outcome. Keep uncertain outcomes unknown. Retry acceptance only after recovery/reconciliation and actual business verification; omit blocked acceptances when dispatching verification.`)
     this.name = 'SuperAgentOperationOutcomeError'
   }
 }
@@ -194,6 +196,7 @@ class SuperAgentOperationOutcomeError extends Error {
 export class SuperAgentService {
   private readonly settingsUpdates = new Map<string, { sessionId: string; config: SuperAgentConfig; revision: string; applying?: boolean }>()
   private readonly documents = new Map<string, SuperAgentDocument>()
+  private readonly receiptRecoveryProbes = new Set<string>()
   private readonly historyCleanupResults = new Map<string, SuperAgentHistoryCleanupResult>()
   private readonly queues = new Map<string, Promise<unknown>>()
   private readonly scriptProcesses = new Map<string, { child: ChildProcess; timer: ReturnType<typeof setTimeout>; output: string; stopping: boolean; stop?: () => Promise<void> }>()
@@ -901,7 +904,7 @@ export class SuperAgentService {
     return { runtime, turn, node, task: document.state.tasks.find(task => task.id === turn.taskId) }
   }
 
-  /** Awaited by the tool pipeline before dispatch; no raw credentials or arguments are stored. */
+  /** Awaited before dispatch. Raw receipts stay in the private host archive, outside model coordination state. */
   async prepareNodeOperation(workspaceId: string, sessionId: string, request: { toolName: string; input: Record<string, unknown>; invocationId: string }): Promise<void> {
     return this.serial(workspaceId, async () => {
       const document = await this.load(workspaceId)
@@ -918,8 +921,12 @@ export class SuperAgentService {
       }
       if (operations.length >= 2000) throw new Error('Operation history is full; archive settled work before dispatching more operations')
       operations.push({ id: this.id('op'), key, taskId: task?.id, turnId: turn.id, nodeId: node.id, sessionId,
+        inputHash: createHash('sha256').update(JSON.stringify(request.input)).digest('hex'),
         invocationId: request.invocationId, toolName: request.toolName, resourceClaims: operationResourceClaims(request.toolName, request.input), status: 'prepared', createdAt: this.now(), updatedAt: this.now() })
-      try { await this.commit(workspaceId, document) }
+      try {
+        await prepareReceipt(this.deps.rootForWorkspace(workspaceId), workspaceId, operations.at(-1)!, request.input)
+        await this.commit(workspaceId, document)
+      }
       catch (error) { operations.pop(); throw error }
     })
   }
@@ -1003,13 +1010,90 @@ export class SuperAgentService {
     })
   }
 
+  private async readOperationReceipt(workspaceId: string, operation: SuperAgentOperation,
+    sessions = new Map<string, Promise<{ id: string; workspaceId: string; messages?: Session['messages'] } | null>>()) {
+    const root = this.deps.rootForWorkspace(workspaceId)
+    let unavailable: ReturnType<typeof operationReceipt> = operationReceipt(operation, null, workspaceId)
+    const sources = [
+      ['host-session', () => this.deps.host.getSession(operation.sessionId)],
+      ['host-journal', () => archivedReceiptSession(root, workspaceId, operation)],
+      ['session-archive', () => diskReceiptSession(root, workspaceId, operation)],
+    ] as const
+    for (const [source, read] of sources) try {
+      const key = `${source}:${operation.sessionId}`
+      const pending = source === 'host-journal' ? read() : sessions.get(key) ?? read()
+      if (source !== 'host-journal') sessions.set(key, pending)
+      const receipt = operationReceipt(operation, await pending, workspaceId)
+      if (receipt.availability === 'available') return { ...receipt, source }
+      if (receipt.availability === 'hash-mismatch') unavailable = receipt
+    } catch { /* Missing/corrupt storage never becomes invented evidence or prevents other exact sources from being checked. */ }
+    return { ...unavailable, source: undefined }
+  }
+
+  private async recoverOperation(workspaceId: string, document: SuperAgentDocument, operation: SuperAgentOperation,
+    receipt: Awaited<ReturnType<SuperAgentService['readOperationReceipt']>>,
+    actor: { requestId: string; actorNodeId: string; actorSessionId: string; note: string }) {
+    const before = operation.status
+    let outcome = terminalReceiptOutcome(receipt)
+    let availability: string = receipt.availability
+    // A recovery turn may reuse an idle worker's original session, but cannot
+    // certify the currently executing invocation or override tracked processes.
+    const originalActive = document.pendingTurns.some(turn => turn.id === operation.turnId && turn.startedAt != null)
+    let hostBusy = false
+    try {
+      const session = await this.deps.host.getSession(operation.sessionId)
+      hostBusy = !!session && (session.workspaceId !== workspaceId || session.isProcessing && session.id !== actor.actorSessionId)
+    } catch { hostBusy = true }
+    const processBusy = document.state.scripts.some(script => script.taskId === operation.taskId && ['running', 'untracked'].includes(script.status))
+    if (originalActive || hostBusy || processBusy) { outcome = 'unknown'; availability = 'execution-active-or-unconfirmed' }
+    if (operation.status === 'unknown' && outcome !== 'unknown') {
+      operation.status = 'completed'; operation.executionOutcome = outcome; operation.updatedAt = this.now()
+      if (receipt.availability === 'available') { operation.resultHash = receipt.resultHash; operation.resultIsError = outcome === 'failed' }
+      const target = document.state.tasks.find(task => task.id === operation.taskId)
+      if (target && !document.state.operations?.some(item => item.taskId === target.id && ['prepared', 'running', 'unknown'].includes(item.status))) {
+        target.phase = target.output?.trim() || target.status === 'completed' ? 'submitted' : 'executing'
+      }
+      // Deliberately preserve task status/output/error/acceptance and all unrelated operations.
+      recordSuperAgentEvent(document, 'work', actor.actorNodeId, this.now(), operation.taskId)
+    }
+    ;(operation.recovery ??= []).push({ ...actor, authorization: 'visible-operation-host-evidence', at: this.now(), before,
+      after: operation.status, outcome: operation.executionOutcome ?? outcome, availability, source: receipt.source,
+      resultHash: receipt.availability === 'available' ? receipt.resultHash : undefined })
+  }
+
+  /** One host-only probe per evidence version. No model call and no new verifier chain. */
+  private async recoverTerminalReceipts(workspaceId: string, document: SuperAgentDocument) {
+    if (document.recoverySuspended) return false
+    let changed = false, probes = 0
+    const sessions = new Map<string, Promise<{ id: string; workspaceId: string; messages?: Session['messages'] } | null>>()
+    for (const operation of document.state.operations ?? []) {
+      if (operation.status !== 'unknown' || (operation.recovery?.length ?? 0) >= 32) continue
+      const target = document.state.tasks.find(task => task.id === operation.taskId)
+      const plan = document.state.plans.find(plan => plan.id === target?.planId)
+      if (target?.status === 'cancelled' || plan?.status === 'cancelled' || plan?.blocker?.kind === 'user'
+        || plan?.status === 'blocked' && plan.updatedBy === 'user' && plan.blocker?.kind !== 'system'
+        || document.state.intents?.some(goal => goal.id === target?.goalId && goal.status === 'cancelled')) continue
+      const key = `${workspaceId}:${operation.id}:${operation.resultHash ?? ''}:${operation.updatedAt}`
+      if (this.receiptRecoveryProbes.has(key)) continue
+      if (++probes > 20) break
+      this.receiptRecoveryProbes.add(key)
+      const receipt = await this.readOperationReceipt(workspaceId, operation, sessions)
+      if (terminalReceiptOutcome(receipt) === 'unknown') continue
+      await this.recoverOperation(workspaceId, document, operation, receipt, {
+        requestId: 'host-recover', actorNodeId: 'system', actorSessionId: 'host', note: 'Restore terminal invocation from matching original host evidence; business acceptance unchanged.',
+      })
+      changed = true
+    }
+    return changed
+  }
+
   async updateNodeTask(workspaceId: string, sessionId: string, value: unknown) {
     const update = SuperAgentTaskUpdateSchema.parse(value)
     return this.serial(workspaceId, async () => {
       const document = await this.load(workspaceId)
       const active = this.activeNode(document, sessionId)
       if (document.config?.architecture === 'dynamic' && active.node.role === 'coordinator') throw new Error('Interaction reads work contracts through super_agent_work_list only')
-      if (update.action === 'get') {
+      if (update.action === 'get' || update.action === 'recover') {
         // A verification task must be able to inspect the operations named in
         // its assignment without depending on acceptance of the blocked task.
         // Completed evidence remains readable during the follow-up reconcile turn.
@@ -1020,23 +1104,41 @@ export class SuperAgentService {
         })) ?? []
         const directlyVisible = (task: SuperAgentTask) => active.node.role !== 'worker' || task.nodeId === active.node.id || active.task?.dependsOn?.includes(task.id)
         const tasks = document.state.tasks.filter(task => directlyVisible(task) || referencedOperations.some(operation => operation.taskId === task.id))
-          .filter(task => !update.taskId || task.id === update.taskId)
+          .filter(task => update.action !== 'get' || !update.taskId || task.id === update.taskId)
         const operations = document.state.operations?.filter(operation => (!update.operationId || operation.id === update.operationId)
           && (tasks.some(task => task.id === operation.taskId && (directlyVisible(task) || referencedOperations.includes(operation))) || operation.turnId === active.turn.id)) ?? []
         // Read only authorized invocations from the original host transcript, not a
-        // worker's paraphrase. Cache sessions per query; never persist receipt bodies.
-        const sessions = new Map<string, Awaited<ReturnType<SuperAgentSessionHost['getSession']>>>()
+        // worker's paraphrase. Cache sessions per query; keep raw bodies out of coordination state.
         const needsReceipt = (operation: typeof operations[number]) => operation.status !== 'completed' || !!update.operationId || referencedOperations.includes(operation)
         const receiptOperations = operations.filter(needsReceipt).slice(0, 20)
         const operationReceipts = []
+        const receiptSessions = new Map<string, Promise<{ id: string; workspaceId: string; messages?: Session['messages'] } | null>>()
         for (const operation of receiptOperations) {
-          if (!sessions.has(operation.sessionId)) sessions.set(operation.sessionId, await this.deps.host.getSession(operation.sessionId))
-          const receipt = operationReceipt(operation, sessions.get(operation.sessionId) ?? null, workspaceId)
+          const receipt = await this.readOperationReceipt(workspaceId, operation, receiptSessions)
           operationReceipts.push(receipt)
           if (!operation.resultHash && receipt.availability === 'available') operation.resultHash = receipt.resultHash
         }
+        if (update.action === 'recover') {
+          const operation = operations.find(item => item.id === update.operationId)
+          if (!operation) throw new Error('Recover only a visible operation assigned to this node or explicitly referenced by its verification task')
+          const previous = operation.recovery?.find(item => item.requestId === update.requestId)
+          if (previous && (previous.actorNodeId !== active.node.id || previous.note !== update.note)) throw new Error('Recovery request ID already used with different actor or note')
+          if (!previous) {
+            if ((operation.recovery?.length ?? 0) >= 32) throw new Error('Recovery audit limit reached; preserve evidence and investigate the host archive')
+            const receipt = operationReceipts.find(item => item.operationId === operation.id)!
+            await this.recoverOperation(workspaceId, document, operation, receipt, {
+              requestId: update.requestId, actorNodeId: active.node.id, actorSessionId: sessionId, note: update.note,
+            })
+          }
+          // Persist again on a retried request: a previous uncertain commit must not
+          // return a successful cached audit that only exists in memory.
+          await this.commit(workspaceId, document)
+          const target = document.state.tasks.find(task => task.id === operation.taskId)
+          return structuredClone({ action: 'recover' as const, operation, operations: [operation], recovery: operation.recovery?.find(item => item.requestId === update.requestId),
+            operationReceipts, task: target, resourceBlockers: target ? superAgentResourceBlockers(document.state, target) : [] })
+        }
         if (operationReceipts.some(receipt => receipt.availability === 'available' && receipt.hashSource === 'transcript')) await this.commit(workspaceId, document)
-        return structuredClone({ workspace: { id: workspaceId, rootPath: this.deps.rootForWorkspace(workspaceId) }, tasks, artifacts: document.state.artifacts?.filter(artifact => tasks.some(task => task.id === artifact.taskId)),
+        return structuredClone({ action: 'get' as const, workspace: { id: workspaceId, rootPath: this.deps.rootForWorkspace(workspaceId) }, tasks, artifacts: document.state.artifacts?.filter(artifact => tasks.some(task => task.id === artifact.taskId)),
           operations, operationReceipts, receiptsTruncated: operations.filter(needsReceipt).length > receiptOperations.length,
           metrics: document.state.metrics })
       }
@@ -1045,10 +1147,17 @@ export class SuperAgentService {
         if (!active.task || active.task.id !== update.taskId || active.task.phase === 'waiting') throw new Error('Install skills only for the task assigned to this active turn')
         if (!document.config?.environment.fullControl || document.config.environment.kind !== 'folder') throw new Error('Managed skill installation requires a worker with full control in a host folder environment')
         const result = await installSuperAgentSkill(this.deps.rootForWorkspace(workspaceId), document.config.environment.workingDirectory, update.path, update.skillSlug)
-        return { workspaceId, taskId: active.task.id, ...result }
+        return { action: update.action, workspaceId, taskId: active.task.id, ...result }
       }
       if (update.action === 'reconcile') {
         const operation = document.state.operations?.find(operation => operation.id === update.operationId)
+        const previous = operation?.reconciliation
+        if (operation?.status === 'reconciled' && previous?.actorNodeId === active.node.id
+          && previous.evidenceTaskId === update.evidenceTaskId && previous.outcome === update.outcome && previous.note === update.note
+          && previous.requestId === update.requestId) {
+          await this.commit(workspaceId, document)
+          return structuredClone({ action: update.action, task: active.task, operations: [operation] })
+        }
         const evidence = document.state.tasks.find(task => task.id === update.evidenceTaskId)
         const target = document.state.tasks.find(task => task.id === operation?.taskId)
         if (!operation || operation.status !== 'unknown' || !evidence || evidence.status !== 'completed' || evidence.nodeId !== active.node.id
@@ -1056,7 +1165,10 @@ export class SuperAgentService {
           || document.state.operations?.some(item => item.taskId === evidence.id && ['prepared', 'running', 'unknown'].includes(item.status))
           || !evidence.instructions.includes(operation.id) || evidence.goalId !== target?.goalId) throw new Error('Reconciliation needs a completed dedicated verification task from this worker, referencing the operation ID and the same goal')
         operation.status = 'reconciled'; operation.updatedAt = this.now()
-        operation.reconciliation = { evidenceTaskId: evidence.id, note: update.note, outcome: update.outcome }
+        operation.reconciliation = { evidenceTaskId: evidence.id, note: update.note, outcome: update.outcome, requestId: update.requestId,
+          actorNodeId: active.node.id, actorSessionId: sessionId, at: this.now(),
+          evidenceHash: createHash('sha256').update(evidence.output!).digest('hex') }
+        if (update.outcome === 'not-executed') operation.executionOutcome = 'not-executed'
         if (target && !document.state.operations?.some(item => item.taskId === target.id && ['prepared', 'running', 'unknown'].includes(item.status))) {
           target.phase = target.status === 'completed' || target.output?.trim() ? 'submitted' : 'executing'
         }
@@ -1100,7 +1212,7 @@ export class SuperAgentService {
       }
       recordSuperAgentEvent(document, 'work', active.node.id, this.now(), active.task?.id)
       await this.commit(workspaceId, document)
-      return structuredClone({ task: active.task, operations: document.state.operations?.filter(operation => operation.taskId === active.task?.id) })
+      return structuredClone({ action: update.action, task: active.task, operations: document.state.operations?.filter(operation => operation.taskId === active.task?.id) })
     })
   }
 
@@ -1258,6 +1370,7 @@ export class SuperAgentService {
       await this.reconcileStartedTurns(workspaceId, document)
       await this.reconcileQueuedTasks(workspaceId, document)
       if (scanContinuity) {
+        if (await this.recoverTerminalReceipts(workspaceId, document)) await this.commit(workspaceId, document)
         await this.scanContinuity(workspaceId, document)
       }
       await this.expireRecoveryWindows(workspaceId, document)
@@ -1339,6 +1452,7 @@ export class SuperAgentService {
           && (!task.actionReceipt || task.actionReceipt.status === 'applied')
           && !document.state.operations?.some(item => item.taskId === task.id && ['prepared', 'running', 'unknown'].includes(item.status)))
         ?? candidates.find(task => task.id === record?.evidenceTaskId)
+        ?? candidates.findLast(task => task.status === 'failed')
       if (evidence) {
         if (record?.evidenceTaskId !== evidence.id) {
           ;(document.operationRecovery ??= {})[operation.id] = { evidenceTaskId: evidence.id }; changed = true
@@ -1363,7 +1477,8 @@ export class SuperAgentService {
       // Group all unknown operations of the same task into a single evidence assignment.
       const worker = document.config.nodes.find(node => node.role === 'worker' && node.id !== operation.nodeId
         && document.state.nodes.find(runtime => runtime.nodeId === node.id)?.status !== 'error')
-      if (document.config.architecture === 'dynamic' || record || !worker || document.pendingTurns.length >= MAX_PENDING_TURNS || document.state.tasks.length >= 500) continue
+      const isVerifier = Object.values(document.operationRecovery ?? {}).some(recovery => recovery.evidenceTaskId === target.id)
+      if (document.config.architecture === 'dynamic' || record || isVerifier || !worker || document.pendingTurns.length >= MAX_PENDING_TURNS || document.state.tasks.length >= 500) continue
       const group = operations.filter(item => item.taskId === target.id && !document.operationRecovery?.[item.id])
       const evidenceTaskId = this.id('task')
       this.addTask(document, { id: evidenceTaskId, title: `核验执行结果：${target.title}`.slice(0, 200), nodeId: worker.id,
@@ -1711,7 +1826,16 @@ export class SuperAgentService {
         turn.pendingToolUseIds = (turn.pendingToolUseIds ?? []).filter(id => id !== event.toolUseId)
         const hash = createHash('sha256').update(`${event.toolName}\n${event.result}`).digest('hex')
         for (const operation of document.state.operations ?? []) if (operation.sessionId === event.sessionId && operation.invocationId === event.toolUseId && ['prepared', 'running'].includes(operation.status)) {
-          operation.status = event.isError && !terminalProgramResult(event.toolName, event.result) ? 'unknown' : 'completed'
+          // Journal the original result before recording its terminal state. Legacy calls
+          // without a journal can still be recovered from the exact session transcript.
+          try { await completeReceipt(this.deps.rootForWorkspace(workspaceId), workspaceId, operation, event.result, event.isError === true, now) } catch { /* Transcript remains the fallback; do not replay an executed call on storage failure. */ }
+          const outcome = terminalReceiptOutcome(operationReceipt({ ...operation, inputHash: undefined, resultHash: hash }, {
+            id: event.sessionId, workspaceId, messages: [{ id: event.toolUseId, role: 'tool', content: '', timestamp: now,
+              toolName: event.toolName, toolUseId: event.toolUseId, toolResult: event.result,
+              toolStatus: event.isError ? 'error' : 'completed', isError: event.isError }],
+          }, workspaceId))
+          operation.status = outcome === 'unknown' ? 'unknown' : 'completed'
+          operation.executionOutcome = outcome
           operation.updatedAt = now; operation.resultHash = hash; operation.resultIsError = event.isError === true
         }
         const task = document.state.tasks.find(task => task.id === turn.taskId)
@@ -2309,6 +2433,7 @@ export class SuperAgentService {
         if (claims) { operation.resourceClaims = claims; recovered = true }
       } catch { /* Missing or malformed historical evidence retains the conservative lock. */ }
     }
+    if (await this.recoverTerminalReceipts(workspaceId, document)) recovered = true
     if (await this.settleRecoveryPlans(document)) recovered = true
     if (this.upgradeIdleTeam(document)) recovered = true
     if (this.recoverInternalBlockers(document)) recovered = true
