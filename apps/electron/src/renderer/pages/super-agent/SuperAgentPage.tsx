@@ -35,6 +35,7 @@ import { SuperAgentHistory } from './SuperAgentHistory'
 import { SuperAgentSessionDialog } from './SuperAgentSessionDialog'
 import { SuperAgentPermissions } from './SuperAgentPermissions'
 import { SuperAgentNodeRecovery } from './SuperAgentNodeRecovery'
+import { SuperAgentWorkerRecovery } from './SuperAgentWorkerRecovery'
 import { SuperAgentConversation, SuperAgentPermissionHistory } from './SuperAgentConversation'
 import { SuperAgentFileContext } from './SuperAgentFileContext'
 import { SuperAgentStatistics } from './SuperAgentStatistics'
@@ -231,6 +232,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings }: Supe
             onSave={async value => { await save(value) }} onOpenAiSettings={onOpenAiSettings} /></div>
             : <>
               {!snapshot.environment.available && <div role="status" className="flex shrink-0 items-start gap-2 border-b border-amber-500/15 bg-amber-500/8 px-5 py-3 text-xs leading-5 text-amber-700 dark:text-amber-400"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" /><p>{snapshot.environment.detail}</p></div>}
+              <SuperAgentWorkerRecovery recovery={snapshot.recovery} suspended={snapshot.recoverySuspended} busy={busy} onCommand={command} />
               {error && <div role="alert" className="flex shrink-0 items-start justify-between gap-3 border-b border-destructive/15 bg-destructive/8 px-5 py-3 text-xs leading-5 text-destructive"><span>{error}</span><button type="button" aria-label={text('cancel')} className="shrink-0" onClick={() => setError('')}>×</button></div>}
               <div className="min-h-0 flex-1">
                 {view === 'home' && <div className={cn('flex h-full min-h-0', compact ? 'flex-col' : 'flex-row')}>

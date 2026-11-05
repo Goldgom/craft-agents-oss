@@ -384,6 +384,9 @@ test('goal revisions do not abandon unknown historical operations or accept obso
   await saveSuperAgentDocument(join(f.root, 'alpha'), document)
   const service = new SuperAgentService({ host: f.host, rootForWorkspace: id => join(f.root, id), now: f.now, autoTick: false })
   try {
+    await service.get('alpha')
+    await until(() => service.get('alpha'), snapshot => snapshot.recovery?.phase === 'ready')
+    f.advance(2000); await service.tick()
     const snapshot = await service.get('alpha')
     expect(snapshot.state.tasks.find(task => task.id !== 'original')).toMatchObject({ goalId: 'goal', goalRevision: 2 })
     expect(snapshot.state.tasks.find(task => task.id !== 'original')?.instructions).toContain(operationId)
@@ -403,6 +406,9 @@ test('legacy system-blocked plans recover on restart and persist one evidence as
   const restart = () => new SuperAgentService({ host: f.host, rootForWorkspace: workspaceId => join(f.root, workspaceId), now: f.now, autoTick: false })
   let service = restart()
   try {
+    await service.get('alpha')
+    await until(() => service.get('alpha'), snapshot => snapshot.recovery?.phase === 'ready')
+    f.advance(2000); await service.tick()
     const recovered = await service.get('alpha')
     const evidence = recovered.state.tasks.find(task => task.id !== 'original')!
     expect(evidence.instructions).toContain(operationId)
@@ -416,7 +422,7 @@ test('legacy system-blocked plans recover on restart and persist one evidence as
     await until(() => loadSuperAgentDocument(join(f.root, 'alpha')), document => !!document.operationRecovery?.[operationId]?.followupTurnId)
     await service.cleanup()
     service = restart()
-    const restored = await service.get('alpha')
+    const restored = await until(() => service.get('alpha'), snapshot => snapshot.recovery?.phase === 'ready')
     expect(restored.state.tasks).toHaveLength(2)
     const durable = await loadSuperAgentDocument(join(f.root, 'alpha'))
     expect(durable.pendingTurns.filter(turn => turn.nodeId === 'verifier' && turn.kind === 'message')).toHaveLength(1)

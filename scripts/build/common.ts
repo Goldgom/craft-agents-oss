@@ -447,6 +447,29 @@ function clearReadOnlyAttributes(dir: string): void {
   }
 }
 
+/** Replace PortableGit's first-use selector, preserving other Git settings/helpers. */
+export function configureBundledGitCredentials(gitRoot: string): void {
+  const configPath = join(gitRoot, 'etc', 'gitconfig');
+  const gitPath = join(gitRoot, 'cmd', 'git.exe');
+  const current = spawnSync(gitPath, ['config', '--file', configPath, '--get-all', 'credential.helper'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (current.error || (current.status !== 0 && current.status !== 1)) {
+    throw new Error('Unable to read bundled Git credential configuration');
+  }
+  if (!current.stdout.split(/\r?\n/).includes('helper-selector')) return;
+  if (!existsSync(join(gitRoot, 'mingw64', 'bin', 'git-credential-manager.exe'))) {
+    throw new Error('Bundled Git Credential Manager is missing');
+  }
+  const updated = spawnSync(gitPath, [
+    'config', '--file', configPath, '--replace-all', 'credential.helper', 'manager', '^helper-selector$',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (updated.error || updated.status !== 0) {
+    throw new Error('Unable to configure bundled Git Credential Manager');
+  }
+}
+
 /**
  * Download, verify, and extract the official PortableGit runtime used by the
  * Windows desktop app. The extracted tree contains bin/bash.exe plus Git and
@@ -454,7 +477,7 @@ function clearReadOnlyAttributes(dir: string): void {
  *
  * The GitHub asset digest is checked before the self-extracting archive is
  * executed. Offline release builds can pre-seed vendor/git-bash; a complete
- * pre-seeded tree is left untouched.
+ * pre-seeded tree is reused with the same credential configuration as a fresh download.
  */
 export async function downloadGitBash(config: BuildConfig): Promise<void> {
   const { platform, arch, electronDir } = config;
@@ -471,6 +494,7 @@ export async function downloadGitBash(config: BuildConfig): Promise<void> {
     && hasExpectedGitForWindowsVersion(gitPath)
   ) {
     clearReadOnlyAttributes(targetDir);
+    configureBundledGitCredentials(targetDir);
     console.log(`Git Bash already present at ${bashPath}`);
     return;
   }
@@ -533,6 +557,7 @@ export async function downloadGitBash(config: BuildConfig): Promise<void> {
     rmSync(targetDir, { recursive: true, force: true });
     cpSync(extractDir, targetDir, { recursive: true });
     clearReadOnlyAttributes(targetDir);
+    configureBundledGitCredentials(targetDir);
     console.log(`  Git Bash installed to ${targetDir} ✓`);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

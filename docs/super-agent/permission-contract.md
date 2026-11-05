@@ -31,3 +31,7 @@
 浏览器长任务在智能体接管期间关闭任务页面的后台定时器限速，隐藏窗口也保持正常执行速度；释放控制、解绑、换绑或销毁时恢复接管前的设置。手动浏览页面保留原设置。此调度策略不授予操作权限、不跳过审批，也不改变所选执行环境；回归测试见 `apps/electron/src/main/__tests__/browser-pane-manager.isolated.ts`。
 
 `super_agent_task action=recover` 是宿主原回执恢复接口，后台规划、派工协调及拥有该操作可见性的执行节点可使用；主节点仍不能调用内部任务工具。恢复读取宿主私有回执和原会话存档，不授予任意文件读取/写入或跨工作区权限。只按真实终止证据结清指定调用，保留任务失败记录、输出、已发生写入和独立业务验收；活跃执行或证据不足时继续阻塞，其他未知操作锁保持。重复请求幂等并持久审计，不要求另一个验证任务先完成，不新增用户审批。完全控制仍不绕过这些身份、证据和进程约束。回归：`SuperAgentOperationRecovery.test.ts`、`SuperAgentEfficiency.test.ts`、`session-execution-policy.test.ts`。
+
+团队恢复采用保留主要节点进度、通信及任务板并重建执行子节点的方式。`recover-workers` 与彻底重置分开：先提交持久恢复屏障和执行代次，确认旧会话及受管准备操作停止后解除 worker 会话绑定；保留原会话、检查点、任务 ID、执行尝试、已提交协作动作及报告游标。主节点、规划节点和派工协调节点的健康会话保留；被中断的主要节点使用新会话接续已提交工作。恢复沿用当前权限、角色拓扑、连接和真实执行环境，不继承旧调用的一次性批准，不取消用户明确的停止、任务取消和用户阻塞。
+
+新执行代次拒绝旧会话派发操作和提交任务，但可将匹配的迟到终止回执补入原操作归档。未知原生 `Read/Glob/Grep/LS` 只读尝试可登记为 `executionOutcome=interrupted`，表示该尝试已结束，不表示读取成功或任务完成；其他未知副作用及未跟踪进程继续保留相关资源占用。完全控制不跳过执行代次、停止确认、证据对账、通信去重及资源串行要求。工具显示分类不得修改执行工具身份；参数哈希使用版本化规范化，旧回执继续按原规则核对。历史 Bash/Read 哈希仅在原私有日志的调用身份、完整参数及原结果均匹配时修复并审计。回归：`SuperAgentWorkerRecovery.test.ts`、`SuperAgentOperationRecovery.test.ts`、`SuperAgentNodeRecovery.test.ts`、`SuperAgentWorkerRecovery.isolated.ts`。

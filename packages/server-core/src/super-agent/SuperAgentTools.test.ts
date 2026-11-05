@@ -154,18 +154,20 @@ describe('Super Agent registered collaboration tools', () => {
     expect((await f.service.get('alpha')).state.board[0]?.revision).toBe(1)
   })
 
-  test('restart preserves committed call evidence when the interrupted turn cannot be resumed', async () => {
+  test('restart resumes management with committed calls and does not repeat their effects', async () => {
     const f = await activeTeam()
-    await f.call('super_agent_board', { requestId: 'board-one', id: 'evidence', title: 'Evidence', content: 'Original', expectedRevision: 0 })
+    const input = { requestId: 'board-one', id: 'evidence', title: 'Evidence', content: 'Original', expectedRevision: 0 }
+    const original = await f.call('super_agent_board', input)
     await f.service.cleanup()
     const restarted = new SuperAgentService({ host: f.host, rootForWorkspace: id => join(f.root, id), now: f.now, autoTick: false })
     try {
-      const snapshot = await restarted.get('alpha')
-      expect(snapshot.state.board[0]?.revision).toBe(1)
-      expect(snapshot.state.nodes[0]?.status).toBe('error')
-      const receipt = snapshot.state.messages.find(message => message.body.includes('interrupted after collaboration'))?.actionReceipt
-      expect(receipt?.applied).toEqual([{ id: expect.any(String), type: 'board-upsert', targetId: 'evidence' }])
-      expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).state.messages.some(message => message.actionReceipt?.applied.some(action => action.targetId === 'evidence'))).toBe(true)
+      await restarted.get('alpha')
+      await until(() => restarted.get('alpha'), value => value.recovery?.phase === 'ready')
+      f.advance(1001); await restarted.tick()
+      const snapshot = await until(() => restarted.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+      expect(snapshot.state.nodes[0]!.sessionId).not.toBe(f.sessionId)
+      expect(await restarted.callNodeActionTool('alpha', snapshot.state.nodes[0]!.sessionId!, 'super_agent_board', input)).toEqual(original)
+      expect((await restarted.get('alpha')).state.board[0]?.revision).toBe(1)
     } finally { await restarted.cleanup() }
   })
 

@@ -4,6 +4,38 @@ import { rebuildSuperAgentConfig } from '@tokenbird/shared/super-agent'
 import { buildSuperAgentNodePrompt } from './SuperAgentPrompt'
 import { buildDynamicNodePrompt } from './SuperAgentDynamic'
 
+test('user-facing language stays separate from backend reports across prompt architectures', async () => {
+  const f = await superAgentFixture()
+  const dynamic = rebuildSuperAgentConfig(f.config)
+  const separated = { ...f.config, nodes: [...f.config.nodes, { ...f.config.nodes[1]!, id: 'dispatch', role: 'orchestrator' as const }] }
+  const legacyDynamic = { ...dynamic, roleTopologyVersion: undefined, nodes: dynamic.nodes.filter(node => node.role !== 'planner') }
+  for (const [config, build] of [
+    [f.config, buildSuperAgentNodePrompt],
+    [separated, buildSuperAgentNodePrompt],
+    [dynamic, buildDynamicNodePrompt],
+    [legacyDynamic, buildDynamicNodePrompt],
+  ] as const) {
+    for (const node of config.nodes) {
+      const prompt = build(config, node)
+      if (node.role === 'coordinator') {
+        expect(prompt).toContain('# 面向用户的表达')
+        expect(prompt).toContain('super_agent_deliver 的 reply、普通最终答复、进度说明和澄清问题')
+        expect(prompt).toContain('不是可直接复制的用户答复')
+        expect(prompt).toContain('把未核验说成已通过')
+        expect(prompt).toContain('用户明确要求技术细节')
+        expect(prompt).toContain('不要因通俗表达而改写代码、命令、路径或引用证据')
+        expect(prompt).not.toContain('# 面向前台的结果交接')
+      } else {
+        expect(prompt).not.toContain('# 面向用户的表达')
+        if (node.role === 'planner' || node.role === 'orchestrator') {
+          expect(prompt).toContain('# 面向前台的结果交接')
+          expect(prompt).toContain('不改变汇报协议、事实或验证状态')
+        }
+      }
+    }
+  }
+})
+
 test('every node role distinguishes user silence from final completion and forbids replay during recovery', async () => {
   const f = await superAgentFixture()
   const dynamic = rebuildSuperAgentConfig(f.config)

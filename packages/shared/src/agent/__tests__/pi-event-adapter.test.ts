@@ -269,14 +269,14 @@ describe('PiEventAdapter', () => {
       expect(events[0].text).toBe('Part 1 Part 2');
     });
 
-    it('should skip message_end with no text content', () => {
+    it('keeps a tool-only assistant message valid without requiring text', () => {
       collect(adapter.adaptEvent({ type: 'turn_start' } as any));
       const events = collect(adapter.adaptEvent({
         type: 'message_end',
         message: {
           role: 'assistant',
-          stopReason: 'stop',
-          content: [{ type: 'tool_use', id: 'tool1' }],
+          stopReason: 'toolUse',
+          content: [{ type: 'toolCall', id: 'tool1', name: 'read', arguments: { path: 'file.txt' } }],
         },
       } as any));
       expect(events).toHaveLength(0);
@@ -985,7 +985,7 @@ describe('PiEventAdapter', () => {
       expect(events[0].intent).toBe('Run unit tests');
     });
 
-    it('should classify bash cat commands as Read tool starts', () => {
+    it('labels bash reads without changing their execution identity or arguments', () => {
       collect(adapter.adaptEvent({ type: 'turn_start' } as any));
       const events = collect(adapter.adaptEvent({
         type: 'tool_execution_start',
@@ -995,8 +995,11 @@ describe('PiEventAdapter', () => {
       } as any));
 
       expect(events).toHaveLength(1);
-      expect(events[0].toolName).toBe('Read');
+      expect(events[0].toolName).toBe('Bash');
+      expect(events[0].input).toEqual({ command: 'cat /path/to/file.ts' });
       expect(events[0].displayName).toBe('Read File');
+      const end = collect(adapter.adaptEvent({ type: 'tool_execution_end', toolCallId: 'call_1', result: 'contents', isError: false } as any));
+      expect(end[0].toolName).toBe('Bash');
     });
 
     it('should reset hasEmittedFinalText after tool_execution_end', () => {

@@ -281,11 +281,13 @@ describe('required asynchronous script results', () => {
     document.state.scripts = [{ scriptId: 'check', runId: 'run_one', planId: 'plan-one', status: 'failed', completedAt: 1, resultPending: true, error: 'queued result' }]
     document.pendingTurns = Array.from({ length: 200 }, (_, index) => ({ id: `turn_${index}`, nodeId: 'main', kind: 'chat' as const, text: 'Already queued work', createdAt: 1, depth: 0, chainId: `turn_${index}`, ...(index === 0 ? { startedAt: 1 } : {}) }))
     await saveSuperAgentDocument(join(root, 'alpha'), document)
-    const full = await service.get('alpha')
+    await service.get('alpha')
+    const full = await until(() => service.get('alpha'), value => value.recovery?.phase === 'ready')
     expect(full.state.scripts[0]!.resultPending).toBe(true)
     expect((await loadSuperAgentDocument(join(root, 'alpha'))).pendingTurns).toHaveLength(200)
     await expect(service.command('alpha', { type: 'script-run', scriptId: 'check' })).rejects.toThrow('previous script result')
-    host.complete(session.id, 'Current turn finished.')
+    const active = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')
+    host.complete(active.state.nodes[0]!.sessionId!, 'Current turn finished.')
     const delivered = await until(() => service.get('alpha'), value => value.state.scripts[0]?.resultQueuedAt != null)
     expect(delivered.state.scripts[0]!.resultPending).toBe(false)
     expect(delivered.state.scripts[0]!.resultReportedAt).toBeUndefined()
@@ -346,14 +348,15 @@ describe('required asynchronous script results', () => {
     document.state.tasks = [task]
     document.state.plans = [{ id: 'plan-one', title: task.title, instructions: task.instructions, status: 'active', priority: 3, note: 'Awaiting verification', revision: 1, updatedBy: 'worker', updatedAt: 2 }]
     document.state.scripts = [{ scriptId: 'check', runId: 'run_original', taskId: task.id, planId: 'plan-one', status: 'completed', exitCode: 0, completedAt: 2, output: 'Result artifact checksum A', resultQueuedAt: 3, resultDeliveryAttempts: 1 }]
-    document.pendingTurns = [{ id: 'turn_interrupted', nodeId: 'main', kind: 'summary', text: 'Lost result review', scriptRunId: 'run_original', createdAt: 3, startedAt: 4, depth: 0, chainId: 'turn_interrupted' }]
+    document.pendingTurns = [{ id: 'turn_interrupted', nodeId: 'main', kind: 'summary', text: 'Run: run_original\nResult artifact checksum A\nReview the saved result without rerunning the script.', scriptRunId: 'run_original', createdAt: 3, startedAt: 4, depth: 0, chainId: 'turn_interrupted' }]
     await saveSuperAgentDocument(join(root, 'alpha'), document)
-    const recovered = await service.get('alpha')
+    await service.get('alpha')
+    const recovered = await until(() => service.get('alpha'), value => value.recovery?.phase === 'ready')
     expect(recovered.state.scripts[0]).toMatchObject({ status: 'completed', resultDeliveryAttempts: 2 })
     expect(recovered.state.scripts[0]!.resultReportedAt).toBeUndefined()
     expect(recovered.state.plans[0]!.status).toBe('blocked')
     const saved = await loadSuperAgentDocument(join(root, 'alpha'))
-    expect(saved.pendingTurns.some(turn => turn.id === 'turn_interrupted')).toBe(false)
+    expect(saved.pendingTurns.some(turn => turn.id === 'turn_interrupted')).toBe(true)
     expect(saved.pendingTurns.filter(turn => turn.scriptRunId === 'run_original')).toHaveLength(1)
     expect(saved.pendingTurns[0]!.text).toContain('Result artifact checksum A')
     const working = await until(() => service.get('alpha'), value => value.state.nodes[0]?.status === 'working')

@@ -35,12 +35,14 @@ export const OperationSchema = z.object({ id, key: z.string().regex(/^[a-f0-9]{6
   createdAt: z.number(), updatedAt: z.number(), resultHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   resultIsError: z.boolean().optional(),
   inputHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  executionOutcome: z.enum(['succeeded', 'failed', 'not-executed', 'unknown']).optional(),
+  inputHashVersion: z.literal(2).optional(),
+  generation: z.number().int().min(0).optional(),
+  executionOutcome: z.enum(['succeeded', 'failed', 'not-executed', 'unknown', 'interrupted']).optional(),
   /** Host evidence only. A terminal invocation does not imply business acceptance. */
   recovery: z.array(z.object({
     requestId: id, actorNodeId: id, actorSessionId: z.string().max(200), at: z.number(), note: z.string().min(1).max(4000),
     authorization: z.literal('visible-operation-host-evidence'), before: z.string().max(32), after: z.string().max(32),
-    outcome: z.enum(['succeeded', 'failed', 'not-executed', 'unknown']),
+    outcome: z.enum(['succeeded', 'failed', 'not-executed', 'unknown', 'interrupted']),
     availability: z.string().max(64), source: z.string().max(64).optional(), resultHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   }).strict()).max(32).optional(),
   /** Host-audited impact scope; absence preserves legacy task-wide resource claims. */

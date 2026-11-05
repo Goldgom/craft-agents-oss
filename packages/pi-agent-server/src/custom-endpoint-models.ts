@@ -1,3 +1,32 @@
+import type { StreamFn } from '@earendil-works/pi-agent-core'
+
+/** Let compatible endpoints choose their output limit unless the caller supplied
+ * one. Pi's synthetic model capacity is context bookkeeping, not an upstream
+ * capability: forwarding its 8192 default can exhaust a reasoning-only reply.
+ * Explicit budgets (including compaction) and Anthropic's required limit remain. */
+export function withCustomEndpointOutputDefaults(stream: StreamFn): StreamFn {
+  return (model, context, options) => {
+    if (model.provider !== 'custom-endpoint' || options?.maxTokens !== undefined ||
+      !['openai-completions', 'openai-responses'].includes(model.api)) {
+      return stream(model, context, options)
+    }
+    return stream(model, context, {
+      ...options,
+      onPayload: async (payload, requestModel) => {
+        let result = payload
+        if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+          const body = { ...payload } as Record<string, unknown>
+          delete body.max_tokens
+          delete body.max_completion_tokens
+          delete body.max_output_tokens
+          result = body
+        }
+        return await options?.onPayload?.(result, requestModel) ?? result
+      },
+    })
+  }
+}
+
 export type CustomEndpointInput = 'text' | 'image'
 
 /** Custom endpoint protocol — determines which streaming adapter Pi SDK uses. */

@@ -1,6 +1,8 @@
 # 服务重启与运行时重载后的自动续做设计
 
-状态：设计方案，尚未接入运行时。适用于普通聊天、超级智能体、MCP 重载、服务更新和异常退出。
+状态：通用恢复仍为设计方案；超级智能体的执行节点恢复已接入运行时。覆盖范围包括普通聊天、超级智能体、MCP 重载、服务更新和异常退出。
+
+超级智能体已接入“保留主要节点进度、通信与任务板，重建执行子节点”的专门恢复流程，详见 [执行节点恢复](super-agent/worker-recovery.md)。本文其余普通聊天、MCP continuation、维护与更新入口仍为通用设计方案。
 
 目标：用户无需点击 Retry，服务恢复可用后自动回到原任务，保留已完成成果，从可验证的位置继续。恢复由宿主完成，不依赖客户端在线或模型在重启前主动保存检查点。完全控制开关不决定是否恢复；续做采用当前权限。
 
@@ -14,7 +16,7 @@
 | `packages/server-core/src/bootstrap/headless-start.ts` | 关闭前统一广播 `reason: shutdown` | 传播关闭意图、重启 ID、旧启动实例 ID，并先持久化恢复状态 |
 | `packages/server-core/src/handlers/rpc/server.ts` | 重启请求保存在内存，等待全部活动会话结束 | 重启请求持久化；支持发起者到达安全暂停点，避免等待自己的轮次结束形成循环等待 |
 | `packages/server-core/src/sessions/SessionManager.ts` | 恢复排队消息；源激活依赖内存中的 `autoRetryPending` 和 100ms timer 续做，cleanup 会清除它们 | 持久化执行中的轮次与待续做意图，覆盖 timer 创建前后和服务退出窗口 |
-| `packages/server-core/src/super-agent/SuperAgentService.ts` | 中断轮次置失败；有检查点且满足条件的任务可续做；未知副作用已有核验机制 | 没有模型检查点也能从宿主执行记录恢复；重启恢复与 continuousWork 分离，复用已有操作核验机制 |
+| `packages/server-core/src/super-agent/SuperAgentService.ts` | 已保留主要节点状态并重建执行节点；没有模型检查点也可从持久任务与回执接续；恢复独立于 continuousWork | 保持与通用维护、重启入口的集成边界，专门流程见执行节点恢复文档 |
 | `apps/electron/src/renderer/App.tsx` | stale reconnect 会刷新会话 | 统一展示恢复阶段；客户端只同步状态，不能另起一次续做 |
 
 既有的检查点、操作指纹、操作核验、最终持久化和客户端刷新机制应继续使用，避免再建立一套互相竞争的超级智能体调度器。

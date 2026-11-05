@@ -3,7 +3,7 @@ import type { SuperAgentActions } from '@tokenbird/session-tools-core/super-agen
 import { superAgentWorkList, hasPlanningTopology, superAgentReportRecipient, type SuperAgentDocument, type SuperAgentNode, type SuperAgentPendingTurn, type SuperAgentReport, type SuperAgentWorkEvent } from '@tokenbird/shared/super-agent'
 import { buildSuperAgentExecutionContract } from './SuperAgentExecutionContract'
 import { readContextPage, type SuperAgentReadQuery } from './SuperAgentContext'
-import { SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS } from './SuperAgentPrompt'
+import { SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS, SUPER_AGENT_USER_LANGUAGE_INSTRUCTIONS, SUPER_AGENT_USER_HANDOFF_INSTRUCTIONS } from './SuperAgentPrompt'
 
 /** A replacement changes only the same author's same-version semantic stream. */
 export function effectiveSuperAgentReports<T extends SuperAgentReport>(reports: T[]): T[] {
@@ -120,7 +120,8 @@ export function buildDynamicNodePrompt(config: NonNullable<SuperAgentDocument['c
 业务操作 unknown 或验证任务自身失败时，后台规划、派工协调或有权限的执行节点优先用 super_agent_task action=recover，参数 operationId、稳定 requestId、note。宿主查原会话、独立原回执归档和磁盘存档，核对身份/哈希，并只按真实终止证据恢复执行状态；不要求完成验证任务，不重放命令，不自动通过业务验收。failed 是已结束但失败，不是未执行。missing 或 hash-mismatch 不可用摘要补齐；仍不确定就保留 unknown，用安全读核查。禁止反复创建验证的验证，也不要把已提供此接口的情况报告成平台缺失。health recover 仅处理准备步骤。主节点仍不直接使用内部任务工具。
 工具参数以当前 Schema 为准。requestId 在本轮唯一；相同参数重试复用原 ID，改参用新 ID。每轮至多八个协作动作、四个派工。错误时只纠正失败调用，先检查回执，不重放已生效动作。
 查询默认返回摘要。complete=false 或 truncated=true 时，按 detailRef 的 area、id、view=detail 查询；分段 JSON 按 nextContentOffset 继续读取，后续页传入第一页 hash 作为 expectedHash，核对一致后重组。只有本次判断需要的详情才读取；完整短结果无需重复获取。技能只读取适用内容，压缩后必要时重读；查询和读取内置技能不因节点绑定或执行权限开关阻塞。
-\n${buildSuperAgentExecutionContract(node.role)}\n${SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS}`
+\n${buildSuperAgentExecutionContract(node.role)}\n${SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS}
+${node.role === 'coordinator' ? SUPER_AGENT_USER_LANGUAGE_INSTRUCTIONS : node.role === 'planner' || node.role === 'orchestrator' ? SUPER_AGENT_USER_HANDOFF_INSTRUCTIONS : ''}`
   if (hasPlanningTopology(config)) {
     const topology = '通信拓扑固定为 主节点 ↔ 后台规划 ↔ 派工协调 ↔ 其执行子节点。peers 只列当前相关的相邻节点；需要联系历史执行者时按任务 ID 查询工作列表取得 nodeId，核实 parentNodeId 后再联系。禁止广播、越级、同级或联系其他派工节点的子节点。此约束在完全控制下也生效。汇报由宿主定向路由，不自行指定收件人。共享板只保存事实和引用，不用它绕过通信边界。'
     const reports = '阶段汇报保留证据引用 sourceReportIds、taskId 和 artifactIds，禁止重复复制完整日志或计划。上级只能从自己的收件箱读汇报。当前 reportBatch 和事件范围固定，成功结束后才消费；失败保留未读数据。无新事实或可执行工作就结束，不发送确认、不轮询、不制造唤醒。'

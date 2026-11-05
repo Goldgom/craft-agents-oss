@@ -129,11 +129,13 @@ describe('Super Agent manual node recovery', () => {
     try {
       await restarted.get('alpha')
       expect(context.host.sends).toHaveLength(1)
+      await until(() => restarted.get('alpha'), value => value.recovery?.phase === 'ready')
       await restarted.tick()
       expect((await restarted.get('alpha')).state.tasks[0]!.status).toBe('failed')
       expect(context.host.sends.filter(send => send.sessionId === task.sessionId)).toHaveLength(1)
       await restarted.command('alpha', { type: 'node-refresh', nodeId: 'worker' })
-      await until(() => restarted.get('alpha'), () => context.host.sends.filter(send => send.sessionId === task.sessionId).length === 2)
+      await until(() => restarted.get('alpha'), () => context.host.sends.length === 2)
+      expect(context.host.sends.at(-1)!.sessionId).not.toBe(task.sessionId)
     } finally { await restarted.cleanup() }
   })
 

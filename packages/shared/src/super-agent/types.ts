@@ -136,6 +136,8 @@ export interface SuperAgentActionReceipt {
 }
 
 export interface SuperAgentTask {
+  /** Prior execution instances remain evidence after workers are rebuilt. */
+  executionAttempts?: Array<{ id: string; generation: number; sessionId?: string; startedAt: number; endedAt?: number; status: 'running' | 'interrupted' | 'completed' | 'failed' }>
   parentNodeId?: string
   planRevision?: number
   modelEntryId?: string
@@ -363,7 +365,23 @@ export interface SuperAgentEnvironmentStatus {
   detail: string
 }
 
+export interface SuperAgentRecoverySummary {
+  id: string
+  generation: number
+  phase: 'stopping' | 'reconciling' | 'ready' | 'blocked'
+  reason: 'restart' | 'user'
+  sourceRevision: number
+  createdAt: number
+  updatedAt: number
+  pendingTaskIds: string[]
+  unresolvedOperationIds: string[]
+  error?: string
+  retryAt?: number
+  attempts: number
+}
+
 export interface SuperAgentSnapshot {
+  recovery?: SuperAgentRecoverySummary
   resources?: unknown
   /** A user-requested inspection is queued or executing, including retry delays. */
   inspectionPending?: boolean
@@ -448,6 +466,7 @@ export interface SuperAgentPermissionGrant {
 
 /** Model output uses the same bounded operations as the user-facing control API. */
 export type SuperAgentCommand =
+  | { type: 'recover-workers'; requestId: string }
   | SuperAgentLibraryCommand
   | { type: 'reset'; confirmed: true; preserveConfig?: boolean }
   | { type: 'environment-check'; config: SuperAgentConfig }

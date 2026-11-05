@@ -174,7 +174,7 @@ describe('Super Agent durable network recovery', () => {
     expect((await loadSuperAgentDocument(join(context.root, 'alpha'))).pendingTurns.some(turn => turn.taskId === task.id)).toBe(false)
   })
 
-  test('reloads a persisted recovery with its deadline and original session', async () => {
+  test('reloads a persisted recovery with its deadline and a rebuilt session', async () => {
     const context = await superAgentFixture()
     const task = await startTask(context)
     context.host.complete(task.sessionId!, connectionError, 'error')
@@ -195,7 +195,11 @@ describe('Super Agent durable network recovery', () => {
       context.advance(1)
       await restarted.tick()
       await until(() => restarted.get('alpha'), () => context.host.sends.length === 2)
-      expect(context.host.sends[1]!.sessionId).toBe(task.sessionId!)
+      expect(context.host.sends[1]!.sessionId).not.toBe(task.sessionId!)
+      const saved = await loadSuperAgentDocument(join(context.root, 'alpha'))
+      expect(saved.pendingTurns[0]!.retryDeadline).toBe(durable.pendingTurns[0]!.retryDeadline)
+      expect(saved.pendingTurns[0]!.retryAttempt).toBe(durable.pendingTurns[0]!.retryAttempt)
+      expect(saved.state.tasks[0]!.id).toBe(task.id)
     } finally { await restarted.cleanup() }
   })
 

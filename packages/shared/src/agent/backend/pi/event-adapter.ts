@@ -95,6 +95,7 @@ export class PiEventAdapter extends BaseEventAdapter {
 
   // Track whether a final (non-intermediate) text_complete has been emitted this turn
   private hasEmittedFinalText: boolean = false;
+  private lastAssistantResponseEmpty = false;
 
   // Sub-turnId isolation for tool calls within a single Pi turn
   private subTurnCounter: number = 0;
@@ -370,6 +371,7 @@ export class PiEventAdapter extends BaseEventAdapter {
     this.toolNames.clear();
     this.hasStreamedDeltas = false;
     this.hasEmittedFinalText = false;
+    this.lastAssistantResponseEmpty = false;
     this.subTurnCounter = 0;
     this.messageSubTurnId = null;
     this.thinkingSubTurnId = null;
@@ -608,6 +610,18 @@ export class PiEventAdapter extends BaseEventAdapter {
 
         // Extract text content from the final assistant message
         const textContent = this.extractTextFromMessage(event.message);
+        const content = (event.message as AssistantMessage).content;
+        const hasToolCall = Array.isArray(content) && content.some(part => part.type === 'toolCall');
+        this.lastAssistantResponseEmpty = !textContent?.trim() && !hasToolCall &&
+          (msg.stopReason === 'stop' || msg.stopReason === 'length');
+        if (this.lastAssistantResponseEmpty) {
+          yield {
+            type: 'typed_error',
+            error: createAgentError('empty_response', msg.stopReason === 'length'
+              ? `Output limit reached without text or tool calls (output tokens: ${finiteNumberOrZero(msg.usage?.output)}).`
+              : 'Provider returned no text or tool calls.'),
+          };
+        }
         // Pi SDK stopReason: 'toolUse' means the model will call tools next (intermediate commentary),
         // 'stop'/'end_turn' means final response. Same logic as Claude's stop_reason === 'tool_use'.
         const isIntermediate = msg.stopReason === 'toolUse';
@@ -712,12 +726,9 @@ export class PiEventAdapter extends BaseEventAdapter {
         if (toolName === 'Bash' && typeof args.command === 'string') {
           const readInfo = this.classifyReadCommand(toolCallId, args.command);
           if (readInfo) {
-            yield this.createReadToolStart(
-              toolCallId,
-              readInfo,
-              intent,
-              'Read File',
-            );
+            // Classification is presentation only. Receipts and policy recording
+            // must retain the actual Bash identity and dispatched arguments.
+            yield this.createToolStart(toolCallId, toolName, args, intent, 'Read File');
             break;
           }
         }
@@ -781,7 +792,7 @@ export class PiEventAdapter extends BaseEventAdapter {
         // Check if this was classified as a file read
         const readInfo = this.consumeReadCommand(toolCallId);
         if (readInfo) {
-          yield this.createToolResult(toolCallId, 'Read', result, isError);
+          yield this.createToolResult(toolCallId, resolvedToolName, result, isError);
           break;
         }
 
@@ -881,7 +892,7 @@ export class PiEventAdapter extends BaseEventAdapter {
           // more retries, before that run's agent_end. Nothing is held here.
           yield { type: 'retry', phase: 'end' };
           const n = retryEndEvent.attempt;
-          if (n > 0) {
+          if (n > 0 && !this.lastAssistantResponseEmpty) {
             yield { type: 'info', message: `Recovered after ${n} ${n === 1 ? 'retry' : 'retries'}` };
           }
           break;

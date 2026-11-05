@@ -5,7 +5,7 @@ import type { SessionToolContext } from './context'
 
 describe('collaboration tool schemas and registry', () => {
   test('advertises and forwards operation recovery through the actual registered continuity tool', async () => {
-    const args = { action: 'recover', operationId: 'op_original', requestId: 'restore-original', note: 'Check original host evidence' }
+    const args = { action: 'recover' as const, operationId: 'op_original', requestId: 'restore-original', note: 'Check original host evidence' }
     expect(SuperAgentTaskSchema.parse(args)).toEqual(args)
     const schema = getToolDefsAsJsonSchema({ prefix: 'mcp__session__' }).find(tool => tool.name === 'mcp__session__super_agent_task')!
     expect(JSON.stringify(schema.inputSchema)).toContain('recover')

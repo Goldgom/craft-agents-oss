@@ -125,6 +125,7 @@ export function validateSuperAgentConfig(value: unknown): SuperAgentConfig {
 }
 
 const CommandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('recover-workers'), requestId: id }).strict(),
   ...SuperAgentLibraryCommandSchemas,
   z.object({ type: z.literal('reset'), confirmed: z.literal(true), preserveConfig: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('environment-check'), config: ConfigSchema }).strict(),

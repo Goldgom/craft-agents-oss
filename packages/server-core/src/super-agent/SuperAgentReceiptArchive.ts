@@ -5,11 +5,14 @@ import { z } from 'zod'
 import { getSessionFilePath, loadSession } from '@tokenbird/shared/sessions'
 import { storedToMessage } from '@tokenbird/core/types'
 import type { SuperAgentOperation } from '@tokenbird/shared/super-agent'
+import { operationInputHash } from './SuperAgentOperationIdentity'
+import { parseReadCommand } from '@tokenbird/shared/agent/backend/read-patterns'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const Journal = z.object({
   version: z.literal(1), workspaceId: z.string(), operationId: z.string(), taskId: z.string().optional(), turnId: z.string(),
   sessionId: z.string(), invocationId: z.string(), toolName: z.string(), inputJson: z.string(), inputHash: z.string(),
+  inputHashVersion: z.literal(2).optional(),
   result: z.string().optional(), resultHash: z.string().optional(), isError: z.boolean().optional(), timestamp: z.number(),
 }).strict()
 type ReceiptJournal = z.infer<typeof Journal>
@@ -33,7 +36,7 @@ export async function prepareReceipt(root: string, workspaceId: string, operatio
   const inputJson = JSON.stringify(input)
   await save(journalPath(root, operation), { version: 1, workspaceId, operationId: operation.id, taskId: operation.taskId,
     turnId: operation.turnId, sessionId: operation.sessionId, invocationId: operation.invocationId, toolName: operation.toolName,
-    inputJson, inputHash: hash(inputJson), timestamp: operation.createdAt })
+    inputJson, inputHash: operationInputHash(operation.toolName, input, operation.inputHashVersion), inputHashVersion: operation.inputHashVersion, timestamp: operation.createdAt })
 }
 async function readJournal(root: string, workspaceId: string, operation: SuperAgentOperation) {
   const path = journalPath(root, operation)
@@ -41,7 +44,7 @@ async function readJournal(root: string, workspaceId: string, operation: SuperAg
   const journal = Journal.parse(JSON.parse(await readFile(path, 'utf8')))
   if (journal.workspaceId !== workspaceId || journal.operationId !== operation.id || journal.taskId !== operation.taskId
     || journal.turnId !== operation.turnId || journal.sessionId !== operation.sessionId || journal.invocationId !== operation.invocationId
-    || journal.toolName !== operation.toolName || hash(journal.inputJson) !== journal.inputHash
+    || journal.toolName !== operation.toolName || operationInputHash(journal.toolName, JSON.parse(journal.inputJson), journal.inputHashVersion) !== journal.inputHash
     || operation.inputHash && operation.inputHash !== journal.inputHash) throw new Error('Operation receipt identity mismatch')
   if (journal.result !== undefined && (hash(`${journal.toolName}\n${journal.result}`) !== journal.resultHash
     || operation.resultHash && operation.resultHash !== journal.resultHash)) throw new Error('Operation receipt hash mismatch')
@@ -58,6 +61,17 @@ export async function archivedReceiptSession(root: string, workspaceId: string, 
     content: '', timestamp: journal.timestamp, toolUseId: journal.invocationId, toolName: journal.toolName,
     toolInput: JSON.parse(journal.inputJson), toolResult: journal.result, isError: journal.isError,
     toolStatus: journal.isError ? 'error' as const : 'completed' as const }] }
+}
+
+/** Repair only the historical display-name hash bug, using a fully matching private journal.
+ * The command classifier establishes the old adapter mapping, never execution safety. */
+export async function legacyReadIdentityRepair(root: string, workspaceId: string, operation: SuperAgentOperation) {
+  if (operation.toolName !== 'Bash' || operation.inputHashVersion || !operation.resultHash) return
+  const journal = await readJournal(root, workspaceId, { ...operation, resultHash: undefined })
+  const input = JSON.parse(journal.inputJson)
+  if (journal.result === undefined || typeof input.command !== 'string' || !parseReadCommand(input.command)
+    || hash(`Read\n${journal.result}`) !== operation.resultHash || journal.resultHash === operation.resultHash) return
+  return { previousResultHash: operation.resultHash, resultHash: journal.resultHash! }
 }
 
 /** Exact original session only, including archived sessions; never search other workspaces or summaries. */

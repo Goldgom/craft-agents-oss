@@ -1,10 +1,45 @@
 import { describe, expect, it } from 'bun:test'
+import { streamSimple } from '@earendil-works/pi-ai/api/openai-completions'
+import type { Model } from '@earendil-works/pi-ai'
 import {
   buildCustomEndpointModelDef,
   buildCustomEndpointProviderModels,
   normalizeCustomEndpointModelEntry,
   stripPiPrefix,
+  withCustomEndpointOutputDefaults,
 } from './custom-endpoint-models.ts'
+
+describe('custom endpoint output budget', () => {
+  for (const [provider, maxTokens, expected] of [
+    ['custom-endpoint', undefined, undefined],
+    ['custom-endpoint', 600, 600],
+    ['openai', undefined, 8192],
+  ] as const) {
+    it(`sends the caller budget for ${provider}/${maxTokens ?? 'default'} without inventing a limit`, async () => {
+      let sent: Record<string, unknown> | undefined
+      const model: Model<'openai-completions'> = {
+        ...buildCustomEndpointModelDef('gemini-test', undefined, undefined, 'openai-completions'),
+        api: 'openai-completions', provider, baseUrl: 'https://invalid.test/v1',
+      }
+      const stream = withCustomEndpointOutputDefaults((target, context, options) =>
+        streamSimple(target as Model<'openai-completions'>, context, options))
+      const events = await stream(model, { messages: [{ role: 'user', content: 'Continue', timestamp: 0 }] }, {
+        apiKey: 'test-only', maxTokens,
+        onPayload: payload => ({ ...(payload as object), user: 'preserved-customization' }),
+        fetch: async (_url, init) => {
+          sent = JSON.parse(String(init?.body))
+          return new Response('data: {"id":"test","choices":[{"index":0,"delta":{"content":"Done"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+            headers: { 'content-type': 'text/event-stream' },
+          })
+        },
+      })
+      const result = await events.result()
+      expect(result.stopReason).toBe('stop')
+      expect(sent?.max_completion_tokens ?? sent?.max_tokens).toBe(expected)
+      expect(sent?.user).toBe('preserved-customization')
+    })
+  }
+})
 
 describe('normalizeCustomEndpointModelEntry', () => {
   it('strips pi/ prefixes from string model IDs', () => {

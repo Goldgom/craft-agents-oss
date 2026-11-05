@@ -2,7 +2,7 @@ import { appendFile, mkdir, open, readFile, readdir, rename, rm, stat, unlink } 
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import type { SuperAgentActionReceipt, SuperAgentMessage, SuperAgentConfig, SuperAgentState } from './types'
+import type { SuperAgentActionReceipt, SuperAgentMessage, SuperAgentConfig, SuperAgentState, SuperAgentRecoverySummary } from './types'
 import { emptySuperAgentState, validateSuperAgentConfig } from './validation'
 import { SuperAgentPermissionGrantSchema } from './permissions'
 import { SuperAgentArchiveSchema, SuperAgentMemorySchema } from './library'
@@ -14,6 +14,7 @@ import { SuperAgentPreparationSchema } from './preparation'
 import { SUPER_AGENT_BOARD_LIMIT } from './board'
 
 export interface SuperAgentPendingTurn {
+  generation?: number
   id: string
   nodeId: string
   kind: 'chat' | 'task' | 'inspection' | 'message' | 'summary' | 'script' | 'compact'
@@ -55,6 +56,12 @@ export interface SuperAgentPendingTurn {
 
 /** Config and runtime are replaced together to keep their references consistent. */
 export interface SuperAgentDocument {
+  generation?: number
+  workerRecovery?: SuperAgentRecoverySummary & {
+    sessions: Array<{ nodeId: string; sessionId: string; rotate: boolean }>
+    turns: SuperAgentPendingTurn[]
+    failedTurnIds: string[]
+  }
   version: 1
   config: SuperAgentConfig | null
   /** Saved user settings awaiting the boundary between model turns. */
@@ -85,6 +92,7 @@ const ActionReceiptSchema = z.object({
   createdAt: number,
 }).strict()
 const TaskContractSchema = {
+  executionAttempts: z.array(z.object({ id: string, generation: number.int(), sessionId: string.optional(), startedAt: number, endedAt: number.optional(), status: z.enum(['running', 'interrupted', 'completed', 'failed']) }).strict()).max(100).optional(),
   parentNodeId: string.optional(), planRevision: number.int().optional(),
   modelEntryId: string.optional(),
   ...ContinuityTaskFields,
@@ -127,19 +135,25 @@ const StateSchema = z.object({
   allIdleSince: number.optional(),
   plans: z.array(z.object({ contractRevision: number.int().min(1).optional(), id: string, goalId: string.optional(), goalRevision: number.int().min(1).optional(), title: string, instructions: string, status: z.enum(['planned', 'active', 'blocked', 'completed', 'cancelled']), priority: z.number().int().min(1).max(5), note: string, blocker: SuperAgentPlanBlockerSchema.optional(), revision: number.int(), updatedBy: string, updatedAt: number }).strict()).max(256).default([]),
 }).strict()
-const TurnSchema = z.object({ id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, sourceTurnId: string.optional(), senderNodeId: string.optional(), taskId: string.optional(), scriptRunId: string.optional(), reportThrough: number.int().optional(), eventThrough: number.int().optional(), createdAt: number, startedAt: number.optional(), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), manualRecovery: z.boolean().optional(), recoveryError: string.optional(), emptyResponseRetryAttempt: number.int().optional(), repetitionRecoveryAttempt: number.int().max(1).optional(), preparationAttempt: number.int().min(0).max(100).optional(), backgroundInspection: z.boolean().optional(), hasToolActivity: z.boolean().optional(), responseText: string.optional(), responseTurnId: string.optional(), responseComplete: z.boolean().optional(), completionCallId: string.optional(), pendingToolUseIds: z.array(string).max(2000).optional(), toolCalls: z.array(z.object({ requestId: z.string().min(1).max(64), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), receipt: ActionReceiptSchema, userReply: z.string().max(32000).optional(), userDelivery: SuperAgentDeliverySchema.optional(), suppressedMessageActions: number.int(), resourceContinuation: z.boolean() }).strict()).max(16).optional(), usageBaseline: z.object({ outputTokens: number, costUsd: number }).strict().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
+const TurnSchema = z.object({ generation: number.int().optional(), id: string, nodeId: string, kind: z.enum(['chat', 'task', 'inspection', 'message', 'summary', 'script', 'compact']), text: string, sourceTurnId: string.optional(), senderNodeId: string.optional(), taskId: string.optional(), scriptRunId: string.optional(), reportThrough: number.int().optional(), eventThrough: number.int().optional(), createdAt: number, startedAt: number.optional(), retryAt: number.optional(), retryAttempt: number.int().optional(), retryDeadline: number.optional(), manualRecovery: z.boolean().optional(), recoveryError: string.optional(), emptyResponseRetryAttempt: number.int().optional(), repetitionRecoveryAttempt: number.int().max(1).optional(), preparationAttempt: number.int().min(0).max(100).optional(), backgroundInspection: z.boolean().optional(), hasToolActivity: z.boolean().optional(), responseText: string.optional(), responseTurnId: string.optional(), responseComplete: z.boolean().optional(), completionCallId: string.optional(), pendingToolUseIds: z.array(string).max(2000).optional(), toolCalls: z.array(z.object({ requestId: z.string().min(1).max(64), fingerprint: z.string().regex(/^[a-f0-9]{64}$/), receipt: ActionReceiptSchema, userReply: z.string().max(32000).optional(), userDelivery: SuperAgentDeliverySchema.optional(), suppressedMessageActions: number.int(), resourceContinuation: z.boolean() }).strict()).max(16).optional(), usageBaseline: z.object({ outputTokens: number, costUsd: number }).strict().optional(), depth: number.int().max(6), chainId: string.optional() }).strict()
 
 export async function loadSuperAgentDocument(workspaceRoot: string): Promise<SuperAgentDocument> {
   const candidates: SuperAgentDocument[] = []; const errors: unknown[] = []
   for (const name of ['state.json', 'commit.json']) try {
     const text = await readFile(join(workspaceRoot, 'super-agent', name), 'utf8')
     if (text.length > 64 * 1024 * 1024) throw new Error('Super Agent state is too large')
-    const document = z.object({ version: z.literal(1), config: z.unknown().nullable(), state: StateSchema, pendingTurns: z.array(TurnSchema).max(200), failedTurns: z.array(TurnSchema).max(32).default([]), chainCounts: z.record(z.string().regex(/^[a-z0-9_]+$/).max(64), number.int().max(32)).default({}),
+    const document = z.object({ version: z.literal(1), config: z.unknown().nullable(), state: StateSchema, pendingTurns: z.array(TurnSchema).max(200), failedTurns: z.array(TurnSchema).max(503).default([]), chainCounts: z.record(z.string().regex(/^[a-z0-9_]+$/).max(64), number.int().max(32)).default({}),
       pendingConfig: z.unknown().optional(), recoverySuspended: z.boolean().optional(),
+      generation: number.int().optional(),
+      workerRecovery: z.object({ id: string, generation: number.int(), phase: z.enum(['stopping', 'reconciling', 'ready', 'blocked']), reason: z.enum(['restart', 'user']),
+        sourceRevision: number.int(), createdAt: number, updatedAt: number, pendingTaskIds: z.array(string).max(500), unresolvedOperationIds: z.array(string).max(2000),
+        error: string.optional(), retryAt: number.optional(), attempts: number.int(),
+        failedTurnIds: z.array(string).max(503).default([]), sessions: z.array(z.object({ nodeId: string, sessionId: string, rotate: z.boolean() }).strict()).max(2503), turns: z.array(TurnSchema).max(703),
+      }).strict().optional(),
       operationRecovery: z.record(string, z.object({ evidenceTaskId: string, followupTurnId: string.optional() }).strict()).optional(),
       recoveryReviews: z.record(string, string).optional(),
     }).strict().parse(JSON.parse(text.replace(/^\uFEFF/, '')))
-    candidates.push({ ...document, pendingTurns: document.pendingTurns.map(turn => ({ ...turn, chainId: turn.chainId ?? turn.id })), failedTurns: document.failedTurns.map(turn => ({ ...turn, chainId: turn.chainId ?? turn.id })), config: document.config == null ? null : validateSuperAgentConfig(document.config), pendingConfig: document.pendingConfig == null ? undefined : validateSuperAgentConfig(document.pendingConfig) })
+    candidates.push({ ...document, workerRecovery: document.workerRecovery ? { ...document.workerRecovery, turns: document.workerRecovery.turns.map(turn => ({ ...turn, chainId: turn.chainId ?? turn.id })) } : undefined, pendingTurns: document.pendingTurns.map(turn => ({ ...turn, chainId: turn.chainId ?? turn.id })), failedTurns: document.failedTurns.map(turn => ({ ...turn, chainId: turn.chainId ?? turn.id })), config: document.config == null ? null : validateSuperAgentConfig(document.config), pendingConfig: document.pendingConfig == null ? undefined : validateSuperAgentConfig(document.pendingConfig) })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') errors.push(error)
   }

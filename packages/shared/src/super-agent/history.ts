@@ -92,6 +92,7 @@ export function planSuperAgentHistoryCleanup(state: SuperAgentState, before: num
 export function protectedHistorySessionIds(state: SuperAgentState): Set<string> {
   const protectedEvidence = protectedHistoryEvidence(state)
   return new Set([
+    ...state.tasks.filter(task => protectedEvidence.tasks.has(task.id)).flatMap(task => (task.executionAttempts ?? []).flatMap(attempt => attempt.sessionId ? [attempt.sessionId] : [])),
     ...state.nodes.flatMap(node => node.sessionId ? [node.sessionId] : []),
     ...state.tasks.flatMap(task => task.sessionId && (['queued', 'running'].includes(task.status)
       || protectedEvidence.tasks.has(task.id) || (task.planId && protectedEvidence.plans.has(task.planId))) ? [task.sessionId] : []),

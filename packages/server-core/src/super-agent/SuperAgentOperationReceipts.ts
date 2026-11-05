@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Session } from '@tokenbird/shared/protocol'
 import type { SuperAgentOperation } from '@tokenbird/shared/super-agent'
+import { operationInputHash } from './SuperAgentOperationIdentity'
 
 /** The shell bridge marks a dispatched process and its terminal exit explicitly.
  * This proves the invocation finished, never that its requested business work succeeded. */
@@ -28,7 +29,7 @@ export function operationReceipt(operation: SuperAgentOperation, session: {
   if (!message) return { ...identity, availability: matches.length ? 'hash-mismatch' as const : 'missing' as const }
   // Bound returned evidence, preserving the full-result hash and explicit truncation.
   const input = message.toolInput === undefined ? undefined : JSON.stringify(message.toolInput)
-  if (operation.inputHash && (input === undefined || createHash('sha256').update(input).digest('hex') !== operation.inputHash)) return { ...identity, availability: 'hash-mismatch' as const }
+  if (operation.inputHash && (message.toolInput === undefined || operationInputHash(operation.toolName, message.toolInput, operation.inputHashVersion) !== operation.inputHash)) return { ...identity, availability: 'hash-mismatch' as const }
   const result = message.toolResult!
   return { ...identity, availability: 'available' as const, messageId: message.id, timestamp: message.timestamp,
     toolName: operation.toolName, toolStatus: message.toolStatus, isError: message.isError,

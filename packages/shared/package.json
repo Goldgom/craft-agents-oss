@@ -12,6 +12,7 @@
     "sync:tokenbird-bash-patterns": "bun run src/config/sync-tokenbird-bash-patterns.ts"
   },
   "exports": {
+    "./agent/backend/read-patterns": "./src/agent/backend/read-patterns.ts",
     "./cloud": "./src/cloud/types.ts",
     ".": "./src/index.ts",
     "./agent": "./src/agent/index.ts",

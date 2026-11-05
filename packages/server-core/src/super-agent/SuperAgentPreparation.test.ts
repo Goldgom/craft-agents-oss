@@ -124,6 +124,28 @@ describe('Super Agent preparation supervisor', () => {
     } finally { await restarted.cleanup() }
   })
 
+  test('rebuilding another worker does not reset an exhausted preparation budget', async () => {
+    const context = await superAgentFixture()
+    context.config.nodes.push({ ...context.config.nodes[1]!, id: 'other' })
+    context.config.execution = { connectionConcurrency: 30, connectionCallsPerMinute: 600, stallMinutes: 15, maxResumeAttempts: 3, preparationMaxRetries: 0 }
+    await context.service.save('alpha', context.config)
+    await context.service.command('alpha', { type: 'task', id: 'other-task', title: 'Other', instructions: 'Continue', nodeId: 'other' })
+    await until(() => context.service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    context.host.applySessionPolicy = async () => new Promise<void>(() => {})
+    await context.service.command('alpha', { type: 'task', id: 'preparing-task', title: 'Prepare', instructions: 'Continue', nodeId: 'worker' })
+    await until(() => context.service.get('alpha'), value => worker(value).preparation?.stage === 'policy')
+    await context.service.cleanup()
+    const restarted = new SuperAgentService({ host: context.host, rootForWorkspace: id => join(context.root, id), now: context.now, autoTick: false })
+    try {
+      await restarted.get('alpha')
+      const snapshot = await until(() => restarted.get('alpha'), value => value.recovery?.phase === 'ready')
+      expect(worker(snapshot).preparation).toMatchObject({ attempt: 1, status: 'failed', cleanupPending: false })
+      const saved = await loadSuperAgentDocument(join(context.root, 'alpha'))
+      expect(saved.pendingTurns.find(turn => turn.taskId === 'preparing-task')?.preparationAttempt).toBe(1)
+      expect(context.host.sends).toHaveLength(1)
+    } finally { await restarted.cleanup() }
+  })
+
   test('cancels a cooperative policy wait and retries the original task without consuming a model call', async () => {
     const context = await superAgentFixture()
     let calls = 0

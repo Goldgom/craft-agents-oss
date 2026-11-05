@@ -145,17 +145,25 @@ describe('Super Agent empty-response recovery', () => {
     const recovered = { ...context, service: restarted }
     try {
       await restarted.get('alpha')
-      await resume(recovered, task.sessionId!, 2)
+      await until(() => restarted.get('alpha'), value => value.recovery?.phase === 'ready')
+      const pending = await loadSuperAgentDocument(join(context.root, 'alpha'))
+      expect(pending.pendingTurns[0]!.emptyResponseRetryAttempt).toBe(1)
+      context.advance(Math.max(0, pending.pendingTurns[0]!.retryAt! - context.now()))
+      await restarted.tick()
+      const running = await until(() => restarted.get('alpha'), () => context.host.sends.length === 2)
+      const sessionId = running.state.tasks[0]!.sessionId!
+      expect(sessionId).not.toBe(task.sessionId!)
       for (let attempt = 2; attempt <= 3; attempt++) {
-        completeEmpty(recovered, task.sessionId!)
+        completeEmpty(recovered, sessionId)
         await recovering(recovered)
         expect((await loadSuperAgentDocument(join(context.root, 'alpha'))).pendingTurns[0]!.emptyResponseRetryAttempt).toBe(attempt)
-        await resume(recovered, task.sessionId!, attempt + 1)
+        await resume(recovered, sessionId, attempt)
       }
-      completeEmpty(recovered, task.sessionId!)
+      completeEmpty(recovered, sessionId)
       const failed = await until(() => restarted.get('alpha'), value => value.state.tasks[0]!.status === 'failed')
       expect(failed.state.tasks[0]!.error).toContain('3 automatic recovery attempts')
-      expect(context.host.sends.filter(send => send.sessionId === task.sessionId)).toHaveLength(4)
+      expect(context.host.sends.filter(send => send.sessionId === sessionId)).toHaveLength(3)
+      expect(context.host.sends).toHaveLength(4)
     } finally { await restarted.cleanup() }
   })
 })

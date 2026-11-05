@@ -92,6 +92,7 @@ import {
 } from './ephemeral-query-lifecycle.ts';
 import {
   buildCustomEndpointProviderModels,
+  withCustomEndpointOutputDefaults,
   normalizeCustomEndpointModelEntry,
   stripPiPrefix,
   type CustomEndpointApi,
@@ -864,7 +865,7 @@ async function ensureSession(): Promise<AgentSession> {
     sessionOptions.resourceLoader = loader;
   }
   const { session } = await createAgentSession(sessionOptions);
-  session.agent.streamFunction = compactionPolicy.wrapStream(session.agent.streamFunction);
+  session.agent.streamFunction = compactionPolicy.wrapStream(withCustomEndpointOutputDefaults(session.agent.streamFunction));
   installTokenBirdPiRetryClassifier(session);
   piSession = session;
 

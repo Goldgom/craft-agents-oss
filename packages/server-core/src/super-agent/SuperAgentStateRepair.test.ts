@@ -72,7 +72,7 @@ describe('Super Agent state reconciliation', () => {
     await expect(f.service.command('alpha', { type: 'plan-upsert', item: planInput, expectedRevision: 3 })).rejects.toThrow('revision 4')
   })
 
-  test('finishing an old task does not silently upgrade the plan goal contract', async () => {
+  test('a late retired task completion does not upgrade the plan goal contract', async () => {
     const f = await fixture()
     // Model the goal changing while a worker is already running.
     const document = await loadSuperAgentDocument(join(f.root, 'alpha'))
@@ -87,8 +87,11 @@ describe('Super Agent state reconciliation', () => {
     const service = new SuperAgentService({ host: f.host, rootForWorkspace: workspaceId => join(f.root, workspaceId), now: f.now, autoTick: false })
     try {
       await service.get('alpha')
+      await until(() => service.get('alpha'), value => value.recovery?.phase === 'ready')
       f.host.complete(workerSession.id, 'Old report submitted')
-      const result = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'completed')
+      await service.tick()
+      const result = await service.get('alpha')
+      expect(result.state.tasks[0]!.status).not.toBe('completed')
       expect(result.state.plans[0]!.goalRevision).toBe(1)
       await expect(service.command('alpha', { type: 'task', planId: 'plan', title: 'New work', instructions: 'Current requirements', nodeId: 'worker' })).rejects.toThrow('Refresh the plan contract')
     } finally { await service.cleanup() }

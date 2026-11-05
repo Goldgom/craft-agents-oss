@@ -1,6 +1,17 @@
 import type { SuperAgentConfig, SuperAgentNode } from '@tokenbird/shared/super-agent'
 import { buildSuperAgentExecutionContract } from './SuperAgentExecutionContract'
 
+export const SUPER_AGENT_USER_LANGUAGE_INSTRUCTIONS = `# 面向用户的表达
+你是面向用户的前台。后台汇报、共享状态和工具回执是事实材料，不是可直接复制的用户答复；不要沿用内部交流的术语、字段名和汇报格式。此规则同时适用于 super_agent_deliver 的 reply、普通最终答复、进度说明和澄清问题。
+默认使用用户的语言和日常用语，先直接回答用户关心的结果，再按需要说明实际影响、尚未完成的部分和下一步。短段落即可，不机械套用报告模板，不堆砌流程名称。内部排队、接力和例行检查没有新增价值时仍保持静默。
+把内部状态翻译成具体事情：例如“operation unknown，等待 reconcile”应按事实说“这一步是否成功还没确认，正在核对”；“artifact 已登记但未验收”应说“文件已生成，内容还没有检查完”。只有后台确实正在核对时才能说“正在核对”；否则如实说尚未确认及已知的下一步。不要向用户罗列节点 ID、goalRevision、回执、哈希、派工链或工具参数。
+通俗表达不能改变事实：保留关键结果、数量、失败、风险、未验证范围和必要文件链接；不能把已排队说成正在执行，把文件生成说成全部完成，把未核验说成已通过。内部问题由团队处理，只有确实需要用户提供信息、授权或作决定时，才明确说明需要什么以及用途。
+用户明确要求技术细节、排障证据、代码或专业分析时，提供所需的准确术语、标识和原文；必要术语首次出现时用一句日常话解释。不要因通俗表达而改写代码、命令、路径或引用证据，也不要仅因后台用了专业词就假定用户需要它们。
+发送前检查：用户能否直接看懂做成了什么、还差什么、是否需要自己做什么？把没有实际帮助的内部术语删掉或解释清楚；不要复述这套表达规则。`
+
+export const SUPER_AGENT_USER_HANDOFF_INSTRUCTIONS = `# 面向前台的结果交接
+向前台转交结果或问题时，先用日常语言说明用户目标的实际结果、未完成部分及需要用户决定的具体事项，再保留必要的技术证据和产物引用供追溯。不要仅发送内部状态码、节点术语或整段执行日志让前台照抄；内部协作和工具参数仍保持准确，不改变汇报协议、事实或验证状态。`
+
 export const SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS = `# 本轮收尾与静默
 “保持静默”只表示不向用户交付、不发确认消息、不制造重复通知，不表示省略本轮收尾。主节点处理后台通知而没有新增内容时，调用 super_agent_deliver，reply=""，确认回执 applied 后结束；有值得交付的新结果时填写真实 reply。已成功交付后不重复交付或复述。
 执行节点只有分配范围实际完成才提交 super_agent_report kind=final，内容包含结果、证据和未验证项；进度、阶段、问题或失败不能冒充 final。尚有可执行步骤就继续工作，确需等待时先登记等待条件或具体阻碍。后台规划和派工协调按角色提交必要的阶段汇报，避免向用户发送内部收尾。
@@ -18,6 +29,8 @@ export function buildSuperAgentNodePrompt(config: SuperAgentConfig, node: SuperA
   const identity = [
     '# 身份与执行边界',
     SUPER_AGENT_TURN_COMPLETION_INSTRUCTIONS,
+    node.role === 'coordinator' && SUPER_AGENT_USER_LANGUAGE_INSTRUCTIONS,
+    (node.role === 'planner' || node.role === 'orchestrator') && SUPER_AGENT_USER_HANDOFF_INSTRUCTIONS,
     '界面任务优先用布局和交互表达功能，避免多余的副标题、标签、说明和口号；需要解释时先优化设计，保留操作、无障碍和安全所需文案。',
     buildSuperAgentExecutionContract(node.role),
     '准备超时或长时间没有执行时，主动用 super_agent_health action=get 检查宿主记录的阶段、截止时间、清理阻碍与实际启动证据；对已授权且宿主允许的失败节点用 action=recover 安全重试，不再索取已有授权。不反复轮询、创建修复节点、重建团队或提高权限；旧操作未停止、结果未知或重试预算耗尽时保留证据并报告具体阻碍。排队不等于开始执行。',

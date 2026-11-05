@@ -261,6 +261,19 @@ async function runScenario(
 }
 
 describe('Pi SDK auto-retry integration', () => {
+  for (const stopReason of ['stop', 'length'] as const) {
+    it(`reports an empty ${stopReason} reply after retry instead of claiming recovery`, async () => {
+      const result = await runScenario([{ error: 'read ECONNRESET' }, { text: '', stopReason }]);
+      expect(result.callCount).toBe(2);
+      expect(result.events.filter(event => event.type === 'typed_error')).toMatchObject([
+        { type: 'typed_error', error: { code: 'empty_response', canRetry: true } },
+      ]);
+      expect(result.events.filter(event => event.type === 'info' && event.message.startsWith('Recovered after'))).toEqual([]);
+      expect(result.events.filter(event => event.type === 'complete')).toHaveLength(1);
+      expect(result.isHoldingTurn).toBe(false);
+    });
+  }
+
   it('retries a socket reset missed by the SDK classifier and recovers', async () => {
     const result = await runScenario([
       { error: 'read ECONNRESET' },

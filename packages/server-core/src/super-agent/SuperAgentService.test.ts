@@ -225,7 +225,7 @@ describe('Super Agent execution defaults and orchestration instructions', () => 
   })
 
   test('rejects foreign, stale, self and inactive senders and preserves message chain limits', async () => {
-    const { root, service, host, config } = await fixture()
+    const { root, service, host, config, advance } = await fixture()
     await service.save('alpha', config)
     await service.command('alpha', { type: 'chat', text: 'Coordinate' })
     await service.command('alpha', { type: 'task', title: 'Inspect', instructions: 'Use tools' })
@@ -247,8 +247,13 @@ describe('Super Agent execution defaults and orchestration instructions', () => 
       document.chainCounts[turn.chainId] = budget
       await saveSuperAgentDocument(join(root, workspaceId), document)
       await service.get(workspaceId)
-      await expect(service.sendNodeMessage(workspaceId, `${workspaceId}-${sender}`, `${workspaceId}-${target}`, 'Progress')).rejects.toThrow(error)
-      await expect(service.sendNodeMessage('alpha', sender, `${workspaceId}-${target}`, 'Foreign team')).rejects.toThrow('same team')
+      await until(() => service.get(workspaceId), value => value.recovery?.phase === 'ready')
+      advance(2000); await service.tick()
+      const recovered = await until(() => service.get(workspaceId), value => value.recovery?.phase === 'ready'
+        && value.state.nodes.find(node => node.nodeId === 'worker')?.status === 'working')
+      await expect(service.sendNodeMessage(workspaceId, recovered.state.nodes.find(node => node.nodeId === 'worker')!.sessionId!,
+        recovered.state.nodes.find(node => node.nodeId === 'main')!.sessionId!, 'Progress')).rejects.toThrow(error)
+      await expect(service.sendNodeMessage('alpha', sender, recovered.state.nodes.find(node => node.nodeId === 'main')!.sessionId!, 'Foreign team')).rejects.toThrow('same team')
     }
     await service.command('alpha', { type: 'cancel' })
     await expect(service.sendNodeMessage('alpha', sender, target, 'After cancel')).rejects.toThrow('active node turn')
@@ -890,7 +895,8 @@ describe('Super Agent configuration and scheduling', () => {
     await service.save('alpha', config)
     await service.command('alpha', { type: 'message', fromNodeId: 'main', toNodeId: 'worker', body: 'Start a conversation' })
     for (let hop = 0; hop <= 6; hop++) {
-      const snapshot = await until(() => service.get('alpha'), value => value.state.nodes.some(node => node.status === 'working'))
+      const snapshot = await until(() => service.get('alpha'), value => value.state.nodes.some(node => node.status === 'working'
+        && host.sessions.get(node.sessionId!)?.isProcessing))
       const active = snapshot.state.nodes.find(node => node.status === 'working')!
       const recipient = active.nodeId === 'worker' ? 'main' : 'worker'
       host.complete(active.sessionId!, `<super_agent_actions>{"messages":[{"toNodeId":"${recipient}","body":"Another reply ${hop}"}]}</super_agent_actions>`)
@@ -941,18 +947,20 @@ describe('Super Agent configuration and scheduling', () => {
     expect((await service.get('alpha')).state.tasks).toHaveLength(1)
   })
 
-  test('does not replay interrupted turns after a restart', async () => {
+  test('continues remaining work after a restart while retaining the original execution evidence', async () => {
     const { root, host, service, config } = await fixture()
     await service.save('alpha', config)
     await service.command('alpha', { type: 'task', title: 'Side effect', instructions: 'Perform work once' })
-    await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    const before = await until(() => service.get('alpha'), value => value.state.tasks[0]?.status === 'running')
+    await service.cleanup()
     const restartedHost = new Host()
     const restarted = new SuperAgentService({ host: restartedHost, rootForWorkspace: workspaceId => join(root, workspaceId), autoTick: false })
     try {
-      const snapshot = await restarted.get('alpha')
-      expect(snapshot.state.tasks[0]!.status).toBe('failed')
-      expect(snapshot.state.tasks[0]!.error).toContain('interrupted')
-      expect(restartedHost.sends).toHaveLength(0)
+      await restarted.get('alpha')
+      const snapshot = await until(() => restarted.get('alpha'), value => value.recovery?.phase === 'ready' && restartedHost.sends.length === 1)
+      expect(snapshot.state.tasks[0]!.id).toBe(before.state.tasks[0]!.id)
+      expect(snapshot.state.tasks[0]!.executionAttempts![0]!.status).toBe('interrupted')
+      expect(restartedHost.sends[0]!.context).toContain('do not repeat completed')
       expect(host.sends).toHaveLength(1)
     } finally { await restarted.cleanup() }
   })
