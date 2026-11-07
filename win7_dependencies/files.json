@@ -1,0 +1,48 @@
+[
+  {
+    "file": "Git-2.46.2-64-bit.exe",
+    "size": 68406896,
+    "sha256": "eac009616605ec7207fbe1990627f453b826a1f23a33d54d9b0be8f4b0cb2094",
+    "parts": [
+      "Git-2.46.2-64-bit.exe.part001",
+      "Git-2.46.2-64-bit.exe.part002"
+    ]
+  },
+  {
+    "file": "jdk-21_windows-x64_bin.exe",
+    "size": 175054000,
+    "sha256": "07f166595579af2702f90a717d99f18ffa53e00e62c62e359f5d48d5a899000d",
+    "parts": [
+      "jdk-21_windows-x64_bin.exe.part001",
+      "jdk-21_windows-x64_bin.exe.part002",
+      "jdk-21_windows-x64_bin.exe.part003",
+      "jdk-21_windows-x64_bin.exe.part004",
+      "jdk-21_windows-x64_bin.exe.part005"
+    ]
+  },
+  {
+    "file": "node-v18.16.0-win-x64.zip",
+    "size": 29157078,
+    "sha256": "4b3bd4cb5570cc217490639e93a7e1b7a7a341981366661e514ce61941824a85"
+  },
+  {
+    "file": "python-3.8.10-amd64.exe",
+    "size": 28296784,
+    "sha256": "7628244cb53408b50639d2c1287c659f4e29d3dfdb9084b11aed5870c0c6a48a"
+  },
+  {
+    "file": "Windows6.1-KB3080149-x64.msu",
+    "size": 17678484,
+    "sha256": "ce0e4a6b9836c3d58ffeed3cbcea574acea4cb3bffd11a9932da1fc05e5f2bdb"
+  },
+  {
+    "file": "x86_64-16.2.0-release-win32-seh-ucrt-rt_v14-rev1.7z",
+    "size": 107950837,
+    "sha256": "c9ae8e4a3afa667b3301dd28c567109d174a0fa0856a2eeaa85a91b89569a50b",
+    "parts": [
+      "x86_64-16.2.0-release-win32-seh-ucrt-rt_v14-rev1.7z.part001",
+      "x86_64-16.2.0-release-win32-seh-ucrt-rt_v14-rev1.7z.part002",
+      "x86_64-16.2.0-release-win32-seh-ucrt-rt_v14-rev1.7z.part003"
+    ]
+  }
+]

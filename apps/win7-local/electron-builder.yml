@@ -19,7 +19,13 @@ win:
   target:
     - target: nsis
       arch: [x64]
+    - target: msiWrapped
+      arch: [x64]
   artifactName: "TokenBird-Win7-Local-OriginalUI-Tools-${version}-${arch}-Setup.${ext}"
+msiProjectCreated: installer/prepare-msi.cjs
+msiWrapped:
+  impersonate: true
+  wrappedInstallerArgs: ""
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

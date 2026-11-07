@@ -2,15 +2,24 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { restoreWin7Dependencies } from './restore-win7-dependencies'
 
 export function prepareWin7Dependencies(root: string) {
+  restoreWin7Dependencies(root)
   const local = join(root, 'apps/win7-local')
   const source = join(root, 'win7_dependencies')
   const output = join(local, 'dist/installer-payload')
   const specs = JSON.parse(readFileSync(join(local, 'installer/dependencies.json'), 'utf8')) as Array<Record<string, string>>
   const expected = new Set(specs.map(spec => spec.file))
+  const sourceAllowed = new Set(expected)
+  if (existsSync(join(source, 'files.json'))) {
+    sourceAllowed.add('files.json')
+    const storage = JSON.parse(readFileSync(join(source, 'files.json'), 'utf8')) as Array<{file: string; parts?: string[]}>
+    if (storage.length !== specs.length || storage.some(entry => !expected.has(entry.file))) throw new Error('Dependency storage manifest differs from installer selection')
+    for (const entry of storage) for (const part of entry.parts ?? []) sourceAllowed.add(part)
+  }
   const files = readdirSync(source, { withFileTypes: true })
-  if (files.some(file => !file.isFile() || !expected.has(file.name))) throw new Error('Unconfigured win7_dependencies entry; update installer/dependencies.json and selection page first')
+  if (files.some(file => !file.isFile() || !sourceAllowed.has(file.name))) throw new Error('Unconfigured win7_dependencies entry; update installer/dependencies.json and selection page first')
   mkdirSync(output, { recursive: true })
   // Fail on stale staged payloads rather than silently shipping an older package.
   const allowed = new Set([...expected, 'manifest.ini', '7za.exe', '7zip-LICENSE.txt', 'install-dependencies.ps1'])
