@@ -1,3 +1,4 @@
+import { SuperAgentSelect } from './SuperAgentSelect'
 import { useTranslation } from 'react-i18next'
 import type { SuperAgentConfig } from '@tokenbird/shared/super-agent'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
@@ -24,7 +25,7 @@ export function SuperAgentCompactionSettings({ config, connections, onChange }: 
       const models = nodeModels(connection)
       const selected = value.models?.[slug] ?? ''
       return <FormField key={slug} label={`${connection?.name ?? slug} · ${tr('压缩模型', 'Compression model')}`}>
-        <select className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={selected} onChange={event => {
+        <SuperAgentSelect className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={selected} onChange={event => {
           const models = { ...value.models }
           if (event.target.value) models[slug] = event.target.value
           else delete models[slug]
@@ -33,7 +34,7 @@ export function SuperAgentCompactionSettings({ config, connections, onChange }: 
           <option value="">{tr('跟随连接压缩设置', 'Use connection compaction settings')}</option>
           {selected && !models.includes(selected) && <option value={selected}>{selected}</option>}
           {models.map(model => <option key={model} value={model}>{model}</option>)}
-        </select>
+        </SuperAgentSelect>
       </FormField>
     })}
   </FormSection>

@@ -1,3 +1,5 @@
+import { ContextMenu, ContextMenuTrigger, StyledContextMenuContent, StyledContextMenuItem, StyledContextMenuSeparator } from './styled-context-menu'
+import { toast } from 'sonner'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { coerceInputText } from '@/lib/input-text'
@@ -521,6 +523,50 @@ export const RichTextInput = React.forwardRef<RichTextInputHandle, RichTextInput
     const { t } = useTranslation()
     const safeValue = React.useMemo(() => coerceInputText(value), [value])
     const divRef = React.useRef<HTMLDivElement>(null)
+    const menuSelectionRef = React.useRef<Range | null>(null)
+    const [editMenuState, setEditMenuState] = React.useState({ selected: false, undo: false, redo: false })
+
+    const restoreMenuSelection = () => {
+      const editor = divRef.current
+      if (!editor) return
+      editor.focus()
+      const range = menuSelectionRef.current
+      if (range && editor.contains(range.commonAncestorContainer)) {
+        const selection = window.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(range)
+      }
+    }
+    const editCommand = (command: string) => {
+      restoreMenuSelection()
+      if (command === 'selectAll' && divRef.current) {
+        const range = document.createRange()
+        range.selectNodeContents(divRef.current)
+        const selection = window.getSelection()
+        selection?.removeAllRanges()
+        selection?.addRange(range)
+      } else {
+        document.execCommand(command)
+      }
+    }
+    const pasteFromMenu = async () => {
+      try {
+        const transfer = new DataTransfer()
+        for (const item of await navigator.clipboard.read()) {
+          // Prefer images over their optional HTML/text representation, as with a native paste.
+          const imageType = item.types.find(type => type.startsWith('image/'))
+          if (imageType) {
+            transfer.items.add(new File([await item.getType(imageType)], 'clipboard.png', { type: imageType }))
+          } else if (item.types.includes('text/plain')) {
+            transfer.setData('text/plain', await (await item.getType('text/plain')).text())
+          }
+        }
+        restoreMenuSelection()
+        divRef.current?.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }))
+      } catch {
+        toast.error(t('chatInput.clipboardReadFailed'))
+      }
+    }
     const [isFocused, setIsFocused] = React.useState(false)
     const [isCompositionActive, setIsCompositionActive] = React.useState(false)
     const isComposing = React.useRef(false)
@@ -768,7 +814,7 @@ export const RichTextInput = React.forwardRef<RichTextInputHandle, RichTextInput
     const placeholderArray = React.useMemo(() => {
       if (!placeholder) return [t("chatInput.placeholder.typeMessage")]
       return Array.isArray(placeholder) ? placeholder : [placeholder]
-    }, [placeholder])
+    }, [placeholder, t])
 
     // Check if value contains any mentions (badges) to adjust line height
     const hasMentions = React.useMemo(() => {
@@ -777,6 +823,15 @@ export const RichTextInput = React.forwardRef<RichTextInputHandle, RichTextInput
     }, [safeValue, skillSlugs, sourceSlugs])
 
     return (
+      <ContextMenu onOpenChange={open => {
+        if (!open) return
+        const selection = window.getSelection()
+        const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+        menuSelectionRef.current = range && divRef.current?.contains(range.commonAncestorContainer) ? range.cloneRange() : null
+        setEditMenuState({ selected: !!menuSelectionRef.current && !menuSelectionRef.current.collapsed,
+          undo: document.queryCommandEnabled('undo'), redo: document.queryCommandEnabled('redo') })
+      }}>
+      <ContextMenuTrigger asChild>
       <div className="relative">
         <div
           ref={divRef}
@@ -819,6 +874,18 @@ export const RichTextInput = React.forwardRef<RichTextInputHandle, RichTextInput
           />
         )}
       </div>
+      </ContextMenuTrigger>
+      <StyledContextMenuContent onCloseAutoFocus={event => event.preventDefault()}>
+        <StyledContextMenuItem disabled={disabled || !editMenuState.undo} onSelect={() => editCommand('undo')}>{t('menu.undo')}</StyledContextMenuItem>
+        <StyledContextMenuItem disabled={disabled || !editMenuState.redo} onSelect={() => editCommand('redo')}>{t('menu.redo')}</StyledContextMenuItem>
+        <StyledContextMenuSeparator />
+        <StyledContextMenuItem disabled={disabled || !editMenuState.selected} onSelect={() => editCommand('cut')}>{t('menu.cut')}</StyledContextMenuItem>
+        <StyledContextMenuItem disabled={!editMenuState.selected} onSelect={() => editCommand('copy')}>{t('menu.copy')}</StyledContextMenuItem>
+        <StyledContextMenuItem disabled={disabled} onSelect={() => { void pasteFromMenu() }}>{t('menu.paste')}</StyledContextMenuItem>
+        <StyledContextMenuSeparator />
+        <StyledContextMenuItem onSelect={() => editCommand('selectAll')}>{t('menu.selectAll')}</StyledContextMenuItem>
+      </StyledContextMenuContent>
+      </ContextMenu>
     )
   }
 )

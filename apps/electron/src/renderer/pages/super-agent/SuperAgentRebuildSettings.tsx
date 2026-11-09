@@ -1,3 +1,4 @@
+import { SuperAgentSelect } from './SuperAgentSelect'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LoaderCircle } from 'lucide-react'
@@ -22,16 +23,16 @@ function ModelFields({ value, connections, onChange, tr }: {
   const connection = connections.find(item => item.slug === value.llmConnection)
   const models = nodeModels(connection)
   return <div className="grid gap-4 sm:grid-cols-2">
-    <FormField label={tr('连接', 'Connection')}><select className={selectClass} value={value.llmConnection} onChange={event => {
+    <FormField label={tr('连接', 'Connection')}><SuperAgentSelect className={selectClass} value={value.llmConnection} onChange={event => {
       const selected = connections.find(item => item.slug === event.target.value), available = nodeModels(selected)
       onChange({ llmConnection: event.target.value, model: selected?.defaultModel && available.includes(selected.defaultModel) ? selected.defaultModel : available[0] ?? '', agentRuntime: undefined })
-    }}><option value="" disabled>{tr('选择连接', 'Select connection')}</option>{connections.filter(item => item.isAuthenticated).map(item => <option key={item.slug} value={item.slug}>{item.name}</option>)}</select></FormField>
-    <FormField label={tr('模型', 'Model')}>{models.length ? <select className={selectClass} value={value.model} onChange={event => onChange({ model: event.target.value })}>
+    }}><option value="" disabled>{tr('选择连接', 'Select connection')}</option>{connections.filter(item => item.isAuthenticated).map(item => <option key={item.slug} value={item.slug}>{item.name}</option>)}</SuperAgentSelect></FormField>
+    <FormField label={tr('模型', 'Model')}>{models.length ? <SuperAgentSelect className={selectClass} value={value.model} onChange={event => onChange({ model: event.target.value })}>
       {!models.includes(value.model) && <option value={value.model}>{value.model || '—'}</option>}{models.map(model => <option key={model} value={model}>{model}</option>)}
-    </select> : <Input value={value.model} onChange={event => onChange({ model: event.target.value })} />}</FormField>
-    <FormField label={tr('执行后端', 'Runtime')}><select className={selectClass} value={value.agentRuntime ?? ''} onChange={event => onChange({ agentRuntime: (event.target.value || undefined) as ModelParameters['agentRuntime'] })}>
+    </SuperAgentSelect> : <Input value={value.model} onChange={event => onChange({ model: event.target.value })} />}</FormField>
+    <FormField label={tr('执行后端', 'Runtime')}><SuperAgentSelect className={selectClass} value={value.agentRuntime ?? ''} onChange={event => onChange({ agentRuntime: (event.target.value || undefined) as ModelParameters['agentRuntime'] })}>
       <option value="">{tr('跟随连接', 'Follow connection')}</option>{connection && getCompatibleAgentRuntimes(connection).map(runtime => <option key={runtime} value={runtime}>{runtime}</option>)}
-    </select></FormField>
+    </SuperAgentSelect></FormField>
     <FormField label={tr('每分钟调用上限', 'Calls per minute')}><Input type="number" min={0.1} max={60} step={0.1} value={value.maxCallsPerMinute} onChange={event => onChange({ maxCallsPerMinute: Number(event.target.value) })} /></FormField>
   </div>
 }
@@ -70,7 +71,7 @@ export function SuperAgentRebuildSettings({ config, connections, defaultConnecti
       {step < 3 && node && <FormSection title={steps[step]} description={step === 0 ? tr('负责用户交互、理解需求和转述汇报。', 'Handles conversation, requirements and reports.') : step === 1 ? tr('分析用户原始需求、维护计划，汇总阶段结论；只与主节点和协调节点交流。', 'Analyzes original requests, maintains plans and summarizes stage results; communicates with main and dispatch.') : tr('按后台计划选择模型和思考强度，派工、协调依赖资源并验收；只与后台和自己的执行子节点交流。', 'Selects models and effort, dispatches plans, coordinates resources and accepts evidence; communicates with planning and owned workers.')}>
         <FormField label={tr('节点名称', 'Node name')}><Input value={node.name} onChange={event => updateNode({ name: event.target.value })} /></FormField>
         <ModelFields value={node} connections={connections} onChange={updateNode} tr={tr} />
-        <FormField label={tr('思考强度', 'Thinking effort')}><select className={selectClass} value={node.thinkingLevel} onChange={event => updateNode({ thinkingLevel: event.target.value as SuperAgentNode['thinkingLevel'] })}>{THINKING_LEVEL_IDS.map(level => <option key={level} value={level}>{level}</option>)}</select></FormField>
+        <FormField label={tr('思考强度', 'Thinking effort')}><SuperAgentSelect className={selectClass} value={node.thinkingLevel} onChange={event => updateNode({ thinkingLevel: event.target.value as SuperAgentNode['thinkingLevel'] })}>{THINKING_LEVEL_IDS.map(level => <option key={level} value={level}>{level}</option>)}</SuperAgentSelect></FormField>
       </FormSection>}
       {step === 1 && <EnvironmentEditor environment={draft.environment} onChange={environment => patch({ environment })} />}
       {step === 3 && <FormSection title={steps[3]}>
