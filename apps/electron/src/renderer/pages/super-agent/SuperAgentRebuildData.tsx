@@ -1,3 +1,4 @@
+import { SuperAgentSelect } from './SuperAgentSelect'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SuperAgentCommand, SuperAgentSnapshot, SuperAgentState } from '@tokenbird/shared/super-agent'
@@ -84,7 +85,7 @@ export function SuperAgentScopedResources({ workspaceId, onCommand, onSources, i
       {tab === 'credentials' && <>
         {data.credentials.map(entry => <div key={JSON.stringify(entry.id)} className="flex items-center justify-between gap-3 rounded-lg border border-border p-3"><div><p className="text-sm">{entry.id.name ?? entry.id.sourceId}</p><p className="text-xs text-muted-foreground">{entry.id.type} {entry.username} {entry.url}</p></div><Button variant="ghost" onClick={() => void run('save-credentials', [{ op: 'delete', id: entry.id }]).catch(() => {})}>{tr('删除', 'Delete')}</Button></div>)}
         <div className="grid gap-4 rounded-xl border border-border p-4 sm:grid-cols-2">
-          <FormField label={tr('用途', 'Use')}><select className={inputClass} value={sourceSlug} onChange={event => setSourceSlug(event.target.value)}><option value="">{tr('保存账户 / 密钥', 'Saved account / secret')}</option>{data.sources.map(source => <option key={source.config.slug} value={source.config.slug}>{source.config.name}</option>)}</select></FormField>
+          <FormField label={tr('用途', 'Use')}><SuperAgentSelect className={inputClass} value={sourceSlug} onChange={event => setSourceSlug(event.target.value)}><option value="">{tr('保存账户 / 密钥', 'Saved account / secret')}</option>{data.sources.map(source => <option key={source.config.slug} value={source.config.slug}>{source.config.name}</option>)}</SuperAgentSelect></FormField>
           <FormField label={tr('名称', 'Name')}><Input value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></FormField>
           <FormField label={tr('用户名', 'Username')}><Input value={username} onChange={event => setUsername(event.target.value)} autoComplete="off" /></FormField>
           <FormField label={tr('网站地址', 'Website')}><Input value={url} onChange={event => setUrl(event.target.value)} /></FormField>
