@@ -42,7 +42,7 @@ export default function CliToolsPage({ filter }: { filter?: 'builtin' | 'custom'
     })
   }, [filter, query, tools])
 
-  const title = filter === 'builtin' ? t('settings.tools.builtinTitle') : filter === 'custom' ? 'Custom CLI' : t('settings.tools.title')
+  const title = filter === 'builtin' ? t('settings.tools.builtinTitle') : filter === 'custom' ? t('settings.tools.customCliTitle') : t('settings.tools.title')
 
   return (
     <div className="flex h-full flex-col">
@@ -55,7 +55,7 @@ export default function CliToolsPage({ filter }: { filter?: 'builtin' | 'custom'
           </div>
           <Input value={query} onChange={event => setQuery(event.target.value)} placeholder={t('settings.tools.searchPlaceholder')} />
           {loading ? <div className="py-16 text-center text-sm text-muted-foreground">{t('common.loading')}</div> : (
-            <SettingsSection title={filter === 'builtin' ? t('settings.tools.builtinTitle') : filter === 'custom' ? 'Custom CLI' : t('settings.tools.title')} description={`${visible.length} tools`}>
+            <SettingsSection title={filter === 'builtin' ? t('settings.tools.builtinTitle') : filter === 'custom' ? t('settings.tools.customCliTitle') : t('settings.tools.title')} description={t('settings.tools.count', { count: visible.length })}>
               <SettingsCard divided>
                 {visible.length === 0 ? <div className="px-4 py-12 text-center text-sm text-muted-foreground">{t('settings.tools.empty')}</div> : visible.map(tool => (
                   <div key={tool.id} className="flex items-start gap-3 px-4 py-3">
@@ -63,17 +63,17 @@ export default function CliToolsPage({ filter }: { filter?: 'builtin' | 'custom'
                       {tool.iconDataUrl ? <img src={tool.iconDataUrl} alt="" className="h-5 w-5 object-contain" /> : <Terminal className="h-4 w-4 text-muted-foreground" />}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{tool.displayName}</span><Badge variant="secondary">{tool.origin === 'builtin' ? t('settings.tools.builtinTitle') : 'Custom'}</Badge></div>
-                      <p className="mt-1 text-xs text-muted-foreground">Commands: <code>{tool.commands.join(', ')}</code></p>
+                      <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{tool.displayName}</span><Badge variant="secondary">{tool.origin === 'builtin' ? t('settings.tools.builtinTitle') : t('settings.tools.custom')}</Badge></div>
+                      <p className="mt-1 text-xs text-muted-foreground">{t('settings.tools.commands')} <code>{tool.commands.join(', ')}</code></p>
                       {tool.description && <p className="mt-1 text-xs text-foreground/60">{tool.description}</p>}
-                      <p className="mt-1 text-[11px] text-muted-foreground/70">Identifier: {tool.id}</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground/70">{t('settings.tools.identifier')} {tool.id}</p>
                     </div>
                   </div>
                 ))}
               </SettingsCard>
             </SettingsSection>
           )}
-          <div className="flex items-center gap-2 text-xs text-muted-foreground"><Wrench className="h-3.5 w-3.5" />Custom mappings can be managed in tool-icons.json.</div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground"><Wrench className="h-3.5 w-3.5" />{t('settings.tools.customMappingsHint')}</div>
         </div>
       </ScrollArea>
     </div>

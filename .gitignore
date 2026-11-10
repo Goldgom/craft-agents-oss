@@ -93,7 +93,6 @@ credentials.enc
 .build-all
 /release/
 /apps/electron/release-test/
-
 # Local Electron installer builds and diagnostics
 /apps/electron/release-*/
 
@@ -112,3 +111,10 @@ credentials.enc
 /.tmp-*
 /apps.lnk
 /apps/electron/src/renderer/.tmp-*/
+/apps/win7-client/release/
+/apps/win7-local/release/
+
+# Reconstructed offline payloads (tracked as verified <50 MiB parts)
+/win7_dependencies/Git-2.46.2-64-bit.exe
+/win7_dependencies/jdk-21_windows-x64_bin.exe
+/win7_dependencies/x86_64-16.2.0-release-win32-seh-ucrt-rt_v14-rev1.7z
