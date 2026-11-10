@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 /**
  * BrowserTabStrip
  *
@@ -46,6 +47,7 @@ export function BrowserTabStrip({
   instancesOverride,
   maxVisibleBadges = DEFAULT_MAX_VISIBLE_BADGES,
 }: BrowserTabStripProps) {
+  const { t } = useTranslation()
   // Filter the badge strip to the workspace currently in focus. Remote-connected
   // workspaces have a different `remoteWorkspaceId` (what the remote agent
   // stamps onto its tabs) than the local `activeWorkspaceId` (what locally-
@@ -224,8 +226,8 @@ export function BrowserTabStrip({
     const targetSessionId = instance.boundSessionId ?? instance.ownerSessionId
     const canOpenSession = !!targetSessionId
     const openSessionLabel = instance.agentControlActive
-      ? 'Open Session Using this Window'
-      : 'Open Session Which Used this Window'
+      ? t('browser.actions.openActiveSession')
+      : t('browser.actions.openPreviousSession')
 
     return (
       <>
@@ -234,7 +236,7 @@ export function BrowserTabStrip({
           onSelect={() => focusBrowserWindow(instance)}
         >
           <Icons.Monitor className="h-3.5 w-3.5" />
-          Show Browser Window
+          {t('browser.actions.showWindow')}
         </StyledDropdownMenuItem>
 
         <StyledDropdownMenuItem
@@ -253,11 +255,11 @@ export function BrowserTabStrip({
           onSelect={() => terminateBrowserWindow(instance)}
         >
           <Icons.XCircle className="h-3.5 w-3.5" />
-          Terminate Browser
+          {t('browser.actions.terminate')}
         </StyledDropdownMenuItem>
       </>
     )
-  }, [instancesOverride, focusBrowserWindow, openSessionUsingWindow, terminateBrowserWindow])
+  }, [instancesOverride, focusBrowserWindow, openSessionUsingWindow, terminateBrowserWindow, t])
 
   if (orderedInstances.length === 0) return null
 
