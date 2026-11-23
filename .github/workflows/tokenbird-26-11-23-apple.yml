@@ -4,28 +4,136 @@ on:
     branches: ['codex/tokenbird-26-11-23-apple']
 permissions:
   contents: read
+env:
+  HUSKY: '0'
+  NODE_OPTIONS: '--max-old-space-size=4608'
+  SOURCE: 7843178d33918fc958178cc43e2592d2ab39cc60
 jobs:
-  ios:
-    runs-on: macos-15
-    timeout-minutes: 30
-    env:
-      HUSKY: '0'
-      NODE_OPTIONS: '--max-old-space-size=4608'
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15-intel, arch: x64, triplet: x64-osx }
+          - { runner: macos-15, arch: arm64, triplet: arm64-osx }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 7843178d33918fc958178cc43e2592d2ab39cc60
+          ref: ${{ env.SOURCE }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.0'
-      - run: bun install --frozen-lockfile
-      - run: bun run ios:build:simulator
-      - run: bun run ios:build -- --skip-webui
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare pinned native dependencies
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile --ignore-scripts
+          if [ "$(uname -m)" = arm64 ]; then
+            cpu=aarch64
+            arch=arm64
+            hash=2fa16464fd8638588a67c7fc172d3c4b57fbdc65dff366e10b0b0e90734628a6
+          else
+            cpu=x86_64
+            arch=x64
+            hash=591c693e80bb444ef1907b2a906feb9c77bcafe1cdf509107cc75dcf0e875bd2
+          fi
+          rg_archive="$RUNNER_TEMP/ripgrep-v15.0.1-$cpu-apple-darwin.tar.gz"
+          curl -fsSL --retry 3 -o "$rg_archive" "https://github.com/microsoft/ripgrep-prebuilt/releases/download/v15.0.1/$(basename "$rg_archive")"
+          echo "$hash  $rg_archive" | shasum -a 256 -c
+          mkdir -p node_modules/@vscode/ripgrep/bin
+          tar -xf "$rg_archive" -C node_modules/@vscode/ripgrep/bin
+          node_modules/@vscode/ripgrep/bin/rg --version
+          bun install --frozen-lockfile
+          if [ ! -f node_modules/electron/dist/version ]; then node node_modules/electron/install.js; fi
+          test -f node_modules/electron/dist/version
+          fingerprint="$(shasum -a 256 bun.lock package.json | shasum -a 256 | cut -d ' ' -f1)"
+          printf '%s' "$fingerprint" > "node_modules/.tokenbird-build-darwin-$arch.sha256"
+          mkdir -p apps/electron/vendor/bun "apps/electron/vendor/server-bun/darwin-$arch"
+          cp "$(command -v bun)" apps/electron/vendor/bun/bun
+          cp "$(command -v bun)" "apps/electron/vendor/server-bun/darwin-$arch/bun"
+      - name: Build and verify macOS FFmpeg runtime
+        env:
+          TRIPLET: ${{ matrix.triplet }}
+          VCPKG_DISABLE_METRICS: '1'
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/tokenbird-media"
+          bundle="$work/bundle"
+          mkdir -p "$bundle/licenses"
+          cd "$work"
+          git clone --quiet --depth 1 --branch 2025.10.17 https://github.com/microsoft/vcpkg.git
+          test "$(git -C vcpkg rev-parse HEAD)" = 74e6536215718009aae747d86d84b78376bf9e09
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          ./vcpkg/vcpkg install "libass:$TRIPLET" "mp3lame:$TRIPLET" --classic
+          brew list nasm >/dev/null 2>&1 || brew install nasm
+          prefix="$work/vcpkg/installed/$TRIPLET"
+          curl -fsSLO https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz
+          echo '05ee0b03119b45c0bdb4df654b96802e909e0a752f72e4fe3794f487229e5a41  ffmpeg-8.0.1.tar.xz' | shasum -a 256 -c
+          tar xf ffmpeg-8.0.1.tar.xz
+          cd ffmpeg-8.0.1
+          export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
+          ./configure --disable-autodetect --disable-debug --disable-doc --disable-ffplay \
+            --enable-static --disable-shared --enable-libass --enable-libmp3lame --enable-videotoolbox \
+            --pkg-config-flags=--static --extra-cflags="-I$prefix/include" --extra-ldflags="-L$prefix/lib"
+          make -j"$(sysctl -n hw.logicalcpu)" ffmpeg ffprobe
+          cp ffmpeg ffprobe "$bundle/"
+          cp COPYING* LICENSE.md "$bundle/licenses/"
+          cp ffbuild/config.log "$bundle/licenses/ffmpeg-config.log"
+          while IFS= read -r copyright; do
+            port="$(basename "$(dirname "$copyright")")"
+            cp "$copyright" "$bundle/licenses/$port.txt"
+          done < <(find "$prefix/share" -name copyright)
+          cat > "$bundle/licenses/TOKENBIRD-NOTICE.txt" <<'NOTICE'
+          FFmpeg 8.0.1 is bundled as separate command-line software.
+          FFmpeg source and license: https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz
+          Dependency source versions, patches and recipes:
+          https://github.com/microsoft/vcpkg/tree/74e6536215718009aae747d86d84b78376bf9e09/ports
+          Configuration and licenses accompany this notice. The binaries
+          can be replaced with TOKENBIRD_FFMPEG_PATH and TOKENBIRD_FFPROBE_PATH.
+          NOTICE
+          ffmpeg_hash="$(shasum -a 256 "$bundle/ffmpeg" | cut -d' ' -f1)"
+          ffprobe_hash="$(shasum -a 256 "$bundle/ffprobe" | cut -d' ' -f1)"
+          printf '{"ffmpegSha256":"%s","ffprobeSha256":"%s"}\n' "$ffmpeg_hash" "$ffprobe_hash" > "$bundle/manifest.json"
+          "$bundle/ffmpeg" -filters | grep ' subtitles '
+          "$bundle/ffmpeg" -encoders | grep h264_videotoolbox
+          "$bundle/ffmpeg" -encoders | grep libmp3lame
+          "$bundle/ffprobe" -version
+          for binary in ffmpeg ffprobe; do
+            if otool -L "$bundle/$binary" | tail -n +2 | grep -vE '^[[:space:]]*(/System/Library/|/usr/lib/)'; then
+              echo "Unexpected external dylib in $binary" >&2
+              exit 1
+            fi
+          done
+          echo "TOKENBIRD_FFMPEG_BUNDLE_DIR=$bundle" >> "$GITHUB_ENV"
+      - name: Build native headless server
+        run: |
+          bun run scripts/build-server.ts --platform=darwin --arch=${{ matrix.arch }} --output=dist/apple-headless/server --compress
+          dist/apple-headless/server/vendor/bun/bun --version
       - uses: actions/upload-artifact@v4
         with:
-          name: ios-unsigned
-          path: dist/ios/
+          name: mac-headless-${{ matrix.arch }}
+          path: dist/apple-headless/*.tar.gz
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
+      - name: Build unsigned macOS desktop installers
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: bash apps/electron/scripts/build-dmg.sh '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-desktop-${{ matrix.arch }}
+          path: |
+            apps/electron/release/TokenBird-*.dmg
+            apps/electron/release/TokenBird-*.zip
+            apps/electron/release/TokenBird-*.blockmap
+            apps/electron/release/latest-mac.yml
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
