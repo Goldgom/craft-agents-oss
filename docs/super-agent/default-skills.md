@@ -31,7 +31,7 @@
 | 开发、调试、脚本与集成 | `software-development`、`software-verification` | 优先专业开发／测试；其他预设由协作执行承接 |
 | 研究、实验、定量及行业分析 | `research-methods`、`web-research`、`browser-automation` | 优先科研／分析；其他预设由资料整理承接 |
 | 文档、表格、报告与数据 | `document-workflows`、`structured-data` | 资料整理；代码预设为检查执行 |
-| 设计、绘画、主题与展示 | `canvas-editing`、`theme-package-design`、`pages-authoring`、`previews-and-diagrams` | 资料整理；代码预设为检查执行 |
+| 设计、绘画、视频、主题与展示 | `canvas-editing`、`video-production`、`theme-package-design`、`pages-authoring`、`previews-and-diagrams` | 资料整理；代码预设为检查执行 |
 | 服务故障与运维 | `incident-response`、`remote-operations` | 优先运维专岗；其他预设由协作执行承接 |
 | 信息整理、长期知识与版本归档 | `knowledge-organization`、`evidence-review` | 资料整理；代码预设为检查执行 |
 | 桌面操作、渠道交付与会话交接 | `windows-desktop-control`、`messaging-and-collaboration`、`session-workflows` | 协作执行；代码预设为代码辅助 |

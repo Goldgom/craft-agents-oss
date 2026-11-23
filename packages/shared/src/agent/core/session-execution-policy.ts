@@ -1,4 +1,5 @@
 import { SUPER_AGENT_ACTION_TOOLS } from '@tokenbird/session-tools-core/super-agent-tools';
+import { VIDEO_TOOL_ACTIONS, VIDEO_READ_ACTIONS, VIDEO_PROGRAM_ACTIONS, VIDEO_GENERATE_ACTIONS } from '@tokenbird/session-tools-core/video-tools';
 import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { expandPath } from '../../utils/paths.ts';
@@ -39,6 +40,8 @@ type RegisteredPolicy = {
   recordOperation?: (request: { toolName: string; input: Record<string, unknown>; invocationId: string }) => Promise<void>;
 };
 const policies = new Map<string, RegisteredPolicy>();
+const PAGE_READ_TOOLS = new Set(['listpages', 'getpage']);
+const PAGE_WRITE_TOOLS = new Set(['createpage', 'updatepage', 'writepagedata', 'deletepage']);
 
 function contained(root: string, path: string): boolean {
   const rel = relative(root, path);
@@ -352,6 +355,11 @@ function operationInput(policy: SessionExecutionPolicy, toolName: string, input:
   delete output._intent; delete output._displayName;
   const name = toolName.split('__').at(-1)!.toLowerCase().replace(/_/g, '');
   if (toolName.startsWith('mcp__') && !toolName.startsWith('mcp__session__')) return output;
+  if (name === 'videotool' && input.args && typeof input.args === 'object' && !Array.isArray(input.args)) {
+    output.args = { ...input.args as Record<string, unknown> };
+    const args = output.args as Record<string, unknown>;
+    if (input.action === 'import_asset' && typeof args.path === 'string') args.path = resolve(expandPath(args.path, cwd || policy.rootPath));
+  }
   if (READ_TOOLS.has(name) || WRITE_TOOLS.has(name)) {
     for (const field of ['file_path', 'path', 'notebook_path']) if (typeof output[field] === 'string') output[field] = resolve(expandPath(output[field] as string, cwd || policy.rootPath));
     if (!output.file_path && !output.path && !output.notebook_path) output.path = cwd || policy.rootPath;
@@ -369,7 +377,9 @@ function operationKey(policy: SessionExecutionPolicy, toolName: string, input: R
 function operationPathIdentity(policy: SessionExecutionPolicy, toolName: string, input: Record<string, unknown>, cwd?: string): string | undefined {
   if (toolName.startsWith('mcp__') && !toolName.startsWith('mcp__session__')) return '[]';
   const normalized = operationInput(policy, toolName, input, cwd);
-  const paths = [normalized.file_path, normalized.path, normalized.notebook_path, normalized.cwd].filter(value => typeof value === 'string') as string[];
+  const videoPath = toolName.toLowerCase().split('__').at(-1) === 'video_tool' && normalized.action === 'import_asset'
+    ? (normalized.args as Record<string, unknown> | undefined)?.path : undefined;
+  const paths = [normalized.file_path, normalized.path, normalized.notebook_path, normalized.cwd, videoPath].filter(value => typeof value === 'string') as string[];
   try {
     return canonicalJson(paths.map(path => {
       if (path.includes('\0') || /^(?:[a-z]+:\/\/|\\\\)/i.test(path)) throw new Error('Invalid path');
@@ -664,6 +674,18 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
   const name = parts[parts.length - 1]!.toLowerCase().replace(/_/g, '');
   const slug = parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : undefined;
   const canonical = parts[parts.length - 1]!.toLowerCase();
+  if (PAGE_READ_TOOLS.has(name)) {
+    if (slug !== 'session') return deny('use the registered session Pages tool');
+    if (policy.role === 'coordinator') return deny('the interaction node cannot access Pages directly');
+    if (!policy.readFiles && !policy.fullControl) return deny('page reading is disabled for this node');
+    return { allowed: true };
+  }
+  if (PAGE_WRITE_TOOLS.has(name)) {
+    if (slug !== 'session') return deny('use the registered session Pages tool');
+    if (policy.role !== 'worker') return deny('page changes must be performed by an execution worker');
+    if (!policy.writeFiles && !policy.fullControl) return deny('page writing is disabled for this node');
+    return { allowed: true };
+  }
   if (name === 'savedcredentials' && (!slug || slug === 'session')) {
     return checkCredentialAccess({ ...registered, policy }, input, cwd);
   }
@@ -744,6 +766,25 @@ function checkPolicyRules(registered: RegisteredPolicy, toolName: string, input:
     return { allowed: true };
   }
   if (policy.role !== 'worker') return deny('the main agent only understands user needs and communicates; assign reading, research, execution and verification to workers');
+  if (canonical === 'video_tool' && (!slug || slug === 'session')) {
+    const action = String(input.action);
+    if (!VIDEO_TOOL_ACTIONS.includes(action as typeof VIDEO_TOOL_ACTIONS[number])) return deny('unknown Video Studio operation');
+    if (action === 'analyze') return deny('each node uses one model process; create the storyboard in this turn with save_project');
+    if (action === 'generate_project' && (input.args as Record<string, unknown> | undefined)?.analyzeFirst === true) return deny('each node uses one model process; save the storyboard before generation');
+    if (registered.executor && VIDEO_PROGRAM_ACTIONS.includes(action)) return deny('Video Studio runs FFmpeg on its host; use Bash with FFmpeg inside the selected container for this operation');
+    if (policy.fullControl) return { allowed: true };
+    if (!policy.readFiles) return deny('Video Studio requires file reading permission');
+    if (!VIDEO_READ_ACTIONS.includes(action) && action !== 'probe' && !policy.writeFiles) return deny('Video Studio requires file writing permission');
+    if (VIDEO_PROGRAM_ACTIONS.includes(action) && !policy.runPrograms) return deny('Video Studio requires program execution permission');
+    if (VIDEO_GENERATE_ACTIONS.includes(action) && !policy.allowSources.includes('video')) return deny('external video generation requires approval for the Video Studio source');
+    const args = input.args as Record<string, unknown> | undefined;
+    if (action === 'import_asset' && args?.path !== undefined) {
+      if (typeof args.path !== 'string') return deny('video import path must be a string');
+      const error = checkSessionPolicyPath(policy, args.path, cwd);
+      if (error) return deny(error);
+    }
+    return { allowed: true };
+  }
   if (DELEGATION_TOOLS.has(canonical) || /^(?:spawn|delegate|handoff|callllm|createtask)/.test(name)) return deny('each node uses one model process; spawning, delegation and additional model calls are disabled');
   if (name === 'webfetch' && !slug) return deny('WebFetch can call an additional summarization model; use browser_tool to fetch pages within the node model process');
   if (!registered.policy!.fullControl && registered.executor && ['localbash', 'runshell'].includes(name) && (!slug || slug === 'session')) return deny('use Bash to run programs in the configured sandbox');

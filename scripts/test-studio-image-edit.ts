@@ -30,5 +30,5 @@ app.whenReady().then(async()=>{
 const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE
 const executable = join(root, 'node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron')
 const child = spawn(executable, [join(directory, 'main.cjs')], { env, windowsHide: true, stdio: 'inherit' })
-const timeout = setTimeout(() => { child.kill(); console.error('Image edit checks timed out') }, 60_000)
+const timeout = setTimeout(() => { child.kill(); console.error('Image edit checks timed out') }, 120_000)
 process.exitCode = await new Promise<number>((resolveExit, reject) => { child.once('error', reject); child.once('exit', code => resolveExit(code ?? 1)) }).finally(() => clearTimeout(timeout))

@@ -11,6 +11,7 @@
  * sequentially; distinct matchers run independently.
  */
 
+import { claimScheduledEffect } from '../scheduled-effects.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type { EventBus, BaseEventPayload } from '../event-bus.ts';
 import type { AutomationHandler, AutomationsConfigProvider } from './types.ts';
@@ -39,7 +40,7 @@ export interface ScriptHandlerOptions {
 /** Script actions of one matched matcher, executed sequentially under its lock */
 interface MatcherScripts {
   matcherId: string;
-  actions: ScriptAction[];
+  actions: Array<{ action: ScriptAction; index: number }>;
 }
 
 // ============================================================================
@@ -50,6 +51,7 @@ export class ScriptHandler implements AutomationHandler {
   private readonly options: ScriptHandlerOptions;
   private readonly configProvider: AutomationsConfigProvider;
   /** Per-matcher concurrency locks: present key = run in flight */
+  private readonly shutdown = new AbortController();
   private readonly inFlight = new Map<string, Promise<void>>();
   private bus: EventBus | null = null;
   private boundHandler: ((event: AutomationEvent, payload: BaseEventPayload) => Promise<void>) | null = null;
@@ -85,7 +87,7 @@ export class ScriptHandler implements AutomationHandler {
     for (const matcher of matchers) {
       if (!matcherMatches(matcher, event, payload as unknown as Record<string, unknown>)) continue;
 
-      const actions = matcher.actions.filter((a): a is ScriptAction => a.type === 'script');
+      const actions = matcher.actions.flatMap((action, index) => action.type === 'script' ? [{ action, index }] : []);
       if (actions.length > 0) {
         matched.push({ matcherId: matcher.id ?? 'unknown', actions });
       }
@@ -100,9 +102,10 @@ export class ScriptHandler implements AutomationHandler {
     await Promise.all(
       matched.map(async ({ matcherId, actions }) => {
         // Per-matcher concurrency lock: skip (and record) instead of piling up.
+        if (event === 'SchedulerTick') await this.inFlight.get(matcherId);
         if (this.inFlight.has(matcherId)) {
           log.debug(`[ScriptHandler] Skipping ${matcherId}: previous run still in progress`);
-          for (const action of actions) {
+          for (const { action } of actions) {
             const skipped: ScriptActionResult = {
               type: 'script',
               script: action.script,
@@ -121,15 +124,20 @@ export class ScriptHandler implements AutomationHandler {
         }
 
         const run = (async () => {
-          for (const action of actions) {
+          for (const { action, index } of actions) {
+            if (this.shutdown.signal.aborted) return;
             try {
               const env = buildScriptEnv(event, payload, {
                 workspaceRootPath: this.options.workspaceRootPath,
                 page: action.page,
               });
+              const scheduled = event === 'SchedulerTick' && (payload as { scheduled?: boolean }).scheduled;
+              const finish = scheduled ? await claimScheduledEffect(this.options.workspaceRootPath, payload.timestamp, matcherId, `script:${index}`) : undefined;
+              if (scheduled && !finish) continue;
               const result = await executeScriptAction(action, {
                 workspaceRootPath: this.options.workspaceRootPath,
                 env,
+                signal: this.shutdown.signal,
               });
 
               if (!result.success) {
@@ -137,6 +145,7 @@ export class ScriptHandler implements AutomationHandler {
               }
               results.push(result);
               await this.appendHistory(matcherId, result);
+              await finish?.();
             } catch (error) {
               // executeScriptAction folds failures into its result; this is a
               // true unexpected error (e.g. history I/O) — report, keep going.
@@ -180,6 +189,7 @@ export class ScriptHandler implements AutomationHandler {
    * Clean up resources.
    */
   dispose(): void {
+    this.shutdown.abort();
     if (this.bus && this.boundHandler) {
       this.bus.offAny(this.boundHandler);
       this.boundHandler = null;

@@ -164,6 +164,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.tokennest.CHECK_AUTH,
   RPC_CHANNELS.tokennest.GET_USAGE,
   RPC_CHANNELS.llmConnections.GET_PRICING,
+  RPC_CHANNELS.tokennest.VOICE,
   RPC_CHANNELS.tokennest.GET_RECHARGE_URL,
   RPC_CHANNELS.copilot.START_OAUTH,
   RPC_CHANNELS.copilot.CANCEL_OAUTH,
@@ -710,7 +711,8 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
   server.handle(RPC_CHANNELS.llmConnections.SAVE, async (_ctx, connection: LlmConnection): Promise<{ success: boolean; error?: string }> => {
     try {
       refreshAgentPluginCatalog()
-      if (connection.agentRuntime?.startsWith('plugin:') && !getCompatibleAgentRuntimes(connection).includes(connection.agentRuntime)) {
+      const runtime = connection.agentRuntime;
+      if (runtime && runtime !== 'auto' && runtime.startsWith('plugin:') && !getCompatibleAgentRuntimes(connection).includes(runtime)) {
         return { success: false, error: 'Agent plugin is missing, disabled, or incompatible with this connection' }
       }
       // Check if this is an update or create
@@ -918,6 +920,52 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
     })
     if (!response.ok) throw new Error(`TokenNest pricing unavailable: HTTP ${response.status}`)
     return response.json()
+  })
+
+  server.handle(RPC_CHANNELS.tokennest.VOICE, async (ctx, action: string, payload: string, slug?: string) => {
+    if (action !== 'tts' && action !== 'asr') throw new Error('Unknown voice action')
+    if (typeof payload !== 'string' || !payload.trim()) throw new Error('Empty voice input')
+    if (action === 'tts' && Array.from(payload).length > 5000) throw new Error('Speech text too long')
+    if (action === 'asr' && (payload.length > 4 * Math.ceil(8 * 1024 * 1024 / 3) ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(payload) || Buffer.byteLength(payload, 'base64') > 8 * 1024 * 1024)) {
+      throw new Error('Invalid or oversized recording')
+    }
+    const { getValidTokenNestCredentials, TOKENNEST_OAUTH_CONFIG } = await import('@tokenbird/shared/auth')
+    const { tokenNestGroupHeaderValue } = await import('@tokenbird/shared/utils/tokennest-headers')
+    const accounts = getLlmConnections().filter(c => c.oauthProvider === 'tokennest' ||
+      (c.baseUrl?.replace(/\/$/, '') === TOKENNEST_OAUTH_CONFIG.apiBaseUrl && c.authType.startsWith('api_key')))
+    const account = accounts.find(c => c.slug === slug) ?? accounts.find(c => c.slug === getDefaultLlmConnection())
+      ?? (accounts.length === 1 ? accounts[0] : undefined)
+    if (!account) throw new Error('Select a TokenNest connection for voice')
+    const manager = getCredentialManager()
+    const deadline = AbortSignal.timeout(120_000)
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, deadline]) : deadline
+    const body = JSON.stringify(action === 'tts' ? { text: payload, format: 'wav', filter_markdown: true }
+      : { audio_data: payload, filename: 'recording.wav' })
+    for (const refresh of [false, true]) {
+      const token = account.oauthProvider === 'tokennest'
+        ? (await getValidTokenNestCredentials(account.slug, manager, refresh))?.accessToken
+        : await manager.getLlmApiKey(account.slug)
+      if (!token) throw new Error('Sign in to TokenNest to use voice')
+      const response = await fetch(`${TOKENNEST_OAUTH_CONFIG.apiBaseUrl}/tools/${action}`, {
+        method: 'POST', redirect: 'error', signal, body,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+          ...(account.channelGroup ? { 'X-TokenNest-Group': tokenNestGroupHeaderValue(account.channelGroup) } : {}) },
+      })
+      if (response.status === 401 && !refresh && account.oauthProvider === 'tokennest') {
+        await response.body?.cancel()
+        continue
+      }
+      if (!response.ok) throw new Error(`TokenNest ${action.toUpperCase()}: HTTP ${response.status}`)
+      if (action === 'tts') {
+        if (!response.headers.get('content-type')?.startsWith('audio/')) throw new Error('Invalid speech response')
+        return Buffer.from(await response.arrayBuffer()).toString('base64')
+      }
+      const result = await response.json() as { text?: unknown }
+      if (typeof result.text !== 'string') throw new Error('Invalid transcription response')
+      return result.text.trim()
+    }
+    throw new Error('TokenNest authorization failed')
   })
 
   server.handle(RPC_CHANNELS.tokennest.GET_RECHARGE_URL, async (_ctx, connectionSlug: string) => {

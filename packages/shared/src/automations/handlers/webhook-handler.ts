@@ -6,6 +6,7 @@
  * method, headers, and body format (JSON or raw).
  */
 
+import { claimScheduledEffect } from '../scheduled-effects.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type { EventBus, BaseEventPayload } from '../event-bus.ts';
 import type { AutomationHandler, AutomationsConfigProvider } from './types.ts';
@@ -36,6 +37,7 @@ export interface WebhookHandlerOptions {
 interface WebhookTask {
   action: WebhookAction;
   matcherId: string;
+  finish?: () => Promise<void>;
 }
 
 // ============================================================================
@@ -147,9 +149,12 @@ export class WebhookHandler implements AutomationHandler {
     for (const matcher of matchers) {
       if (!matcherMatches(matcher, event, payload as unknown as Record<string, unknown>)) continue;
 
-      for (const action of matcher.actions) {
+      for (const [index, action] of matcher.actions.entries()) {
         if (action.type === 'webhook') {
-          webhookTasks.push({ action, matcherId: matcher.id ?? 'unknown' });
+          const matcherId = matcher.id ?? 'unknown';
+          const scheduled = event === 'SchedulerTick' && (payload as { scheduled?: boolean }).scheduled;
+          const finish = scheduled ? await claimScheduledEffect(this.options.workspaceRootPath, payload.timestamp, matcherId, `webhook:${index}`) : undefined;
+          if (!scheduled || finish) webhookTasks.push({ action, matcherId, finish });
         }
       }
     }
@@ -245,10 +250,11 @@ export class WebhookHandler implements AutomationHandler {
       if (isTransientFailure(result)) {
         if (result.attempts && result.attempts > 1) {
           const expandedAction = expandWebhookAction(task.action, env);
-          this.retryScheduler.enqueue(task.matcherId, expandedAction, result.url, result.error)
+          await this.retryScheduler.enqueue(task.matcherId, expandedAction, result.url, result.error)
             .catch(e => log.debug(`[WebhookHandler] Failed to enqueue for deferred retry: ${e}`));
         }
       }
+      await task.finish?.();
     }
 
     // Deliver results via callback

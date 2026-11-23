@@ -6,6 +6,10 @@ import { parseArgs, resolveApiKey, shouldSetupLlmConnection } from './index.ts'
 // ---------------------------------------------------------------------------
 
 describe('parseArgs', () => {
+  it('accepts an explicit Auto runtime', () => {
+    expect(parseArgs(['bun', 'index.ts', '--runtime', 'auto', 'run', 'hello']).agentRuntime).toBe('auto')
+  })
+
   it('parses --url, --token, --workspace', () => {
     const args = parseArgs([
       'bun', 'index.ts',
@@ -243,7 +247,7 @@ describe('parseArgs', () => {
 
   it('rejects an unknown agent runtime protocol', () => {
     expect(() => parseArgs(['bun', 'index.ts', '--runtime', 'unknown', 'run', 'hello'])).toThrow(
-      'Expected pi, codex, or claude-code',
+      'Expected auto, pi, codex, or claude-code',
     )
   })
 })

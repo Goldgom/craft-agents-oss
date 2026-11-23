@@ -30,7 +30,8 @@
 
 | 功能 | 当前限制 |
 | --- | --- |
-| Claude / Codex 原生桌面运行时 | Android bionic 不能直接运行 Windows/glibc 可执行文件；使用支持相应运行时的服务器 |
+| Agent 后端 | Android 本机默认 Auto，使用 APK 内置的 ARM64 Pi 运行时；连接远程服务器时按服务器的模型命名规则及运行时选择后端 |
+| Claude Code / Codex / Antigravity | 原生 CLI 使用兼容的远程服务。iOS 的任务同样由其连接的 Agent 服务执行 |
 | Windows 内置浏览器与浏览器自动化 | 未实现 Android BrowserPaneManager；普通链接在系统浏览器打开 |
 | 多服务器协作中继 | 依赖 Electron 主进程中继，Android 尚未实现；同服务器协作可用 |
 | SFTP 客户端 | 尚未实现 Android SFTP；操作返回明确说明，不能冒充传输成功 |

@@ -25,7 +25,6 @@ import { useOptionalAppShellContext } from '@/context/AppShellContext'
 import {
   ANTHROPIC_MODELS,
   getModelDisplayName,
-  getModelShortName,
 } from '@config/models'
 import {
   isCompatProvider,
@@ -43,9 +42,13 @@ import {
   formatTokenCount,
   getAgentChannelGroups,
   getAgentModelsForConnection,
+  getPickerModelName,
   groupConnectionsByProvider,
+  groupPickerConnectionModels,
+  groupPickerModels,
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
+import { ModelPickerGroups, ModelPickerSearch } from './ModelPickerGroups'
 import { useModelVisionToggle } from './useModelVisionToggle'
 import { ModelPeakValleyBadge } from './ModelPeakValleyBadge'
 import { openConnectionRecharge, TOKENNEST_BALANCE_REFRESH_EVENT } from '@/lib/tokennest-recharge'
@@ -81,7 +84,9 @@ export function CompactModelSelector({
 }: CompactModelSelectorProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
-  const [expandedConnection, setExpandedConnection] = React.useState<string | null>(null)
+  const [expandedConnection, setExpandedConnection] = React.useState<string | null>()
+  const [modelQuery, setModelQuery] = React.useState('')
+  const searchingModels = modelQuery.trim().length > 0
   const [apiBalances, setApiBalances] = React.useState<ApiBalance[]>([])
 
   const appShellCtx = useOptionalAppShellContext()
@@ -155,9 +160,16 @@ export function CompactModelSelector({
     llmConnections.length > 1 &&
     storage.get(storage.KEYS.showConnectionIcons, true)
 
-  // Reset accordion state when the drawer closes so re-open shows top-level switcher.
+  const modelConnectionGroups = React.useMemo(
+    () => open && pickerMode === 'switcher' ? groupPickerConnectionModels(connectionsByProvider, modelQuery) : [],
+    [open, pickerMode, connectionsByProvider, modelQuery],
+  )
+
   React.useEffect(() => {
-    if (!open) setExpandedConnection(null)
+    if (!open) {
+      setExpandedConnection(undefined)
+      setModelQuery('')
+    }
   }, [open])
 
   React.useEffect(() => {
@@ -266,6 +278,9 @@ export function CompactModelSelector({
           )}
         </DrawerHeader>
 
+        {(pickerMode === 'flat' || pickerMode === 'switcher') && (
+          <ModelPickerSearch query={modelQuery} setQuery={setModelQuery} />
+        )}
         <div className="px-2 pb-4 flex flex-col gap-0.5 max-h-[55vh] overflow-y-auto">
           {/* === Models section === */}
           {pickerMode === 'unavailable' ? (
@@ -295,23 +310,25 @@ export function CompactModelSelector({
               onToggleVision={toggleVision}
             />
           ) : pickerMode === 'switcher' ? (
-            connectionsByProvider.map(([providerName, connections]) => (
+            modelConnectionGroups.length === 0 && searchingModels ? (
+              <ModelPickerGroups groups={[]} searching renderModel={() => null} />
+            ) : modelConnectionGroups.map(({ provider: providerName, entries }) => (
               <React.Fragment key={providerName}>
                 <div className="px-3 pt-3 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
                   {providerName}
                 </div>
-                {connections.map(conn => {
+                {entries.map(({ connection: conn, groups }) => {
                   const isCurrentConnection = effectiveConnection === conn.slug
                   const isAuthenticated = conn.isAuthenticated
-                  const isExpanded = expandedConnection === conn.slug
+                  const isExpanded = searchingModels || (expandedConnection === undefined ? isCurrentConnection : expandedConnection === conn.slug)
                   const balance = apiBalances.find(item => item.connectionSlug === conn.slug)
                   return (
                     <React.Fragment key={conn.slug}>
                       <button
                         type="button"
-                        disabled={!isAuthenticated}
+                        disabled={!isAuthenticated || searchingModels}
                         onClick={() =>
-                          setExpandedConnection(prev => (prev === conn.slug ? null : conn.slug))
+                          setExpandedConnection(isExpanded ? null : conn.slug)
                         }
                         className={cn(
                           'flex items-center gap-2 w-full px-3 py-2 rounded-lg text-left transition-colors',
@@ -348,50 +365,53 @@ export function CompactModelSelector({
                       </button>
                       {isAuthenticated && isExpanded && (
                         <div className="pl-6 flex flex-col gap-0.5">
-                          {getAgentModelsForConnection(conn).map(model => {
-                            const modelId = typeof model === 'string' ? model : model.id
-                            const modelName = typeof model === 'string'
-                              ? stripPiPrefixForDisplay(getModelShortName(model))
-                              : (model.name ?? stripPiPrefixForDisplay(model.id))
-                            const isSelectedModel =
-                              isCurrentConnection && currentModel === modelId
-                            const showVision = isCompatProvider(conn.providerType)
-                            const visionOn = showVision && modelSupportsImages(conn, modelId)
-                            return (
-                              <DrawerClose asChild key={modelId}>
-                                <button
-                                  type="button"
-                                  onClick={() => handlePickSwitcherModel(conn.slug, modelId)}
-                                  className={cn(
-                                    'flex items-center justify-between w-full px-3 py-2 rounded-lg text-left transition-colors',
-                                    isSelectedModel
-                                      ? 'bg-foreground/5'
-                                      : 'hover:bg-foreground/5',
-                                  )}
-                                >
-                                  <span className="flex items-center gap-1.5 min-w-0">
-                                    <span className="text-sm font-medium truncate">{modelName}</span>
-                                    <ModelPeakValleyBadge connection={conn} modelId={modelId} />
-                                  </span>
-                                  <div className="flex items-center gap-1 ml-3 shrink-0">
-                                    {showVision && (
-                                      <VisionToggle
-                                        visionOn={visionOn}
-                                        onToggle={(e) => {
-                                          e.preventDefault()
-                                          e.stopPropagation()
-                                          toggleVision(conn.slug, modelId, !visionOn)
-                                        }}
-                                      />
+                          <ModelPickerGroups
+                            groups={groups}
+                            currentModel={isCurrentConnection ? connectionDefaultModel ?? currentModel : undefined}
+                            searching={searchingModels}
+                            renderModel={model => {
+                              const modelId = typeof model === 'string' ? model : model.id
+                              const modelName = getPickerModelName(model)
+                              const isSelectedModel =
+                                isCurrentConnection && (connectionDefaultModel ?? currentModel) === modelId
+                              const showVision = isCompatProvider(conn.providerType)
+                              const visionOn = showVision && modelSupportsImages(conn, modelId)
+                              return (
+                                <DrawerClose asChild key={modelId}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePickSwitcherModel(conn.slug, modelId)}
+                                    className={cn(
+                                      'flex items-center justify-between w-full px-3 py-2 rounded-lg text-left transition-colors',
+                                      isSelectedModel
+                                        ? 'bg-foreground/5'
+                                        : 'hover:bg-foreground/5',
                                     )}
-                                    {isSelectedModel && (
-                                      <Check className="h-3 w-3 text-foreground/60" />
-                                    )}
-                                  </div>
-                                </button>
-                              </DrawerClose>
-                            )
-                          })}
+                                  >
+                                    <span className="flex items-center gap-1.5 min-w-0">
+                                      <span className="text-sm font-medium truncate">{modelName}</span>
+                                      <ModelPeakValleyBadge connection={conn} modelId={modelId} />
+                                    </span>
+                                    <div className="flex items-center gap-1 ml-3 shrink-0">
+                                      {showVision && (
+                                        <VisionToggle
+                                          visionOn={visionOn}
+                                          onToggle={(e) => {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            toggleVision(conn.slug, modelId, !visionOn)
+                                          }}
+                                        />
+                                      )}
+                                      {isSelectedModel && (
+                                        <Check className="h-3 w-3 text-foreground/60" />
+                                      )}
+                                    </div>
+                                  </button>
+                                </DrawerClose>
+                              )
+                            }}
+                          />
                         </div>
                       )}
                     </React.Fragment>
@@ -400,75 +420,77 @@ export function CompactModelSelector({
               </React.Fragment>
             ))
           ) : (
-            // 'flat' — list models of the active connection
-            availableModels.map(model => {
-              const modelId = typeof model === 'string' ? model : model.id
-              const modelName = typeof model === 'string'
-                ? stripPiPrefixForDisplay(getModelShortName(model))
-                : (model.name ?? stripPiPrefixForDisplay(model.id))
-              const isSelected = currentModel === modelId
-              const descriptionKey =
-                typeof model !== 'string' && 'descriptionKey' in model
-                  ? (model.descriptionKey as string)
-                  : undefined
-              const description = descriptionKey
-                ? t(descriptionKey)
-                : (typeof model !== 'string' && 'description' in model
-                    ? (model.description as string)
-                    : '')
-              const showVision =
-                !!effectiveConnectionDetails &&
-                isCompatProvider(effectiveConnectionDetails.providerType)
-              const visionOn =
-                showVision && modelSupportsImages(effectiveConnectionDetails!, modelId)
-              return (
-                <DrawerClose asChild key={modelId}>
-                  <button
-                    type="button"
-                    onClick={() => handlePickFlatModel(modelId)}
-                    className={cn(
-                      'flex items-center justify-between w-full px-3 py-2 rounded-lg text-left transition-colors',
-                      isSelected ? 'bg-foreground/5' : 'hover:bg-foreground/5',
-                    )}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-sm font-medium truncate">{modelName}</span>
-                        <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={modelId} />
-                      </div>
-                      {description && (
-                        <div className="text-xs text-foreground/50 truncate">
-                          {description}
+            <ModelPickerGroups
+              groups={groupPickerModels(availableModels, modelQuery)}
+              currentModel={connectionDefaultModel ?? currentModel}
+              searching={searchingModels}
+              renderModel={model => {
+                const modelId = typeof model === 'string' ? model : model.id
+                const modelName = getPickerModelName(model)
+                const isSelected = currentModel === modelId
+                const descriptionKey =
+                  typeof model !== 'string' && 'descriptionKey' in model
+                    ? (model.descriptionKey as string)
+                    : undefined
+                const description = descriptionKey
+                  ? t(descriptionKey)
+                  : (typeof model !== 'string' && 'description' in model
+                      ? (model.description as string)
+                      : '')
+                const showVision =
+                  !!effectiveConnectionDetails &&
+                  isCompatProvider(effectiveConnectionDetails.providerType)
+                const visionOn =
+                  showVision && modelSupportsImages(effectiveConnectionDetails!, modelId)
+                return (
+                  <DrawerClose asChild key={modelId}>
+                    <button
+                      type="button"
+                      onClick={() => handlePickFlatModel(modelId)}
+                      className={cn(
+                        'flex items-center justify-between w-full px-3 py-2 rounded-lg text-left transition-colors',
+                        isSelected ? 'bg-foreground/5' : 'hover:bg-foreground/5',
+                      )}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm font-medium truncate">{modelName}</span>
+                          <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={modelId} />
                         </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1 ml-3 shrink-0">
-                      {showVision && effectiveConnectionDetails && (
-                        <VisionToggle
-                          visionOn={visionOn}
-                          onToggle={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            toggleVision(
-                              effectiveConnectionDetails.slug,
-                              modelId,
-                              !visionOn,
-                            )
-                          }}
-                        />
-                      )}
-                      {isSelected && (
-                        <Check className="h-3 w-3 text-foreground/60" />
-                      )}
-                    </div>
-                  </button>
-                </DrawerClose>
-              )
-            })
+                        {description && (
+                          <div className="text-xs text-foreground/50 truncate">
+                            {description}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 ml-3 shrink-0">
+                        {showVision && effectiveConnectionDetails && (
+                          <VisionToggle
+                            visionOn={visionOn}
+                            onToggle={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              toggleVision(
+                                effectiveConnectionDetails.slug,
+                                modelId,
+                                !visionOn,
+                              )
+                            }}
+                          />
+                        )}
+                        {isSelected && (
+                          <Check className="h-3 w-3 text-foreground/60" />
+                        )}
+                      </div>
+                    </button>
+                  </DrawerClose>
+                )
+              }}
+            />
           )}
 
           {/* === Thinking section === */}
-          {effectiveConnectionDetails?.oauthProvider === 'tokennest' && (effectiveConnectionDetails.channelGroups?.length ?? 0) > 0 && pickerMode !== 'unavailable' && (
+          {!searchingModels && effectiveConnectionDetails?.oauthProvider === 'tokennest' && (effectiveConnectionDetails.channelGroups?.length ?? 0) > 0 && pickerMode !== 'unavailable' && (
             <>
               <div className="px-3 pt-4 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
                 {t('chat.modelPicker.channelGroupSection')}
@@ -497,7 +519,7 @@ export function CompactModelSelector({
           )}
 
           {/* === Thinking section === */}
-          {THINKING_LEVELS.length > 0 && pickerMode !== 'unavailable' && (
+          {!searchingModels && THINKING_LEVELS.length > 0 && pickerMode !== 'unavailable' && (
             <>
               <div className="px-3 pt-4 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
                 {t('chat.modelPicker.thinkingSection')}
@@ -534,7 +556,7 @@ export function CompactModelSelector({
           )}
 
           {/* === Context section === */}
-          {contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
+          {!searchingModels && contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
             <>
               <div className="px-3 pt-4 pb-1 text-xs font-medium text-foreground/60 uppercase tracking-wide select-none">
                 {t('chat.modelPicker.contextSection')}

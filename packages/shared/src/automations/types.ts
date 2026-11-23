@@ -197,6 +197,8 @@ export interface HostedScriptPermissions {
 // ============================================================================
 
 export interface AutomationMatcher {
+  /** Optional conversation that owns runs of this schedule. */
+  parentSessionId?: string;
   /** Short 6-character hex ID for stable identification across config changes. */
   id?: string;
   /** Optional display name. If omitted, derived from the first action. */
@@ -319,6 +321,7 @@ export interface PendingPrompt {
   sessionId: string | undefined;
   /** The automation matcher ID this prompt originated from */
   matcherId?: string;
+  scheduledRun?: { timestamp: number; actionIndex: number; parentSessionId?: string };
   /** Human-readable automation name (from matcher.name or derived fallback) */
   automationName?: string;
   /** The expanded prompt text */

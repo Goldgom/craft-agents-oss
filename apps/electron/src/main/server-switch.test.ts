@@ -1,6 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test'
 import { createServerSwitcher } from './server-switch'
-import type { ResolvedRemoteProfile } from './remote-credentials'
+import { RemoteCredentialUnavailableError, type ResolvedRemoteProfile } from './remote-credentials'
 
 const profile = (id: string): ResolvedRemoteProfile => ({
   id, profileId: id, name: id, url: `wss://${id}.example.test`,
@@ -53,6 +53,19 @@ describe('runtime server switching', () => {
     expect(f.persistLocation).not.toHaveBeenCalled()
     expect(f.reloadWindows).not.toHaveBeenCalled()
     expect(f.restart).not.toHaveBeenCalled()
+  })
+
+  it('returns only the missing credential field and retries without changing the active server', async () => {
+    const f = fixture()
+    f.resolveProfile.mockRejectedValueOnce(new RemoteCredentialUnavailableError('password'))
+    expect(await f.switchServer('remote-a')).toEqual({
+      success: false, needsCredentialRepair: true, missingCredential: 'password',
+    })
+    expect(f.context()).toEqual({ mode: 'local', remote: undefined })
+    expect(f.env.TOKENBIRD_WORKSPACE_ID).toBe('old-workspace')
+    expect(f.persistLocation).not.toHaveBeenCalled()
+    expect(f.reloadWindows).not.toHaveBeenCalled()
+    expect(await f.switchServer('remote-a')).toEqual({ success: true })
   })
 
   it('rejects a request from a frame that navigated during credential resolution', async () => {

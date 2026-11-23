@@ -461,6 +461,7 @@ export const CHANNEL_MAP = {
   exportAgentProfile: invoke(RPC_CHANNELS.agentPlugins.EXPORT_PROFILE),
   importAgentProfile: invoke(RPC_CHANNELS.agentPlugins.IMPORT_PROFILE),
   onAgentPluginsChanged: listener(RPC_CHANNELS.agentPlugins.CHANGED),
+  executeVideo: invoke(RPC_CHANNELS.video.EXECUTE),
   generateStudioImage: invoke(RPC_CHANNELS.studio.GENERATE_IMAGE),
   assistStudioCanvas: invoke(RPC_CHANNELS.studio.ASSIST_CANVAS),
   generateStudioMindMap: invoke(RPC_CHANNELS.studio.GENERATE_MIND_MAP),
@@ -486,6 +487,7 @@ export const CHANNEL_MAP = {
   setShowApiBalances: invoke(RPC_CHANNELS.llmConnections.SET_SHOW_BALANCES),
   getTokenNestUsage: invoke(RPC_CHANNELS.tokennest.GET_USAGE),
   getModelPeakValleyPricing: invoke(RPC_CHANNELS.llmConnections.GET_PRICING),
+  tokenNestVoice: invoke(RPC_CHANNELS.tokennest.VOICE),
   getTokenNestRechargeUrl: invoke(RPC_CHANNELS.tokennest.GET_RECHARGE_URL),
 
   // Projects

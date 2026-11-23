@@ -37,22 +37,37 @@ function ModelFields({ value, connections, onChange, tr }: {
   </div>
 }
 
-export function SuperAgentRebuildSettings({ config, connections, defaultConnection, onSave, onOpenAiSettings, onReset }: {
-  config?: SuperAgentConfig; connections: LlmConnectionWithStatus[]; defaultConnection?: string
-  onSave: (config: SuperAgentConfig) => Promise<void>; onOpenAiSettings?: () => void; onReset?: () => Promise<void>
+export function SuperAgentRebuildSettings({ config, policySyncError, connections, defaultConnection, onSave, onOpenAiSettings, onReset }: {
+  policySyncError?: string; config?: SuperAgentConfig; connections: LlmConnectionWithStatus[]; defaultConnection?: string
+  onSave: (config: SuperAgentConfig, policyConnection?: string) => Promise<SuperAgentConfig | void>; onOpenAiSettings?: () => void; onReset?: () => Promise<void>
 }) {
   const { i18n } = useTranslation(), text = useSuperAgentText()
   const tr = (zh: string, en: string) => i18n.language.startsWith('zh') ? zh : en
   const [draft, setDraft] = useState(() => config ? rebuildSuperAgentConfig(structuredClone(config)) : createDynamicConfig(connections, text, defaultConnection))
   const [step, setStep] = useState(0)
   const [pending, setPending] = useState(false), [error, setError] = useState(''), [saved, setSaved] = useState(false)
+  const accounts = connections.filter(item => item.isAuthenticated && item.oauthProvider === 'tokennest')
+  const [selectedSlug, setSelectedSlug] = useState('')
+  const account = accounts.find(a => a.slug === selectedSlug) ?? accounts.find(a => a.slug === (config?.tokenNestPolicy?.connectionSlug ?? defaultConnection)) ?? accounts[0]
+  const [manual, setManual] = useState(false)
+  const showManual = manual || !account || (!!config && !config.tokenNestPolicy)
+  async function quickSetup() {
+    if (!account || pending) return
+    setPending(true); setError(''); setSaved(false)
+    try {
+      const next = await onSave(draft, account.slug)
+      if (next) setDraft(next)
+      setSaved(true)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setPending(false) }
+  }
   const patch = (change: Partial<SuperAgentConfig>) => { setDraft(value => ({ ...value, ...change })); setSaved(false) }
   const steps = [tr('主节点', 'Main node'), tr('后台节点', 'Background planner'), tr('协调节点', 'Dispatch coordinator'), tr('subagent 可用模型', 'Available subagent models')]
   const node = draft.nodes.find(item => item.role === (step === 0 ? 'coordinator' : step === 1 ? 'planner' : 'orchestrator'))
   const updateNode = (change: Partial<SuperAgentNode>) => { if (node) patch({ nodes: draft.nodes.map(item => item.id === node.id ? { ...item, ...change } : item) }) }
   async function save() {
     setPending(true); setError(''); setSaved(false)
-    try { await onSave(validateSuperAgentConfig(draft)); setSaved(true) } catch (error) { setError(error instanceof Error ? error.message : String(error)) } finally { setPending(false) }
+    try { const next = await onSave(validateSuperAgentConfig({ ...draft, tokenNestPolicy: undefined })); if (next) setDraft(next); setSaved(true) } catch (error) { setError(error instanceof Error ? error.message : String(error)) } finally { setPending(false) }
   }
   function next() {
     if (!node?.name.trim() || !node.llmConnection || !node.model.trim()) { setError(tr('请填写节点名称并选择模型连接和模型。', 'Enter a node name and select its connection and model.')); return }
@@ -60,7 +75,17 @@ export function SuperAgentRebuildSettings({ config, connections, defaultConnecti
   }
   return <div className="h-full overflow-y-auto"><div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-5">
     <div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">{config ? tr('超级智能体配置', 'Super Agent configuration') : tr('创建超级智能体', 'Create Super Agent')}</h2><p className="mt-1 text-xs text-muted-foreground">{tr('主节点负责交互，后台节点负责需求分析和计划，协调节点负责派工与验收；每项任务独立创建执行子节点。', 'Main handles conversation, background planning owns goals and plans, dispatch coordinates execution, and each task gets an independent worker.')}</p></div>{onOpenAiSettings && <Button variant="outline" onClick={onOpenAiSettings}>{tr('模型连接', 'AI connections')}</Button>}</div>
-    <nav aria-label={tr('配置步骤', 'Configuration steps')} className="flex flex-wrap gap-2">{steps.map((label, index) => <Button key={label} variant={step === index ? 'default' : 'outline'} aria-current={step === index ? 'step' : undefined} disabled={pending || (!config && index > step)} onClick={() => { setStep(index); setError('') }}>{index + 1}. {label}</Button>)}</nav>
+    {account && <FormSection title={tr('TokenNest 一键配置', 'TokenNest one-click setup')} description={tr('使用当前账号和分组可用的模型建立团队。策略每 6 小时更新一次；手动保存可停止跟随。', 'Build a team with models available to this account and group. Policy updates every six hours. Save manually to stop following it.')}>
+      <div className="flex flex-wrap items-center gap-3">
+        {accounts.length > 1 ? <SuperAgentSelect className={selectClass + ' max-w-xs'} aria-label={tr('TokenNest 账号', 'TokenNest account')} value={account.slug} onChange={e => setSelectedSlug(e.target.value)}>{accounts.map(a => <option key={a.slug} value={a.slug}>{a.name}</option>)}</SuperAgentSelect> : <span className="text-sm">{account.name}</span>}
+        <Button disabled={pending} onClick={() => void quickSetup()}>{pending && <LoaderCircle className="size-4 animate-spin" />}{config?.tokenNestPolicy ? tr('立即同步策略', 'Sync policy now') : tr('一键配置', 'Set up in one click')}</Button>
+        {(!config || config.tokenNestPolicy) && <Button variant="ghost" disabled={pending} onClick={() => { if (!manual && config) setDraft(rebuildSuperAgentConfig(structuredClone(config))); setManual(!manual) }}>{manual ? tr('收起手动配置', 'Hide manual setup') : tr('手动配置', 'Manual setup')}</Button>}
+      </div>
+      {config?.tokenNestPolicy && <p className="text-sm text-muted-foreground">{config.nodes.filter(n => !n.dynamic).map(n => (n.role === 'coordinator' ? tr('交互', 'Interaction') : n.role === 'planner' ? tr('主规划', 'Planning') : tr('调度', 'Dispatch')) + ' · ' + n.model).join(' / ')} · {config.modelPool?.length} {tr('个子节点模型', 'worker models')}</p>}
+      {policySyncError && <p role="status" className="text-xs text-muted-foreground">{tr('暂用已保存的策略，15 分钟后重试。', 'Using the saved policy. Retrying in 15 minutes.')} {policySyncError}</p>}
+    </FormSection>}
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    {showManual && <><nav aria-label={tr('配置步骤', 'Configuration steps')} className="flex flex-wrap gap-2">{steps.map((label, index) => <Button key={label} variant={step === index ? 'default' : 'outline'} aria-current={step === index ? 'step' : undefined} disabled={pending || (!config && index > step)} onClick={() => { setStep(index); setError('') }}>{index + 1}. {label}</Button>)}</nav>
     {config && <p className="text-xs text-muted-foreground">{tr('运行中也可修改并保存，当前轮次结束后在下一轮对话生效。', 'You can edit and save while running. Changes apply to the next conversation turn after active turns finish.')}</p>}
     <fieldset disabled={pending} className="min-w-0 space-y-4">
       {step === 0 && <FormSection title={tr('基本设置', 'General')}>
@@ -82,13 +107,13 @@ export function SuperAgentRebuildSettings({ config, connections, defaultConnecti
       {step === 3 && <SuperAgentPreparationSettings config={draft} onChange={execution => patch({ execution })} />}
       {step === 3 && <SuperAgentCompactionSettings config={draft} connections={connections} onChange={contextCompaction => patch({ contextCompaction })} />}
     </fieldset>
-    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <div className="flex items-center justify-end gap-3">
       {saved && <span role="status" className="text-sm text-emerald-600">{tr('已保存，将在当前轮次结束后的下一轮对话生效', 'Saved. Applies to the next conversation turn after active turns finish.')}</span>}
       {step > 0 && <Button variant="outline" disabled={pending} onClick={() => { setStep(value => value - 1); setError('') }}>{tr('上一步', 'Back')}</Button>}
       {step < 3 && <Button disabled={pending} onClick={next}>{tr('下一步', 'Next')}</Button>}
       {(config || step === 3) && <Button disabled={pending} onClick={() => void save()}>{pending && <LoaderCircle className="size-4 animate-spin" />}{config ? tr('保存配置', 'Save configuration') : tr('创建超级智能体', 'Create Super Agent')}</Button>}
     </div>
+    </>}
     {onReset && <Button variant="destructive" disabled={pending} onClick={() => { if (window.confirm(tr('清除超级智能体配置和运行数据？独立资源库将保留。', 'Clear Super Agent configuration and runtime data? Its resource library will be retained.'))) void onReset().catch(error => setError(String(error))) }}>{tr('重置超级智能体', 'Reset Super Agent')}</Button>}
   </div></div>
 }

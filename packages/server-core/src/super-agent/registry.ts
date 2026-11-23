@@ -1,5 +1,7 @@
 import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
-import { SuperAgentResourceStore } from './SuperAgentResourceStore'
+import { AutomationSystem } from '@tokenbird/shared/automations'
+import { appendAutomationHistoryEntry } from '@tokenbird/shared/automations/history-store'
+import { SuperAgentResourceStore, superAgentSchedulesPath } from './SuperAgentResourceStore'
 import { SUPER_AGENT_COLLABORATION_SKILL } from '@tokenbird/session-tools-core/super-agent-tools'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { access, realpath } from 'node:fs/promises'
@@ -12,6 +14,7 @@ import { loadAllSkills, loadSkillBySlug } from '@tokenbird/shared/skills'
 import type { SuperAgentConfig, SuperAgentEnvironment } from '@tokenbird/shared/super-agent'
 import type { ISessionManager } from '../handlers/session-manager-interface'
 import { SuperAgentService } from './SuperAgentService'
+import { loadTokenNestPolicy } from './TokenNestPolicy'
 import { describeSuperAgentResources } from './SuperAgentResources'
 import { SuperAgentEnvironments } from './SuperAgentEnvironments'
 import { MicrosoftAgentWorkflow } from './MicrosoftAgentWorkflow'
@@ -22,7 +25,7 @@ import { getAgentPluginDescriptor } from '@tokenbird/shared/agent-plugins/catalo
 import { loadBackendFrameworkConfiguration } from '@tokenbird/shared/agent-plugins'
 import { resolveNativeCodexBinary } from '@tokenbird/shared/codex/binary-resolver'
 
-const services = new WeakMap<ISessionManager, { service: SuperAgentService; environments: SuperAgentEnvironments }>()
+const services = new WeakMap<ISessionManager, { service: SuperAgentService; environments: SuperAgentEnvironments; schedules: Map<string, AutomationSystem>; startSchedules(workspaceId: string, rootPath: string): Promise<void> }>()
 const closedHosts = new WeakSet<ISessionManager>()
 
 async function validateExecutionRoot(workspaceId: string, environment: SuperAgentEnvironment): Promise<void> {
@@ -90,6 +93,33 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
   const environments = new SuperAgentEnvironments({ isVmHost: process.env.TOKENBIRD_EXECUTION_HOST === 'vm' })
   const environmentConfigs = new Map<string, SuperAgentEnvironment>()
   const resources = new SuperAgentResourceStore(getCredentialManager(), async (workspaceId, text, automationId, runId) => { await service.command(workspaceId, { type: 'automation-work', text, automationId, runId }) })
+  const schedules = new Map<string, AutomationSystem>()
+  const startSchedules = async (workspaceId: string, rootPath: string) => {
+    await resources.initialize(rootPath)
+    if (schedules.has(workspaceId) || closedHosts.has(host)) return
+    const workspaceRootPath = superAgentSchedulesPath(rootPath)
+    schedules.set(workspaceId, new AutomationSystem({
+      workspaceId,
+      workspaceRootPath,
+      enableScheduler: true,
+      onPromptsReady: async prompts => {
+        for (const prompt of prompts) {
+          if (!prompt.matcherId || !prompt.scheduledRun) continue
+          const { timestamp, actionIndex } = prompt.scheduledRun
+          const runId = `${timestamp}:${actionIndex}`
+          let error: string | undefined
+          try {
+            await service.command(workspaceId, { type: 'automation-work', text: prompt.prompt, automationId: prompt.matcherId, runId })
+          } catch (cause) {
+            error = cause instanceof Error ? cause.message : String(cause)
+          }
+          await appendAutomationHistoryEntry(workspaceRootPath, {
+            id: prompt.matcherId, ts: timestamp, ok: !error, prompt: prompt.prompt, error,
+          })
+        }
+      },
+    }))
+  }
   const service = new SuperAgentService({
     actionGates: true,
     upgradeArchitecture: true,
@@ -98,9 +128,9 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       const workspace = getWorkspaceByNameOrId(workspaceId)
       if (!workspace) throw new Error('Workspace not found')
       const result = await resources.access(workspaceId, workspace.rootPath, operation, value)
-      const scope = superAgentResourceScope(workspace.rootPath)
-      host.setupConfigWatcher(scope.rootPath, workspaceId)
-      host.notifyConfigFileChange(scope.rootPath, 'automations.json')
+      if (operation === 'save-automations' || operation === 'update-schedule' || operation === 'import') {
+        schedules.get(workspaceId)?.reloadConfig()
+      }
       return result
     },
     workflow: new MicrosoftAgentWorkflow(),
@@ -187,8 +217,13 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       await validateExecutionRoot(workspaceId, config.environment)
       return environments.checkReadiness(workspaceId, config, host.hasSuperAgentBrowserSupport?.(workspaceId) === true, force)
     },
+    loadTokenNestPolicy,
     validateConfig: validateSuperAgentCatalog,
     onReset: async workspaceId => {
+      const scheduler = schedules.get(workspaceId)
+      schedules.delete(workspaceId)
+      // Reset holds the serial team lock, so dispose without waiting for a tick.
+      void scheduler?.dispose().catch(error => console.error('[SuperAgent schedules] Could not dispose scheduler:', error))
       environmentConfigs.delete(workspaceId)
       await environments.reconcile(workspaceId, null)
     },
@@ -196,10 +231,8 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       const current = (await service.get(workspaceId)).config
       if (current) {
         await environments.reconcile(workspaceId, current)
-        if (current.architecture === 'dynamic') {
-          const workspace = getWorkspaceByNameOrId(workspaceId)
-          if (workspace) { const scope = await resources.initialize(workspace.rootPath); host.setupConfigWatcher(scope.rootPath, workspaceId) }
-        }
+        const workspace = getWorkspaceByNameOrId(workspaceId)
+        if (workspace) await startSchedules(workspaceId, workspace.rootPath)
       }
     },
     resolveEnvironment: async (workspaceId, environment) => {
@@ -243,7 +276,7 @@ export function getSuperAgentService(host: ISessionManager): SuperAgentService {
       } }
     },
   })
-  services.set(host, { service, environments })
+  services.set(host, { service, environments, schedules, startSchedules })
   return service
 }
 
@@ -257,10 +290,7 @@ export async function restoreSuperAgents(host: ISessionManager, onError: (error:
     catch { try { await access(join(workspace.rootPath, 'super-agent', 'commit.json')) } catch { continue } }
     try {
       const snapshot = await service.get(workspace.id)
-      if (snapshot.config?.architecture === 'dynamic') {
-        const scope = await new SuperAgentResourceStore().initialize(workspace.rootPath)
-        host.setupConfigWatcher(scope.rootPath, workspace.id)
-      }
+      if (snapshot.config) await services.get(host)?.startSchedules(workspace.id, workspace.rootPath)
     } catch (error) { onError(error) }
   }
 }
@@ -270,5 +300,8 @@ export async function cleanupSuperAgents(host: ISessionManager): Promise<void> {
   const entry = services.get(host)
   if (!entry) return
   services.delete(host)
-  try { await entry.service.cleanup() } finally { await entry.environments.cleanup() }
+  try {
+    await Promise.all([...entry.schedules.values()].map(system => system.dispose()))
+    await entry.service.cleanup()
+  } finally { await entry.environments.cleanup() }
 }

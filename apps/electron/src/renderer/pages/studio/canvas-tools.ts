@@ -2,7 +2,7 @@ import type { CanvasTool } from './canvas-engine'
 
 export const canvasToolGroups: Array<{ label: string; tools: Array<{ id: CanvasTool; label: string; shortcut?: string; actions: string[] }> }> = [
   { label: '布局与导航', tools: [
-    { id: 'workspace', label: '编辑工作台', actions: ['set_document', 'resize_document', 'crop_document', 'set_guides', 'group_layers', 'set_group', 'align_layers', 'flatten_layers', 'set_layer_mask', 'apply_layer_mask', 'copy_pixels', 'cut_pixels', 'paste_pixels', 'filter', 'export_image', 'get_history', 'select_all', 'modify_selection', 'fill_selection', 'stroke_selection'] },
+    { id: 'workspace', label: '编辑工作台', actions: ['set_document', 'resize_document', 'crop_document', 'set_guides', 'group_layers', 'set_group', 'align_layers', 'flatten_layers', 'set_layer_mask', 'apply_layer_mask', 'copy_pixels', 'cut_pixels', 'paste_pixels', 'filter', 'export_image', 'generate_gif', 'get_history', 'select_all', 'modify_selection', 'fill_selection', 'stroke_selection'] },
     { id: 'move', label: '移动图层', shortcut: 'V', actions: ['set_layer'] },
     { id: 'crop', label: '裁剪图层', shortcut: 'R', actions: ['crop_layer'] },
     { id: 'transform', label: '自由变换', actions: ['transform_layer'] },

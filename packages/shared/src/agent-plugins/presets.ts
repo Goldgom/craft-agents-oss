@@ -7,6 +7,11 @@ export const BUNDLED_AGENT_PLUGIN_PRESETS: readonly AgentPluginDescriptor[] = [
     capabilities: ['resume', 'steering', 'nativeTools', 'hostTools', 'toolApproval'],
     compatibility: { providerTypes: ['pi', 'pi_compat'], piAuthProviders: ['openai', 'deepseek'],
       authTypes: ['api_key', 'api_key_with_endpoint', 'bearer_token', 'oauth', 'none'] } },
+  { id: 'plugin:antigravity', name: 'Google Antigravity CLI',
+    description: 'Google Antigravity agent over ACP. Uses the Google login on the backend host.',
+    version: '1.0.0', builtin: false, enabled: false, setupRequired: true,
+    capabilities: ['nativeTools', 'toolApproval'],
+    compatibility: { providerTypes: ['pi'], piAuthProviders: ['google'], authTypes: ['none'] } },
   { id: 'plugin:dsh', name: 'DeepSeek Harness', description: 'DeepSeek Harness native agent with TokenBird sources and tools',
     version: '2.0.0', builtin: false, enabled: false, setupRequired: true,
     capabilities: ['nativeTools', 'hostTools', 'toolApproval'],
@@ -30,4 +35,13 @@ export function createBundledAgentManifest(input: {
       args: [`tokenbird:bridge:${input.backend}`, ...(input.backend === 'hermes' ? ['--hermes-root', input.hermesRoot!.trim()] : [])],
       requestTimeoutMs: 120_000 },
   };
+}
+
+export function createAntigravityManifest(executable: string): AgentPluginManifest {
+  const preset = BUNDLED_AGENT_PLUGIN_PRESETS.find(entry => entry.id === 'plugin:antigravity')!;
+  return { schemaVersion: 1, id: 'plugin:antigravity', name: preset.name, description: preset.description,
+    version: preset.version, enabled: true, capabilities: [...preset.capabilities],
+    compatibility: { ...preset.compatibility }, useConnectionCredentials: false,
+    transport: { type: 'stdio', command: 'tokenbird:python',
+      args: ['tokenbird:bridge:antigravity', executable], env: { PYTHONUTF8: '1' }, requestTimeoutMs: 65_000 } };
 }

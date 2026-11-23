@@ -1,14 +1,14 @@
 # GitCode 自动二进制发布
 
 GitHub Actions 在各平台的原生构建机上生成安装包，再通过 GitCode OpenAPI 发布到
-`Goldgom/token-bird`。工作流：`.github/workflows/gitcode-release.yml`。
+`tokennest/TokenBird`。工作流：`.github/workflows/gitcode-release.yml`。
 
 ## 首次配置
 
 在 GitHub 仓库 `Goldgom/tokenbird` 的 **Settings → Secrets and variables → Actions** 中：
 
 - 添加 Secret `GITCODE_TOKEN`：使用对目标 GitCode 仓库具有 Release 创建、附件上传和更新权限的个人访问令牌。
-- 如需更换发布仓库，添加 Variable `GITCODE_REPOSITORY`，格式为 `owner/repo`；默认 `Goldgom/token-bird`。
+- 如需更换发布仓库，添加 Variable `GITCODE_REPOSITORY`，格式为 `owner/repo`；默认 `tokennest/TokenBird`。
   同时修改客户端 `apps/electron/src/main/gitcode-release.ts` 的默认仓库，确保客户端能找到发布版本。
 - 确保 GitHub Actions 已启用，提交本工作流到 GitHub，并将同一源码提交推送到 GitCode。
 

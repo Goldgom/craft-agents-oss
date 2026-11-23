@@ -121,6 +121,7 @@ import { listLabels, loadLabelConfig } from '@tokenbird/shared/labels/storage'
 import { extractLabelId, resolveSessionLabels, findTaskItemLabelId } from '@tokenbird/shared/labels'
 import { ensureLabelsExist, ensureTaskItemLabel } from '@tokenbird/shared/labels/crud'
 import { loadStatusConfig } from '@tokenbird/shared/statuses/storage'
+import { AUTOMATIONS_HISTORY_FILE } from '@tokenbird/shared/automations/constants'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@tokenbird/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { migrateAgentSessionRuntime } from './agent-runtime-migration'
@@ -955,7 +956,7 @@ interface ManagedSession {
   // Token refresh manager for OAuth token refresh with rate limiting
   tokenRefreshManager: TokenRefreshManager
   // Metadata for sessions created by automations
-  triggeredBy?: { automationName?: string; event?: string; timestamp?: number }
+  triggeredBy?: { automationName?: string; event?: string; timestamp?: number; automationId?: string; runId?: string; completedAt?: number }
   // Promise that resolves when the agent instance is ready (for title gen to await)
   agentReady?: Promise<void>
   agentReadyResolve?: () => void
@@ -1261,6 +1262,7 @@ export class SessionManager implements ISessionManager {
   private pendingMcpReloadSessionIds = new Set<string>()
   // Automation systems for workspace event automations - one per workspace (includes scheduler, diffing, and handlers)
   private automationSystems: Map<string, AutomationSystem> = new Map()
+  private scheduledAutomationParents = new Map<string, Promise<string>>()
   // Pending credential request resolvers (keyed by requestId)
   private pendingCredentialResolvers: Map<string, (response: import('@tokenbird/shared/protocol').CredentialResponse) => void> = new Map()
   private localCredentialAccessEnabled = false
@@ -2129,6 +2131,7 @@ export class SessionManager implements ISessionManager {
         workspaceId,
         enableScheduler: true,
         onPromptsReady: async (prompts) => {
+          await this.waitForInit()
           // Execute prompt automations by creating new sessions
           const settled = await Promise.allSettled(
             prompts.map(async (pending) => {
@@ -2144,6 +2147,12 @@ export class SessionManager implements ISessionManager {
                 thinkingLevel: pending.thinkingLevel,
                 automationName: pending.automationName,
                 telegramTopic: pending.telegramTopic,
+                scheduledRun: pending.matcherId && pending.scheduledRun ? {
+                  automationId: pending.matcherId,
+                  runId: `${pending.scheduledRun.timestamp}:${pending.scheduledRun.actionIndex}`,
+                  timestamp: pending.scheduledRun.timestamp,
+                  parentSessionId: pending.scheduledRun.parentSessionId,
+                } : undefined,
               })
             })
           )
@@ -2151,7 +2160,7 @@ export class SessionManager implements ISessionManager {
           // Write enriched history entries (with session IDs and prompt summaries)
           for (const [idx, result] of settled.entries()) {
             const pending = prompts[idx]
-            if (!pending.matcherId) continue
+            if (!pending.matcherId || (pending.scheduledRun && result.status === 'fulfilled')) continue
 
             const entry = createPromptHistoryEntry({
               matcherId: pending.matcherId,
@@ -2450,6 +2459,9 @@ export class SessionManager implements ISessionManager {
 
       // Load existing sessions from disk
       this.loadSessionsFromDisk()
+      for (const workspace of workspaces) {
+        await this.groupPastScheduledRuns(workspace).catch(error => sessionLog.warn('[Automations] Could not group prior scheduled runs:', error))
+      }
 
       // Signal that initialization is complete — IPC handlers waiting on initGate will proceed
       this.initGate.markReady()
@@ -5229,6 +5241,14 @@ export class SessionManager implements ISessionManager {
           if (!clientId) throw new Error('No connected desktop client provides the canvas editor')
           return await this.rpcServer.invokeClientWithTimeout!(clientId, CLIENT_CANVAS_INVOKE, 360_000, args)
         },
+        videoToolFn: async (args: Record<string, unknown>): Promise<unknown> => {
+          const { runVideoSessionTool } = await import('../services/video/session-tool')
+          const { createVideoAnalyzer } = await import('../services/video/agent-analysis')
+          return runVideoSessionTool(managed.workspace.id, managed.id, args, {
+            workingDirectory: managed.workingDirectory ?? managed.workspace.rootPath,
+            analyzer: createVideoAnalyzer(this),
+          })
+        },
         // localbash — execute a shell command on the CLIENT machine when one
         // is connected (remote mode). Falls back to this host (embedded/local
         // server shares the client's machine) so local sessions keep working.
@@ -6660,17 +6680,8 @@ export class SessionManager implements ISessionManager {
       updates.llmConnection = connection
     }
     await updateSessionMetadata(managed.workspace.rootPath, sessionId, updates)
-    // Update agent model if it already exists (takes effect on next query)
-    if (managed.agent) {
-      // Fallback chain: session model > workspace default > connection default
-      const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
-      const sessionConn = resolveSessionConnection(managed.llmConnection, wsConfig?.defaults?.defaultLlmConnection)
-      const effectiveModel = model ?? wsConfig?.defaults?.model ?? sessionConn?.defaultModel!
-      sessionLog.info(`[updateSessionModel] Calling agent.setModel(${effectiveModel}) [agent exists=${!!managed.agent}, connectionLocked=${managed.connectionLocked}]`)
-      managed.agent.setModel(effectiveModel)
-    } else {
-      sessionLog.info(`[updateSessionModel] No agent yet, model will apply on next agent creation`)
-    }
+    // The next send reconciles the model and engine together. The current
+    // subprocess may still be completing a turn with the previous model.
     // Notify renderer of the model change
     this.sendEvent({ type: 'session_model_changed', sessionId, model }, managed.workspace.id)
     if (connectionChanged && connection) {
@@ -7945,7 +7956,20 @@ export class SessionManager implements ISessionManager {
   }
 
   private emitSessionComplete(evt: SessionCompletionEvent): void {
-    if (this.sessionCompletionListeners.size === 0) return
+    const managed = this.sessions.get(evt.sessionId)
+    const trigger = managed?.triggeredBy
+    if (managed && trigger?.event === 'SchedulerTick' && trigger.automationId && trigger.completedAt === undefined) {
+      trigger.completedAt = Date.now()
+      this.persistSession(managed)
+      const ok = evt.reason === 'complete' && !!evt.finalMessageId
+      const entry = createPromptHistoryEntry({
+        matcherId: trigger.automationId,
+        sessionId: evt.sessionId,
+        ok,
+        error: ok ? undefined : `Scheduled session ended with ${evt.reason}${evt.reason === 'complete' ? ' without a final response' : ''}`,
+      })
+      void appendAutomationHistoryEntry(managed.workspace.rootPath, entry).catch(error => sessionLog.warn('[Automations] Failed to write history:', error))
+    }
     for (const listener of this.sessionCompletionListeners) {
       try {
         listener(evt)
@@ -10193,6 +10217,7 @@ export class SessionManager implements ISessionManager {
       automationName,
       telegramTopic,
       waitForCompletion,
+      scheduledRun,
     } = input
 
     // Warn if llmConnection was specified but doesn't resolve
@@ -10215,8 +10240,20 @@ export class SessionManager implements ISessionManager {
     const fallback = `Automation: ${prompt.slice(0, 50)}${prompt.length > 50 ? '...' : ''}`
     const sessionName = automationName || fallback
 
-    // Create a new session for this automation
-    const session = await this.createSession(workspaceId, {
+    const previous = scheduledRun && [...this.sessions.values()].find(item => item.workspace.id === workspaceId
+      && item.triggeredBy?.event === 'SchedulerTick' && item.triggeredBy.automationId === scheduledRun.automationId
+      && item.triggeredBy.runId === scheduledRun.runId)
+    if (previous) {
+      await this.ensureMessagesLoaded(previous)
+      // A saved user message may already have caused external effects.
+      if (previous.isProcessing || previous.triggeredBy?.completedAt || previous.messages.some(message => message.role === 'user')) {
+        return { sessionId: previous.id }
+      }
+    }
+    const parentSessionId = previous?.parentSessionId ?? (scheduledRun
+      ? await this.scheduledAutomationParent(workspaceId, sessionName, scheduledRun.automationId, scheduledRun.parentSessionId)
+      : undefined)
+    const session = previous ?? await this.createSession(workspaceId, {
       name: sessionName,
       labels: resolvedLabels,
       permissionMode: permissionMode || 'safe',
@@ -10224,14 +10261,21 @@ export class SessionManager implements ISessionManager {
       llmConnection,
       model,
       thinkingLevel,
-    })
+      parentSessionId,
+    }, scheduledRun ? { emitCreatedEvent: false } : undefined)
 
     // Populate triggeredBy metadata so title generation is explicitly skipped
     // and the session is identifiable as automation-initiated after reload
     const managed = this.sessions.get(session.id)
     if (managed) {
-      managed.triggeredBy = { automationName, timestamp: Date.now() }
-      this.persistSession(managed)
+      managed.triggeredBy = scheduledRun
+        ? { automationName, event: 'SchedulerTick', timestamp: scheduledRun.timestamp, automationId: scheduledRun.automationId, runId: scheduledRun.runId }
+        : { automationName, timestamp: Date.now() }
+      this.persistSession(managed, !!scheduledRun)
+      if (scheduledRun) {
+        await this.flushSession(session.id)
+        if (!previous) this.notifySessionCreated(workspaceId, session.id)
+      }
     }
 
     // (session_created is emitted by createSession above; triggeredBy is set synchronously
@@ -10263,11 +10307,30 @@ export class SessionManager implements ISessionManager {
     // until the entire turn (including tool calls) finishes and trips the 30s
     // client timeout (tokenbird#943). The session streams live either
     // way; a background failure surfaces in the session UI and is logged here.
+    if (scheduledRun) {
+      // Wait for durable prompt acceptance, without holding the clock through the agent turn.
+      await new Promise<void>((resolve, reject) => {
+        let accepted = false
+        void this.sendMessage(session.id, prompt, undefined, undefined, {
+          skillSlugs: resolved?.skillSlugs,
+        }, undefined, undefined, () => {
+          accepted = true
+          resolve()
+        }).then(() => {
+          if (!accepted) reject(new Error('Scheduled prompt was not accepted'))
+        }, error => {
+          if (accepted) this.emitSessionComplete({ workspaceId, sessionId: session.id, reason: 'error' })
+          else reject(error)
+        })
+      })
+      return { sessionId: session.id }
+    }
+
     if (waitForCompletion === false) {
       void this.sendMessage(session.id, prompt, undefined, undefined, {
         skillSlugs: resolved?.skillSlugs,
       }).catch((err) => {
-        sessionLog.error('[Automations] background sendMessage failed for test run', {
+        sessionLog.error('[Automations] background sendMessage failed', {
           sessionId: session.id,
           error: err instanceof Error ? err.message : String(err),
         })
@@ -10280,6 +10343,94 @@ export class SessionManager implements ISessionManager {
     })
 
     return { sessionId: session.id }
+  }
+
+  getScheduledAutomation(workspaceId: string, id: string) {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) return undefined
+    return this.automationSystems.get(workspace.rootPath)?.getConfig()?.automations.SchedulerTick?.find(rule => rule.id === id)
+  }
+
+  private async groupPastScheduledRuns(workspace: Workspace): Promise<void> {
+    const rules = this.automationSystems.get(workspace.rootPath)?.getConfig()?.automations
+    const matchers = rules?.SchedulerTick ?? []
+    const byId = new Map(matchers.filter(matcher => matcher.id).map(matcher => [matcher.id!, matcher]))
+    const ruleNames = Object.values(rules ?? {}).flat().reduce((counts, matcher) => {
+      if (matcher.name) counts.set(matcher.name, (counts.get(matcher.name) ?? 0) + 1)
+      return counts
+    }, new Map<string, number>())
+    const uniqueNames = new Map([...byId.values()].filter(rule => rule.name && ruleNames.get(rule.name) === 1).map(rule => [rule.name!, rule]))
+    const previousRuns = new Map<string, { automationId: string; timestamp?: number }>()
+    const history = await readFile(join(workspace.rootPath, AUTOMATIONS_HISTORY_FILE), 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return ''
+      throw error
+    })
+    for (const line of history.trim().split('\n')) {
+      if (!line) continue
+      let entry: { id?: string; sessionId?: string; ts?: number }
+      try { entry = JSON.parse(line) } catch { continue }
+      if (entry?.id && byId.has(entry.id) && entry.sessionId) {
+        previousRuns.set(entry.sessionId, { automationId: entry.id, timestamp: entry.ts })
+      }
+    }
+
+    // Snapshot before creating parent conversations, which also adds to the session map.
+    for (const session of [...this.sessions.values()]) {
+      const trigger = session.triggeredBy
+      if (session.workspace.id !== workspace.id || !trigger || (trigger.event && trigger.event !== 'SchedulerTick')) continue
+      if (trigger.event === 'SchedulerTick' && trigger.completedAt === undefined) {
+        await this.ensureMessagesLoaded(session)
+        if (session.messages.some(message => message.role === 'user')) {
+          const last = session.messages.findLast(message => message.role === 'error' || message.role === 'user' ||
+            ((message.role === 'assistant' || message.role === 'plan') && !message.isIntermediate))
+          const finalMessageId = last && (last.role === 'assistant' || last.role === 'plan') ? last.id : undefined
+          this.emitSessionComplete({
+            workspaceId: workspace.id, sessionId: session.id,
+            reason: finalMessageId ? 'complete' : last?.role === 'error' ? 'error' : 'interrupted',
+            finalMessageId,
+          })
+          await this.flushSession(session.id)
+        }
+      }
+
+      const saved = previousRuns.get(session.id)
+      const id = trigger.automationId ?? saved?.automationId
+      const matcher = id ? byId.get(id) : trigger.automationName ? uniqueNames.get(trigger.automationName) : undefined
+      if (!matcher?.id || (session.parentSessionId && this.sessions.has(session.parentSessionId))) continue
+      session.parentSessionId = await this.scheduledAutomationParent(workspace.id, matcher.name ?? session.name ?? 'Scheduled automation', matcher.id, matcher.parentSessionId)
+      if (!trigger.event) {
+        session.triggeredBy = { ...trigger, event: 'SchedulerTick', automationId: matcher.id, completedAt: saved?.timestamp ?? trigger.timestamp ?? Date.now() }
+      }
+      this.persistSession(session, true)
+      await this.flushSession(session.id)
+    }
+  }
+
+  private async scheduledAutomationParent(workspaceId: string, name: string, automationId: string, requestedId?: string): Promise<string> {
+    const requested = requestedId && this.sessions.get(requestedId)
+    if (requested && requested.workspace.id === workspaceId && !requested.hidden && !requested.parentSessionId && !requested.isArchived) {
+      return requested.id
+    }
+
+    const key = JSON.stringify([workspaceId, automationId])
+    const pending = this.scheduledAutomationParents.get(key)
+    if (pending) return pending
+    const existing = [...this.sessions.values()].find(session => session.workspace.id === workspaceId
+      && session.triggeredBy?.event === 'SchedulerParent' && session.triggeredBy.automationId === automationId)
+    if (existing) return existing.id
+
+    const creating = (async () => {
+      const session = await this.createSession(workspaceId, { name, permissionMode: 'safe' }, { emitCreatedEvent: false })
+      const managed = this.sessions.get(session.id)
+      if (!managed) throw new Error('Scheduled automation parent was not created')
+      managed.triggeredBy = { event: 'SchedulerParent', automationId }
+      this.persistSession(managed, true)
+      await this.flushSession(session.id)
+      this.notifySessionCreated(workspaceId, session.id)
+      return session.id
+    })()
+    this.scheduledAutomationParents.set(key, creating)
+    try { return await creating } finally { this.scheduledAutomationParents.delete(key) }
   }
 
   /**

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SessionManager } from './SessionManager.ts'
+import { createManagedSession, SessionManager } from './SessionManager.ts'
 
 // Regression test for tokenbird#943:
 //
@@ -54,6 +54,35 @@ describe('executePromptAutomation waitForCompletion', () => {
 
     expect(result.sessionId).toBe('test-sess')
     expect(sendCalled).toBe(true)
+  })
+
+  it('groups scheduled runs and deduplicates a replay after the prompt is accepted', async () => {
+    const workspace = { id: 'ws_test', name: 'Test', slug: 'test', rootPath: tmpRoot, createdAt: 1 }
+    const ids: string[] = []
+    const accepted: string[] = []
+    sm['createSession'] = async (_id, options) => {
+      const id = `session-${ids.length}`
+      ids.push(id)
+      sm['sessions'].set(id, createManagedSession({ id, parentSessionId: options?.parentSessionId }, workspace, { messagesLoaded: true }))
+      return { id } as Awaited<ReturnType<SessionManager['createSession']>>
+    }
+    sm['persistSession'] = () => {}
+    sm.flushSession = async () => {}
+    sm.sendMessage = async (id, prompt, _attachments, _stored, _options, _existing, _authRetry, onAck) => {
+      accepted.push(id)
+      sm['sessions'].get(id)!.messages.push({ id: 'message', role: 'user', content: prompt, timestamp: 1 })
+      onAck?.('message')
+      await new Promise<never>(() => {})
+    }
+    const input = { workspaceId: workspace.id, workspaceRootPath: tmpRoot, prompt: 'daily report', automationName: 'Daily report' }
+    const firstRun = { automationId: 'daily', runId: '1:0', timestamp: 1 }
+    const first = await sm.executePromptAutomation({ ...input, scheduledRun: firstRun })
+    expect(await sm.executePromptAutomation({ ...input, scheduledRun: firstRun })).toEqual(first)
+    const next = await sm.executePromptAutomation({ ...input, scheduledRun: { ...firstRun, runId: '2:0', timestamp: 2 } })
+    expect(accepted).toEqual([first.sessionId, next.sessionId])
+    expect(ids).toHaveLength(3)
+    expect(sm['sessions'].get(first.sessionId)?.parentSessionId).toBe(ids[0])
+    expect(sm['sessions'].get(next.sessionId)?.parentSessionId).toBe(ids[0])
   })
 
   it('default (waitForCompletion unset) awaits sendMessage and propagates its error', async () => {

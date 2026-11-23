@@ -85,6 +85,7 @@ export interface SuperAgentScript {
 }
 
 export interface SuperAgentConfig {
+  tokenNestPolicy?: { connectionSlug: string }
   version: 1
   architecture?: 'dynamic'
   roleTopologyVersion?: 2
@@ -381,6 +382,7 @@ export interface SuperAgentRecoverySummary {
 }
 
 export interface SuperAgentSnapshot {
+  policySyncError?: string
   recovery?: SuperAgentRecoverySummary
   resources?: unknown
   /** A user-requested inspection is queued or executing, including retry delays. */
@@ -471,7 +473,7 @@ export type SuperAgentCommand =
   | { type: 'reset'; confirmed: true; preserveConfig?: boolean }
   | { type: 'environment-check'; config: SuperAgentConfig }
   | { type: 'chat'; text: string; attachments?: Array<{ name: string; mimeType: string; text?: string; base64?: string }> }
-  | { type: 'resources'; operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'save-credentials' | 'test-automation' | 'replay-automation'; value?: unknown }
+  | { type: 'resources'; operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'update-schedule' | 'save-credentials' | 'test-automation' | 'replay-automation'; value?: unknown }
   | { type: 'automation-work'; text: string; automationId: string; runId: string }
   | ({ type: 'task' } & SuperAgentTaskContract)
   | { type: 'continuous-work'; enabled: boolean }

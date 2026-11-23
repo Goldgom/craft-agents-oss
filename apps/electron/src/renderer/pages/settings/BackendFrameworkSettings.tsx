@@ -4,28 +4,29 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { SettingsCard, SettingsSection } from '@/components/settings';
 import { getAgentPluginDescriptor, setAgentPluginCatalog } from '@tokenbird/shared/agent-plugins/catalog';
-import type { AgentPluginRuntime } from '@tokenbird/shared/agent-plugins/types';
 import { defaultFrameworkConfiguration, defaultNativeOptions, FRAMEWORK_FEATURES, frameworkFeatureOptions, getAgentFrameworkProfile, nativeCodexTransportCompatible,
   type BackendFrameworkCatalog, type BackendFrameworkConfiguration, type BackendFrameworkEntry,
   type BackendFrameworkTestResult, type FrameworkInstallProgress } from '@tokenbird/shared/agent-plugins/frameworks';
-import type { LlmConnection } from '@config/llm-connections';
+import type { AgentRuntimeSelection, LlmConnection } from '@config/llm-connections';
 import { AgentPluginInstaller } from './AgentPluginInstaller';
 
 const prefix = 'settings.ai.frameworks.';
 const frameworkKeys: Record<string, string> = { pi: 'pi', codex: 'codex', 'claude-code': 'claude', 'plugin:hermes': 'hermes', 'plugin:dsh': 'dsh' };
 
-export function agentRuntimeLabel(runtime: AgentPluginRuntime, t: (key: string) => string): string {
+export function agentRuntimeLabel(runtime: AgentRuntimeSelection, t: (key: string) => string): string {
+  if (runtime === 'auto') return t('settings.ai.runtime.auto');
   return getAgentPluginDescriptor(runtime)?.name ?? t(`${prefix}unavailable`);
 }
 
-export function agentRuntimeDescription(runtime: AgentPluginRuntime, t: (key: string) => string): string {
+export function agentRuntimeDescription(runtime: AgentRuntimeSelection, t: (key: string) => string): string {
+  if (runtime === 'auto') return t('settings.ai.runtime.autoDescription');
   const key = frameworkKeys[runtime];
   return key ? t(`${prefix}descriptions.${key}`) : getAgentPluginDescriptor(runtime)?.description ?? t(`${prefix}unavailable`);
 }
 
-export function AgentFrameworkDetails({ runtime, connection }: { runtime: AgentPluginRuntime; connection?: LlmConnection }) {
+export function AgentFrameworkDetails({ runtime, connection }: { runtime: AgentRuntimeSelection; connection?: LlmConnection }) {
   const { t } = useTranslation();
-  const profile = getAgentFrameworkProfile(runtime);
+  const profile = runtime === 'auto' ? undefined : getAgentFrameworkProfile(runtime);
   if (!profile) return <p className="text-xs text-muted-foreground">{agentRuntimeDescription(runtime, t)}</p>;
   return <div className="space-y-2 text-xs leading-5" data-framework-details={runtime}>
     {(['strengths', 'bestFor', 'limits'] as const).map(field => <p key={field}>
@@ -41,7 +42,12 @@ function FrameworkRow({ framework, onSaved }: { framework: BackendFrameworkEntry
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<BackendFrameworkConfiguration>(framework.configuration);
-  const [busy, setBusy] = useState<'save' | 'test' | 'install' | null>(null);
+  const [busy, setBusy] = useState<'save' | 'test' | 'install' | 'connection' | null>(null);
+  const antigravityExecutable = draft.executablePath || framework.detectedLocation?.executablePath;
+  const antigravityLogin = antigravityExecutable
+    ? /^[A-Za-z]:[\\/]/.test(antigravityExecutable) ? `& '${antigravityExecutable.replaceAll("'", "''")}' acp --login`
+      : `'${antigravityExecutable.replaceAll("'", "'\\''")}' acp --login`
+    : 'agy acp --login';
   const [progress, setProgress] = useState<FrameworkInstallProgress | null>(null);
   const [result, setResult] = useState<BackendFrameworkTestResult | null>(null);
   const [feedback, setFeedback] = useState('');
@@ -86,10 +92,29 @@ function FrameworkRow({ framework, onSaved }: { framework: BackendFrameworkEntry
     finally { setBusy(null); }
   }
 
+  async function addAntigravityConnection() {
+    setBusy('connection'); setFeedback(''); setFailed(false);
+    try {
+      const connections = await window.electronAPI.listLlmConnections();
+      if (!connections.some(connection => connection.agentRuntime === 'plugin:antigravity')) {
+        const now = Date.now();
+        const result = await window.electronAPI.saveLlmConnection({
+          slug: `antigravity-${crypto.randomUUID()}`, name: framework.name,
+          providerType: 'pi', piAuthProvider: 'google', authType: 'none', agentRuntime: 'plugin:antigravity',
+          models: ['antigravity-auto'], defaultModel: 'antigravity-auto', createdAt: now,
+        });
+        if (!result.success) throw new Error(result.error || t(`${prefix}failed`));
+      }
+      await onSaved();
+      setFeedback(t(`${prefix}antigravity.connectionReady`));
+    } catch (error) { setFailed(true); setFeedback(error instanceof Error ? error.message : t(`${prefix}failed`)); }
+    finally { setBusy(null); }
+  }
+
   async function install() {
     setBusy('install'); setResult(null); setFeedback(''); setFailed(false); setProgress({ id: framework.id, phase: 'preparing' });
     try {
-      const installed = await window.electronAPI.installBackendFramework(framework.id, draft.downloadSource ?? 'official');
+      const installed = await window.electronAPI.installBackendFramework(framework.id, framework.id === 'plugin:antigravity' ? 'official' : draft.downloadSource ?? 'official');
       if (!installed.success || !installed.configuration) throw new Error(installed.error || t(`${prefix}installFailed`));
       // Keep unsaved feature choices while adopting the verified executable paths.
       setDraft({ ...installed.configuration, features: draft.features, ...(draft.nativeOptions ? { nativeOptions: draft.nativeOptions } : {}) });
@@ -112,15 +137,23 @@ function FrameworkRow({ framework, onSaved }: { framework: BackendFrameworkEntry
     </button>
     {open && <div id={`framework-${framework.id.replace(':', '-')}`} className="space-y-5 border-t border-border/50 px-4 py-4">
       <AgentFrameworkDetails runtime={framework.id} />
+      {framework.id === 'plugin:antigravity' && <div className="space-y-2 text-xs text-muted-foreground">
+        <p>{t(`${prefix}antigravity.loginHelp`)}</p>
+        <code className="block select-all break-all">{antigravityLogin}</code>
+        <Button size="sm" variant="outline" disabled={!!busy || !framework.enabled} onClick={() => void addAntigravityConnection()}>
+          {t('settings.ai.addConnection')}
+        </Button>
+      </div>}
+
       {framework.installation?.installable && <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">{t(`${prefix}downloadSource`)}
+          {framework.id !== 'plugin:antigravity' && <label className="flex items-center gap-2 text-xs text-muted-foreground">{t(`${prefix}downloadSource`)}
             <select value={draft.downloadSource ?? 'official'} disabled={!!busy} aria-label={`${framework.name} ${t(`${prefix}downloadSource`)}`}
               className="rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground"
               onChange={event => update({ downloadSource: event.target.value as 'official' | 'mirror' })}>
               <option value="official">{t(`${prefix}downloadOfficial`)}</option><option value="mirror">{t(`${prefix}downloadMirror`)}</option>
             </select>
-          </label>
+          </label>}
           <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void install()}>
             {busy === 'install' ? <Loader2 className="mr-1 size-3 animate-spin" /> : <Download className="mr-1 size-3" />}
             {t(`${prefix}${framework.installation.available ? 'reinstall' : 'install'}`)}
@@ -134,10 +167,10 @@ function FrameworkRow({ framework, onSaved }: { framework: BackendFrameworkEntry
         <h4 className="text-sm font-medium">{t(`${prefix}location`)}</h4>
         <p className="text-xs text-muted-foreground">{t(`${prefix}locationHelp`)}</p>
         <label className="block space-y-1 text-xs text-muted-foreground">
-          <span>{t(`${prefix}${framework.id === 'pi' ? 'bunPath' : external ? 'pythonPath' : 'executablePath'}`)}</span>
+          <span>{t(`${prefix}${framework.id === 'pi' ? 'bunPath' : external && framework.id !== 'plugin:antigravity' ? 'pythonPath' : 'executablePath'}`)}</span>
           <input aria-label={`${framework.name} ${t(`${prefix}executablePath`)}`} value={draft.executablePath}
             onChange={event => update({ executablePath: event.target.value })} disabled={!!busy}
-            placeholder={framework.detectedLocation?.executablePath || t(`${prefix}${external ? 'pythonPlaceholder' : 'automatic'}`)}
+            placeholder={framework.detectedLocation?.executablePath || t(`${prefix}${external && framework.id !== 'plugin:antigravity' ? 'pythonPlaceholder' : 'automatic'}`)}
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground" />
         </label>
         {!external && <p className="text-xs text-muted-foreground">{t(`${prefix}automaticHelp`)}</p>}

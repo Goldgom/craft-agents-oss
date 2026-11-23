@@ -8,6 +8,7 @@ import { existsSync, rmSync, cpSync, readFileSync, statSync, mkdirSync } from "f
 import { join, basename } from "path";
 import * as esbuild from "esbuild";
 import { downloadUv, type Platform, type Arch } from "./build/common";
+import { downloadFfmpeg } from './build/ffmpeg';
 
 const ROOT_DIR = join(import.meta.dir, "..");
 const ELECTRON_DIR = join(ROOT_DIR, "apps/electron");
@@ -441,6 +442,11 @@ async function main(): Promise<void> {
   }
 
   await ensureBundledUvForCurrentPlatform();
+  if (process.platform !== 'darwin' || process.env.TOKENBIRD_FFMPEG_BUNDLE_DIR) {
+    await downloadFfmpeg({ platform: resolveBuildPlatform(), arch: resolveBuildArch(), upload: false, uploadLatest: false, uploadScript: false, rootDir: ROOT_DIR, electronDir: ELECTRON_DIR });
+  } else {
+    console.log('Video Studio on macOS requires a checksum-verified TOKENBIRD_FFMPEG_BUNDLE_DIR runtime.');
+  }
 
   copyResources();
 

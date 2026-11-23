@@ -15,9 +15,10 @@ export async function createCodexHostHome(parent: string, workDir: string, login
   return home;
 }
 
-/** Reviewed against codex-cli 0.154.0. No native environment is attached in host execution mode. */
+/** Reviewed against codex-cli 0.171.0. No native environment is attached in host execution mode. */
 export const CODEX_HOST_EXECUTION_CONFIG: Record<string, JsonValue> = {
   'features.shell_tool': false,
+  'features.view_image': false,
   'features.multi_agent': false,
   'features.multi_agent_v2': false,
   'features.apps': false,

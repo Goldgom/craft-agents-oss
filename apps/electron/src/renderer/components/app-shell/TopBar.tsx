@@ -35,13 +35,13 @@ import { AppMenu } from "../AppMenu"
 
 const RIGHT_SLOT_FULL_BADGES_THRESHOLD = 420
 const RIGHT_SLOT_TWO_BADGES_THRESHOLD = 300
-type StudioMode = 'agent' | 'canvas' | 'mindmap' | 'super-agent'
+type StudioMode = 'agent' | 'canvas' | 'video' | 'super-agent'
 
 const STUDIO_MODES = [
-  { value: 'agent', label: 'studio.mode.agent', Icon: Icons.Bot },
-  { value: 'canvas', label: 'studio.mode.canvas', Icon: Icons.Paintbrush },
-  { value: 'mindmap', label: 'studio.mode.mindmap', Icon: Icons.Network },
-  { value: 'super-agent', label: 'studio.mode.superAgent', Icon: Icons.Sparkles },
+  { value: 'agent', labelKey: 'studio.mode.agent', Icon: Icons.Bot },
+  { value: 'canvas', labelKey: 'studio.mode.canvas', Icon: Icons.Paintbrush },
+  { value: 'video', labelKey: 'studio.mode.video', Icon: Icons.Clapperboard },
+  { value: 'super-agent', labelKey: 'studio.mode.superAgent', Icon: Icons.Sparkles },
 ] as const
 
 function StudioModeSwitcher({ value, onChange, compact = false }: {
@@ -52,8 +52,8 @@ function StudioModeSwitcher({ value, onChange, compact = false }: {
   const { t } = useTranslation()
   const layoutId = useId()
   const reduceMotion = useReducedMotion()
-  return <LayoutGroup id={layoutId}><div role="group" aria-label={t('studio.mode.switch')} className="titlebar-no-drag inline-flex h-9 shrink-0 items-center gap-0.5 rounded-xl border border-border/70 bg-muted/60 p-1">
-    {STUDIO_MODES.map(({ value: mode, label: labelKey, Icon }) => {
+  return <LayoutGroup id={layoutId}><div role="group" aria-label={t('studio.mode.switcher')} className="titlebar-no-drag inline-flex h-9 shrink-0 items-center gap-0.5 rounded-xl border border-border/70 bg-muted/60 p-1">
+    {STUDIO_MODES.map(({ value: mode, labelKey, Icon }) => {
       const label = t(labelKey)
       const active = value === mode
       return <button key={mode} type="button" aria-label={label} aria-pressed={active} title={label}

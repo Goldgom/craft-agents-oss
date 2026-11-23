@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { killProcessTreeAsync } from '../utils/process-tree.ts';
 import { getNativeCodexStatus } from '../codex/binary-resolver.ts';
-import { createBundledAgentManifest } from './presets.ts';
+import { createAntigravityManifest, createBundledAgentManifest } from './presets.ts';
 import { loadAgentPluginManifests } from './storage.ts';
 import { AgentPluginStdioClient } from './stdio-client.ts';
 import { getBackendFrameworkCatalog, validateBackendFrameworkConfiguration } from './framework-storage.ts';
@@ -97,11 +97,12 @@ export async function testBackendFrameworkConfiguration(value: unknown): Promise
         message => message.id === 'framework-probe' && !!message.result && !message.error);
     } else if (configuration.id.startsWith('plugin:')) {
       const existing = loadAgentPluginManifests().manifests.find(item => item.id === configuration.id);
-      const manifest = configuration.id === 'plugin:hermes' || configuration.id === 'plugin:dsh'
+      const manifest = configuration.id === 'plugin:antigravity' ? createAntigravityManifest(executable)
+        : configuration.id === 'plugin:hermes' || configuration.id === 'plugin:dsh'
         ? createBundledAgentManifest({ backend: configuration.id === 'plugin:hermes' ? 'hermes' : 'dsh', pythonPath: executable, hermesRoot: configuration.projectPath })
         : existing && { ...existing, transport: { ...existing.transport, command: executable } };
       if (!manifest) throw new Error('Backend adapter is not installed');
-      if (existing?.transport.env) manifest.transport.env = existing.transport.env;
+      if (existing?.transport.env && configuration.id !== 'plugin:antigravity') manifest.transport.env = existing.transport.env;
       const client = new AgentPluginStdioClient(manifest, { cwd: root,
         onNotification: () => {}, onRequest: async () => { throw new Error('Tools are unavailable during a local framework test'); }, onFailure: () => {} });
       try {

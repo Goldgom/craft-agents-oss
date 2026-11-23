@@ -29,7 +29,8 @@ export function getAgentPluginDescriptor(id: AgentPluginRuntime): AgentPluginDes
 }
 
 export function isAgentPluginCompatible(plugin: AgentPluginDescriptor,
-  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider'> & Partial<Pick<LlmConnection, 'authType'>>): boolean {
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider'> & Partial<Pick<LlmConnection, 'authType' | 'baseUrl' | 'oauthProvider'>>): boolean {
+  if (plugin.id === 'plugin:antigravity' && (connection.baseUrl || connection.oauthProvider)) return false;
   const match = plugin.compatibility;
   return plugin.enabled && match.providerTypes.includes(connection.providerType)
     && (!match.piAuthProviders || match.piAuthProviders.includes(connection.piAuthProvider ?? (connection.providerType === 'pi_compat' ? 'openai' : '')))

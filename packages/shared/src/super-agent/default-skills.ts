@@ -6,7 +6,7 @@ import type { SuperAgentNode } from './types'
 const organizationSkills = [
   'knowledge-organization', 'document-workflows', 'structured-data', 'previews-and-diagrams',
   'web-research', 'browser-automation', 'research-methods', 'evidence-review',
-  'pages-authoring', 'canvas-editing', 'theme-package-design',
+  'pages-authoring', 'canvas-editing', 'video-production', 'theme-package-design',
 ] as const
 const assistanceSkills = [
   'everyday-assistance', 'software-development', 'software-verification', 'incident-response',
@@ -36,7 +36,7 @@ export const DEFAULT_SUPER_AGENT_SKILLS = {
   experiment: ['research-methods', 'software-development', 'structured-data', 'previews-and-diagrams'],
   researchReviewer: ['research-methods', 'evidence-review', 'software-verification'],
   analyst: ['research-methods', 'structured-data', 'web-research', 'browser-automation', 'evidence-review'],
-  producer: ['document-workflows', 'structured-data', 'previews-and-diagrams', 'pages-authoring', 'canvas-editing', 'windows-desktop-control'],
+  producer: ['document-workflows', 'structured-data', 'previews-and-diagrams', 'pages-authoring', 'canvas-editing', 'video-production', 'windows-desktop-control'],
   workReviewer: ['evidence-review', 'document-workflows', 'structured-data'],
   diagnostician: ['incident-response', 'remote-operations', 'software-verification', 'evidence-review'],
   operator: ['incident-response', 'remote-operations', 'software-development', 'source-authoring'],

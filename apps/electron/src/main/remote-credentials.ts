@@ -1,5 +1,6 @@
 /** Main-process-only remote secret resolution. Never send resolved records to a renderer. */
 import { createHash, randomUUID } from 'node:crypto'
+import type { RemoteCredentialField } from '../shared/types'
 import type { RemoteServerConfig } from '@tokenbird/core/types'
 import { getCredentialManager, type CredentialId, type CredentialWrite, type StoredCredential } from '@tokenbird/shared/credentials'
 import {
@@ -29,12 +30,12 @@ export interface RemoteCredentialMigrationResult {
 
 export class RemoteCredentialUnavailableError extends Error {
   readonly code = 'REMOTE_CREDENTIAL_UNAVAILABLE'
-  constructor() {
+  constructor(readonly field?: RemoteCredentialField) {
     super('The saved remote credential is unavailable. Repair the saved connection before connecting.')
     this.name = 'RemoteCredentialUnavailableError'
   }
 }
-const resolutionError = () => new RemoteCredentialUnavailableError()
+const resolutionError = (field?: RemoteCredentialField) => new RemoteCredentialUnavailableError(field)
 const publicationError = () => new Error('Remote credential migration or save could not finish. Existing connection snapshots are preserved; retry from Remote Servers settings.')
 const profileHasReferences = (profile: RemoteServerProfile) => !!(profile.tokenRef || profile.sftp?.passwordRef || profile.sftp?.passphraseRef)
 const profileHasPlaintext = (profile: RemoteServerProfile) => !!(profile.token || profile.sftp?.password || profile.sftp?.passphrase)
@@ -67,16 +68,17 @@ export function createRemoteCredentialService(deps: RemoteCredentialDependencies
     return result
   }
   async function secret(type: RemoteCredentialType, ref: string | undefined, legacy?: string): Promise<string> {
+    const field = type === 'remote_sftp_password' ? 'password' : type === 'remote_sftp_passphrase' ? 'passphrase' : 'token'
     if (!ref) {
-      if (legacy !== undefined && typeof legacy !== 'string') throw resolutionError()
+      if (legacy !== undefined && typeof legacy !== 'string') throw resolutionError(field)
       return legacy ?? ''
     }
-    if (!isRemoteSecretRef(ref) || legacy) throw resolutionError()
+    if (!isRemoteSecretRef(ref) || legacy) throw resolutionError(field)
     try {
       const stored = await deps.credentials.get({ type, name: ref })
-      if (typeof stored?.value !== 'string' || !stored.value) throw resolutionError()
+      if (typeof stored?.value !== 'string' || !stored.value) throw resolutionError(field)
       return stored.value
-    } catch { throw resolutionError() }
+    } catch { throw resolutionError(field) }
   }
   async function resolveProfileSnapshot(profile: RemoteServerProfile): Promise<ResolvedRemoteProfile> {
     const result = clone(profile) as ResolvedRemoteProfile

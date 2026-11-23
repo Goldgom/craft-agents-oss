@@ -27,6 +27,10 @@ export function classifyActionGate(toolName: string, input: Record<string, unkno
   if (tool === 'super_agent_manage_resources') return 'state-change';
   if (SUPER_AGENT_ACTION_TOOLS.some(def => def.name === tool)) return;
   const name = tool.replace(/_/g, '');
+  if (tool === 'video_tool') {
+    if (['state', 'job', 'read_asset', 'probe'].includes(String(input.action))) return;
+    return ['generate_shot', 'generate_project'].includes(String(input.action)) ? 'financial' : 'state-change';
+  }
   if (name === 'savedcredentials' && input.action === 'list') return;
   if (tool === 'super_agent_task' && input.action === 'install-skill') return 'state-change';
   if (tool === 'super_agent_settings') return input.action === 'get' ? undefined : 'state-change';

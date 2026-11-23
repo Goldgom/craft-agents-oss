@@ -5,10 +5,9 @@ import { useTranslation } from 'react-i18next'
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { Check, PanelLeftOpen, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { DeleteSessionConfirmationDialog } from '@/components/DeleteSessionConfirmationDialog'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   activeStudioSessionId, deleteStudioSession, listStudioSessions, loadStudioSession,
-  moveMindMapSessionToDirectory, putStudioSession, saveStudioSessionData, setActiveStudioSessionId, updateStudioSessionMeta,
+  putStudioSession, saveStudioSessionData, setActiveStudioSessionId, updateStudioSessionMeta,
   type StudioSessionMeta, type StudioSessionMode,
 } from './studio-sessions'
 
@@ -17,7 +16,6 @@ export type StudioSessionEditorProps = {
   session: StudioSessionMeta & { data: string }
   onSave: (data: string) => Promise<void>
   createSession: () => Promise<void>
-  bindWorkDirectory: () => Promise<void>
   selectSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
   deleteSession: (id: string, confirmed?: boolean) => Promise<void>
@@ -51,12 +49,11 @@ export function StudioSessionWorkspace({ mode, children }: {
   const sidebarVisible = pageSidebar?.visible ?? localSidebarVisible
   const toggleSidebar = pageSidebar?.toggle ?? (() => setLocalSidebarVisible(value => !value))
   const [creating, setCreating] = useState(false)
-  const [workDirectory, setWorkDirectory] = useState('')
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const createResolve = useRef<(() => void) | null>(null)
   const flushRef = useRef<(() => Promise<void>) | null>(null)
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions
-  const defaultTitle = mode === 'canvas' ? t('studio.untitledCanvas') : t('studio.untitledDiagram')
+  const defaultTitle = t('studio.untitledCanvas')
   const initialTitle = useRef(defaultTitle)
 
   useEffect(() => {
@@ -65,7 +62,6 @@ export function StudioSessionWorkspace({ mode, children }: {
       const items = await listStudioSessions(mode)
       if (!alive) return
       if (!items.length) {
-        if (mode === 'mindmap') { setSessions([]); setCurrent(null); return }
         const meta = { id: `studio-${mode}-first`, mode, title: initialTitle.current, updatedAt: Date.now() }
         await putStudioSession(meta, '')
         if (!alive) return
@@ -119,23 +115,7 @@ export function StudioSessionWorkspace({ mode, children }: {
   }
   async function create() {
     if (locked) return
-    if (mode === 'canvas') return finishCreate()
-    if (creating) return
-    setWorkDirectory(current?.workspaceDir ?? '')
-    setCreating(true)
-    return new Promise<void>(resolve => { createResolve.current = resolve })
-  }
-  async function bindWorkDirectory() {
-    if (locked || !current || current.mode !== 'mindmap' || current.workspaceDir) return
-    try {
-      const directory = await window.electronAPI.pickStudioMindMapDirectory()
-      if (!directory) return
-      await flush()
-      const next = await moveMindMapSessionToDirectory(current, directory)
-      setSessions(items => items.map(item => item.id === next.id ? next : item))
-      setCurrent(item => item ? { ...item, ...next } : item)
-      setError('')
-    } catch (cause) { setError(t('studio.directorySetFailed', { value1: String(cause) })) }
+    return finishCreate()
   }
   function cancelCreate() { setCreating(false); createResolve.current?.(); createResolve.current = null }
 
@@ -169,10 +149,6 @@ export function StudioSessionWorkspace({ mode, children }: {
           setCurrent({ ...next, data }); setActiveStudioSessionId(mode, next.id)
         }
       } else {
-        if (mode === 'mindmap') {
-          setSessions([]); setCurrent(null); flushRef.current = null
-          return
-        }
         const meta = { id: crypto.randomUUID(), mode, title: defaultTitle, updatedAt: Date.now() }
         await putStudioSession(meta, '')
         flushRef.current = null
@@ -185,7 +161,7 @@ export function StudioSessionWorkspace({ mode, children }: {
     if (current?.title === defaultTitle) void rename(current.id, title)
   }, [current?.id, current?.title, sessions])
 
-  const sidebarTitle = mode === 'canvas' ? t('studio.canvasSessions') : t('studio.diagramSessions')
+  const sidebarTitle = t('studio.canvasSessions')
   const sidebar = <PageSidebar title={sidebarTitle} visible={sidebarVisible} compact={sidebarCompact}
     open={sessionsOpen} onOpenChange={setSessionsOpen} onToggle={toggleSidebar}>
       <div data-studio-session-sidebar className="flex min-h-0 flex-1 flex-col">
@@ -205,18 +181,11 @@ export function StudioSessionWorkspace({ mode, children }: {
     {sidebarCompact || (!pageSidebar && !sidebarVisible) ? <div className="studio-session-mobile-bar"><button aria-label={sidebarTitle} onClick={() => sidebarCompact ? setSessionsOpen(true) : toggleSidebar()}><PanelLeftOpen className="size-4 shrink-0" /><span>{current?.title ?? defaultTitle}</span></button><button aria-label={t('studio.newSession')} disabled={locked || loading} onClick={() => void create()}><Plus className="size-5" /></button></div> : null}
     {sidebar}
     {error && (sidebarCompact || !sidebarVisible) && <div role="alert" className="px-3 py-2 text-xs text-destructive">{error}</div>}
-    <div className="min-h-0 min-w-0 flex-1">{current ? children({ compactLayout: mode === 'canvas' ? compact : undefined, session: current, onSave: save, createSession: create, bindWorkDirectory, selectSession: select, renameSession: rename, deleteSession: remove, flushRef, setLocked, suggestTitle }) : <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">{loading ? t('studio.loadingSessions') : mode === 'mindmap' ? <><span>{t('studio.chooseFolderCreate')}</span><button className="rounded-md bg-primary px-3 py-2 text-primary-foreground" onClick={() => void create()}>{t('studio.newMindMap')}</button></> : t('studio.sessionOpenFailed')}</div>}</div>
+    <div className="min-h-0 min-w-0 flex-1">{current ? children({ compactLayout: compact, session: current, onSave: save, createSession: create, selectSession: select, renameSession: rename, deleteSession: remove, flushRef, setLocked, suggestTitle }) : <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">{loading ? t('studio.loadingSessions') : t('studio.sessionOpenFailed')}</div>}</div>
     <DeleteSessionConfirmationDialog
       sessionName={sessions.find(item => item.id === pendingDeleteId)?.title ?? null}
       onCancel={() => setPendingDeleteId(null)}
       onConfirm={() => { const id = pendingDeleteId; setPendingDeleteId(null); if (id) void remove(id, true) }}
     />
-    <Dialog open={creating} onOpenChange={open => { if (!open) cancelCreate() }}>
-      <DialogContent><DialogHeader><DialogTitle>{t('studio.chooseMindMapFolder')}</DialogTitle></DialogHeader>
-        <p className="text-sm text-muted-foreground">{t('studio.mindMapFolderHint')}</p>
-        <button type="button" className="min-h-10 rounded-md border border-border px-3 text-left text-sm hover:bg-accent" onClick={async () => { try { const selected = await window.electronAPI.pickStudioMindMapDirectory(workDirectory || undefined); if (selected) setWorkDirectory(selected) } catch (cause) { setError(String(cause)) } }}>{workDirectory || t('studio.chooseFolder')}</button>
-        <div className="flex justify-end gap-2"><button className="rounded-md px-3 py-2 text-sm hover:bg-accent" onClick={cancelCreate}>{t('studio.cancel')}</button><button disabled={!workDirectory} className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-40" onClick={() => void finishCreate(workDirectory)}>{t('studio.create')}</button></div>
-      </DialogContent>
-    </Dialog>
   </div>
 }

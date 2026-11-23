@@ -212,6 +212,8 @@ export interface SessionToolContext {
 
   /** Invoke the desktop canvas editor that owns the Studio IndexedDB projects. */
   canvasToolFn?: (args: Record<string, unknown>) => Promise<unknown>;
+  /** Host-owned persistent Video Studio and bundled FFmpeg service. */
+  videoToolFn?: (args: Record<string, unknown>) => Promise<unknown>;
 
   /** Transfer files through the connected desktop client's configured SFTP profile. */
   requestClientFilesFn?: (args: import('@tokenbird/core/types').ClientFileRequest) => Promise<import('@tokenbird/core/types').SavedClientFiles>;

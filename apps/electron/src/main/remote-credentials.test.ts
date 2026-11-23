@@ -54,10 +54,23 @@ describe('revision-scoped remote credential service', () => {
     expect(JSON.stringify(f.profiles)).not.toContain('dummy-repaired')
   })
 
-  test('partial repair stays unavailable until every referenced secret is replaced', async () => {
-    const f = fixture(); await f.migrate(); f.secrets.clear()
-    await f.saveProfile({ id: 'profile-one', name: 'Dummy', url: f.profiles[0]!.url, token: 'dummy-repaired-token' })
-    await expect(f.resolveProfile('profile-one')).rejects.toBeInstanceOf(RemoteCredentialUnavailableError)
+  test('repair identifies one missing credential at a time and preserves valid vault references', async () => {
+    const f = fixture(); await f.migrate()
+    const before = structuredClone(f.profiles[0]!)
+    f.secrets.delete(credentialIdToAccount({ type: 'remote_server_token', name: before.tokenRef! }))
+    f.secrets.delete(credentialIdToAccount({ type: 'remote_sftp_password', name: before.sftp!.passwordRef! }))
+    await expect(f.resolveProfile(before.id)).rejects.toMatchObject({ field: 'token' })
+    const base = { id: before.id, name: before.name, url: before.url }
+    await f.saveProfile({ ...base, token: 'dummy-repaired-token' })
+    await expect(f.resolveProfile(before.id)).rejects.toMatchObject({ field: 'password' })
+    const tokenRef = f.profiles[0]!.tokenRef
+    await f.saveProfile({ ...base, sftp: { enabled: true, password: 'dummy-repaired-password' } })
+    expect(f.profiles[0]!.tokenRef).toBe(tokenRef)
+    expect(f.profiles[0]!.sftp!.passphraseRef).toBe(before.sftp!.passphraseRef)
+    const resolved = await f.resolveProfile(before.id)
+    expect(resolved?.token).toBe('dummy-repaired-token')
+    expect(resolved?.sftp?.password).toBe('dummy-repaired-password')
+    expect(resolved?.sftp?.passphrase).toBe(' dummy-phrase ')
   })
   test('legacy reads and saves remain functional without implicit migration', async () => {
     const f = fixture()

@@ -11,7 +11,6 @@ import { getValidTokenNestCredentials } from '../auth/tokennest-oauth.ts';
 import { getBackendRuntime } from './backend/internal/driver-types.ts';
 import { CODEX_CUSTOM_API_KEY_ENV, CODEX_CUSTOM_PROVIDER, customCodexTransport } from '../codex/custom-transport.ts';
 import { getModelById } from '../config/models.ts';
-import { COMPACT_AGENT } from '../agents/types.ts';
 import { getSessionPlansPath } from '../sessions/storage.ts';
 import { mkdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -391,7 +390,7 @@ export class NativeCodexAgent extends BaseAgent {
     }
   }
 
-  private buildSystemPrompt(): string {
+  private buildTokenBirdContext(): string {
     const system = getSystemPrompt(
       undefined,
       this.config.debugMode,
@@ -427,7 +426,7 @@ export class NativeCodexAgent extends BaseAgent {
         attachmentText.push(`[Attached file: ${attachment.name}]\n[Stored at: ${path}]${attachment.markdownPath ? `\n[Markdown version: ${attachment.markdownPath}]` : ''}`);
       }
     }
-    input.unshift({ type: 'text', text: [...volatile, ...attachmentText, message].filter(Boolean).join('\n\n'), text_elements: [] });
+    input.unshift({ type: 'text', text: [this.buildTokenBirdContext(), ...volatile, ...attachmentText, message].filter(Boolean).join('\n\n'), text_elements: [] });
     return input;
   }
 
@@ -440,9 +439,7 @@ export class NativeCodexAgent extends BaseAgent {
       ?? getModelById(this._model)?.contextWindow;
     const compactLimit = resolveAutoCompactionTokenLimit(this.config.modelPromptSettings, contextWindow);
     const hostExecution = this.usesHostExecution();
-    // Developer instructions are fixed at thread creation. Refresh the thread
-    // (with the existing recovery context) when commit attribution changes.
-    const signature = JSON.stringify({ tools, compactLimit, hostExecution, includeCoAuthoredBy: getCoAuthorPreference() });
+    const signature = JSON.stringify({ tools, compactLimit, hostExecution });
     if (this.codexThreadId && this.threadClient === client && !this.toolsChanged && signature === this.toolSignature) {
       return this.codexThreadId;
     }
@@ -463,14 +460,12 @@ export class NativeCodexAgent extends BaseAgent {
       config: {
         ...(hostExecution ? CODEX_HOST_EXECUTION_CONFIG : {}),
         ...(compactLimit !== undefined ? { model_auto_compact_token_limit: compactLimit } : {}),
-        compact_prompt: COMPACT_AGENT.prompt,
       },
       ...(hostExecution ? { environments: [] } : {}),
       cwd: this.workingDirectory,
       runtimeWorkspaceRoots: [this.config.workspace.rootPath],
       approvalPolicy: policy.approvalPolicy,
       sandbox: policy.sandbox,
-      developerInstructions: this.buildSystemPrompt(),
       dynamicTools: tools,
       experimentalRawEvents: false,
     });
@@ -1121,7 +1116,6 @@ export class NativeCodexAgent extends BaseAgent {
           cwd: workDir,
           approvalPolicy: 'never',
           sandbox: 'read-only',
-          developerInstructions: request.systemPrompt ?? null,
           ephemeral: true,
           dynamicTools: [],
           ...(hostExecution ? { environments: [], config: CODEX_HOST_EXECUTION_CONFIG } : {}),
@@ -1129,7 +1123,7 @@ export class NativeCodexAgent extends BaseAgent {
         utilityThreadId = thread.thread.id;
         await client.request<TurnStartResponse>('turn/start', {
           threadId: utilityThreadId,
-          input: [{ type: 'text', text: request.prompt, text_elements: [] }],
+          input: [{ type: 'text', text: [request.systemPrompt, request.prompt].filter(Boolean).join('\n\n'), text_elements: [] }],
           model: bareModelId(request.model ?? this.config.miniModel ?? this._model),
           effort: 'low',
           ...(hostExecution ? { environments: [] } : {}),

@@ -13,6 +13,10 @@ module.exports = async function pruneWindowsResources(context) {
   const requiredFiles = [
     join(resourcesRoot, 'vendor', 'bun', 'bun.exe'),
     join(contentRoot, 'resources', 'bin', 'win32-x64', 'uv.exe'),
+    join(contentRoot, 'resources', 'bin', 'win32-x64', 'ffmpeg.exe'),
+    join(contentRoot, 'resources', 'bin', 'win32-x64', 'ffprobe.exe'),
+    join(contentRoot, 'resources', 'bin', 'win32-x64', '.ffmpeg-build.json'),
+    join(contentRoot, 'resources', 'bin', 'win32-x64', 'ffmpeg-licenses', 'TOKENBIRD-NOTICE.txt'),
     join(contentRoot, 'resources', 'bridge-mcp-server', 'index.js'),
     join(contentRoot, 'resources', 'session-mcp-server', 'index.js'),
     join(contentRoot, 'resources', 'pi-agent-server', 'index.js'),

@@ -27,7 +27,7 @@ import { useSetAtom } from 'jotai'
 import { fullscreenOverlayOpenAtom } from '@/atoms/overlay'
 import { motion, AnimatePresence } from 'motion/react'
 import type { LlmConnectionWithStatus, ThinkingLevel, WorkspaceSettings, Workspace } from '../../../shared/types'
-import type { AgentRuntimeProtocol } from '@tokenbird/shared/config'
+import type { AgentRuntimeSelection } from '@tokenbird/shared/config'
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVELS } from '@tokenbird/shared/agent/thinking-levels'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import {
@@ -363,7 +363,7 @@ interface ConnectionRowProps {
   onReauthenticate: () => void
   onEdit: () => void
   onSetMidStreamBehavior: (behavior: MidStreamBehavior) => void
-  onSetAgentRuntime: (runtime: AgentRuntimeProtocol) => void
+  onSetAgentRuntime: (runtime: AgentRuntimeSelection) => void
   validationState: ValidationState
   validationError?: string
   balance?: ApiBalance
@@ -460,7 +460,7 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
   const oauthIdentityLine = connection.authType === 'oauth' && connection.oauthAccountEmail
     ? [connection.oauthAccountEmail, connection.oauthOrganizationName].filter(Boolean).join(' · ')
     : null
-  const currentRuntime = resolveAgentRuntime(connection)
+  const currentRuntime = connection.agentRuntime ?? 'auto'
 
   return (
     <SettingsRow
@@ -517,7 +517,7 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
             </button>
           </DropdownMenuTrigger>
           <StyledDropdownMenuContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
-            {getCompatibleAgentRuntimes(connection).map(runtime => (
+            {(['auto', ...getCompatibleAgentRuntimes(connection)] as const).map(runtime => (
               <StyledDropdownMenuItem key={runtime} onClick={() => onSetAgentRuntime(runtime)}>
                 <span className="min-w-0 flex-1 py-1">
                   <span className="block font-medium">{agentRuntimeLabel(runtime, t)}</span>
@@ -1273,11 +1273,11 @@ export default function AiSettingsPage() {
 
   const handleSetAgentRuntime = useCallback(async (
     connection: LlmConnectionWithStatus,
-    runtime: AgentRuntimeProtocol,
+    runtime: AgentRuntimeSelection,
   ) => {
     if (!window.electronAPI) return
-    if (!getCompatibleAgentRuntimes(connection).includes(runtime)) return
-    if (resolveAgentRuntime(connection) === runtime) return
+    if (runtime !== 'auto' && !getCompatibleAgentRuntimes(connection).includes(runtime)) return
+    if ((connection.agentRuntime ?? 'auto') === runtime) return
     try {
       const updated = { ...connection, agentRuntime: runtime }
       const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = updated
@@ -1540,18 +1540,18 @@ export default function AiSettingsPage() {
                   <SettingsMenuSelectRow
                     label={t('settings.ai.runtime.title')}
                     description={t('settings.ai.runtime.description')}
-                    value={defaultConnection ? resolveAgentRuntime(defaultConnection) : 'pi'}
+                    value={defaultConnection?.agentRuntime ?? 'auto'}
                     onValueChange={(value) => {
-                      if (defaultConnection) void handleSetAgentRuntime(defaultConnection, value as AgentRuntimeProtocol)
+                      if (defaultConnection) void handleSetAgentRuntime(defaultConnection, value as AgentRuntimeSelection)
                     }}
-                    options={(defaultConnection ? getCompatibleAgentRuntimes(defaultConnection) : ['pi']).map(runtime => ({
+                    options={(['auto', ...(defaultConnection ? getCompatibleAgentRuntimes(defaultConnection) : ['pi'])] as const).map(runtime => ({
                       value: runtime,
-                      label: agentRuntimeLabel(runtime as AgentRuntimeProtocol, t),
-                      description: agentRuntimeDescription(runtime as AgentRuntimeProtocol, t),
+                      label: agentRuntimeLabel(runtime as AgentRuntimeSelection, t),
+                      description: agentRuntimeDescription(runtime as AgentRuntimeSelection, t),
                     }))}
                   />
                   {defaultConnection && <div className="border-b border-border/50 px-4 py-3">
-                    <AgentFrameworkDetails runtime={resolveAgentRuntime(defaultConnection)} connection={defaultConnection} />
+                    <AgentFrameworkDetails runtime={defaultConnection.agentRuntime ?? 'auto'} connection={defaultConnection} />
                   </div>}
                   {defaultConnection?.oauthProvider === 'tokennest' && (defaultConnection.channelGroups?.length ?? 0) > 0 && (
                     <SettingsMenuSelectRow

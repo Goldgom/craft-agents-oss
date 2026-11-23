@@ -32,6 +32,7 @@ import { registerMessagingHandlers } from './messaging'
 import { registerAgentsHandlers } from './agents'
 import { registerCollaborationHandlers } from './collaborations'
 import { registerStudioHandlers } from './studio'
+import { registerVideoHandlers } from './video'
 import { registerSuperAgentHandlers } from './super-agent'
 import { registerCloudHandlers } from './cloud'
 import { registerCredentialHandlers } from './credentials'
@@ -55,6 +56,7 @@ export function registerCoreRpcHandlers(
   registerCollaborationHandlers(server, deps)
   // Experimental multi-server relay RPCs are intentionally not registered.
   registerStudioHandlers(server)
+  registerVideoHandlers(server, deps)
   registerSuperAgentHandlers(server, deps)
   registerFilesHandlers(server, deps)
   registerLabelsHandlers(server, deps)

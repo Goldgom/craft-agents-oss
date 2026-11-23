@@ -4,7 +4,7 @@ import {
   Archive, Bot, ChevronDown, Clock, Database, FileCode, Flag, FolderKanban,
   FolderOpen, History, Menu, MessageCircle, MonitorCog, MousePointerClick,
   PlugZap, RefreshCw, Search, Server, Settings, Sparkles, SquarePen, Tag,
-  Moon, Sun, Wrench, X, Zap, FileText, Columns3, Palette, GitBranch, BarChart3,
+  Moon, Sun, Wrench, X, Zap, FileText, Columns3, Palette, BarChart3, Clapperboard,
 } from 'lucide-react'
 import { navigate, routes } from '../../electron/src/renderer/lib/navigate'
 import { activeSessionIdAtom, sessionMetaMapAtom, windowWorkspaceIdAtom, type SessionMeta } from '../../electron/src/renderer/atoms/sessions'
@@ -119,11 +119,13 @@ function DrawerSessions({ onNavigate }: { onNavigate: (route: Route) => void }) 
   const workspaceId = useAtomValue(windowWorkspaceIdAtom)
   const activeId = useAtomValue(activeSessionIdAtom)
   const [query, setQuery] = useState('')
-  const eligible = [...sessions.values()]
-    .filter(session => session.workspaceId === workspaceId && !session.hidden && !session.isArchived && !session.parentSessionId && !session.taskDraft)
+  const eligibleChildren = [...sessions.values()].filter(session => session.workspaceId === workspaceId && !session.hidden && !session.isArchived && !session.taskDraft)
+  const parents = new Set(eligibleChildren.flatMap(session => session.triggeredBy?.event === 'SchedulerTick' && session.parentSessionId ? [session.parentSessionId] : []))
+  const eligible = eligibleChildren
+    .filter(session => !session.parentSessionId)
     // Creation time and a draft name do not make a conversation history.
     // Preview/final-message evidence also supports older metadata without counts.
-    .filter(session => (session.messageCount ?? 0) > 0 || Boolean(session.preview?.trim()) || Boolean(session.lastFinalMessageId))
+    .filter(session => parents.has(session.id) || (session.messageCount ?? 0) > 0 || Boolean(session.preview?.trim()) || Boolean(session.lastFinalMessageId))
     .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? 0) - (a.lastMessageAt ?? a.createdAt ?? 0))
   const filtered = eligible.filter(session => sessionTitle(session).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
   const pinned = filtered.filter(session => session.isFlagged)
@@ -279,7 +281,7 @@ export function MobileControls({ connectionMode }: { connectionMode: 'local' | '
       <CloudServerPicker open={serverPickerOpen} onOpenChange={setServerPickerOpen} connectionMode={connectionMode} />
       <header className="mobile-app-bar" aria-label="词元鸟">
         <button type="button" className="mobile-app-bar__icon" aria-label="打开应用菜单" aria-expanded={navigationOpen} aria-controls="mobile-controls-panel" onClick={() => { dismissKeyboard(); setWorkspaceOpen(false); setNavigationOpen(value => !value) }}><Menu aria-hidden="true" /></button>
-        <button type="button" className="mobile-app-bar__title" aria-label="切换工作区" aria-expanded={workspaceOpen} aria-controls="mobile-workspace-controls-panel" onClick={openWorkspace}><span>{studioMode === 'canvas' ? '画布' : studioMode === 'mindmap' ? '思维导图' : studioMode === 'super-agent' ? '超级智能体' : '词元鸟'} <ChevronDown aria-hidden="true" /></span><small><i className={connectionMode === 'remote' ? 'is-remote' : ''} />{modeLabel}</small></button>
+        <button type="button" className="mobile-app-bar__title" aria-label="切换工作区" aria-expanded={workspaceOpen} aria-controls="mobile-workspace-controls-panel" onClick={openWorkspace}><span>{studioMode === 'canvas' ? '画布' : studioMode === 'super-agent' ? '超级智能体' : studioMode === 'video' ? '视频制作' : '词元鸟'} <ChevronDown aria-hidden="true" /></span><small><i className={connectionMode === 'remote' ? 'is-remote' : ''} />{modeLabel}</small></button>
         <button type="button" className="mobile-app-bar__icon" aria-label="新建对话" onClick={() => navigateTo(routes.action.newSession())}><SquarePen aria-hidden="true" /></button>
       </header>
       {showModelNotice && <aside className="mobile-model-notice" aria-label="模型连接提示">
@@ -295,7 +297,7 @@ export function MobileControls({ connectionMode }: { connectionMode: 'local' | '
             <button type="button" className="mobile-drawer__new" onClick={() => navigateTo(routes.action.newSession())}><SquarePen aria-hidden="true" /><span>开启新对话</span></button>
             <nav className="mobile-drawer__destinations" aria-label="常用功能">
               <div className="mobile-drawer__studio" aria-label="创作工具">
-                {[{ mode: 'canvas', label: '画布', Icon: Palette }, { mode: 'mindmap', label: '思维导图', Icon: GitBranch }, { mode: 'super-agent', label: '超级智能体', Icon: Bot }].map(({ mode, label, Icon }) => <button key={mode} type="button" aria-pressed={studioMode === mode} onClick={() => openStudio(mode)}><Icon aria-hidden="true" /><span>{label}</span></button>)}
+                {[{ mode: 'canvas', label: '画布', Icon: Palette }, { mode: 'video', label: '视频制作', Icon: Clapperboard }, { mode: 'super-agent', label: '超级智能体', Icon: Bot }].map(({ mode, label, Icon }) => <button key={mode} type="button" aria-pressed={studioMode === mode} onClick={() => openStudio(mode)}><Icon aria-hidden="true" /><span>{label}</span></button>)}
               </div>
               {PRIMARY_DESTINATIONS.map(({ label, route, icon: Icon }) => <button key={label} type="button" onClick={() => navigateTo(route)}><Icon aria-hidden="true" /><span>{label}</span></button>)}
               <details className="mobile-drawer__more"><summary>更多功能 <ChevronDown aria-hidden="true" /></summary>{MORE_DESTINATIONS.map(({ label, route, icon: Icon }) => <button key={label} type="button" onClick={() => navigateTo(route)}><Icon aria-hidden="true" /><span>{label}</span></button>)}</details>

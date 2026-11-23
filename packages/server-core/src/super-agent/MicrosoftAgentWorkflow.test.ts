@@ -13,6 +13,7 @@ function workflow() { const value = new MicrosoftAgentWorkflow(); workflows.push
 describe.skipIf(!process.env.TOKENBIRD_AGENT_FRAMEWORK_PYTHON)('Microsoft Agent Framework session orchestration', () => {
   test('suspends for an external session response, streams SDK events, then resumes without reinvocation', async () => {
     const engine = workflow()
+    await engine.prepare()
     const events: SuperAgentWorkflowEvent[] = []
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
@@ -53,6 +54,19 @@ describe.skipIf(!process.env.TOKENBIRD_AGENT_FRAMEWORK_PYTHON)('Microsoft Agent 
     const failure = await engine.run({ nodeId: 'orchestrator', kind: 'task', nodes: f.config.nodes }, async () => { throw new Error('Must not execute') }).catch(error => error)
     expect(failure.message).toContain('Tasks must execute on worker nodes')
   }, 150_000)
+  test('routes all four roles and rejects an incomplete planning topology before invocation', async () => {
+    const engine = workflow()
+    const team = [...nodes, { id: 'planner', role: 'planner' as const }, { id: 'dispatch', role: 'orchestrator' as const }]
+    const calls: string[] = []
+    for (const node of team) {
+      await engine.run({ nodes: team, nodeId: node.id, kind: node.role === 'worker' ? 'task' : 'message' }, async () => { calls.push(node.id) })
+    }
+    const failure = await engine.run({ nodes: team.filter(n => n.role !== 'orchestrator'), nodeId: 'planner', kind: 'message' },
+      async () => { calls.push('unexpected') }).catch(error => error)
+    expect(failure.message).toContain('Invalid orchestration topology')
+    expect(calls).toEqual(team.map(node => node.id))
+  }, 150_000)
+
   test('executes independent node workflows concurrently and propagates session errors', async () => {
     const engine = workflow()
     const invoked: string[] = []

@@ -3,10 +3,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AutomationSystem, type SessionMetadataSnapshot } from './automation-system.ts';
+import { SchedulerService } from '../scheduler/scheduler-service.ts';
+import { RetryScheduler } from './retry-scheduler.ts';
+import { AUTOMATIONS_RETRY_QUEUE_FILE } from './constants.ts';
+import { claimScheduledEffect } from './scheduled-effects.ts';
 import { AUTOMATIONS_CONFIG_FILE, AUTOMATIONS_HISTORY_FILE } from './constants.ts';
 
 describe('AutomationSystem', () => {
@@ -18,6 +22,81 @@ describe('AutomationSystem', () => {
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('catches up missed minutes after restart and matches the original planned timestamp', async () => {
+    let now = Date.parse('2026-11-23T14:00:00Z');
+    const checkpoint = join(tempDir, 'checkpoint');
+    writeFileSync(join(tempDir, AUTOMATIONS_CONFIG_FILE), JSON.stringify({ automations: {
+      SchedulerTick: [{ cron: '1 9 * * *', timezone: 'America/New_York', actions: [{ type: 'prompt', prompt: 'run' }] }],
+    } }));
+    const accepted: Array<{ id?: string; timestamp?: number }> = [];
+    const system = new AutomationSystem({
+      workspaceRootPath: tempDir, workspaceId: 'workspace',
+      onPromptsReady: async prompts => {
+        accepted.push(...prompts.map(prompt => ({ id: prompt.matcherId, timestamp: prompt.scheduledRun?.timestamp })));
+      },
+    });
+    const run = async () => {
+      const clock = new SchedulerService(payload => system.emit('SchedulerTick', {
+        workspaceId: 'workspace', timestamp: Date.parse(payload.timestamp), utcTime: payload.timestamp, localTime: payload.localTime,
+      }), checkpoint, () => now);
+      clock.start();
+      try { await clock['runDueMinutes'](); } finally { clock.stop(); }
+    };
+    try {
+      await run();
+      now += 3 * 60_000;
+      await run();
+      await run();
+      expect(accepted).toEqual([{ id: expect.any(String), timestamp: Date.parse('2026-11-23T14:01:00Z') }]);
+      expect(readFileSync(checkpoint, 'utf8')).toBe(String(now));
+    } finally { await system.dispose(); }
+  });
+
+  it('recovers the first minute when the initial dispatch is interrupted', async () => {
+    let now = Date.parse('2026-11-23T14:00:00Z');
+    const checkpoint = join(tempDir, 'checkpoint');
+    const first = new SchedulerService(async () => { throw new Error('dispatch interrupted'); }, checkpoint, () => now);
+    first.start();
+    try { await expect(first['runDueMinutes']()).rejects.toThrow('dispatch interrupted'); } finally { first.stop(); }
+    now += 60_000;
+    const minutes: string[] = [];
+    const resumed = new SchedulerService(async payload => { minutes.push(payload.timestamp); }, checkpoint, () => now);
+    resumed.start();
+    try { await resumed['runDueMinutes'](); } finally { resumed.stop(); }
+    expect(minutes).toEqual(['2026-11-23T14:00:00.000Z', '2026-11-23T14:01:00.000Z']);
+  });
+
+  it('does not repeat an ambiguous scheduled script or webhook after interruption', async () => {
+    const timestamp = Date.parse('2026-11-23T14:00:00Z');
+    expect(await claimScheduledEffect(tempDir, timestamp, 'nightly', 'script:0')).toBeFunction();
+    expect(await claimScheduledEffect(tempDir, timestamp, 'nightly', 'script:0')).toBeUndefined();
+    const webhook = await claimScheduledEffect(tempDir, timestamp, 'nightly', 'webhook:1');
+    await webhook!();
+    expect(await claimScheduledEffect(tempDir, timestamp, 'nightly', 'webhook:1')).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(tempDir, AUTOMATIONS_HISTORY_FILE), 'utf8'))).toMatchObject({
+      id: 'nightly', ok: false, error: expect.stringContaining('outcome is unknown'),
+    });
+  });
+
+  it('preserves webhook entries queued while a previous retry is executing', async () => {
+    const path = join(tempDir, AUTOMATIONS_RETRY_QUEUE_FILE);
+    const retry = new RetryScheduler({ workspaceRootPath: tempDir });
+    const action = { type: 'webhook' as const, url: 'https://example.test/due' };
+    writeFileSync(path, JSON.stringify({
+      id: 'due', matcherId: 'due', action, expandedUrl: action.url,
+      nextRetryAt: 1, deferredAttempt: 0, createdAt: 1,
+    }) + '\n');
+    const fetch = spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await retry.enqueue('arrived-during-fetch', action, action.url);
+      return new Response('ok');
+    });
+    try {
+      await retry['tick']();
+      const entries = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(entries.map(entry => entry.matcherId)).toEqual(['arrived-during-fetch']);
+    } finally { fetch.mockRestore(); }
   });
 
   describe('constructor', () => {

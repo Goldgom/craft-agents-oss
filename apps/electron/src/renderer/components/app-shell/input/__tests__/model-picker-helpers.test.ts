@@ -7,13 +7,58 @@
 
 import { describe, test, expect } from 'bun:test'
 import type { LlmConnection } from '@tokenbird/shared/config/llm-connections'
+import { ANTHROPIC_MODELS } from '@tokenbird/shared/config/models'
 import {
   formatTokenCount,
   getAgentChannelGroups,
   getAgentModelsForConnection,
   groupConnectionsByProvider,
+  groupPickerConnectionModels,
+  groupPickerModels,
   stripPiPrefixForDisplay,
 } from '../model-picker-helpers'
+
+describe('model source groups', () => {
+  test('recognizes gateway model IDs and keeps unknowns in Other', () => {
+    expect(groupPickerModels([
+      'unrecognized', 'pi/gpt-6.2-astra', 'codex-auto.review', 'Opus 5.5',
+      'us.anthropic.claude-sonnet-4-6-v1', 'google/gemini-4-carbon',
+      'deepseek-v4.pro', 'Qwen3.8', 'glm-5.3', 'minimax-h3.video',
+    ], '')).toEqual([
+      { source: 'OpenAI', models: ['pi/gpt-6.2-astra', 'codex-auto.review'] },
+      { source: 'Anthropic', models: ['Opus 5.5', 'us.anthropic.claude-sonnet-4-6-v1'] },
+      { source: 'Google AI', models: ['google/gemini-4-carbon'] },
+      { source: 'DeepSeek', models: ['deepseek-v4.pro'] },
+      { source: 'Alibaba', models: ['Qwen3.8'] },
+      { source: 'MiniMax', models: ['minimax-h3.video'] },
+      { source: 'Zhipu AI', models: ['glm-5.3'] },
+      { source: 'other', models: ['unrecognized'] },
+    ])
+  })
+
+  test('matches display names, IDs, and sources while preferring a recognized ID', () => {
+    const model = { ...ANTHROPIC_MODELS[0]!, id: 'pi/openai/gpt-example', name: 'Claude Alias' }
+    const expected = [{ source: 'OpenAI', models: [model] }]
+    expect(groupPickerModels([model], '  OPENAI alias ')).toEqual(expected)
+    expect(groupPickerModels([model], 'gpt-example')).toEqual(expected)
+    expect(groupPickerModels([model], 'gemini')).toEqual([])
+  })
+
+  test('connection search only returns models that can be selected', () => {
+    const connection = {
+      ...conn('tokennest', 'pi_compat', {
+        oauthProvider: 'tokennest', channelGroup: 'team',
+        models: ['gpt-allowed', 'gpt-unavailable', 'gpt-image-2'],
+        channelGroups: [{ id: 'team', name: 'Team', models: ['gpt-allowed', 'gpt-image-2'] }],
+      }),
+      isAuthenticated: true,
+    }
+    const inactive = { ...connection, slug: 'inactive', isAuthenticated: false }
+    expect(groupPickerConnectionModels([['TokenBird Backend', [connection, inactive]]], 'gpt')).toEqual([
+      { provider: 'TokenBird Backend', entries: [{ connection, groups: [{ source: 'OpenAI', models: ['gpt-allowed'] }] }] },
+    ])
+  })
+})
 
 // -----------------------------------------------------------------------------
 // stripPiPrefixForDisplay

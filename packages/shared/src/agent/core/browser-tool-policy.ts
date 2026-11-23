@@ -16,12 +16,14 @@ export const DYNAMIC_INTERACTION_TOOL_NAMES = [
   'super_agent_reports', 'super_agent_resource_catalog', 'super_agent_settings',
 ] as const;
 
+const pageReadTools = ['list_pages', 'get_page'];
+const pageWriteTools = ['create_page', 'update_page', 'write_page_data', 'delete_page'];
 const sharedTeamTools = ['send_agent_message', 'collaboration_board', 'get_session_info', 'super_agent_message', 'super_agent_task', 'super_agent_library', 'saved_credentials'];
 const roleTools: Record<SuperAgentToolRole, readonly string[]> = {
   coordinator: [...sharedTeamTools, 'super_agent_settings', 'super_agent_intent', 'super_agent_deliver'],
-  planner: [...sharedTeamTools, 'super_agent_intent', 'super_agent_plan', 'super_agent_report', 'super_agent_settings', 'super_agent_finish_turn'],
-  orchestrator: [...sharedTeamTools, 'super_agent_dispatch', 'super_agent_plan', 'super_agent_board', 'super_agent_accept', 'super_agent_resources', 'super_agent_finish_turn'],
-  worker: [...sharedTeamTools, 'super_agent_board', 'super_agent_resources', 'super_agent_script'],
+  planner: [...sharedTeamTools, ...pageReadTools, 'super_agent_intent', 'super_agent_plan', 'super_agent_report', 'super_agent_settings', 'super_agent_finish_turn'],
+  orchestrator: [...sharedTeamTools, ...pageReadTools, 'super_agent_dispatch', 'super_agent_plan', 'super_agent_board', 'super_agent_accept', 'super_agent_resources', 'super_agent_finish_turn'],
+  worker: [...sharedTeamTools, ...pageReadTools, ...pageWriteTools, 'super_agent_board', 'super_agent_resources', 'super_agent_script'],
 };
 const collaborationTools = new Set(Object.values(roleTools).flat());
 const delegationTools = new Set(['call_llm', 'spawn_session', 'Task', 'Agent', 'spawn_agent', 'delegate', 'create_task']);
@@ -67,7 +69,10 @@ export function filterSuperAgentTools<T extends { name: string }>(tools: T[], ro
   const scopedCollaborationTools = architecture === 'dynamic' ? dynamicCollaborationTools : collaborationTools;
   return tools.filter(tool => {
     const name = tool.name.replace(/^mcp__session__/, '');
-    if (role !== 'worker') return (!tool.name.startsWith('mcp__') || tool.name.startsWith('mcp__session__')) && allowed.has(name);
+    if (role !== 'worker') {
+      if (tool.name.startsWith('mcp__') && !tool.name.startsWith('mcp__session__')) return role === 'planner' || role === 'orchestrator';
+      return allowed.has(name);
+    }
     if (scopedCollaborationTools.has(name)) return allowed.has(name);
     return !delegationTools.has(name);
   });

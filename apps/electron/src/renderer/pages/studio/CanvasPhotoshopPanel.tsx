@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { CanvasGifPanel } from './CanvasGifPanel'
 import { useTranslation } from 'react-i18next'
 import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { BLEND_MODES, type CanvasLayer, type Rect } from './canvas-engine'
@@ -83,6 +84,7 @@ export function CanvasPhotoshopPanel({ documentSettings: doc, layers, activeId, 
         <p className="text-xs text-muted-foreground">{label('filterScope')}</p>
         <button className={button} onClick={()=>command('filter',{filter,...(filter==='levels'?{black,white,gamma}:filter==='curves'?{curve:curve.split(';').map(pair=>{const [x,y]=pair.split(',').map(Number);return{x,y}})}:filter==='color-balance'?{red,green,blue}:filter==='invert'?{}:{amount})})}>{label('applyFilter')}</button>
       </details>
+      <CanvasGifPanel hasSelection={!!selection} onCommand={onCommand} onSave={onSave} />
       <details open className="space-y-3">{heading('export')}
         {select(format,['png','jpeg','webp'].map(value=>({value,label:value.toUpperCase()})),setFormat)}
         {format!=='png'&&num('quality',quality,setQuality,10,100)}

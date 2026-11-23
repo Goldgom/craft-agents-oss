@@ -241,6 +241,7 @@ export interface AutomationListItem {
    * supergroup (created on first use).
    */
   telegramTopic?: string
+  parentSessionId?: string
   /** Timestamp of last execution (ms since epoch) */
   lastExecutedAt?: number
 }
@@ -389,6 +390,7 @@ type RawAction =
   | { type: 'webhook'; url: string; method?: string; headers?: Record<string, string>; bodyFormat?: 'json' | 'form' | 'raw'; body?: unknown; captureResponse?: boolean; auth?: WebhookAction['auth'] }
 
 interface AutomationsConfigMatcher {
+  parentSessionId?: string
   id?: string
   name?: string
   matcher?: string
@@ -511,6 +513,7 @@ export function parseAutomationsConfig(json: unknown): AutomationListItem[] {
         conditions: matcher.conditions,
         actions,
         telegramTopic,
+        parentSessionId: matcher.parentSessionId,
       })
       index++
     }

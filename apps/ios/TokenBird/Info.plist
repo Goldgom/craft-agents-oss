@@ -23,6 +23,6 @@
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSLocalNetworkUsageDescription</key><string>Connect to your TokenBird server on the local network.</string>
   <key>NSCameraUsageDescription</key><string>Take a photo or video to attach to a conversation.</string>
-  <key>NSMicrophoneUsageDescription</key><string>Record audio when attaching a video to a conversation.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Record audio for voice input, voice conversations, and video attachments.</string>
   <key>NSPhotoLibraryUsageDescription</key><string>Select images or videos to attach to a conversation.</string>
 </dict></plist>

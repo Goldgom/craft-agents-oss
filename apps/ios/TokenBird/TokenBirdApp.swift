@@ -100,7 +100,9 @@ struct TokenBirdApp: App {
                     if let page = model.pageURL {
                         WebView(url: page, onError: { model.error = $0 }, onDownload: { model.download = $0 })
                             .id(model.reloadID)
-                    } else { ProgressView("Starting TokenBird…") }
+                    } else {
+                        SplashLoadingView()
+                    }
                 }
                 .navigationTitle("TokenBird")
                 .navigationBarTitleDisplayMode(.inline)
@@ -125,6 +127,27 @@ struct TokenBirdApp: App {
             }
             .task { if !model.serverURL.isEmpty { model.connect() } }
         }
+    }
+}
+
+private struct SplashLoadingView: View {
+    @State private var active = false
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Image("AppIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 112, height: 112)
+                .scaleEffect(active ? 1 : 0.94)
+                .opacity(active ? 1 : 0.72)
+                .animation(.easeInOut(duration: 1.35).repeatForever(autoreverses: true), value: active)
+            ProgressView()
+                .tint(.accentColor)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+        .onAppear { active = true }
     }
 }
 

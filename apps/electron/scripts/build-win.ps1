@@ -593,6 +593,18 @@ if ($LASTEXITCODE -ne 0 -or $PackagedGitVersion -ne "git version 2.55.0.windows.
 }
 Write-Host "Bundled Git Bash verified: $PackagedGitVersion" -ForegroundColor Green
 
+# Verify the video runtime from the final package, including independent FFprobe.
+$PackagedVideoBin = "$ReleaseDir\win-unpacked\resources\app\resources\bin\win32-x64"
+foreach ($VideoTool in @('ffmpeg', 'ffprobe')) {
+    $VideoExecutable = Join-Path $PackagedVideoBin "$VideoTool.exe"
+    if (-not (Test-Path -LiteralPath $VideoExecutable -PathType Leaf)) { throw "Packaged video runtime missing: $VideoExecutable" }
+    $VideoVersionOutput = @(& $VideoExecutable -version)
+    $VideoVersionExit = $LASTEXITCODE
+    $VideoVersion = $VideoVersionOutput[0]
+    if ($VideoVersionExit -ne 0 -or $VideoVersion -notmatch 'a35157abb9') { throw "Unexpected packaged video runtime: $VideoVersion" }
+    Write-Host "Bundled video runtime verified: $VideoVersion" -ForegroundColor Green
+}
+
 # Verify the clean-machine programming runtimes from the packaged tree itself.
 $PackagedToolchains = "$ReleaseDir\win-unpacked\resources\app\vendor\toolchains"
 $PackagedJava = "$PackagedToolchains\jdk\bin\java.exe"

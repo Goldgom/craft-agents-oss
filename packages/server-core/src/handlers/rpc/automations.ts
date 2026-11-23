@@ -123,6 +123,9 @@ export function registerAutomationsHandlers(server: RpcServer, deps: HandlerDeps
     const { parsePromptReferences } = await import('@tokenbird/shared/automations')
     const { executeWebhookRequest, createWebhookHistoryEntry, createPromptHistoryEntry } = await import('@tokenbird/shared/automations/webhook-utils')
 
+    const scheduledMatcher = payload.automationId
+      ? deps.sessionManager.getScheduledAutomation?.(workspace.id, payload.automationId)
+      : undefined
     for (const action of payload.actions) {
       const start = Date.now()
 
@@ -218,6 +221,10 @@ export function registerAutomationsHandlers(server: RpcServer, deps: HandlerDeps
           thinkingLevel: action.thinkingLevel,
           automationName: payload.automationName,
           telegramTopic: payload.telegramTopic,
+          scheduledRun: scheduledMatcher?.id ? {
+            automationId: scheduledMatcher.id, runId: `manual:${crypto.randomUUID()}`, timestamp: start,
+            parentSessionId: scheduledMatcher.parentSessionId,
+          } : undefined,
           // Test = "did it launch + start producing output", not "did the whole
           // turn finish". Return once the session is created so a long run doesn't
           // trip the 30s RPC timeout (tokenbird#943).
@@ -231,7 +238,7 @@ export function registerAutomationsHandlers(server: RpcServer, deps: HandlerDeps
         })
 
         // Write history entry for test runs
-        if (payload.automationId) {
+        if (payload.automationId && !scheduledMatcher) {
           const entry = createPromptHistoryEntry({ matcherId: payload.automationId, ok: true, sessionId, prompt: action.prompt })
           try {
             await appendAutomationHistoryEntry(workspace.rootPath, entry)

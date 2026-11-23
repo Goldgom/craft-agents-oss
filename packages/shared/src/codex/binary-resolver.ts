@@ -14,8 +14,8 @@ export interface NativeCodexBinary {
   testedProtocol: boolean;
 }
 
-const TESTED_VERSION = /^0\.154\./;
-export const MANAGED_CODEX_VERSION = '0.154.0';
+export const MANAGED_CODEX_VERSION = '0.171.0';
+const TESTED_VERSIONS = new Set(['0.154.0', MANAGED_CODEX_VERSION]);
 let cached: NativeCodexBinary | null | undefined;
 let cachedContextKey: string | undefined;
 let configuredResourcesPath: string | undefined;
@@ -127,14 +127,21 @@ export function resolveNativeCodexBinary(options: {
   if (options.useCache !== false && cached !== undefined && cachedContextKey === contextKey) return cached;
   if (options.useCache !== false) cachedContextKey = contextKey;
   const bundled = resourcesPath ? [
+    join(resourcesPath, 'codex', `${platform()}-${arch()}`, 'bin', executableName()),
     join(resourcesPath, 'codex', `${platform()}-${arch()}`, executableName()),
     join(resourcesPath, 'vendor', 'codex', `${platform()}-${arch()}`, executableName()),
     join(resourcesPath, 'app', 'vendor', 'codex', `${platform()}-${arch()}`, executableName()),
   ] : [];
+  let workspaceBinary: string | null = null;
+  try {
+    const req = createRequire(import.meta.url);
+    workspaceBinary = resolveCodexPackageExecutable(req.resolve('@openai/codex/bin/codex.js'));
+  } catch { /* Production bundles resolve from resourcesPath. */ }
   const candidates: Array<{ path: string | null; source: NativeCodexBinary['source'] }> = [
     { path: resolveExistingPath(env.TOKENBIRD_CODEX_PATH), source: 'TOKENBIRD_CODEX_PATH' },
     { path: resolveExistingPath(env.CODEX_PATH), source: 'CODEX_PATH' },
     ...bundled.map(path => ({ path: existsSync(path) ? path : null, source: 'bundled' as const })),
+    ...(options.env ? [] : [{ path: workspaceBinary, source: 'bundled' as const }]),
     ...managedCodexCandidates().map(path => ({ path: existsSync(path) ? path : null, source: 'managed' as const })),
     ...pathCandidates(env).map(path => ({ path: existsSync(path) ? path : null, source: 'PATH' as const })),
   ];
@@ -149,7 +156,7 @@ export function resolveNativeCodexBinary(options: {
     if (!path) continue;
     const version = readVersion(path);
     if (!version) continue;
-    const testedProtocol = TESTED_VERSION.test(version);
+    const testedProtocol = TESTED_VERSIONS.has(version);
     if (!testedProtocol && env.TOKENBIRD_CODEX_ALLOW_UNTESTED !== '1') continue;
     const resolved = { path, source: candidate.source, version, testedProtocol };
     if (options.useCache !== false) cached = resolved;

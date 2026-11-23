@@ -12,6 +12,7 @@ import { StudioImageConnectionDialog } from './StudioImageConnectionDialog'
 import { GenerationImage, StudioGenerationHistory } from './StudioGenerationHistory'
 import { deleteStudioGeneration, getStudioGeneration, listStudioGenerations, saveStudioGeneration, type StudioGeneration } from './studio-generation-history'
 import { assessEditOutput, composeInpaint, composeOutpaint, fillTransparentForEdit, referenceCoverage, type EditOutputIssue } from './studio-image-composite'
+import { drawGeneration, generateTiledCandidate, needsGenerationTiles } from './studio-generation-tiles'
 import { classifyStudioConnectionError, type StudioConnectionIssue } from './studio-connection-error'
 import { StudioErrorToast } from './StudioErrorToast'
 import { rechargeOnInsufficientBalance } from '@/lib/tokennest-recharge'
@@ -28,13 +29,15 @@ import { canvasToolGroups } from './canvas-tools'
 import { applyDrawingCommand, drawingActions, type DrawingShape } from './canvas-drawing'
 import { executeWorkbench } from './canvas-workbench'
 import { CanvasPhotoshopPanel } from './CanvasPhotoshopPanel'
+import { generateSelectionGif } from './canvas-gif'
+import { CanvasGifPanel } from './CanvasGifPanel'
 import { retouchBrush, paintBrushStroke, photoshopActions, defaultDocument, validateDocument, serializeLayer, deserializeLayers, copyLayer, paintMask, snapPoint, healSegment, type DocumentSettings } from './canvas-photoshop'
 import { applyEditingPixels, cropLayer, resizeDimensions, transformLayerContent, type ExposureMode } from './canvas-editing'
 
 const SIZE = 1024
-const MAX_AI_CANVAS_PIXELS = 32_000_000
+
 type AiMode = 'generate' | 'inpaint' | 'outpaint' | 'cutout'
-type CandidateBatch = { records: StudioGeneration[]; target: Rect; context: Rect | null; reference: HTMLCanvasElement | null; pixelSelection: PixelSelection | null; layerId: string; mode: AiMode; prompt: string; savedCount: number; issues: Map<string, EditOutputIssue> }
+type CandidateBatch = { records: StudioGeneration[]; target: Rect; context: Rect | null; reference: HTMLCanvasElement | null; referenceLayer?: CanvasLayer; pixelSelection: PixelSelection | null; layerId: string; mode: AiMode; prompt: string; savedCount: number; issues: Map<string, EditOutputIssue> }
 const actionClass = 'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-background px-2.5 text-xs font-medium transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-40'
 const iconClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-40'
 const sectionClass = 'space-y-3 border-b border-border/70 px-4 py-4'
@@ -136,6 +139,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
   const [maskReveal, setMaskReveal] = useState(false)
   const [polygonPoints, setPolygonPoints] = useState<Point[]>([])
   const [tool, setTool] = useState<CanvasTool>('ai')
+  const gifRunning = useRef(false)
   const [selection, setSelectionRect] = useState<Rect | null>(null)
   const [pixelSelection, setPixelSelection] = useState<PixelSelection | null>(null)
   const pixelSelectionRef = useRef<PixelSelection | null>(null)
@@ -187,6 +191,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
   const [assistantError, setAssistantError] = useState('')
   const [assistantBusy, setAssistantBusy] = useState(false)
   const [aiMode, setAiMode] = useState<AiMode>('generate')
+  const [tileProgress, setTileProgress] = useState<{ current: number; total: number } | null>(null)
   const [generationCount, setGenerationCount] = useState(1)
   const [generationWidth, setGenerationWidth] = useState(1024)
   const [generationHeight, setGenerationHeight] = useState(1024)
@@ -823,21 +828,33 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
       const layer = layersRef.current.find(item => item.id === batch.layerId)
       if (!layer || !layer.visible) throw new Error(t('studio.restoreOriginalLayer'))
       assertPixelEditable(layer)
-      if (!batch.reference) throw new Error(t('studio.missingSnapshot'))
-      const overlay = document.createElement('canvas')
-      // Compose in canvas pixels. Resizing the snapshot to the provider output
-      // and back would alter even the protected artwork on every edit.
-      overlay.width = batch.reference.width; overlay.height = batch.reference.height
-      const ctx = overlay.getContext('2d')!
-      ctx.drawImage(image, 0, 0, overlay.width, overlay.height)
-      const generatedPixels = ctx.getImageData(0, 0, overlay.width, overlay.height)
-      const referencePixels = batch.reference.getContext('2d')!.getImageData(0, 0, overlay.width, overlay.height)
-      const feather = Math.max(8, Math.min(32, Math.round(Math.min(overlay.width, overlay.height) * 0.02)))
-      if (batch.mode === 'inpaint') composeInpaint(generatedPixels, referencePixels, feather)
-      else composeOutpaint(generatedPixels, referencePixels, feather)
-      ctx.putImageData(generatedPixels, 0, 0)
+      if (!batch.reference && !batch.referenceLayer) throw new Error(t('studio.missingSnapshot'))
       const before: TileSnapshot = new Map()
-      drawMaskedImage(layer, overlay, batch.target, batch.pixelSelection, before, true)
+      const { target } = batch
+      const feather = Math.max(8, Math.min(32, Math.round(Math.min(target.width, target.height) * 0.02)))
+      // Process large selections in native pixels. The halo keeps feathering and
+      // outpaint distance calculations continuous across internal boundaries.
+      const step = batch.referenceLayer ? 1024 : Math.max(target.width, target.height)
+      try {
+        for (let y = 0; y < target.height; y += step) for (let x = 0; x < target.width; x += step) {
+          const width = Math.min(step, target.width - x), height = Math.min(step, target.height - y)
+          const left = Math.max(0, x - feather), top = Math.max(0, y - feather)
+          const region = { x: target.x + left, y: target.y + top,
+            width: Math.min(target.width, x + width + feather) - left, height: Math.min(target.height, y + height + feather) - top }
+          const ref = batch.reference ?? rasterizeLayer(batch.referenceLayer!, region, region.width, region.height)
+          const overlay = document.createElement('canvas')
+          overlay.width = region.width; overlay.height = region.height
+          const ctx = overlay.getContext('2d')!
+          drawGeneration(ctx, image, batch.context ?? target, region)
+          const generated = ctx.getImageData(0, 0, region.width, region.height)
+          const original = ref.getContext('2d')!.getImageData(0, 0, region.width, region.height)
+          if (batch.mode === 'inpaint') composeInpaint(generated, original, feather)
+          else composeOutpaint(generated, original, feather)
+          overlay.width = width; overlay.height = height
+          ctx.putImageData(generated, left - x, top - y)
+          drawMaskedImage(layer, overlay, { x: target.x + x, y: target.y + y, width, height }, batch.pixelSelection, before, true)
+        }
+      } catch (cause) { restoreTiles(layer, before); throw cause }
       finishTiles(layer, before)
       setSelection(null); setCandidates(null)
       suggestTitle(batch.prompt.slice(0, 40))
@@ -848,23 +865,19 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
     }
     const layer = createLayer(batch.mode === 'cutout' ? t('studio.transparentAsset') : `AI · ${batch.prompt.slice(0, 24)}`)
     let transparent = true
-    if (batch.context) {
-      const { target, context } = batch
-      const sx = (target.x - context.x) / context.width * image.naturalWidth
-      const sy = (target.y - context.y) / context.height * image.naturalHeight
-      const sw = target.width / context.width * image.naturalWidth
-      const sh = target.height / context.height * image.naturalHeight
-      const crop = document.createElement('canvas')
-      crop.width = Math.max(1, Math.round(sw)); crop.height = Math.max(1, Math.round(sh))
-      const ctx = crop.getContext('2d')!
-      ctx.drawImage(image, sx, sy, sw, sh, 0, 0, crop.width, crop.height)
-      if (batch.mode === 'cutout') {
-        transparent = false
-        const pixels = ctx.getImageData(0, 0, crop.width, crop.height).data
-        for (let index = 3; index < pixels.length; index += 4) if (pixels[index] < 250) { transparent = true; break }
-      }
-      drawMaskedImage(layer, crop, target, batch.pixelSelection)
-    } else drawMaskedImage(layer, image, batch.target, batch.pixelSelection)
+    const crop = document.createElement('canvas')
+    const frame = batch.context ?? batch.target
+    const sampleScale = Math.min(1, image.naturalWidth / frame.width, image.naturalHeight / frame.height)
+    crop.width = Math.max(1, Math.round(batch.target.width * sampleScale))
+    crop.height = Math.max(1, Math.round(batch.target.height * sampleScale))
+    const ctx = crop.getContext('2d')!
+    drawGeneration(ctx, image, frame, batch.target)
+    if (batch.mode === 'cutout') {
+      transparent = false
+      const pixels = ctx.getImageData(0, 0, crop.width, crop.height).data
+      for (let index = 3; index < pixels.length; index += 4) if (pixels[index] < 250) { transparent = true; break }
+    }
+    drawMaskedImage(layer, crop, batch.target, batch.pixelSelection)
     changeLayers([...layersRef.current, layer]); setActiveId(layer.id); setSelection(null); setCandidates(null)
     suggestTitle(batch.prompt.slice(0, 40))
     setNotice(batch.mode === 'cutout'
@@ -877,18 +890,21 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
     if (mode !== 'cutout' && !(promptOverride ?? prompt).trim()) { const message = t('studio.promptRequired'); setError(message); return { status: 'error' as const, message } }
     setBusy(true); setError(''); setNotice('')
     try {
+      if (!Number.isInteger(generationCount) || generationCount < 1 || generationCount > 4) throw new Error('Image count must be between 1 and 4')
       const generationPrompt = mode === 'cutout'
         ? 'Remove the background completely. Keep only the original subject with fine edges. Return a PNG with a fully transparent background, without adding objects.'
         : (promptOverride ?? prompt).trim()
       let target: Rect, source: HTMLCanvasElement | null = null, mask: HTMLCanvasElement | null = null
       let reference: HTMLCanvasElement | null = null
+      let referenceLayer: CanvasLayer | undefined
       const generationSelection = pixelSelectionRef.current
       let context: Rect | null = null
+      let editRegion: Rect | null = null
       if (mode === 'cutout') {
         if (!activeLayer.visible) throw new Error(t('studio.showCurrentLayer'))
         const bounds = selected ? selection : layerPixelBounds(activeLayer)
         if (!bounds) throw new Error(t('studio.imageRequired'))
-        checkRect(bounds); target = bounds; context = square(target, 0.05)
+        checkRect(bounds, 16000); target = pixelAligned(bounds); context = square(target, 0.05)
         source = rasterizeLayer(activeLayer, context, SIZE, SIZE)
       } else {
         const center = world({ x: size.width / 2, y: size.height / 2 })
@@ -898,20 +914,19 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
         }
         target = pixelAligned(target)
         if (![target.x, target.y, target.width, target.height].every(Number.isFinite)
-          || target.width < 2 || target.height < 2 || target.width * target.height > MAX_AI_CANVAS_PIXELS) {
+          || target.width < 2 || target.height < 2) {
           throw new Error(t('studio.targetSizeLimit'))
         }
-        const range = tileRange(target)
-        if ((range.right - range.left + 1) * (range.bottom - range.top + 1) > 128) {
-          throw new Error(t('studio.tooManyTiles'))
-        }
+        if (needsGenerationTiles(target, false)) checkRect(target, 16000)
         if (mode === 'inpaint' || mode === 'outpaint') {
           assertPixelEditable(activeLayer)
           if (!selected || !selection) throw new Error(mode === 'inpaint' ? t('studio.inpaintSelectionRequired') : t('studio.outpaintSelectionRequired'))
           if (!activeLayer.visible) throw new Error(t('studio.showEditLayer'))
           if (activeLayer.opacity !== 1) throw new Error(t('studio.fullOpacityRequired'))
-          reference = rasterizeLayer(activeLayer, target, target.width, target.height)
-          const activePixels = reference.getContext('2d')!.getImageData(0, 0, reference.width, reference.height).data
+          if (needsGenerationTiles(target, false)) referenceLayer = snapshotLayer(activeLayer)
+          else reference = rasterizeLayer(activeLayer, target, target.width, target.height)
+          const probe = reference ?? rasterizeLayer(activeLayer, target, SIZE, SIZE)
+          const activePixels = probe.getContext('2d')!.getImageData(0, 0, probe.width, probe.height).data
           let activeHasContent = false
           for (let index = 3; index < activePixels.length; index += 4) if (activePixels[index]) { activeHasContent = true; break }
           if (!activeHasContent) throw new Error(t('studio.originalLayerRequired'))
@@ -923,47 +938,38 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
               throw new Error(t('studio.selectionObscured'))
             }
           }
-          // The API output uses the same frame as the selected canvas region.
-          // Padding this input and then cropping the response changed its scale.
-          context = target
-          source = rasterizeRegion(layersRef.current, target, SIZE, SIZE)
-          const sourcePixels = source.getContext('2d')!.getImageData(0, 0, SIZE, SIZE)
-          const alpha = sourcePixels.data
-          let populated = false, blank = false
-          for (let index = 3; index < alpha.length; index += 4) if (alpha[index]) { populated = true; break }
-          if (!populated) throw new Error(t('studio.noReference'))
+          context = square(target)
+          source = rasterizeRegion(layersRef.current, context, SIZE, SIZE)
+          const sourceCtx = source.getContext('2d')!
+          const sourcePixels = sourceCtx.getImageData(0, 0, SIZE, SIZE)
+          const scale = SIZE / context.width
+          const left = Math.max(0, Math.floor((target.x - context.x) * scale))
+          const top = Math.max(0, Math.floor((target.y - context.y) * scale))
+          const right = Math.min(SIZE, Math.ceil((target.x + target.width - context.x) * scale))
+          const bottom = Math.min(SIZE, Math.ceil((target.y + target.height - context.y) * scale))
+          editRegion = { x: left, y: top, width: right - left, height: bottom - top }
+          const selectedPixels = sourceCtx.getImageData(left, top, editRegion.width, editRegion.height)
+          if (!selectedPixels.data.some((value, index) => index % 4 === 3 && value > 0)) throw new Error(t('studio.noReference'))
           if (mode === 'outpaint') {
-            const coverage = referenceCoverage(sourcePixels)
-            if (coverage < 0.2) throw new Error(t('studio.insufficientReference', { value1: Math.round(coverage * 100) }))
+            const coverage = referenceCoverage(selectedPixels)
+            if (coverage < 0.2 && !referenceLayer) throw new Error(t('studio.insufficientReference', { value1: Math.round(coverage * 100) }))
           }
           mask = document.createElement('canvas'); mask.width = SIZE; mask.height = SIZE
           const ctx = mask.getContext('2d')!; ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, SIZE, SIZE)
-          if (mode === 'inpaint') {
-            const pixels = ctx.getImageData(0, 0, SIZE, SIZE)
-            const border = 24
-            for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-              const index = (y * SIZE + x) * 4 + 3
-              if ((x >= border && x < SIZE - border && y >= border && y < SIZE - border) || alpha[index] === 0 || generationSelection) {
-                pixels.data[index] = 0
-              }
-            }
-            ctx.putImageData(pixels, 0, 0)
-          } else {
-            const pixels = ctx.getImageData(0, 0, SIZE, SIZE)
-            const left = Math.max(0, Math.floor((target.x - context.x) / context.width * SIZE))
-            const top = Math.max(0, Math.floor((target.y - context.y) / context.height * SIZE))
-            const right = Math.min(SIZE, Math.ceil((target.x + target.width - context.x) / context.width * SIZE))
-            const bottom = Math.min(SIZE, Math.ceil((target.y + target.height - context.y) / context.height * SIZE))
-            for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-              const index = (y * SIZE + x) * 4
-              pixels.data[index + 3] = alpha[index + 3] > 0 ? 255 : 0
-              if (x >= left && x < right && y >= top && y < bottom && alpha[index + 3] === 0) blank = true
-            }
-            if (!blank) throw new Error(t('studio.noBlankArea'))
-            ctx.putImageData(pixels, 0, 0)
+          const pixels = ctx.getImageData(0, 0, SIZE, SIZE)
+          const border = Math.min(24, Math.floor(Math.min(right - left, bottom - top) * 24 / SIZE))
+          let blank = false
+          for (let y = top; y < bottom; y++) for (let x = left; x < right; x++) {
+            const index = (y * SIZE + x) * 4 + 3
+            const empty = sourcePixels.data[index] === 0
+            if (empty) blank = true
+            if (empty || (mode === 'inpaint' && (generationSelection ||
+              (x >= left + border && x < right - border && y >= top + border && y < bottom - border)))) pixels.data[index] = 0
           }
+          if (mode === 'outpaint' && !blank) throw new Error(t('studio.noBlankArea'))
+          ctx.putImageData(pixels, 0, 0)
           if (generationSelection) {
-            const selectedPixels = selectionMask(generationSelection, target, SIZE, SIZE).getContext('2d')!.getImageData(0, 0, SIZE, SIZE)
+            const selectedPixels = selectionMask(generationSelection, context, SIZE, SIZE).getContext('2d')!.getImageData(0, 0, SIZE, SIZE)
             const pixels = ctx.getImageData(0, 0, SIZE, SIZE)
             for (let index = 3; index < pixels.data.length; index += 4) pixels.data[index] = 255 - (255 - pixels.data[index]) * selectedPixels.data[index] / 255
             ctx.putImageData(pixels, 0, 0)
@@ -975,7 +981,19 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
       const requestedSize = source ? '1024x1024'
         : target.width / target.height > 1.3 ? '1536x1024'
           : target.height / target.width > 1.3 ? '1024x1536' : '1024x1024'
-      const result = await window.electronAPI.generateStudioImage({
+      const tiled = needsGenerationTiles(target, mode === 'cutout')
+      if (tiled) {
+        const editing = mode === 'inpaint' || mode === 'outpaint'
+        const outputLayer = editing ? activeLayer : null
+        const range = tileRange({ ...target, x: target.x - (outputLayer?.offset.x ?? 0), y: target.y - (outputLayer?.offset.y ?? 0) })
+        let additional = 0
+        for (let y = range.top; y <= range.bottom; y++) for (let x = range.left; x <= range.right; x++) {
+          if (!outputLayer?.tiles.has(`${x},${y}`)) additional++
+        }
+        if (additional + (outputLayer?.tiles.size ?? 0) > 1024 ||
+          additional + layersRef.current.reduce((sum, layer) => sum + layer.tiles.size, 0) > 4096) throw new Error(t('studio.tooManyTiles'))
+      }
+      const request = {
         connectionSlug, model: model.trim(), size: requestedSize, count: generationCount,
         ...(connection?.oauthProvider === 'tokennest' ? { channelGroup } : {}),
         prompt: (mode === 'inpaint'
@@ -986,44 +1004,62 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
         ...(source ? { imageBase64: base64(source) } : {}),
         ...(mask ? { maskBase64: base64(mask) } : {}),
         ...(mode === 'cutout' ? { transparentBackground: true } : {}),
-      })
-      if (result.channelGroup) setChannelGroup(result.channelGroup)
-      const outputs = result.images?.length ? result.images : [result]
+      }
+      const needsGuide = mode === 'generate' || mode === 'outpaint'
+      const result = !tiled || needsGuide ? await window.electronAPI.generateStudioImage(request) : null
+      let usedGroup = result?.channelGroup ?? channelGroup
+      const outputs = result ? result.images?.length ? result.images : [result] : Array.from({ length: generationCount }, () => null)
       const records: StudioGeneration[] = []
       const issues = new Map<string, EditOutputIssue>()
       let historyError = ''
       let savedCount = 0
       for (const output of outputs) {
-        const image = await decode(`data:${output.mimeType};base64,${output.imageBase64}`)
-        const bytes = Uint8Array.from(atob(output.imageBase64), char => char.charCodeAt(0))
+        const image = output ? await decode(`data:${output.mimeType};base64,${output.imageBase64}`) : null
+        let blob: Blob, width: number, height: number
+        let issue: EditOutputIssue | null = null
+        if (image && source && mask && context && editRegion) {
+          const returned = document.createElement('canvas'); returned.width = SIZE; returned.height = SIZE
+          const returnedContext = returned.getContext('2d')!
+          drawGeneration(returnedContext, image, context, context)
+          const region = editRegion
+          issue = assessEditOutput(
+            returnedContext.getImageData(region.x, region.y, region.width, region.height),
+            source.getContext('2d')!.getImageData(region.x, region.y, region.width, region.height),
+            mask.getContext('2d')!.getImageData(region.x, region.y, region.width, region.height),
+          )
+        }
+        if (tiled && !issue) {
+          const assembled = await generateTiledCandidate(target, image, context ?? target, mode,
+            mode === 'cutout' ? [rawLayer(activeLayer)] : layersRef.current, mask,
+            { ...request, channelGroup: result?.channelGroup ?? request.channelGroup },
+            (current, total) => setTileProgress({ current: records.length * total + current, total: outputs.length * total }))
+          blob = assembled.blob; width = assembled.width; height = assembled.height; issue = assembled.issue
+          usedGroup = assembled.channelGroup ?? usedGroup
+        } else {
+          if (!output || !image) throw new Error(t('studio.noImageReturned'))
+          const bytes = Uint8Array.from(atob(output.imageBase64), char => char.charCodeAt(0))
+          blob = new Blob([bytes], { type: output.mimeType }); width = image.naturalWidth; height = image.naturalHeight
+        }
         const record: StudioGeneration = {
           id: crypto.randomUUID(), createdAt: Date.now() + records.length, sessionId: session.id,
           sessionTitle: session.title === t('studio.untitledCanvas') ? generationPrompt.slice(0, 40) : session.title,
           kind: mode === 'inpaint' ? 'edit' : mode,
           prompt: generationPrompt, model: model.trim(), connectionName: connection?.name ?? connectionSlug,
-          ...(connection?.oauthProvider === 'tokennest' ? { channelGroup: result.channelGroup ?? channelGroup } : {}),
-          width: image.naturalWidth, height: image.naturalHeight,
-          image: new Blob([bytes], { type: 'image/png' }),
+          ...(connection?.oauthProvider === 'tokennest' ? { channelGroup: usedGroup } : {}),
+          width, height, image: blob,
         }
-        if (source && mask) {
-          const returned = document.createElement('canvas'); returned.width = SIZE; returned.height = SIZE
-          const returnedContext = returned.getContext('2d')!
-          returnedContext.drawImage(image, 0, 0, SIZE, SIZE)
-          const issue = assessEditOutput(
-            returnedContext.getImageData(0, 0, SIZE, SIZE),
-            source.getContext('2d')!.getImageData(0, 0, SIZE, SIZE),
-            mask.getContext('2d')!.getImageData(0, 0, SIZE, SIZE),
-          )
-          if (issue) issues.set(record.id, issue)
-        }
+        if (issue) issues.set(record.id, issue)
         records.push(record)
+      }
+      if (usedGroup) setChannelGroup(usedGroup)
+      for (const record of records) {
         try { await saveStudioGeneration(record); savedCount++ }
         catch (cause) { historyError = String(cause) }
       }
       if (!records.length) throw new Error(t('studio.noImageReturned'))
       setRecentRecords(current => [...records, ...current].slice(0, 5))
       if (savedCount) setHistoryRevision(value => value + 1)
-      const batch: CandidateBatch = { records, target, context, reference, pixelSelection: generationSelection, layerId: activeLayer.id, mode, prompt: generationPrompt, savedCount, issues }
+      const batch: CandidateBatch = { records, target, context: tiled ? target : context, reference, referenceLayer, pixelSelection: generationSelection, layerId: activeLayer.id, mode, prompt: generationPrompt, savedCount, issues }
       if (records.length === 1 && !issues.size) await applyCandidate(batch, records[0])
       else {
         setCandidateIndex(Math.max(0, records.findIndex(record => !issues.has(record.id))))
@@ -1043,7 +1079,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
       else setError(String(cause))
       return { status: 'error', message: String(cause) }
     }
-    finally { setBusy(false) }
+    finally { setTileProgress(null); setBusy(false) }
   }
   async function chooseCandidate(record: StudioGeneration) {
     if (!candidates || busy) return false
@@ -1169,6 +1205,12 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
       return { deleted: targetId, activeId: activeStudioSessionId('canvas') }
     }
     if (targetId !== session.id) throw new Error(`Canvas session ${targetId} is not active. Call select_session first.`)
+    if (action === 'generate_gif') {
+      if (gifRunning.current) throw new Error('GIF 正在生成，请等待完成')
+      gifRunning.current = true
+      try { return await generateSelectionGif(layersRef.current, currentSelectionMask(), input) }
+      finally { gifRunning.current = false }
+    }
     if(photoshopActions.includes(action as typeof photoshopActions[number])) return executePhotoshop(input)
     if (action === 'get_state') return {
       session: { id: session.id, title: session.title }, activeLayerId: activeId, selection: selected ? selection : null,
@@ -1531,6 +1573,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
             <button className={`${actionClass} w-full`} onClick={mergeDown}>{t('studio.mergeDown')}</button>
             <label className="block text-[11px] text-muted-foreground">{t('studio.opacity')}{Math.round(activeLayer.opacity * 100)}%<input className="mt-1 w-full accent-primary" type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={event => { canvasCommand({action:'set_layer',opacity:Number(event.target.value)}).catch(cause=>setError(String(cause))) }} /></label></>}
         </section>}
+        {selectionTools.includes(tool) && <section className={sectionClass}><CanvasGifPanel hasSelection={selected} onCommand={input => canvasCommand(input).catch(cause => { setError(String(cause)); throw cause })} onSave={saveFile} /></section>}
         {selectionTools.includes(tool) && <section className={sectionClass}>
           <div className="flex items-center gap-2"><Scissors className="h-4 w-4" /><h2 className="text-sm font-semibold">{t('studio.selectionCutout')}</h2></div>
           <div className="grid grid-cols-2 gap-2"><button className={actionClass} disabled={!selected} onClick={() => extract(false)}>{t('studio.copyToLayer')}</button><button className={actionClass} disabled={!selected} onClick={() => extract(true)}>{t('studio.cutToLayer')}</button><button className={actionClass} disabled={!selected} onClick={clearSelected}>{t('studio.clearSelection')}</button><button className={actionClass} onClick={() => setSelection(null)}>{t('studio.deselect')}</button></div>
@@ -1620,7 +1663,7 @@ function CanvasEditor({ compactLayout, active, onOpenAiSettings, session, onSave
             <div className="flex min-w-56 flex-col items-center rounded-2xl border border-primary/25 bg-background/95 px-8 py-7 shadow-strong">
               <div className="relative mb-4 flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary"><span className="absolute inset-0 animate-ping rounded-2xl border border-primary/25" /><Sparkles className="size-6 animate-pulse" /></div>
               <strong className="text-sm">{t('studio.generatingImage')}</strong><span className="mt-1 text-xs text-muted-foreground">{aiMode === 'inpaint' || aiMode === 'outpaint' ? t('studio.replaceAfterGeneration') : t('studio.newLayerAfterGeneration')}</span>
-              <div className="mt-4 h-1 w-full overflow-hidden rounded-full bg-primary/10"><div className="h-full w-1/2 animate-pulse rounded-full bg-primary/70" /></div>
+              {tileProgress ? <span className="mt-4 text-xs tabular-nums">{tileProgress.current} / {tileProgress.total}</span> : <div className="mt-4 h-1 w-full overflow-hidden rounded-full bg-primary/10"><div className="h-full w-1/2 animate-pulse rounded-full bg-primary/70" /></div>}
             </div>
           </div>}
           {drawingPreview && <div className="pointer-events-none absolute border border-primary bg-primary/10" style={{ left: view.x + drawingPreview.x * view.zoom, top: view.y + drawingPreview.y * view.zoom, width: Math.max(1, drawingPreview.width * view.zoom), height: Math.max(1, drawingPreview.height * view.zoom) }} />}

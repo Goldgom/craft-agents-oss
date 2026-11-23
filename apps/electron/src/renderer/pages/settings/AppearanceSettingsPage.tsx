@@ -38,6 +38,7 @@ import { ColorPicker } from '@/components/ui/color-picker'
 import { workspaceAvatarColorsAtom } from '@/atoms/workspace-avatar-colors'
 import { kanbanColumnColorsAtom, kanbanColumnStatusAtom, kanbanLivePulseAtom } from '@/atoms/kanban'
 import { showBackgroundFinishedChipAtom } from '@/atoms/background-finished'
+import { modelGroupExpansionAtom } from '@/atoms/model-picker'
 import { KANBAN_COLUMNS } from '@/components/app-shell/kanban/status-column'
 import { DEFAULT_KANBAN_COLUMN_COLORS } from '@/components/app-shell/kanban/kanban-colors'
 import type { KanbanColumnId } from '@/components/app-shell/kanban/types'
@@ -115,6 +116,7 @@ const getToolIconColumns = (t: (key: string) => string): ColumnDef<ToolIconMappi
 
 export default function AppearanceSettingsPage() {
   const { t } = useTranslation()
+  const [modelGroupExpansion, setModelGroupExpansion] = useAtom(modelGroupExpansionAtom)
   const toolIconColumns = useMemo(() => getToolIconColumns(t), [t])
 
   const {
@@ -652,6 +654,21 @@ export default function AppearanceSettingsPage() {
               {/* Interface */}
               <SettingsSection title={t("settings.appearance.interface")}>
                 <SettingsCard>
+                  <SettingsRow label={t('settings.appearance.modelGroupExpansion')}>
+                    <SettingsMenuSelect
+                      value={modelGroupExpansion}
+                      onValueChange={value => {
+                        if (value === 'current' || value === 'all-expanded' || value === 'all-collapsed') {
+                          setModelGroupExpansion(value)
+                        }
+                      }}
+                      options={[
+                        { value: 'current', label: t('settings.appearance.modelGroupCurrent') },
+                        { value: 'all-expanded', label: t('settings.appearance.modelGroupAllExpanded') },
+                        { value: 'all-collapsed', label: t('settings.appearance.modelGroupAllCollapsed') },
+                      ]}
+                    />
+                  </SettingsRow>
                   <SettingsToggle
                     label={t("settings.appearance.connectionIcons")}
                     description={t("settings.appearance.connectionIconsDesc")}

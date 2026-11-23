@@ -76,7 +76,8 @@ import { useAppShellContext } from "@/context/AppShellContext"
 import { navigate, routes } from "@/lib/navigate"
 import { CHAT_LAYOUT } from "@/config/layout"
 import { collectFileChangesFromActivities, getFirstFileChangeIdForActivity } from "@/lib/file-changes"
-import { resolveBranchNewPanelOption } from "./branching"
+import { ChatVoice } from "./ChatVoice"
+import { resolveBranchMessageId, resolveBranchNewPanelOption } from "./branching"
 import { scrollChatViewport } from "./chat-scroll"
 import { handleErrorMessageAction } from "./error-message-actions"
 import { isSessionTooSmallToCompact } from "./message-notice"
@@ -582,6 +583,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
 
   // Input is only disabled when explicitly disabled (e.g., agent needs activation)
   // User can type during streaming - submitting will stop the stream and send
+  const voice = React.useRef<{ read: (text: string) => void; stop: () => void }>(null)
   const isInputDisabled = disabled
   const scrollViewportRef = React.useRef<HTMLDivElement>(null)
   const prevSessionIdRef = React.useRef<string | null>(null)
@@ -645,8 +647,11 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     ? session?.messages.filter(message => message.role !== 'status')[branchPoint!.index]?.id
     : undefined
   const historyBranches = (messageId: string) => {
+    messageId = resolveBranchMessageId(session?.messages ?? [], messageId)
     const ownBranches = branchesByMessage.get(messageId)
-    const isCurrentBranchPoint = messageId === currentBranchMessageId || messageId === session?.branchFromMessageId
+    const currentBranchId = currentBranchMessageId
+      ? resolveBranchMessageId(session?.messages ?? [], currentBranchMessageId) : undefined
+    const isCurrentBranchPoint = messageId === currentBranchId || messageId === session?.branchFromMessageId
     const siblings = isCurrentBranchPoint && session?.branchFromMessageId
       ? branchesByMessage.get(session.branchFromMessageId) : undefined
     const variants = ownBranches?.length ? ownBranches : siblings
@@ -660,7 +665,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     if (!session) return
     try {
       const child = await appShellContext.onCreateSession(session.workspaceId, {
-        branchFromMessageId: messageId,
+        branchFromMessageId: resolveBranchMessageId(session.messages, messageId),
         branchFromSessionId: session.id,
         editedMessageContent: content,
         name: t('chat.history.branchName', { name: session.name || t('settings.usage.untitledSession') }),
@@ -807,6 +812,17 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     if (!session) return []
     return groupMessagesByTurn(session.messages, { isSessionProcessing: session.isProcessing })
   }, [session?.messages, session?.isProcessing])
+
+  // A long-running request can produce many assistant turns before it ends.
+  // Reverse pagination is useful for cold history, but hiding older turns
+  // while the request is active makes the live transcript look truncated.
+  // Keep the complete active transcript mounted so every round remains
+  // reachable while the model is still working.
+  React.useEffect(() => {
+    if (session?.isProcessing && visibleTurnCount < allTurns.length) {
+      setVisibleTurnCount(allTurns.length)
+    }
+  }, [session?.isProcessing, allTurns.length, visibleTurnCount])
 
   // Find ALL individual match occurrences (not just turns)
   // Returns array with unique matchId for each occurrence
@@ -1448,6 +1464,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // silent=true when redirecting (sending new message), silent=false when user clicks Stop button
   const handleStop = (silent = false, recallPrompt = false) => {
     if (!session?.isProcessing) return
+    voice.current?.stop()
 
     // Arrow Up is an explicit recall shortcut. The Stop button and Escape
     // leave the draft alone; the interruption marker offers recall afterward.
@@ -1779,10 +1796,10 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
                           )}
                         >
-                          <MessageHistoryActions content={turn.message.content}
+                          <MessageHistoryActions content={turn.message.content} onRead={text => voice.current?.read(text)}
                             onEdit={value => editHistoryMessage(turn.message.id, value)}
                             editDisabled={disabled || session.isProcessing || turn.message.isPending || turn.message.isQueued}
-                            branchCount={branchesByMessage.get(turn.message.id)?.length}
+                            branchCount={branchesByMessage.get(resolveBranchMessageId(session.messages, turn.message.id))?.length}
                             branches={historyBranches(turn.message.id)}
                             currentSessionId={session.id}
                             onSelectBranch={id => navigate(routes.view.allSessions(id))}>
@@ -1876,7 +1893,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                           isAnyMatch && !isCurrentMatch && "ring-1 ring-info/30"
                         )}
                       >
-                      <MessageHistoryActions content={turn.response?.text ?? ''}
+                      <MessageHistoryActions content={turn.response?.text ?? ''} onRead={text => voice.current?.read(text)}
                         branchCount={turn.response?.messageId ? branchesByMessage.get(turn.response.messageId)?.length : 0}
                         branches={turn.response?.messageId ? historyBranches(turn.response.messageId) : undefined}
                         currentSessionId={session.id}
@@ -1908,7 +1925,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                             const child = await appShellContext.onCreateSession(
                               session.workspaceId,
                               {
-                                branchFromMessageId: messageId,
+                                branchFromMessageId: resolveBranchMessageId(session.messages, messageId),
                                 branchFromSessionId: session.id,
                                 name: `Branch of ${session.name || 'Untitled'}`,
                                 // Keep branch on the same backend/provider by inheriting parent session settings.
@@ -2093,63 +2110,73 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
           </div>
 
           {/* === INPUT CONTAINER: FreeForm or Structured Input === */}
-          <ChatInputZone
-            compactMode={compactMode}
-            permissionMode={permissionMode}
-            onPermissionModeChange={onPermissionModeChange}
-            tasks={backgroundTasks}
-            sessionId={session.id}
-            sessionFolderPath={sessionFolderPath}
-            onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type === 'shell' ? 'shell' : 'agent')}
-            onInsertMessage={onInputChange}
-            sessionLabels={session.labels}
-            labels={labels}
-            onLabelsChange={onLabelsChange}
-            sessionStatuses={sessionStatuses}
-            currentSessionStatus={session.sessionStatus || 'todo'}
-            onSessionStatusChange={onSessionStatusChange}
-            inputProps={{
-              placeholder,
-              disabled: isInputDisabled,
-              isProcessing: session.isProcessing,
-              onAnimatedHeightChange: handleAnimatedHeightChange,
-              onSubmit: handleSubmit,
-              onStop: handleStop,
-              textareaRef,
-              currentModel,
-              onModelChange,
-              thinkingLevel,
-              onThinkingLevelChange,
-              enabledModes,
-              enableCompactModelPicker,
-              structuredInput,
-              onStructuredResponse: handleStructuredResponse,
-              inputValue,
-              onInputChange,
-              attachmentsValue,
-              onAttachmentsChange,
-              sources,
-              enabledSourceSlugs: session.enabledSourceSlugs,
-              onSourcesChange,
-              skills,
-              workspaceId,
-              workingDirectory,
-              onWorkingDirectoryChange,
-              disableSend: disableSend || connectionUnavailable,
-              connectionUnavailable,
-              isEmptySession: session.messages.length === 0,
-              currentConnection: session.llmConnection,
-              onConnectionChange,
-              contextStatus: {
-                isCompacting: session.currentStatus?.statusType === 'compacting',
-                inputTokens: session.tokenUsage?.inputTokens,
-                contextWindow: session.tokenUsage?.contextWindow,
-              },
-              followUpItems: followUpInputItems,
-              onFollowUpClick: handleFollowUpChipClick,
-              onFollowUpIndexClick: handleFollowUpIndexClick,
-            }}
-          />
+          <ChatVoice key={JSON.stringify([session.id, session.llmConnection])} controlsRef={voice}
+            slug={session.llmConnection} messages={session.messages} focused={isFocusedPanel}
+            canDictate={!!onInputChange && !isInputDisabled && !structuredInput}
+            canSend={!isInputDisabled && !structuredInput && !disableSend && !connectionUnavailable
+              && !session.isProcessing && !inputValue?.trim() && !attachmentsValue?.length}
+            append={text => onInputChange?.(appendRestoredInput(inputValue, text))} send={handleSubmit}>
+            {({ microphone, conversation }) => <ChatInputZone
+              conversationControl={structuredInput ? undefined : conversation}
+              compactMode={compactMode}
+              permissionMode={permissionMode}
+              onPermissionModeChange={onPermissionModeChange}
+              tasks={backgroundTasks}
+              sessionId={session.id}
+              sessionFolderPath={sessionFolderPath}
+              onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type === 'shell' ? 'shell' : 'agent')}
+              onInsertMessage={onInputChange}
+              sessionLabels={session.labels}
+              labels={labels}
+              onLabelsChange={onLabelsChange}
+              sessionStatuses={sessionStatuses}
+              currentSessionStatus={session.sessionStatus || 'todo'}
+              onSessionStatusChange={onSessionStatusChange}
+              inputProps={{
+                voiceInputControl: microphone,
+                voiceConversationControl: structuredInput ? undefined : conversation,
+                placeholder,
+                disabled: isInputDisabled,
+                isProcessing: session.isProcessing,
+                onAnimatedHeightChange: handleAnimatedHeightChange,
+                onSubmit: handleSubmit,
+                onStop: handleStop,
+                textareaRef,
+                currentModel,
+                onModelChange,
+                thinkingLevel,
+                onThinkingLevelChange,
+                enabledModes,
+                enableCompactModelPicker,
+                structuredInput,
+                onStructuredResponse: handleStructuredResponse,
+                inputValue,
+                onInputChange,
+                attachmentsValue,
+                onAttachmentsChange,
+                sources,
+                enabledSourceSlugs: session.enabledSourceSlugs,
+                onSourcesChange,
+                skills,
+                workspaceId,
+                workingDirectory,
+                onWorkingDirectoryChange,
+                disableSend: disableSend || connectionUnavailable,
+                connectionUnavailable,
+                isEmptySession: session.messages.length === 0,
+                currentConnection: session.llmConnection,
+                onConnectionChange,
+                contextStatus: {
+                  isCompacting: session.currentStatus?.statusType === 'compacting',
+                  inputTokens: session.tokenUsage?.inputTokens,
+                  contextWindow: session.tokenUsage?.contextWindow,
+                },
+                followUpItems: followUpInputItems,
+                onFollowUpClick: handleFollowUpChipClick,
+                onFollowUpIndexClick: handleFollowUpIndexClick,
+              }}
+            />}
+          </ChatVoice>
           </div>
         </div>
       ) : null}

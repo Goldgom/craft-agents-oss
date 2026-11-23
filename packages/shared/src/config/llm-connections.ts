@@ -64,6 +64,7 @@ export type LlmProviderType =
  * - `claude-code`: native Claude Agent SDK / Claude Code runtime
  */
 export type AgentRuntimeProtocol = AgentPluginRuntime;
+export type AgentRuntimeSelection = 'auto' | AgentRuntimeProtocol;
 
 export const AGENT_RUNTIME_PROTOCOLS: readonly AgentRuntimeProtocol[] = [
   'pi',
@@ -213,7 +214,7 @@ export interface LlmConnection {
    * Agent runtime used for this connection. Optional for backward compatibility;
    * legacy Anthropic connections resolve to Claude Code and all others to Pi.
    */
-  agentRuntime?: AgentRuntimeProtocol;
+  agentRuntime?: AgentRuntimeSelection;
 
   /**
    * @deprecated Use providerType instead. Kept for migration compatibility.
@@ -312,13 +313,23 @@ export interface LlmConnectionWithStatus extends LlmConnection {
   isDefault?: boolean;
 }
 
+/** Claude Code can send Messages directly to a configured API-key gateway. */
+export function isClaudeMessagesGateway(
+  connection: Pick<LlmConnection, 'providerType' | 'customEndpoint'> & Partial<Pick<LlmConnection, 'authType' | 'baseUrl'>>,
+): boolean {
+  return connection.providerType === 'pi_compat'
+    && connection.customEndpoint?.api === 'anthropic-messages'
+    && (connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint')
+    && !!connection.baseUrl;
+}
+
 /** Return the runtime protocols that can safely host this connection. */
 export function getCompatibleAgentRuntimes(
-  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint'> & Partial<Pick<LlmConnection, 'authType'>>,
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint'> & Partial<Pick<LlmConnection, 'authType' | 'baseUrl'>>,
 ): AgentRuntimeProtocol[] {
   const compatible: AgentRuntimeProtocol[] = ['pi'];
 
-  if (connection.providerType === 'anthropic') {
+  if (connection.providerType === 'anthropic' || isClaudeMessagesGateway(connection)) {
     compatible.push('claude-code');
   }
 
@@ -336,17 +347,29 @@ export function getCompatibleAgentRuntimes(
   return compatible;
 }
 
-/** Resolve a persisted runtime fail-soft so an invalid manual edit cannot break sessions. */
+/** Return the preferred engine for a model ID before host and transport checks. */
+export function getModelAgentRuntime(model: string | undefined): AgentRuntimeProtocol {
+  const id = model?.trim().toLowerCase().split('/').pop() ?? '';
+  if (!id || isImageGenerationModelId(id)) return 'pi';
+  if (/^(?:gpt|codex)(?:[.-]|$)/.test(id)) return 'codex';
+  if (/^(?:anthropic\.)?claude(?:[.-]|$)/.test(id)) return 'claude-code';
+  if (/^(?:gemini|antigravity)(?:[.-]|$)/.test(id)) return 'plugin:antigravity';
+  return 'pi';
+}
+
+/** Resolve persisted preferences using the connection's default model for previews. */
 export function resolveAgentRuntime(
-  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint' | 'agentRuntime'>,
+  connection: Pick<LlmConnection, 'providerType' | 'piAuthProvider' | 'oauthProvider' | 'customEndpoint' | 'agentRuntime'>
+    & Partial<Pick<LlmConnection, 'defaultModel' | 'authType' | 'baseUrl'>>,
 ): AgentRuntimeProtocol {
-  const fallback: AgentRuntimeProtocol = connection.providerType === 'anthropic'
-    ? 'claude-code'
-    : 'pi';
-  const requested = connection.agentRuntime ?? fallback;
-  // Missing/disabled plugins must be reported, never silently replaced by Pi.
-  if (requested.startsWith('plugin:')) return requested;
-  return getCompatibleAgentRuntimes(connection).includes(requested) ? requested : fallback;
+  const requested = connection.agentRuntime;
+  if (requested && requested !== 'auto') {
+    if (requested.startsWith('plugin:')) return requested;
+    return getCompatibleAgentRuntimes(connection).includes(requested) ? requested : 'pi';
+  }
+  const preferred = getModelAgentRuntime(connection.defaultModel);
+  if (preferred === 'plugin:antigravity') return 'pi';
+  return getCompatibleAgentRuntimes(connection).includes(preferred) ? preferred : 'pi';
 }
 
 /** Explicit session/node choices fail clearly instead of silently switching engines. */

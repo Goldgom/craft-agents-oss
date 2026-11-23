@@ -109,7 +109,7 @@ const PDFPreviewOverlay = React.lazy(() =>
   import('@tokenbird/ui/overlay/PDFPreviewOverlay').then(module => ({ default: module.PDFPreviewOverlay }))
 )
 const StudioCanvas = React.lazy(() => import('./pages/studio/StudioCanvas'))
-const StudioMindMap = React.lazy(() => import('./pages/studio/StudioMindMap'))
+const StudioVideo = React.lazy(() => import('./pages/video/StudioVideo'))
 const SuperAgentPage = React.lazy(() => import('./pages/super-agent/SuperAgentPage'))
 
 type AppState = 'loading' | 'onboarding' | 'reauth' | 'workspace-picker' | 'server-picker' | 'ready'
@@ -305,13 +305,12 @@ function SessionLoadErrorScreen({
 
 export default function App() {
   const { t } = useTranslation()
-  const [studioMode, setStudioMode] = useState<'agent' | 'canvas' | 'mindmap' | 'super-agent'>('agent')
-  const [studioVisited, setStudioVisited] = useState({ canvas: true, mindmap: false, 'super-agent': false })
+  const [studioMode, setStudioMode] = useState<'agent' | 'canvas' | 'video' | 'super-agent'>('agent')
+  const [studioVisited, setStudioVisited] = useState({ canvas: true, video: false, 'super-agent': false })
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('embedded') !== 'android') return
     const changeMode = (event: Event) => {
       const mode = (event as CustomEvent).detail
-      if (!['agent', 'canvas', 'mindmap', 'super-agent'].includes(mode)) return
+      if (!['agent', 'canvas', 'video', 'super-agent'].includes(mode)) return
       setStudioMode(mode)
       if (mode !== 'agent') setStudioVisited(previous => ({ ...previous, [mode]: true }))
     }
@@ -2420,9 +2419,9 @@ export default function App() {
                           <React.Suspense fallback={<StudioPageLoading />}><StudioCanvas active={studioMode === 'canvas'} onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }} /></React.Suspense>
                         </StudioPagePanel>
                       )}
-                      {studioVisited.mindmap && (
-                        <StudioPagePanel active={studioMode === 'mindmap'} className="h-full">
-                          <React.Suspense fallback={<StudioPageLoading />}><StudioMindMap /></React.Suspense>
+                      {studioVisited.video && (
+                        <StudioPagePanel active={studioMode === 'video'} className="h-full">
+                          <React.Suspense fallback={<StudioPageLoading />}><StudioVideo active={studioMode === 'video'} onOpenAiSettings={() => { setStudioMode('agent'); navigate(routes.view.settings('ai')) }} /></React.Suspense>
                         </StudioPagePanel>
                       )}
                       {studioVisited['super-agent'] && (

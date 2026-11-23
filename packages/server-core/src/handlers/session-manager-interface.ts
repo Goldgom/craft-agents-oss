@@ -34,6 +34,7 @@ export interface ISessionManager {
   // ---------------------------------------------------------------------------
 
   waitForInit(): Promise<void>
+  getScheduledAutomation?(workspaceId: string, id: string): import('@tokenbird/shared/automations').AutomationMatcher | undefined
   initialize(): Promise<void>
   cleanup(): Promise<void> | void
   setEventSink(sink: EventSink): void
@@ -333,6 +334,7 @@ export interface ExecutePromptAutomationInput {
   /** Override the workspace default thinking level for the spawned session. */
   thinkingLevel?: ThinkingLevel
   automationName?: string
+  scheduledRun?: { automationId: string; runId: string; timestamp: number; parentSessionId?: string }
   /**
    * Optional Telegram forum-topic name. When set and the workspace has a
    * paired supergroup, the new session is bound to a topic of this name

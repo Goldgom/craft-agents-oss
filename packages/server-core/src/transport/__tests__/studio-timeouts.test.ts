@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import {
   RPC_CHANNELS,
   REQUEST_TIMEOUT_MS,
+  FILE_DIALOG_TIMEOUT_MS,
   STUDIO_IMAGE_HANDLER_TIMEOUT_MS,
   STUDIO_IMAGE_REQUEST_TIMEOUT_MS,
 } from '@tokenbird/shared/protocol'
 import { WsRpcClient } from '../client'
 import { WsRpcServer } from '../server'
+import { CLIENT_OPEN_FILE_DIALOG, requestClientOpenFileDialog } from '../capabilities'
 
 const originalSetTimeout = globalThis.setTimeout
 const cleanup: Array<() => void> = []
@@ -19,7 +21,7 @@ async function fixture(requestTimeout = REQUEST_TIMEOUT_MS) {
   const server = new WsRpcServer({ host: '127.0.0.1', port: 0 })
   await server.listen()
   cleanup.push(() => server.close())
-  const client = new WsRpcClient(`ws://127.0.0.1:${server.port}`, { autoReconnect: false, requestTimeout })
+  const client = new WsRpcClient(`ws://127.0.0.1:${server.port}`, { autoReconnect: false, requestTimeout, clientCapabilities: [CLIENT_OPEN_FILE_DIALOG] })
   cleanup.push(() => client.destroy())
   server.handle('test:ready', () => true)
   await client.invoke('test:ready')
@@ -42,6 +44,34 @@ function accelerateDeadlines() {
 }
 
 describe('Studio RPC deadlines over real WebSockets', () => {
+  for (const channel of [
+    RPC_CHANNELS.file.OPEN_DIALOG,
+    RPC_CHANNELS.dialog.OPEN_FOLDER,
+    RPC_CHANNELS.gitbash.BROWSE,
+    RPC_CHANNELS.resources.IMPORT_FROM_FILE,
+    RPC_CHANNELS.settings.IMPORT_ALL_DATA,
+  ]) {
+    it(`allows five minutes through every file picker layer: ${channel}`, async () => {
+      const { server, client } = await fixture()
+      client.handleCapability(CLIENT_OPEN_FILE_DIALOG, async () => {
+        await Bun.sleep(120)
+        return { canceled: false, filePaths: ['chosen.txt'] }
+      })
+      server.handle(channel, ctx => requestClientOpenFileDialog(server, ctx.clientId, { properties: ['openFile'] }))
+      const delays = accelerateDeadlines()
+      await expect(client.invoke(channel)).resolves.toEqual({ canceled: false, filePaths: ['chosen.txt'] })
+      expect(delays).toEqual([FILE_DIALOG_TIMEOUT_MS, FILE_DIALOG_TIMEOUT_MS, FILE_DIALOG_TIMEOUT_MS])
+    })
+  }
+
+  it('expires a file picker request after five minutes', async () => {
+    const { server, client } = await fixture()
+    client.handleCapability(CLIENT_OPEN_FILE_DIALOG, () => new Promise(() => {}))
+    server.handle(RPC_CHANNELS.file.OPEN_DIALOG, ctx => requestClientOpenFileDialog(server, ctx.clientId, {}))
+    accelerateDeadlines()
+    await expect(client.invoke(RPC_CHANNELS.file.OPEN_DIALOG)).rejects.toThrow('Request timeout: file:openDialog (300000ms)')
+  })
+
   for (const [label, channel, input] of [
     ['mind map generation', RPC_CHANNELS.studio.GENERATE_MIND_MAP, { mode: 'execute' }],
     ['mind map questions', RPC_CHANNELS.studio.GENERATE_MIND_MAP, { mode: 'ask' }],

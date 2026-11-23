@@ -81,6 +81,7 @@ export interface SessionMeta {
   projectId?: string
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task) */
   parentSessionId?: string
+  triggeredBy?: Session['triggeredBy']
   /** Kanban board column id ('todo' | 'in-progress' | 'done'); independent of sessionStatus */
   kanbanColumn?: string
   /** Tasks Conductor: slug of the task spec this session belongs to (orchestrator + child nodes) */

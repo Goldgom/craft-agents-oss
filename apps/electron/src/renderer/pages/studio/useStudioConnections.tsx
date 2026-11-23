@@ -3,14 +3,16 @@ import { WorkbenchSelect } from '@/components/ui/workbench-select'
 import { useEffect, useMemo, useState } from 'react'
 import type { LlmConnectionWithStatus } from '../../../shared/types'
 import { imageGroups, imageModels, isImageConnection, preferredImageGroup, preferredImageConnection } from './image-connections'
-import { mindMapGroupForModel, mindMapTextModels } from './mindmap-models'
 import { useAppShellContext } from '@/context/AppShellContext'
 
 const IMAGE_CONNECTION_KEY = 'tokenbird.studio.imageConnection'
-const MINDMAP_CONNECTION_KEY = 'tokenbird.studio.mindmapConnection'
 const CANVAS_ASSISTANT_CONNECTION_KEY = 'tokenbird.studio.canvasAssistantConnection'
 
-function supportsMindMap(connection: LlmConnectionWithStatus): boolean {
+function textModels(connection: LlmConnectionWithStatus): string[] {
+  return [...new Set((connection.models ?? []).map(model => typeof model === 'string' ? model : model.id))]
+}
+
+function supportsText(connection: LlmConnectionWithStatus): boolean {
   return connection.oauthProvider === 'tokennest' || connection.authType === 'api_key' || connection.authType === 'api_key_with_endpoint'
 }
 
@@ -19,7 +21,7 @@ export function useStudioConnections(options: { image?: boolean; assistant?: boo
   const { workspaceDefaultLlmConnection } = useAppShellContext()
   const [connections, setConnections] = useState<LlmConnectionWithStatus[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [connectionSlug, setConnectionSlug] = useState(() => localStorage.getItem(options.image ? IMAGE_CONNECTION_KEY : options.assistant ? CANVAS_ASSISTANT_CONNECTION_KEY : MINDMAP_CONNECTION_KEY) ?? '')
+  const [connectionSlug, setConnectionSlug] = useState(() => localStorage.getItem(options.image ? IMAGE_CONNECTION_KEY : CANVAS_ASSISTANT_CONNECTION_KEY) ?? '')
   const [channelGroup, setChannelGroup] = useState('')
   const [model, setModel] = useState('')
 
@@ -44,15 +46,15 @@ export function useStudioConnections(options: { image?: boolean; assistant?: boo
           setConnectionSlug(current => preferredImageConnection(items, current, workspaceDefaultLlmConnection))
         } else {
           setConnectionSlug(current => {
-            const compatible = items.filter(supportsMindMap)
-            if (compatible.some(item => item.slug === current && item.isAuthenticated && mindMapTextModels(item).length)) return current
-            return (compatible.find(item => item.slug === workspaceDefaultLlmConnection && item.isAuthenticated && mindMapTextModels(item).length)
-              ?? compatible.find(item => item.isDefault && item.isAuthenticated && mindMapTextModels(item).length)
-              ?? compatible.find(item => item.isAuthenticated && mindMapTextModels(item).length)
+            const compatible = items.filter(supportsText)
+            if (compatible.some(item => item.slug === current && item.isAuthenticated && textModels(item).length)) return current
+            return (compatible.find(item => item.slug === workspaceDefaultLlmConnection && item.isAuthenticated && textModels(item).length)
+              ?? compatible.find(item => item.isDefault && item.isAuthenticated && textModels(item).length)
+              ?? compatible.find(item => item.isAuthenticated && textModels(item).length)
               ?? compatible.find(item => item.slug === current)
-              ?? compatible.find(item => item.slug === workspaceDefaultLlmConnection && mindMapTextModels(item).length)
-              ?? compatible.find(item => item.isDefault && mindMapTextModels(item).length)
-              ?? compatible.find(item => mindMapTextModels(item).length)
+              ?? compatible.find(item => item.slug === workspaceDefaultLlmConnection && textModels(item).length)
+              ?? compatible.find(item => item.isDefault && textModels(item).length)
+              ?? compatible.find(item => textModels(item).length)
               ?? compatible[0])?.slug ?? ''
           })
         }
@@ -68,13 +70,13 @@ export function useStudioConnections(options: { image?: boolean; assistant?: boo
   const groups = useMemo(() => connection && options.image ? imageGroups(connection) : [], [connection, options.image])
   const selectedGroup = groups.some(group => group.id === channelGroup) ? channelGroup : connection && options.image ? preferredImageGroup(connection) : ''
   const availableModels = useMemo(() => connection
-    ? options.image ? imageModels(connection, selectedGroup) : mindMapTextModels(connection)
+    ? options.image ? imageModels(connection, selectedGroup) : textModels(connection)
     : [], [connection, options.image, selectedGroup])
   // Discovery and the selected group update together; do not expose an empty or
   // stale image model for one render while the state synchronization effect runs.
   const selectedModel = options.image && availableModels.length && !availableModels.includes(model)
     ? availableModels[0]! : model
-  const modelChannelGroup = connection && !options.image ? mindMapGroupForModel(connection, model) : ''
+  const modelChannelGroup = ''
 
   useEffect(() => {
     if (!connection) return
@@ -87,7 +89,7 @@ export function useStudioConnections(options: { image?: boolean; assistant?: boo
     setConnectionSlug(slug)
     setChannelGroup('')
     setModel('')
-    const key = options.image ? IMAGE_CONNECTION_KEY : options.assistant ? CANVAS_ASSISTANT_CONNECTION_KEY : MINDMAP_CONNECTION_KEY
+    const key = options.image ? IMAGE_CONNECTION_KEY : CANVAS_ASSISTANT_CONNECTION_KEY
     if (slug) localStorage.setItem(key, slug)
     else localStorage.removeItem(key)
   }
@@ -131,11 +133,11 @@ export function StudioConnectionPicker({
 }) {
   const { t } = useTranslation()
   const selected = connections.find(item => item.slug === connectionSlug)
-  const suggested = selected ? image ? imageModels(selected, channelGroup) : mindMapTextModels(selected) : []
+  const suggested = selected ? image ? imageModels(selected, channelGroup) : textModels(selected) : []
   const groups = image && selected ? imageGroups(selected) : []
   return (
     <div className="grid min-w-0 grid-cols-1 gap-2">
-      <WorkbenchSelect value={connectionSlug} onValueChange={value => { setConnectionSlug(value); setModel('') }} aria-label={t('studio.chooseConnection')} options={[{ value: "", label: t('studio.chooseConnection') }, ...connections.filter(item => image ? isImageConnection(item) : supportsMindMap(item)).map(item =>
+      <WorkbenchSelect value={connectionSlug} onValueChange={value => { setConnectionSlug(value); setModel('') }} aria-label={t('studio.chooseConnection')} options={[{ value: "", label: t('studio.chooseConnection') }, ...connections.filter(item => image ? isImageConnection(item) : supportsText(item)).map(item =>
           ({ value: item.slug, label: <>{item.name}{item.isAuthenticated ? '' : t('studio.notSignedIn')}</> }))]} />
       {groups.length > 0 && <WorkbenchSelect className="w-full" value={channelGroup} onValueChange={value => { setChannelGroup?.(value); setModel('') }} aria-label={t('studio.imageGroup')} options={[...groups.map(group => ({ value: group.id, label: group.name }))]} />}
       {suggested.length > 0 ? <WorkbenchSelect className="w-full" placeholder={t(image ? 'studio.imageModel' : 'studio.textModel')} value={model} onValueChange={value => setModel(value)} aria-label={image ? t('studio.imageModel') : t('studio.textModel')} options={[...suggested.map(id => ({ value: id, label: id }))]} /> : <input className="h-9 min-w-0 w-full rounded-lg border border-input bg-background px-3 text-xs shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" value={model} onChange={event => setModel(event.target.value)} list={image ? 'studio-image-models' : 'studio-text-models'} placeholder={image ? t('studio.configureImageModel') : t('studio.textModel')} aria-label={image ? t('studio.imageModel') : t('studio.textModel')} />}

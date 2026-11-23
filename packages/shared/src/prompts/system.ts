@@ -407,10 +407,11 @@ const BUILTIN_PROMPT_SKILLS: readonly BuiltinPromptSkill[] = [
   { slug: 'pages-authoring', description: 'Create persistent Pages and their secure live-data bridge.' },
   { slug: 'previews-and-diagrams', description: 'Render Mermaid, HTML, PDF, image, Markdown, and tabbed previews.' },
   { slug: 'canvas-editing', description: 'Create images with GPT Image and operate drawing sessions through canvas_tool.' },
+  { slug: 'video-production', description: 'Edit, storyboard and generate videos with video_tool.' },
   { slug: 'messaging-and-collaboration', description: 'Work with messaging channels, shared collaboration boards, and collaboration files.' },
   { slug: 'resource-transfer', description: 'Export or import portable source and integration bundles.' },
   { slug: 'remote-operations', description: 'Run scoped local/remote shell commands and transfer files over SFTP.' },
-  { slug: 'windows-desktop-control', description: 'Use computer_use to observe and operate Windows applications: screenshots, UI elements, windows, mouse and keyboard.' },
+  { slug: 'windows-desktop-control', description: 'Observe and control Windows applications with computer_use.' },
   { slug: 'subagent-collaboration', description: 'Delegate bounded tool-using work and integrate verified results.', capability: 'subagents' },
 ] as const;
 
@@ -443,7 +444,7 @@ function formatBuiltinSkillsPrompt(compact = false): string {
 
   if (!entries) return '';
 
-  return `## Built-in Skills (On-Demand)\n\nThe following app-shipped skills describe existing capabilities. When the current request matches one, read its SKILL.md before acting; focus reading on the relevant skills. A project, workspace, or global skill with the same slug takes precedence when explicitly mentioned.\n\n${entries}`;
+  return `## Built-in Skills (On-Demand)\n\nRead matching app-shipped SKILL.md files before acting. Read only relevant skills. Explicitly mentioned project, workspace or global skills take precedence over built-ins with the same slug.\n\n${entries}`;
 }
 
 /**

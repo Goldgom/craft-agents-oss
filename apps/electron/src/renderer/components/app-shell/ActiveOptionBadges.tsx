@@ -47,6 +47,8 @@ export interface ActiveOptionBadgesProps {
   permissionMode?: PermissionMode
   /** Callback when permission mode changes */
   onPermissionModeChange?: (mode: PermissionMode) => void
+  /** Optional voice conversation switch next to the execution mode. */
+  conversationControl?: React.ReactNode
   /** Background tasks to display */
   tasks?: BackgroundTask[]
   /** Session ID for opening preview windows */
@@ -92,6 +94,7 @@ interface ResolvedLabelEntry {
 export function ActiveOptionBadges({
   permissionMode = 'ask',
   onPermissionModeChange,
+  conversationControl,
   tasks = [],
   sessionId,
   sessionFolderPath,
@@ -144,7 +147,7 @@ export function ActiveOptionBadges({
   const stackRef = useDynamicStack({ gap: 8, minVisible: 20, reservedStart: 0 })
 
   // Only render if badges or tasks are active
-  if (!permissionMode && tasks.length === 0 && !hasState && !hasStackContent) {
+  if (!permissionMode && !conversationControl && tasks.length === 0 && !hasState && !hasStackContent) {
     return null
   }
 
@@ -178,6 +181,8 @@ export function ActiveOptionBadges({
             />
           </div>
         )}
+
+        {conversationControl}
 
         {/* State Badge — standalone on the left, after Mode */}
         {hasState && resolvedState && (

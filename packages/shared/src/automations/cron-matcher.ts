@@ -22,15 +22,13 @@ const log = createLogger('cron-matcher');
  * matchesCron('* * * * *')                    // Matches every minute
  * matchesCron('0 9 * * *', 'Europe/Budapest') // Matches 9:00 AM Budapest time
  */
-export function matchesCron(cronExpr: string, timezone?: string): boolean {
+export function matchesCron(cronExpr: string, timezone?: string, now = new Date()): boolean {
   try {
     const options = timezone ? { timezone } : {};
     const job = new Cron(cronExpr, options);
-    const now = new Date();
 
     // Get start of current minute (floored to :00 seconds)
-    const startOfMinute = new Date(now);
-    startOfMinute.setSeconds(0, 0);
+    const startOfMinute = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
 
     // Check from 1 second before the start of this minute
     const checkFrom = new Date(startOfMinute.getTime() - 1000);

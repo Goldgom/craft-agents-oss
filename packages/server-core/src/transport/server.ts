@@ -19,6 +19,8 @@ import {
   EVENT_BUFFER_TTL_MS,
   DISCONNECTED_CLIENT_TTL_MS,
   RPC_CHANNELS,
+  FILE_DIALOG_TIMEOUT_MS,
+  isFileDialogChannel,
   STUDIO_IMAGE_HANDLER_TIMEOUT_MS,
   isStudioTextChannel,
   isErrorCode,
@@ -241,7 +243,7 @@ export class WsRpcServer implements RpcServer {
   }
 
   invokeClient(clientId: string, channel: string, ...args: any[]): Promise<any> {
-    return this.invokeClientWithTimeout(clientId, channel, 30_000, ...args)
+    return this.invokeClientWithTimeout(clientId, channel, isFileDialogChannel(channel) ? FILE_DIALOG_TIMEOUT_MS : 30_000, ...args)
   }
 
   invokeClientWithTimeout(clientId: string, channel: string, timeoutMs: number, ...args: any[]): Promise<any> {
@@ -753,7 +755,11 @@ export class WsRpcServer implements RpcServer {
     const handlerTimeoutPromise = new Promise<never>((_, reject) => {
       rejectHandlerTimeout = reject
     })
-    const handlerTimeoutMs = channel === RPC_CHANNELS.studio.GENERATE_IMAGE
+    const handlerTimeoutMs = isFileDialogChannel(channel)
+      ? FILE_DIALOG_TIMEOUT_MS
+      : channel === RPC_CHANNELS.tokennest.VOICE
+      ? 123_000
+      : channel === RPC_CHANNELS.studio.GENERATE_IMAGE
       ? STUDIO_IMAGE_HANDLER_TIMEOUT_MS
       : WsRpcServer.HANDLER_TIMEOUT_MS
     const handlerTimeout = {

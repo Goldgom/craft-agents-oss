@@ -117,10 +117,10 @@ export interface BackendFrameworkTestResult {
 export function frameworkFeatureOptions(framework: AgentPluginDescriptor, feature: FrameworkFeature): FrameworkImplementation[] {
   switch (feature) {
     case 'history': return framework.capabilities.includes('resume') ? ['native', 'host'] : ['host'];
-    case 'utility': return framework.capabilities.includes('utilityCompletion') ? ['native', 'host'] : ['host'];
+    case 'utility': return framework.id === 'plugin:antigravity' ? ['disabled'] : framework.capabilities.includes('utilityCompletion') ? ['native', 'host'] : ['host'];
     case 'steering': return framework.capabilities.includes('steering') ? ['native', 'disabled'] : ['disabled'];
     // Codex can retain its loop while delegating file execution to the host.
-    case 'files': return framework.id === 'codex' ? ['native', 'host', 'disabled'] : framework.builtin ? ['native', 'disabled']
+    case 'files': return framework.id === 'plugin:antigravity' ? ['native'] : framework.id === 'codex' ? ['native', 'host', 'disabled'] : framework.builtin ? ['native', 'disabled']
       : framework.capabilities.includes('nativeTools') ? ['native', 'host', 'disabled']
       : framework.capabilities.includes('hostTools') ? ['host', 'disabled'] : ['disabled'];
     default: return framework.capabilities.includes('hostTools') ? ['host', 'disabled'] : ['disabled'];

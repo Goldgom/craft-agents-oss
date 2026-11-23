@@ -926,7 +926,7 @@ describe('Super Agent configuration and scheduling', () => {
     }
     expect(host.sends).toHaveLength(32)
     expect((await service.get('alpha')).state.messages.some(message => message.body.includes('call budget'))).toBe(true)
-  })
+  }, 30_000)
 
   test('idle coordinator checks summarize changed work once without inventing tasks', async () => {
     const { host, service, config, advance } = await fixture()

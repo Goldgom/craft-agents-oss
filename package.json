@@ -1,6 +1,6 @@
 {
   "name": "tokenbird",
-  "version": "26.11.6",
+  "version": "26.11.23",
   "license": "Apache-2.0",
   "description": "TokenBird agent plugin host and unified workspace with portable preferences and shared capabilities",
   "type": "module",
@@ -157,7 +157,8 @@
     "vite": "^6.2.4"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.258",
+    "@openai/codex": "0.171.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.330",
     "@anthropic-ai/sdk": "^0.100.0",
     "@dnd-kit/dom": "^0.4.0-beta-20260227032529",
     "@dnd-kit/helpers": "^0.4.0-beta-20260227032529",

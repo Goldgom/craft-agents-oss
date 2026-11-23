@@ -131,6 +131,7 @@ export function AutomationConfigDialog({ open, onOpenChange, automation, workspa
         labels: automation.labels,
         conditions: automation.conditions,
         telegramTopic: automation.telegramTopic,
+        parentSessionId: automation.parentSessionId,
         script: isHosted ? script : undefined,
         intervalMs: isHosted ? intervalMs : undefined,
         scriptTimeoutMs: isHosted ? Math.max(10, Math.min(30_000, Number(timeout) || 2000)) : undefined,

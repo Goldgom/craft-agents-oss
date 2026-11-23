@@ -1,4 +1,5 @@
-import type { ResolvedRemoteProfile } from './remote-credentials'
+import { RemoteCredentialUnavailableError, type ResolvedRemoteProfile } from './remote-credentials'
+import type { ServerSwitchResult } from '../shared/types'
 
 /** Switch the frontend connection without terminating the embedded agent host. */
 export function createServerSwitcher(deps: {
@@ -11,11 +12,20 @@ export function createServerSwitcher(deps: {
   restart(): void
 }) {
   let tail: Promise<void> = Promise.resolve()
-  return (target: string, assertCurrent: () => void = () => {}): Promise<void> => {
-    const operation = tail.then(async () => {
+  return (target: string, assertCurrent: () => void = () => {}): Promise<ServerSwitchResult> => {
+    const operation = tail.then(async (): Promise<ServerSwitchResult> => {
       assertCurrent()
-      const profile = target === 'local' || target === 'none'
-        ? undefined : await deps.resolveProfile(target)
+      let profile: ResolvedRemoteProfile | undefined
+      if (target !== 'local' && target !== 'none') {
+        try { profile = await deps.resolveProfile(target) }
+        catch (error) {
+          assertCurrent()
+          if (error instanceof RemoteCredentialUnavailableError) {
+            return { success: false, needsCredentialRepair: true, missingCredential: error.field }
+          }
+          throw error
+        }
+      }
       if (target !== 'local' && target !== 'none' && !profile) throw new Error('Remote server profile not found')
       assertCurrent()
       deps.persistLocation(target)
@@ -35,8 +45,9 @@ export function createServerSwitcher(deps: {
       deps.setContext(target, profile)
       if (deps.canReload(target)) deps.reloadWindows()
       else deps.restart()
+      return { success: true }
     })
-    tail = operation.catch(() => {})
+    tail = operation.then(() => undefined, () => undefined)
     return operation
   }
 }

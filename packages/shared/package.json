@@ -12,6 +12,7 @@
     "sync:tokenbird-bash-patterns": "bun run src/config/sync-tokenbird-bash-patterns.ts"
   },
   "exports": {
+    "./video": "./src/video/index.ts",
     "./agent/backend/read-patterns": "./src/agent/backend/read-patterns.ts",
     "./cloud": "./src/cloud/types.ts",
     ".": "./src/index.ts",
@@ -57,6 +58,7 @@
       "browser": "./src/super-agent/browser.ts",
       "default": "./src/super-agent/index.ts"
     },
+    "./super-agent/model-presets": "./src/super-agent/model-presets.ts",
     "./super-agent/history": "./src/super-agent/history.ts",
     "./super-agent/board": "./src/super-agent/board.ts",
     "./skills": "./src/skills/index.ts",
@@ -120,7 +122,7 @@
     "@earendil-works/pi-coding-agent": "0.85.1"
   },
   "peerDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.258",
+    "@anthropic-ai/claude-agent-sdk": "0.3.330",
     "@modelcontextprotocol/sdk": ">=1.29.0",
     "zod": ">=4.0.0"
   },

@@ -14,7 +14,7 @@ export function resolveAgentPluginArguments(args: string[]): string[] {
   return args.map(arg => {
     if (!arg.startsWith('tokenbird:bridge:')) return arg;
     const backend = arg.slice('tokenbird:bridge:'.length);
-    if (!['hermes', 'dsh'].includes(backend)) throw new Error('Unknown bundled agent bridge');
+    if (!['hermes', 'dsh', 'antigravity'].includes(backend)) throw new Error('Unknown bundled agent bridge');
     const scripts = getBundledAssetsDir('scripts');
     const path = scripts && join(scripts, 'agent-plugins', `${backend}_bridge.py`);
     if (!path || !existsSync(path)) throw new Error(`Bundled ${backend} bridge is unavailable`);
@@ -54,7 +54,12 @@ export class AgentPluginStdioClient {
         delete env.Path;
       }
     }
-    this.child = spawn(manifest.transport.command, resolveAgentPluginArguments(manifest.transport.args), {
+    const scripts = getBundledAssetsDir('scripts');
+    const packagedPython = scripts && join(scripts, '..', '..', 'vendor', 'toolchains', 'python', 'python.exe');
+    const command = manifest.transport.command === 'tokenbird:python'
+      ? process.platform === 'win32' ? packagedPython && existsSync(packagedPython) ? packagedPython : 'python.exe' : 'python3'
+      : manifest.transport.command;
+    this.child = spawn(command, resolveAgentPluginArguments(manifest.transport.args), {
       cwd: manifest.transport.cwd ?? options.cwd,
       env: { ...env, ...manifest.transport.env }, shell: false, windowsHide: true,
       detached: process.platform !== 'win32',

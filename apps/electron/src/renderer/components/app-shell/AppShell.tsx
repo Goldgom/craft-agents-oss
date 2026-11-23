@@ -178,8 +178,8 @@ import { dispatchFocusInputEvent } from "./input/focus-input-events"
  * 3. Use via useAppShellContext() hook in child components
  */
 interface AppShellProps {
-  studioMode: 'agent' | 'canvas' | 'mindmap' | 'super-agent'
-  onStudioModeChange: (mode: 'agent' | 'canvas' | 'mindmap' | 'super-agent') => void
+  studioMode: 'agent' | 'canvas' | 'video' | 'super-agent'
+  onStudioModeChange: (mode: 'agent' | 'canvas' | 'video' | 'super-agent') => void
   studioContent?: React.ReactNode
   /** All data and callbacks - passed directly to AppShellProvider */
   contextValue: AppShellContextType

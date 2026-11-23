@@ -1,6 +1,6 @@
 import i18n, { type i18n as I18nInstance, type InitOptions } from "i18next";
 import { LOCALE_REGISTRY } from "./registry";
-import { SUPPORTED_LANGUAGE_CODES } from "./languages";
+import { SUPPORTED_LANGUAGE_CODES, type LanguageCode } from "./languages";
 
 // Build i18next resources from the locale registry.
 const resources = Object.fromEntries(
@@ -22,6 +22,7 @@ let initialized = false;
 export function setupI18n(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   plugins: any[] = [],
+  language?: LanguageCode,
 ): I18nInstance {
   if (initialized) return i18n;
 
@@ -32,6 +33,7 @@ export function setupI18n(
 
   instance.init({
     resources,
+    lng: language,
     fallbackLng: "en",
     supportedLngs: [...SUPPORTED_LANGUAGE_CODES],
     interpolation: { escapeValue: false },

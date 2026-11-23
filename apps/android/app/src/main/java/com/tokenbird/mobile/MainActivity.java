@@ -37,9 +37,13 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import android.animation.ObjectAnimator;
+import android.animation.AnimatorSet;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -92,6 +96,18 @@ public final class MainActivity extends Activity {
     private static final int COLOR_ACCENT = Color.rgb(0, 102, 255);
     private boolean darkTheme;
     private static final String DARK_THEME_KEY = "dark_theme";
+    private static final int VOICE_PERMISSION_CODE = 2002;
+    private PermissionRequest pendingVoice;
+    private boolean isVoiceOrigin(Uri origin) {
+        if (localWebServer == null || !"http".equals(origin.getScheme())
+                || !"127.0.0.1".equals(origin.getHost())) return false;
+        try {
+            return origin.getPort() == localWebServer.getPort();
+        } catch (IOException unavailable) {
+            return false;
+        }
+    }
+
     private static final int FILE_CHOOSER_REQUEST_CODE = 2001;
     private static final int PERMISSION_REQUEST_CODE_START = 4100;
     private static final String ANDROID_BACK_SCRIPT =
@@ -295,6 +311,26 @@ public final class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
         view.addJavascriptInterface(new AndroidBridge(), "TokenBirdAgentAndroid");
         view.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                if (!isVoiceOrigin(request.getOrigin()) || pendingVoice != null
+                        || !java.util.Arrays.asList(request.getResources()).contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
+                    request.deny();
+                    return;
+                }
+                if (hasPermissionKey("microphone")) {
+                    request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                    return;
+                }
+                pendingVoice = request;
+                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, VOICE_PERMISSION_CODE);
+            }
+
+            @Override
+            public void onPermissionRequestCanceled(PermissionRequest request) {
+                if (pendingVoice == request) pendingVoice = null;
+            }
+
             @Override
             public boolean onShowFileChooser(
                     WebView webView,
@@ -618,6 +654,16 @@ public final class MainActivity extends Activity {
                 R.string.preparing_local_server,
                 R.string.preparing_local_server_description);
 
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.ic_launcher);
+        logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        logo.setContentDescription(getString(R.string.app_name));
+        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(112), dp(112));
+        logoParams.gravity = Gravity.CENTER_HORIZONTAL;
+        logoParams.setMargins(0, dp(12), 0, dp(18));
+        page.addView(logo, 0, logoParams);
+        animateLoadingLogo(logo);
+
         ProgressBar progress = new ProgressBar(this);
         progress.setIndeterminateTintList(ColorStateList.valueOf(COLOR_ACCENT));
         LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(dp(48), dp(48));
@@ -629,6 +675,28 @@ public final class MainActivity extends Activity {
         changeMode.setOnClickListener(view -> showServerConfiguration(configurationAllowCancel));
         page.addView(changeMode, matchWrap());
         showConfigurationPage(page);
+    }
+
+    private void animateLoadingLogo(ImageView logo) {
+        logo.setAlpha(0.72f);
+        logo.setScaleX(0.96f);
+        logo.setScaleY(0.96f);
+        ObjectAnimator alpha = ObjectAnimator.ofFloat(logo, View.ALPHA, 0.72f, 1f, 0.72f);
+        ObjectAnimator scaleX = ObjectAnimator.ofFloat(logo, View.SCALE_X, 0.96f, 1f, 0.96f);
+        ObjectAnimator scaleY = ObjectAnimator.ofFloat(logo, View.SCALE_Y, 0.96f, 1f, 0.96f);
+        alpha.setRepeatCount(ObjectAnimator.INFINITE);
+        scaleX.setRepeatCount(ObjectAnimator.INFINITE);
+        scaleY.setRepeatCount(ObjectAnimator.INFINITE);
+        AnimatorSet pulse = new AnimatorSet();
+        pulse.playTogether(alpha, scaleX, scaleY);
+        pulse.setDuration(1500L);
+        pulse.setInterpolator(new AccelerateDecelerateInterpolator());
+        pulse.setStartDelay(80L);
+        logo.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View view) {}
+            @Override public void onViewDetachedFromWindow(View view) { pulse.cancel(); }
+        });
+        pulse.start();
     }
 
     private void showConnectionError(String details) {
@@ -1178,6 +1246,16 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == VOICE_PERMISSION_CODE) {
+            PermissionRequest request = pendingVoice;
+            pendingVoice = null;
+            if (request != null) {
+                if (isVoiceOrigin(request.getOrigin()) && hasPermissionKey("microphone")) {
+                    request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                } else request.deny();
+            }
+            return;
+        }
         PendingPermissionRequest pending = pendingPermissionRequests.get(requestCode);
         if (pending != null) {
             pendingPermissionRequests.remove(requestCode);

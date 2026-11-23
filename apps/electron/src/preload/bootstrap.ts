@@ -76,6 +76,7 @@ interface TransportClient extends RpcClient {
 // only the minimal API the server picker page needs; no WS clients are created.
 const startupContext: {
   mode?: 'picker' | 'normal'
+  uiLanguage?: ElectronAPI['startupUiLanguage']
   remote?: { url: string; profileId?: string; token?: string; workspaceId?: string }
 } = ipcRenderer.sendSync('__get-startup-context')
 const isPickerMode = startupContext?.mode === 'picker'
@@ -86,11 +87,12 @@ if (isPickerMode) {
     // Sync flag read by the renderer ROOT so it can render the picker page
     // without ever mounting the full App (which expects a live server).
     startupMode: 'picker',
+    startupUiLanguage: startupContext?.uiLanguage,
     getRuntimeEnvironment: (): 'electron' | 'web' => 'electron',
     getStartupContext: () => ipcRenderer.invoke('__get-server-context'),
     getRemoteServers: () => ipcRenderer.invoke('__picker-get-profiles'),
     saveRemoteServer: (input: Parameters<ElectronAPI['saveRemoteServer']>[0]) => ipcRenderer.invoke('__remote-servers:save', input),
-    selectStartupServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target, true),
+    selectStartupServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
     switchServer: (target: string) => ipcRenderer.invoke('__select-startup-server', target),
     getStartupLocation: () => ipcRenderer.invoke('__get-startup-location'),
     setStartupLocation: (value: string) => ipcRenderer.invoke('__set-startup-location', value),
@@ -272,7 +274,7 @@ client.handleCapability(CLIENT_CANVAS_INVOKE, async (request: Record<string, unk
     input.projectText = bytes.toString('utf8')
   }
   const result = await canvasRequestHandler(input) as Record<string, unknown>
-  if ((input.action === 'export_image' || input.action === 'export_png' || input.action === 'export_selection_mask' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
+  if ((input.action === 'generate_gif' || input.action === 'export_image' || input.action === 'export_png' || input.action === 'export_selection_mask' || input.action === 'save_project' || input.action === 'download_history' || input.action === 'download_candidate') && typeof input.outputPath === 'string' && typeof result?.base64 === 'string') {
     if (!isAbsolute(input.outputPath)) throw new Error('outputPath must be absolute')
     const extension = extname(input.outputPath).toLowerCase()
     if (!canvasExportInfo(input).extensions.includes(extension)) throw new Error('Output path has the wrong file extension')
@@ -697,9 +699,10 @@ const remoteCredentials = () => isClientOnly || !!ipcRenderer.sendSync('__get-wo
 // WS RPC so they keep working in thin-client remote mode where the local
 // embedded server is not running.
 ;(api as ElectronAPI).startupMode = 'normal'
+;(api as ElectronAPI).startupUiLanguage = startupContext?.uiLanguage
 ;(api as ElectronAPI).getStartupContext = () => ipcRenderer.invoke('__get-server-context')
 ;(api as ElectronAPI).switchServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
-;(api as ElectronAPI).selectStartupServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target, true)
+;(api as ElectronAPI).selectStartupServer = (target: string) => ipcRenderer.invoke('__select-startup-server', target)
 ;(api as ElectronAPI).getStartupLocation = () => ipcRenderer.invoke('__get-startup-location')
 ;(api as ElectronAPI).setStartupLocation = (value: string) => ipcRenderer.invoke('__set-startup-location', value)
 // Profile list is client-local too — overrides the CHANNEL_MAP entry so it

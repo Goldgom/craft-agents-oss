@@ -13,7 +13,6 @@ import { registerNativeWorkspaceSwitch } from './handlers/workspace-native'
 import { createServerSwitcher } from './server-switch'
 import { configureElectronCredentialVault } from './credential-vault'
 import { recoverStartupCredentials, type CredentialRecoveryChoice } from './credential-startup-recovery'
-import { RemoteCredentialUnavailableError } from './remote-credentials'
 import { registerNativeCredentialIpcHandlers } from './handlers/credentials-native'
 import { configureRemoteCredentialProtection, hasPendingRemoteCredentialMigration, listManagedRemoteCredentialMetadata, migrateRemoteCredentials, prepareRemoteWorkspaceConfig, resolveRemoteProfile, resolveRemoteWorkspace, saveRemoteProfile, type ResolvedRemoteProfile } from './remote-credentials'
 import { reconcileSourceCredentialChanges } from '@tokenbird/shared/sources/credential-runtime'
@@ -28,7 +27,6 @@ import { redactWorkspaceRemoteCredentials } from '@tokenbird/server-core/handler
 import { sourceCredentialWorkspaceId, workspaceForSourceCredentialId } from './credential-scope'
 import * as Sentry from '@sentry/electron/main'
 import { redactSensitiveHeadersInPlace, redactSensitiveKeysInPlace } from '@tokenbird/shared/utils'
-import { getLocalizedProductName } from '@tokenbird/shared/branding'
 import { applyRuntimeToolEnvironment } from './runtime-toolchains'
 import { exportChatTranscript } from './chat-export'
 import { openTokenNestRechargeWindow } from './tokennest-recharge'
@@ -36,12 +34,15 @@ import { BirdCompanionManager } from './bird-companion'
 import { TOKENNEST_RECHARGE_IPC } from '../shared/tokennest-recharge'
 import { deleteMindMapSession, mindMapWorkspaceContext, readMindMapSession, writeMindMapSession, executeMindMapTool } from './studio-mindmap-files'
 
-// Keep Electron-managed state in the TokenBird profile,
-// including development launches where Electron would otherwise derive the
-// directory name from package metadata.
+// Keep the Electron identity stable across branding and locale changes.
+// Chromium's Windows safeStorage key is tied to the Electron profile identity.
+// Changing this name during an update can make an existing native vault
+// impossible to decrypt even when the user data directory is unchanged.
+const ELECTRON_APP_ID = 'top.goldgom.tokenbird'
+const ELECTRON_IDENTITY_NAME = 'TokenBird'
 const electronUserDataDir = join(app.getPath('appData'), 'TokenBird')
-const systemUiLanguage = Intl.DateTimeFormat().resolvedOptions().locale
-app.setName(getLocalizedProductName(systemUiLanguage))
+app.setName(ELECTRON_IDENTITY_NAME)
+app.setAppUserModelId(ELECTRON_APP_ID)
 app.setPath('userData', electronUserDataDir)
 app.setPath('sessionData', join(electronUserDataDir, 'Session Data'))
 app.setAppLogsPath(join(electronUserDataDir, 'logs'))
@@ -101,7 +102,7 @@ const persistedUiLanguage = getPersistedUiLanguage()
 if (persistedUiLanguage) {
   void i18n.changeLanguage(persistedUiLanguage)
 }
-app.setName(process.env.TOKENBIRD_APP_NAME || getLocalizedProductName(persistedUiLanguage ?? systemUiLanguage))
+app.setName(process.env.TOKENBIRD_APP_NAME || ELECTRON_IDENTITY_NAME)
 // Note: deferred startup log lives below where mainLog is available (after log.initialize()).
 
 // Set anonymous machine ID for Sentry user tracking (no PII — just a hash).
@@ -425,6 +426,7 @@ const switchServer = createServerSwitcher({
 ipcMain.on('__get-startup-context', (e) => {
   e.returnValue = {
     mode: pickerMode ? 'picker' : 'normal',
+    uiLanguage: getPersistedUiLanguage(),
     remote: process.env.TOKENBIRD_SERVER_URL ? {
       url: process.env.TOKENBIRD_SERVER_URL,
       profileId: process.env.TOKENBIRD_SERVER_PROFILE_ID,
@@ -487,17 +489,7 @@ ipcMain.handle('__remote-servers:test', async (event, input: { id?: string; url?
     client.destroy()
   }
 })
-ipcMain.handle('__select-startup-server', async (event, target: string, recoverCredentials = false) => {
-  const assertCurrent = pinNativeApp(event)
-  try {
-    await switchServer(target, assertCurrent)
-    return { success: true }
-  } catch (error) {
-    assertCurrent()
-    if (recoverCredentials === true && error instanceof RemoteCredentialUnavailableError) return { success: false, needsCredentialRepair: true }
-    throw error
-  }
-})
+ipcMain.handle('__select-startup-server', (event, target: string) => switchServer(target, pinNativeApp(event)))
 ipcMain.handle('__get-startup-location', async () => getStartupServerLocation() ?? STARTUP_LOCATION_LOCAL)
 ipcMain.handle('__set-startup-location', async (event, value: string) => {
   pinNativeApp(event)()
@@ -637,9 +629,10 @@ ipcMain.handle('data:importFromLocalFile', async (_event, filePath: string) => {
   }
 })
 
-// Set app name early (before app.whenReady) to ensure correct macOS menu bar title
+// Keep the Electron identity stable for safeStorage. User-facing branding is
+// localized in the window and menu content instead of changing app identity.
 // Supports multi-instance dev: TOKENBIRD_APP_NAME env var (e.g., "TokenBird [1]")
-app.setName(process.env.TOKENBIRD_APP_NAME || getLocalizedProductName(persistedUiLanguage ?? systemUiLanguage))
+app.setName(process.env.TOKENBIRD_APP_NAME || ELECTRON_IDENTITY_NAME)
 
 // Register as default protocol client for tokenbird:// URLs
 // This must be done before app.whenReady() on some platforms
@@ -1732,7 +1725,6 @@ app.whenReady().then(async () => {
         await i18n.changeLanguage(code)
         setPersistedUiLanguage(code)
         if (!process.env.TOKENBIRD_APP_NAME) {
-          app.setName(getLocalizedProductName(code))
           windowManager?.refreshLocalizedAppName()
         }
         systemTray?.refresh()

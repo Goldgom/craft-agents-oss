@@ -10,6 +10,7 @@
     ".": "./src/index.ts",
     "./super-agent-tools": "./src/super-agent-tools.ts",
     "./computer-use": "./src/computer-use.ts",
+    "./video-tools": "./src/video-tools.ts",
     "./runtime/resolve-script-runtime": "./src/runtime/resolve-script-runtime.ts",
     "./runtime/path-security": "./src/runtime/path-security.ts"
   },

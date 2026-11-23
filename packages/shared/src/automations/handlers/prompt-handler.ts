@@ -55,19 +55,21 @@ export class PromptHandler implements AutomationHandler {
     // Group prompt actions by matcher for per-matcher history
     const matcherPrompts: Array<{
       matcherId: string | undefined;
+      parentSessionId: string | undefined;
       automationName: string;
       telegramTopic: string | undefined;
-      prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode; provider?: string; scriptInfo?: Record<string, unknown> }>;
+      prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode; provider?: string; actionIndex: number; scriptInfo?: Record<string, unknown> }>;
     }> = [];
 
     for (const matcher of matchers) {
       if (!matcherMatches(matcher, event, payload as unknown as Record<string, unknown>)) continue;
 
-      const prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode; provider?: string; scriptInfo?: Record<string, unknown> }> = [];
-      for (const action of matcher.actions) {
+      const prompts: Array<{ prompt: PromptAction; labels?: string[]; permissionMode?: PermissionMode; provider?: string; actionIndex: number; scriptInfo?: Record<string, unknown> }> = [];
+      for (const [actionIndex, action] of matcher.actions.entries()) {
         if (action.type === 'prompt') {
           prompts.push({
             prompt: action,
+            actionIndex,
             labels: matcher.labels,
             permissionMode: matcher.permissionMode ?? matcher.mode ?? action.mode,
             provider: matcher.provider,
@@ -79,6 +81,7 @@ export class PromptHandler implements AutomationHandler {
         const telegramTopic = matcher.telegramTopic?.trim();
         matcherPrompts.push({
           matcherId: matcher.id,
+          parentSessionId: matcher.parentSessionId,
           automationName: deriveAutomationName(event, matcher),
           telegramTopic: telegramTopic && telegramTopic.length > 0 ? telegramTopic : undefined,
           prompts,
@@ -97,13 +100,13 @@ export class PromptHandler implements AutomationHandler {
     // Process prompts per matcher
     const pendingPrompts: PendingPrompt[] = [];
 
-    for (const { matcherId, automationName, telegramTopic, prompts } of matcherPrompts) {
+    for (const { matcherId, parentSessionId, automationName, telegramTopic, prompts } of matcherPrompts) {
       // Topic name accepts env-var expansion so users can route by event payload
       // (e.g. telegramTopic: "Label: $LABEL"). Empty after expansion → drop it.
       const expandedTopic = telegramTopic ? expandEnvVars(telegramTopic, env).trim() : undefined;
       const finalTopic = expandedTopic && expandedTopic.length > 0 ? expandedTopic : undefined;
 
-      for (const { prompt, labels, permissionMode, provider, scriptInfo } of prompts) {
+      for (const { prompt, labels, permissionMode, provider, scriptInfo, actionIndex } of prompts) {
         // Expand environment variables in the prompt
         const expandedPrompt = expandEnvVars(prompt.prompt, env);
         const promptWithScriptInfo = scriptInfo
@@ -119,6 +122,7 @@ export class PromptHandler implements AutomationHandler {
         pendingPrompts.push({
           sessionId: this.options.sessionId,
           matcherId,
+          scheduledRun: event === 'SchedulerTick' ? { timestamp: payload.timestamp, actionIndex, parentSessionId } : undefined,
           automationName,
           prompt: promptWithScriptInfo,
           mentions: references.mentions,
@@ -138,7 +142,9 @@ export class PromptHandler implements AutomationHandler {
     // Deliver prompts via callback
     if (pendingPrompts.length > 0 && this.options.onPromptsReady) {
       log.debug(`[PromptHandler] Delivering ${pendingPrompts.length} prompts`);
-      this.options.onPromptsReady(pendingPrompts);
+      const delivery = this.options.onPromptsReady(pendingPrompts);
+      if (event === 'SchedulerTick') await delivery;
+      else void Promise.resolve(delivery).catch(error => this.options.onError?.(event, error instanceof Error ? error : new Error(String(error))));
     }
   }
 

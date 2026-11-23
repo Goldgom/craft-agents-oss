@@ -72,6 +72,7 @@ export function SubagentIndicator({ sessionId, inList = false }: { sessionId: st
                   <div className="mt-1 flex items-center gap-1 text-xs text-foreground/60">
                     {child.isProcessing && <Spinner className="text-[10px]" />}
                     {t(`subagents.state.${subagentState(child)}`)}
+                    {child.triggeredBy?.timestamp !== undefined && <time dateTime={new Date(child.triggeredBy.timestamp).toISOString()}>{new Date(child.triggeredBy.timestamp).toLocaleString()}</time>}
                     {child.hasUnread && <span className="size-1.5 rounded-full bg-accent" />}
                   </div>
                 </button>

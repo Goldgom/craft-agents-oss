@@ -1,0 +1,12 @@
+import { z } from 'zod/v3';
+
+export const VIDEO_TOOL_ACTIONS = ['state', 'save_memory', 'delete_memory', 'save_project', 'delete_project', 'import_asset', 'read_asset', 'probe', 'edit', 'analyze', 'generate_shot', 'generate_project', 'render_project', 'job', 'cancel_job'] as const;
+export const VIDEO_READ_ACTIONS: readonly string[] = ['state', 'read_asset', 'job'];
+export const VIDEO_PROGRAM_ACTIONS: readonly string[] = ['probe', 'edit', 'render_project', 'generate_project', 'generate_shot'];
+export const VIDEO_GENERATE_ACTIONS: readonly string[] = ['generate_shot', 'generate_project'];
+export const VideoToolSchema = z.object({
+  action: z.enum(VIDEO_TOOL_ACTIONS),
+  args: z.record(z.unknown()).optional().describe('Action parameters. Start with state to discover actual project, provider, memory and asset IDs. Never pass API keys.'),
+});
+
+export const VIDEO_TOOL_DESCRIPTION = `Create and edit videos in this workspace. Read the video-production skill first. Start with action=state to discover configured video providers, persistent person/scene/style memories, projects, assets and jobs. Pass action parameters in args. save_project: {id?,name,script,preferences,providerId,aspectRatio,memoryIds,shots:[{id?,title,prompt,durationSeconds,memoryIds,narration?}]}; preserve existing values when editing. save_memory: {id?,kind:person|scene|style,name,description,imageAssetIds,referenceUrl?,enabled}. import_asset: {name,bytesBase64,mimeType} or {path}. read_asset returns metadata and file path; probe returns media information, both take {assetId}. edit: {inputAssetIds,operation,...parameters}; see the skill for editing parameters. generate_shot: {projectId,shotId}; generate_project: {projectId} generates missing shots then assembles a movie; render_project: {projectId} assembles existing clips. Selected enabled memories are applied to prompts and supported image references. Generation calls an external, potentially paid service. analyze: {projectId,connectionSlug?,model?} runs a dedicated Agent to extract memories and storyboard; node sessions must build their storyboard in their existing model process using save_project instead. Long operations return a persistent job: poll job with {jobId}; cancel_job with {jobId} cancels local work and tries provider cancellation. Assets are saved on the current server. delete_memory/delete_project require {id,confirm:true}. Provider credentials are configured by the user in Video Studio and never returned to the model. Do not claim completion before a job completes and an outputAssetId exists.`;

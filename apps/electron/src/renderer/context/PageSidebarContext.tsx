@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 
-export type StudioMode = 'agent' | 'canvas' | 'mindmap' | 'super-agent'
+export type StudioMode = 'agent' | 'canvas' | 'video' | 'super-agent'
 
 export interface PageSidebarState {
   mode: StudioMode

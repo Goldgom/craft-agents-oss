@@ -8,7 +8,7 @@ const updater = Object.assign(new EventEmitter(), {
   setFeedURL: mock((_feed: unknown) => {}),
   checkForUpdates: mock(async () => null),
 })
-const releaseUrl = 'https://gitcode.com/Goldgom/token-bird/releases/tag/26.10.21'
+const releaseUrl = 'https://gitcode.com/tokennest/TokenBird/releases/tag/26.10.21'
 let releaseResult = { version: '26.10.21', available: true, releaseUrl, feedUrl: null as string | null }
 let checkError: Error | undefined
 let dismissed: string | null = null
@@ -74,7 +74,7 @@ describe('Windows GitCode update check', () => {
   })
 
   test('retains automatic updates for complete releases and restores download settings', async () => {
-    releaseResult.feedUrl = 'https://gitcode.com/Goldgom/token-bird/releases/download/26.10.21/'
+    releaseResult.feedUrl = 'https://gitcode.com/tokennest/TokenBird/releases/download/26.10.21/'
     updater.checkForUpdates.mockImplementation(async () => {
       updater.emit('update-available', { version: '26.10.21' })
       return null

@@ -37,10 +37,11 @@ import {
 import type { LlmConnectionType, CustomEndpointConfig } from '../../config/llm-connections.ts';
 // Import validation helpers for provider-auth combinations
 import {
-  resolveAgentRuntime,
   resolveSessionAgentRuntime,
   isValidProviderAuthCombination,
   getModelPromptSettings,
+  getModelAgentRuntime,
+  getCompatibleAgentRuntimes,
 } from '../../config/llm-connections.ts';
 import type { AgentRuntimeProtocol } from '../../config/llm-connections.ts';
 import { parseValidationError, type LlmValidationResult } from '../../config/llm-validation.ts';
@@ -73,7 +74,7 @@ import { getAgentPluginDescriptor } from '../../agent-plugins/catalog.ts';
 import { loadBackendFrameworkConfiguration, getBackendFrameworkFingerprint } from '../../agent-plugins/framework-storage.ts';
 import { configureFrameworkAgent } from '../../agent-plugins/framework-runtime.ts';
 import { nativeCodexTransportCompatible } from '../../agent-plugins/frameworks.ts';
-import { setPathToClaudeCodeExecutable } from '../options.ts';
+import { isAndroidRuntime, setPathToClaudeCodeExecutable } from '../options.ts';
 import type { BuiltinAgentRuntime } from '../../agent-plugins/types.ts';
 
 const DRIVER_REGISTRY: Record<AgentProvider, ProviderDriver> = {
@@ -440,6 +441,33 @@ export function resolveSessionConnection(
  */
 export interface ResolvedBackendContext extends BackendResolutionContext { agentPluginFingerprint?: string }
 
+function resolveModelAgentRuntime(
+  connection: LlmConnection,
+  model: string | undefined,
+  override?: AgentRuntimeProtocol,
+): AgentRuntimeProtocol {
+  const explicit = override ?? connection.agentRuntime;
+  if (explicit && explicit !== 'auto') {
+    const runtime = resolveSessionAgentRuntime(connection, override);
+    if (isAndroidRuntime() && runtime !== 'pi') {
+      throw new Error(`Agent backend ${runtime} requires a compatible remote server on Android. Select Auto or Pi for local sessions.`);
+    }
+    return runtime;
+  }
+
+  if (isAndroidRuntime()) return 'pi';
+  const transportProvider = providerTypeToAgentProvider(connection.providerType);
+  const selectedModel = resolveModelForProvider(transportProvider, model, connection);
+  const preferred = getModelAgentRuntime(selectedModel);
+  if (preferred === 'plugin:antigravity') return 'pi';
+  if (preferred === 'codex') {
+    const transport = buildPiConnectionTransport(connection);
+    return nativeCodexTransportCompatible({ ...transport, authType: connection.authType })
+      && resolveNativeCodexBinary() ? 'codex' : 'pi';
+  }
+  return getCompatibleAgentRuntimes(connection).includes(preferred) ? preferred : 'pi';
+}
+
 /**
  * Resolve connection + provider/auth/model/capabilities in one call.
  * This keeps main-process orchestration free from provider-specific branching.
@@ -457,7 +485,9 @@ export function resolveBackendContext(args: {
   );
 
   if (args.sessionAgentRuntime && !connection) throw new Error('An explicit agent backend requires an AI connection');
-  const agentRuntime = connection ? resolveSessionAgentRuntime(connection, args.sessionAgentRuntime) : 'claude-code';
+  const agentRuntime = connection
+    ? resolveModelAgentRuntime(connection, args.managedModel, args.sessionAgentRuntime)
+    : 'pi';
   const provider = agentRuntimeToAgentProvider(agentRuntime, connection?.providerType);
 
   const authType = connection
@@ -603,7 +633,7 @@ export function createConfigFromConnection(
   refreshAgentPluginCatalog();
   // Use new providerType if available, fall back to legacy type
   const providerType = connection.providerType || (connection.type ? connectionTypeToProvider(connection.type) as unknown as LlmProviderType : 'anthropic');
-  const agentRuntime = resolveAgentRuntime(connection);
+  const agentRuntime = resolveModelAgentRuntime(connection, baseConfig.model, baseConfig.agentRuntime);
   const provider = agentRuntimeToAgentProvider(agentRuntime, providerType);
 
   return {
@@ -650,7 +680,7 @@ export function createBackendFromConnection(
   }
 
   refreshAgentPluginCatalog();
-  const agentRuntime = resolveAgentRuntime(connection);
+  const agentRuntime = resolveModelAgentRuntime(connection, baseConfig.model, baseConfig.agentRuntime);
   const provider = agentRuntimeToAgentProvider(agentRuntime, connection.providerType);
   const context: ResolvedBackendContext = {
     connection,
@@ -736,12 +766,14 @@ export function resolveModelForProvider(
   managedModel: string | undefined,
   connection: LlmConnection | null
 ): string {
-  // Cross-provider guard: if the model belongs to a different provider, fall back
-  // to the connection's default. This prevents e.g. sending a Claude model to Pi.
+  // A registered model can be served by a different engine when the connection
+  // explicitly lists it or Pi is using the Anthropic transport.
   if (managedModel) {
     managedModel = normalizeDeprecatedModelId(managedModel);
     const modelProvider = getModelProvider(managedModel);
-    if (modelProvider && modelProvider !== provider) {
+    const listedModel = connection?.models?.some(model => (typeof model === 'string' ? model : model.id) === managedModel);
+    const piAnthropicTransport = provider === 'pi' && connection?.providerType === 'anthropic' && modelProvider === 'anthropic';
+    if (modelProvider && modelProvider !== provider && !listedModel && !piAnthropicTransport) {
       managedModel = undefined; // Clear — will fall through to connection default
     }
   }

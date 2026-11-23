@@ -284,11 +284,14 @@ describe('agent runtime compatibility', () => {
     })).toEqual(['pi'])
   })
 
-  it('keeps legacy defaults and fails soft for incompatible persisted values', () => {
-    expect(resolveAgentRuntime({ providerType: 'anthropic' })).toBe('claude-code')
-    expect(resolveAgentRuntime({ providerType: 'pi', piAuthProvider: 'openai' })).toBe('pi')
-    expect(resolveAgentRuntime({ providerType: 'anthropic', agentRuntime: 'codex' })).toBe('claude-code')
+  it('uses the default model name in Auto and retains compatible manual choices', () => {
+    expect(resolveAgentRuntime({ providerType: 'anthropic', defaultModel: 'claude-sonnet-4-6' })).toBe('claude-code')
+    expect(resolveAgentRuntime({ providerType: 'anthropic', defaultModel: 'custom-model' })).toBe('pi')
+    expect(resolveAgentRuntime({ providerType: 'pi', piAuthProvider: 'openai', defaultModel: 'openai/GPT-6.2-sol', agentRuntime: 'auto' })).toBe('codex')
+    expect(resolveAgentRuntime({ providerType: 'pi', piAuthProvider: 'openai', defaultModel: 'gpt-image-1', agentRuntime: 'auto' })).toBe('pi')
+    expect(resolveAgentRuntime({ providerType: 'anthropic', agentRuntime: 'codex' })).toBe('pi')
     expect(resolveAgentRuntime({ providerType: 'pi', piAuthProvider: 'google', agentRuntime: 'claude-code' })).toBe('pi')
+    expect(resolveAgentRuntime({ providerType: 'pi', piAuthProvider: 'google', defaultModel: 'gemini-4-hydrogen' })).toBe('pi')
   })
 })
 

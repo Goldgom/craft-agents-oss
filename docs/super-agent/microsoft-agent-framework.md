@@ -1,6 +1,6 @@
 # Microsoft Agent Framework 协作运行时
 
-超级智能体的执行宿主使用 Microsoft Agent Framework Python SDK `agent-framework-core==1.21.0`。模型连接、工具、流式事件和权限由原有 TokenBird 节点会话提供，不需要 Azure 账户或额外模型凭据。
+动态团队由 TokenBird 调度器直接调用节点会话。以下工作流适配器用于旧架构团队，其执行宿主使用 Microsoft Agent Framework Python SDK `agent-framework-core==1.21.0`。模型连接、工具、流式事件和权限由原有 TokenBird 节点会话提供，不需要 Azure 账户或额外模型凭据。
 
 ## 执行路径
 

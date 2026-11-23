@@ -9,7 +9,7 @@ import { dump, load } from 'js-yaml'
 import semver from 'semver'
 
 const root = resolve(import.meta.dir, '..')
-export const DEFAULT_REPOSITORY = 'Goldgom/token-bird'
+export const DEFAULT_REPOSITORY = 'tokennest/TokenBird'
 const targets = ['win-x64', 'mac-x64', 'mac-arm64', 'linux-x64']
 const required = ['TokenBird-x64.exe', 'TokenBird-x64.exe.blockmap', 'TokenBird-x64.AppImage',
   'TokenBird-x64.dmg', 'TokenBird-arm64.dmg', 'TokenBird-x64.zip', 'TokenBird-arm64.zip',

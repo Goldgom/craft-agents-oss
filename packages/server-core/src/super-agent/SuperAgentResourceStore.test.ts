@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { CredentialManager } from '@tokenbird/shared/credentials'
 import { SecureStorageBackend } from '@tokenbird/shared/credentials/backends/secure-storage'
 import { loadWorkspaceSources, saveSourceConfig } from '@tokenbird/shared/sources'
 import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
-import { SuperAgentResourceStore } from './SuperAgentResourceStore'
+import { SuperAgentResourceStore, superAgentSchedulesPath } from './SuperAgentResourceStore'
 import { superAgentFixture, until } from './SuperAgentTestSupport'
 
 const source = { id: 'shared-api', slug: 'shared-api', name: 'Shared API', type: 'api' as const, provider: 'custom', enabled: true, api: { baseUrl: 'https://example.com', authType: 'bearer' as const }, createdAt: 1, updatedAt: 1 }
@@ -32,6 +32,25 @@ test('all modes see the same source and credential data, including non-path work
   await f.store.access('workspace-id', f.rootPath, 'save-credentials', [{ op: 'upsert', id: { type: 'saved_credential', workspaceId: 'workspace-id', name: 'account' }, credential: { value: 'updated-secret' } }])
   expect((await f.manager.get({ type: 'saved_credential', workspaceId: 'workspace-id', name: 'account' }))?.value).toBe('updated-secret')
   await expect(f.store.access('workspace-id', f.rootPath, 'save-credentials', [{ op: 'delete', id: { type: 'saved_credential', workspaceId: 'foreign', name: 'account' } }])).rejects.toThrow('outside')
+})
+
+test('team schedules can be edited and run without touching workspace automations', async () => {
+  const f = await fixture()
+  const ordinary = JSON.stringify({ automations: { SchedulerTick: [{ id: 'daily', cron: '* * * * *', actions: [{ type: 'prompt', prompt: 'ordinary' }] }] } })
+  await writeFile(join(f.rootPath, 'automations.json'), ordinary)
+  const requests: string[] = []
+  const store = new SuperAgentResourceStore(f.manager, async (_id, text) => { requests.push(text) })
+  const matcher = { cron: '0 9 * * *', actions: [{ type: 'prompt', prompt: 'team request' }] }
+  await store.access('workspace-id', f.rootPath, 'update-schedule', { id: 'daily', matcher })
+  await store.access('workspace-id', f.rootPath, 'update-schedule', { id: 'daily', enabled: false })
+  const result = await store.access('workspace-id', f.rootPath, 'test-automation', { id: 'daily' }) as { executionResults: unknown[] }
+  expect(result.executionResults).toEqual([expect.objectContaining({ ok: true, result: { queued: true, type: 'prompt' } })])
+  expect(requests).toEqual(['team request'])
+  expect((await store.snapshot('workspace-id', f.rootPath)).automations.automations.SchedulerTick?.[0]).toMatchObject({ id: 'daily', enabled: false })
+  expect(await readFile(join(f.rootPath, 'automations.json'), 'utf8')).toBe(ordinary)
+  expect(await readFile(join(superAgentSchedulesPath(f.rootPath), 'automations-history.jsonl'), 'utf8')).toContain('team request')
+  await store.access('workspace-id', f.rootPath, 'update-schedule', { id: 'daily', remove: true })
+  expect((await store.snapshot('workspace-id', f.rootPath)).automations.automations.SchedulerTick).toEqual([])
 })
 
 test('encrypted backup restores resources and credentials into another workspace without plaintext secrets', async () => {

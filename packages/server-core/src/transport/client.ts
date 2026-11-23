@@ -12,6 +12,8 @@
 import {
   PROTOCOL_VERSION,
   REQUEST_TIMEOUT_MS,
+  FILE_DIALOG_TIMEOUT_MS,
+  isFileDialogChannel,
   RPC_CHANNELS,
   STUDIO_IMAGE_REQUEST_TIMEOUT_MS,
   isStudioTextChannel,
@@ -237,7 +239,11 @@ export class WsRpcClient implements RpcClient {
       }
 
       const id = crypto.randomUUID()
-      const timeoutMs = channel === RPC_CHANNELS.studio.GENERATE_IMAGE
+      const timeoutMs = isFileDialogChannel(channel)
+        ? Math.max(this.requestTimeout, FILE_DIALOG_TIMEOUT_MS)
+        : channel === RPC_CHANNELS.tokennest.VOICE
+          ? Math.max(this.requestTimeout, 125_000)
+        : channel === RPC_CHANNELS.studio.GENERATE_IMAGE
         ? Math.max(this.requestTimeout, STUDIO_IMAGE_REQUEST_TIMEOUT_MS)
         : channel === RPC_CHANNELS.agentPlugins.TEST_FRAMEWORK
           ? Math.max(this.requestTimeout, FRAMEWORK_TEST_REQUEST_TIMEOUT_MS)

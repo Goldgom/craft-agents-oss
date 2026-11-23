@@ -25,6 +25,7 @@ import { PromptHandler, EventLogHandler, WebhookHandler, ScriptHandler, HostedSc
 import { type AutomationsConfig, type AutomationEvent, type AutomationMatcher, type PendingPrompt, type WebhookActionResult, type ScriptActionResult, type AppEvent, type AgentEvent, type SdkAutomationCallbackMatcher, type SdkAutomationInput } from './types.ts';
 import { buildPageRefreshMatchers } from '../pages/refresh.ts';
 import { validateAutomationsConfig } from './validation.ts';
+import { retireScheduledEffects } from './scheduled-effects.ts';
 import { matcherMatchesSdk } from './utils.ts';
 import { SchedulerService, type SchedulerTickPayload } from '../scheduler/scheduler-service.ts';
 
@@ -50,7 +51,7 @@ export interface AutomationSystemOptions {
   /** Whether to start the scheduler service (default: false) */
   enableScheduler?: boolean;
   /** Called when prompts are ready to be executed */
-  onPromptsReady?: (prompts: PendingPrompt[]) => void;
+  onPromptsReady?: (prompts: PendingPrompt[]) => void | Promise<void>;
   /** Called when webhook results are available */
   onWebhookResults?: (results: WebhookActionResult[]) => void;
   /** Called when script results are available */
@@ -139,8 +140,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
         return;
       }
 
-      this.config = validation.config;
-      this.backfillIds(configPath, raw);
+      this.config = this.backfillIds(configPath, raw) ? validateAutomationsConfig(raw).config : validation.config;
       this.rotateHistory();
       const actionCount = this.getActionCount();
       log.debug(`[AutomationSystem] Loaded ${actionCount} actions from ${configPath}`);
@@ -171,8 +171,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
         return { success: false, automationCount: 0, errors: validation.errors };
       }
 
-      this.config = validation.config;
-      this.backfillIds(configPath, raw);
+      this.config = this.backfillIds(configPath, raw) ? validateAutomationsConfig(raw).config : validation.config;
       this.hostedScriptHandler?.refresh();
       const actionCount = this.getActionCount();
       log.debug(`[AutomationSystem] Reloaded ${actionCount} actions`);
@@ -188,11 +187,11 @@ export class AutomationSystem implements AutomationsConfigProvider {
    * Operates on the already-parsed raw JSON to avoid re-reading from disk.
    * Only writes if IDs were actually missing — no-op on subsequent loads.
    */
-  private backfillIds(configPath: string, raw: unknown): void {
+  private backfillIds(configPath: string, raw: unknown): boolean {
     try {
       const obj = raw as Record<string, unknown>;
       const eventMap = (obj.automations ?? obj.tasks ?? obj.hooks) as Record<string, unknown[]> | undefined;
-      if (!eventMap) return;
+      if (!eventMap) return false;
 
       let changed = false;
       for (const matchers of Object.values(eventMap)) {
@@ -206,8 +205,10 @@ export class AutomationSystem implements AutomationsConfigProvider {
         writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
         log.debug('[AutomationSystem] Backfilled missing matcher IDs');
       }
+      return changed;
     } catch {
       // Non-critical — IDs will be backfilled on next mutation via IPC
+      return false;
     }
   }
 
@@ -348,11 +349,13 @@ export class AutomationSystem implements AutomationsConfigProvider {
     this.scheduler = new SchedulerService(async (payload: SchedulerTickPayload) => {
       await this.eventBus.emit('SchedulerTick', {
         workspaceId: this.options.workspaceId,
-        timestamp: Date.now(),
+        timestamp: Date.parse(payload.timestamp),
+        scheduled: true,
         localTime: payload.localTime,
         utcTime: payload.timestamp,
-      });
-    });
+      }, true);
+    }, join(this.options.workspaceRootPath, 'automations-scheduler.checkpoint'), Date.now,
+      timestamp => retireScheduledEffects(this.options.workspaceRootPath, timestamp));
 
     this.scheduler.start();
     log.debug(`[AutomationSystem] Scheduler started`);
@@ -596,6 +599,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
    */
   async dispose(): Promise<void> {
     if (this.disposed) return;
+    this.disposed = true;
 
     log.debug(`[AutomationSystem] Disposing for workspace: ${this.options.workspaceId}`);
 
@@ -605,6 +609,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
     // Dispose handlers
     this.promptHandler?.dispose();
     this.webhookHandler?.dispose();
+    this.scriptHandler?.dispose();
     this.hostedScriptHandler?.dispose();
     await this.eventLogHandler?.dispose();
 
@@ -614,7 +619,6 @@ export class AutomationSystem implements AutomationsConfigProvider {
     // Clear metadata
     this.lastKnownMetadata.clear();
 
-    this.disposed = true;
     log.debug(`[AutomationSystem] Disposed`);
   }
 }

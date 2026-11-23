@@ -2,6 +2,7 @@ import { expect, it } from 'bun:test'
 import { canvasExportInfo } from './canvas-export'
 
 it('routes real canvas export bytes to matching extensions and browser MIME types',()=>{
+  expect(canvasExportInfo({action:'generate_gif'})).toEqual({mime:'image/gif',extension:'gif',extensions:['.gif']})
   expect(canvasExportInfo({action:'export_image',format:'jpeg'})).toEqual({mime:'image/jpeg',extension:'jpg',extensions:['.jpg','.jpeg']})
   expect(canvasExportInfo({action:'export_image',format:'webp'})).toEqual({mime:'image/webp',extension:'webp',extensions:['.webp']})
   expect(canvasExportInfo({action:'export_image'}).extensions).toEqual(['.png'])

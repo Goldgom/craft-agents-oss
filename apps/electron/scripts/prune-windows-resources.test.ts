@@ -8,6 +8,10 @@ const temporaryRoots: string[] = []
 const retainedFiles = [
   'resources/vendor/bun/bun.exe',
   'resources/app/resources/bin/win32-x64/uv.exe',
+  'resources/app/resources/bin/win32-x64/ffmpeg.exe',
+  'resources/app/resources/bin/win32-x64/ffprobe.exe',
+  'resources/app/resources/bin/win32-x64/.ffmpeg-build.json',
+  'resources/app/resources/bin/win32-x64/ffmpeg-licenses/TOKENBIRD-NOTICE.txt',
   'resources/app/resources/bin/pdf-tool.cmd',
   'resources/app/resources/bridge-mcp-server/index.js',
   'resources/app/resources/session-mcp-server/index.js',

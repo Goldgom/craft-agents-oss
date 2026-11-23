@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { homedir } from 'node:os';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { getConfigDir } from '../config/paths.ts';
 import { getAgentPluginCatalog, getAgentPluginDescriptor } from './catalog.ts';
 import { loadAgentPluginManifests, saveAgentPluginManifest, refreshAgentPluginCatalog, getAgentPluginFingerprint } from './storage.ts';
-import { createBundledAgentManifest } from './presets.ts';
+import { createAntigravityManifest, createBundledAgentManifest } from './presets.ts';
 import { defaultFrameworkConfiguration, FRAMEWORK_FEATURES, frameworkFeatureOptions,
   type BackendFrameworkConfiguration, type BackendFrameworkCatalog } from './frameworks.ts';
 import type { AgentPluginRuntime } from './types.ts';
@@ -25,6 +26,14 @@ const schema = z.object({ id: z.string().regex(/^(pi|codex|claude-code|plugin:[a
 const detected = new Map<AgentPluginRuntime, { executablePath?: string; entrypointPath?: string }>();
 export function setDetectedFrameworkLocation(id: AgentPluginRuntime, location: { executablePath?: string; entrypointPath?: string }): void {
   detected.set(id, location);
+}
+
+function detectAntigravity(): string | undefined {
+  const name = process.platform === 'win32' ? 'agy.exe' : 'agy';
+  const locations = [...(process.env.PATH ?? process.env.Path ?? '').split(delimiter).filter(isAbsolute),
+    ...(process.platform === 'win32' && process.env.LOCALAPPDATA ? [join(process.env.LOCALAPPDATA, 'agy', 'bin')]
+      : [join(homedir(), '.local', 'bin')])];
+  return locations.map(root => join(root, name)).find(existsSync);
 }
 
 function readSettings(): BackendFrameworkConfiguration[] {
@@ -48,6 +57,12 @@ export function validateBackendFrameworkConfiguration(value: unknown): BackendFr
     if (!frameworkFeatureOptions(framework, feature).includes(configuration.features[feature])) {
       throw new Error(`Unsupported implementation for ${feature}`);
     }
+  }
+  if (configuration.id === 'plugin:antigravity') {
+    if (!configuration.executablePath || /^agy(?:\.exe)?$/i.test(configuration.executablePath)) {
+      configuration.executablePath = detectAntigravity() ?? '';
+    }
+    if (!isAbsolute(configuration.executablePath)) throw new Error('Specify the absolute path to agy, or install the official Antigravity CLI');
   }
   if (configuration.id.startsWith('plugin:') && !configuration.executablePath) throw new Error('Specify the agent Python or bridge executable');
   if (configuration.id === 'plugin:hermes' && !configuration.projectPath) throw new Error('Specify the Hermes project directory');
@@ -79,13 +94,15 @@ export function getBackendFrameworkCatalog(): BackendFrameworkCatalog {
     const manifest = manifests.find(item => item.id === framework.id);
     // Upgrade existing bridge manifests without exporting arbitrary environment variables.
     if (manifest && !settings.some(item => item.id === framework.id)) {
-      configuration.executablePath = manifest.transport.command;
+      configuration.executablePath = framework.id === 'plugin:antigravity' && manifest.transport.command === 'tokenbird:python'
+        ? manifest.transport.args[1] ?? '' : manifest.transport.command;
       if (framework.id === 'plugin:hermes') {
         const index = manifest.transport.args.indexOf('--hermes-root');
         configuration.projectPath = index < 0 ? '' : manifest.transport.args[index + 1] ?? '';
       }
     }
-    return { ...framework, configuration, detectedLocation: detected.get(framework.id) };
+    return { ...framework, configuration, detectedLocation: framework.id === 'plugin:antigravity'
+      ? { executablePath: detectAntigravity() } : detected.get(framework.id) };
   }), errors: catalog.errors };
 }
 
@@ -94,7 +111,9 @@ export function saveBackendFrameworkConfiguration(value: unknown): BackendFramew
   const settings = readSettings(); // Validate storage before updating either store.
   if (configuration.id.startsWith('plugin:')) {
     const existing = loadAgentPluginManifests().manifests.find(item => item.id === configuration.id);
-    if (configuration.id === 'plugin:hermes' || configuration.id === 'plugin:dsh') {
+    if (configuration.id === 'plugin:antigravity') {
+      saveAgentPluginManifest({ ...createAntigravityManifest(configuration.executablePath), enabled: existing?.enabled ?? true });
+    } else if (configuration.id === 'plugin:hermes' || configuration.id === 'plugin:dsh') {
       const manifest = createBundledAgentManifest({ backend: configuration.id === 'plugin:hermes' ? 'hermes' : 'dsh',
         pythonPath: configuration.executablePath, hermesRoot: configuration.projectPath });
       saveAgentPluginManifest({ ...manifest, ...(existing ? { enabled: existing.enabled,

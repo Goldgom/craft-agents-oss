@@ -35,6 +35,22 @@ beforeEach(() => {
 afterEach(() => { clearSessionExecutionPolicy(sessionId); cleanupModeState(sessionId); rmSync(temp, { recursive: true, force: true }); });
 
 describe('rebuilt Super Agent role boundaries', () => {
+  test('page tools are readable by management roles and writable only by workers', () => {
+    const roles = ['coordinator', 'planner', 'orchestrator', 'worker'] as const;
+    for (const role of roles) {
+      const sessionId = `pages-${role}`;
+      setSessionExecutionPolicy(sessionId, { ...policy, role, architecture: 'dynamic', roleTopologyVersion: 2,
+        fullControl: false, readFiles: role !== 'coordinator', writeFiles: role === 'worker', runPrograms: false, browser: false });
+      expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__get_page', { slug: 'home' }).allowed, role).toBe(role !== 'coordinator');
+      expect(checkSessionExecutionPolicy(sessionId, 'mcp__session__create_page', { name: 'Home' }).allowed).toBe(role === 'worker');
+    }
+    const coordinatorFullControl = 'pages-coordinator-full-control';
+    setSessionExecutionPolicy(coordinatorFullControl, { ...policy, role: 'coordinator', architecture: 'dynamic', roleTopologyVersion: 2, fullControl: true, readFiles: true, writeFiles: true, runPrograms: true, browser: true });
+    expect(checkSessionExecutionPolicy(coordinatorFullControl, 'mcp__session__get_page', { slug: 'home' }).allowed).toBe(false);
+    expect(checkSessionExecutionPolicy(coordinatorFullControl, 'mcp__other__get_page', { slug: 'home' }).allowed).toBe(false);
+    for (const role of roles) clearSessionExecutionPolicy(`pages-${role}`);
+    clearSessionExecutionPolicy(coordinatorFullControl);
+  });
   test('evidence-based recovery is available to internal roles without granting checkpoint writes or bypassing interaction boundaries', () => {
     for (const fullControl of [false, true]) for (const role of ['coordinator', 'planner', 'orchestrator', 'worker'] as const) {
       setSessionExecutionPolicy(sessionId, { ...policy, architecture: 'dynamic', roleTopologyVersion: 2, role, fullControl, readFiles: false, writeFiles: false });

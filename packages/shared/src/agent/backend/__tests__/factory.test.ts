@@ -7,7 +7,7 @@
  * - LLM connection type mapping
  * - Available providers list
  */
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { describe, it, expect, beforeEach, spyOn } from 'bun:test';
 import { join } from 'node:path';
 import {
   detectProvider,
@@ -30,6 +30,8 @@ import {
 } from '../factory.ts';
 import type { BackendConfig } from '../types.ts';
 import type { Workspace, LlmConnection } from '../../../config/storage.ts';
+import * as configStorage from '../../../config/storage.ts';
+import { getCredentialManager } from '../../../credentials/index.ts';
 import type { SessionConfig as Session } from '../../../sessions/storage.ts';
 import { ClaudeAgent } from '../../claude-agent.ts';
 import { PiAgent } from '../../pi-agent.ts';
@@ -70,6 +72,83 @@ function createTestConfig(overrides: Partial<BackendConfig> = {}): BackendConfig
     ...overrides,
   };
 }
+
+describe('model-aware runtime selection', () => {
+  it('uses Codex for eligible GPT models and keeps Pi for other models and explicit overrides', () => {
+    const connection: LlmConnection = {
+      slug: 'gateway', name: 'Gateway', providerType: 'pi_compat', authType: 'api_key_with_endpoint',
+      baseUrl: 'https://gateway.example.test/v1', customEndpoint: { api: 'openai-responses' },
+      createdAt: 1, defaultModel: 'gpt-6.2-sol', models: ['gpt-6.2-sol', 'gemini-4-hydrogen'],
+    };
+    const baseConfig = createTestConfig();
+    expect(createConfigFromConnection(connection, baseConfig).agentRuntime)
+      .toBe(resolveNativeCodexBinary() ? 'codex' : 'pi');
+    expect(createConfigFromConnection(connection, { ...baseConfig, model: 'gemini-4-hydrogen' }).agentRuntime).toBe('pi');
+    expect(createConfigFromConnection({ ...connection, agentRuntime: 'pi' }, baseConfig).agentRuntime).toBe('pi');
+    expect(createConfigFromConnection({ ...connection, customEndpoint: { api: 'openai-completions' } }, baseConfig).agentRuntime).toBe('pi');
+  });
+
+  it('selects Claude Code for Messages gateways and uses Pi for the same model on Android', () => {
+    const connection: LlmConnection = {
+      slug: 'gateway', name: 'Gateway', providerType: 'pi_compat', authType: 'api_key_with_endpoint',
+      baseUrl: 'https://gateway.example.test/v1', customEndpoint: { api: 'anthropic-messages' },
+      createdAt: 1, defaultModel: 'claude-sonnet-4-6', models: ['claude-sonnet-4-6', 'custom-model'],
+      agentRuntime: 'auto',
+    };
+    const config = createTestConfig();
+    expect(createConfigFromConnection(connection, config).agentRuntime).toBe('claude-code');
+    expect(createConfigFromConnection(connection, { ...config, model: 'custom-model' }).agentRuntime).toBe('pi');
+
+    const oldAndroid = process.env.TOKENBIRD_ANDROID;
+    process.env.TOKENBIRD_ANDROID = 'true';
+    try {
+      const selected = createConfigFromConnection(connection, config);
+      expect(selected.agentRuntime).toBe('pi');
+      expect(selected.model).toBe('claude-sonnet-4-6');
+      expect(selected.runtime?.customEndpoint).toEqual({ api: 'anthropic-messages' });
+      expect(() => createConfigFromConnection({ ...connection, agentRuntime: 'claude-code' }, config)).toThrow('requires a compatible remote server');
+    } finally {
+      if (oldAndroid === undefined) delete process.env.TOKENBIRD_ANDROID;
+      else process.env.TOKENBIRD_ANDROID = oldAndroid;
+    }
+  });
+
+  it('keeps concurrent Claude Messages gateway keys and endpoint overrides per session', async () => {
+    const connection: LlmConnection = {
+      slug: 'gateway', name: 'Gateway', providerType: 'pi_compat', authType: 'api_key_with_endpoint',
+      baseUrl: 'https://first.example.test/v1', customEndpoint: { api: 'anthropic-messages' },
+      createdAt: 1, defaultModel: 'claude-sonnet-4-6',
+    };
+    const second = { ...connection, slug: 'second', baseUrl: 'https://second.example.test/relay/v1/' };
+    const lookup = spyOn(configStorage, 'getLlmConnection').mockImplementation(slug => slug === second.slug ? second : connection);
+    const manager = getCredentialManager();
+    const lookupApiKey = spyOn(manager, 'getLlmApiKey').mockImplementation(async slug => slug + '-fixture-key');
+    const lookupCredential = spyOn(manager, 'get').mockResolvedValue(null);
+    const inheritedKey = process.env.ANTHROPIC_API_KEY;
+    const inheritedEndpoint = process.env.ANTHROPIC_BASE_URL;
+    const firstAgent = new ClaudeAgent(createConfigFromConnection(connection, createTestConfig()));
+    const secondAgent = new ClaudeAgent(createConfigFromConnection(second, createTestConfig()));
+    try {
+      const results = await Promise.all([firstAgent.postInit(), secondAgent.postInit()]);
+      expect(results.map(result => result.authInjected)).toEqual([true, true]);
+      expect(firstAgent['config'].envOverrides).toMatchObject({
+        ANTHROPIC_API_KEY: 'gateway-fixture-key', ANTHROPIC_BASE_URL: 'https://first.example.test',
+        ANTHROPIC_AUTH_TOKEN: '', CLAUDE_CODE_OAUTH_TOKEN: '',
+      });
+      expect(secondAgent['config'].envOverrides).toMatchObject({
+        ANTHROPIC_API_KEY: 'second-fixture-key', ANTHROPIC_BASE_URL: 'https://second.example.test/relay',
+      });
+      expect(process.env.ANTHROPIC_API_KEY).toBe(inheritedKey);
+      expect(process.env.ANTHROPIC_BASE_URL).toBe(inheritedEndpoint);
+    } finally {
+      firstAgent.destroy();
+      secondAgent.destroy();
+      lookup.mockRestore();
+      lookupApiKey.mockRestore();
+      lookupCredential.mockRestore();
+    }
+  });
+});
 
 describe('detectProvider', () => {
   it('retains TokenNest transport when creating connection config without host runtime paths', () => {

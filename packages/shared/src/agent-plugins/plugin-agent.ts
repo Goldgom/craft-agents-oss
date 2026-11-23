@@ -184,6 +184,11 @@ export class PluginAgent extends BaseAgent {
 
   protected async *chatImpl(message: string, attachments?: FileAttachment[], options?: ChatOptions): AsyncGenerator<AgentEvent> {
     if (this.processing) throw new Error('Agent plugin is already processing a turn');
+    if (this.manifest.id === 'plugin:antigravity' && getSessionExecutionPolicy(this._sessionId)) {
+      yield { type: 'error', message: 'Antigravity native tools cannot enforce Super Agent node permissions. Choose another backend for this node.' };
+      yield { type: 'complete' };
+      return;
+    }
     this.processing = true; this.turnId = randomUUID(); this.queue.reset(); this.queuedBytes = 0;
     const currentTurnId = this.turnId;
     let request: Promise<void> | undefined;
@@ -237,10 +242,12 @@ export class PluginAgent extends BaseAgent {
   }
 
   async runMiniCompletion(prompt: string): Promise<string | null> {
+    if (this.manifest.id === 'plugin:antigravity') return null;
     return (await this.queryLlm({ prompt })).text;
   }
 
   async queryLlm(request: LLMQueryRequest): Promise<LLMQueryResult> {
+    if (this.manifest.id === 'plugin:antigravity') throw new Error('Antigravity does not provide auxiliary model inference');
     if (!this.manifest.capabilities.includes('utilityCompletion')) {
       if (!this.config.connectionSlug) throw new Error('Host utility inference requires a model connection');
       if (!this.utilityBackend) {

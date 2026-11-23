@@ -38,7 +38,7 @@ export interface CliArgs {
   model: string
   apiKey: string
   baseUrl: string
-  agentRuntime: '' | 'pi' | 'codex' | 'claude-code'
+  agentRuntime: '' | 'auto' | 'pi' | 'codex' | 'claude-code'
   codexLogin: boolean
 }
 
@@ -165,8 +165,8 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!baseUrl) baseUrl = process.env.LLM_BASE_URL ?? ''
   if (!agentRuntime) agentRuntime = process.env.LLM_AGENT_RUNTIME ?? ''
   if (!codexLogin) codexLogin = process.env.TOKENBIRD_CODEX_USE_LOGIN === '1'
-  if (agentRuntime && !['pi', 'codex', 'claude-code'].includes(agentRuntime)) {
-    throw new Error(`Invalid runtime "${agentRuntime}". Expected pi, codex, or claude-code.`)
+  if (agentRuntime && !['auto', 'pi', 'codex', 'claude-code'].includes(agentRuntime)) {
+    throw new Error(`Invalid runtime "${agentRuntime}". Expected auto, pi, codex, or claude-code.`)
   }
 
   return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl, agentRuntime: agentRuntime as CliArgs['agentRuntime'], codexLogin }
@@ -594,8 +594,8 @@ async function setupLlmConnection(
   if (args.agentRuntime === 'codex' && (provider !== 'openai' || !!baseUrl)) {
     throw new Error('The codex runtime requires a direct OpenAI provider connection.')
   }
-  if (args.agentRuntime === 'claude-code' && (provider !== 'anthropic' || !!baseUrl)) {
-    throw new Error('The claude-code runtime requires a direct Anthropic provider connection.')
+  if (args.agentRuntime === 'claude-code' && provider !== 'anthropic') {
+    throw new Error('The claude-code runtime requires an Anthropic Messages connection.')
   }
   if (args.codexLogin && args.agentRuntime !== 'codex') {
     throw new Error('--codex-login requires --runtime codex.')
@@ -1125,8 +1125,8 @@ export function getValidateSteps(): ValidateStep[] {
         if (agentRuntime === 'codex' && (requestedProvider !== 'openai' || !!ctx.baseUrl)) {
           return 'setup failed: the codex runtime requires a direct OpenAI provider connection'
         }
-        if (agentRuntime === 'claude-code' && (requestedProvider !== 'anthropic' || !!ctx.baseUrl)) {
-          return 'setup failed: the claude-code runtime requires a direct Anthropic provider connection'
+        if (agentRuntime === 'claude-code' && requestedProvider !== 'anthropic') {
+          return 'setup failed: the claude-code runtime requires an Anthropic Messages connection'
         }
         if (ctx.codexLogin && agentRuntime !== 'codex') {
           return 'setup failed: --codex-login requires --runtime codex'
@@ -1989,7 +1989,7 @@ LLM Configuration (for 'run' command):
   --model <id>           Model to use (or $LLM_MODEL)
   --api-key <key>        API key (or $LLM_API_KEY, or provider-specific e.g. $OPENAI_API_KEY)
   --base-url <url>       Custom API endpoint (or $LLM_BASE_URL)
-  --runtime <protocol>   Agent runtime: pi, codex, or claude-code (or $LLM_AGENT_RUNTIME)
+  --runtime <protocol>   Agent runtime: auto (default), pi, codex, or claude-code (or $LLM_AGENT_RUNTIME)
   --codex-login          Reuse local \`codex login\` auth (requires --runtime codex; or $TOKENBIRD_CODEX_USE_LOGIN=1)
 
 Commands:

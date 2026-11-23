@@ -1,5 +1,7 @@
 appId: top.goldgom.tokenbird
-productName: 词元鸟
+# Keep the package identity stable across releases. Localized window, menu and
+# installer copy is supplied by the application UI and installer languages.
+productName: TokenBird
 copyright: Copyright © 2026 TokenNest
 
 electronVersion: "39.2.7"
@@ -59,7 +61,7 @@ files:
   - resources/bin/ical-tool.cmd
   - resources/bin/desktop-control
   - resources/bin/desktop-control.cmd
-  # Include bundled uv binary (platform-specific, only the relevant one ships per build)
+  # Include bundled uv, FFmpeg, FFprobe and their license notices.
   - resources/bin/darwin-arm64/**/*
   - resources/bin/darwin-x64/**/*
   - resources/bin/win32-x64/**/*
@@ -101,6 +103,7 @@ mac:
     # Required for macOS to list the app under Privacy & Security > Local Network
     # and prompt for permission. Without it the app is silently denied LAN access
     # and never appears in the privacy pane (tokenbird#938).
+    NSMicrophoneUsageDescription: "Record speech for voice input and voice conversations."
     NSLocalNetworkUsageDescription: "TokenBird uses your local network to reach LAN addresses and devices you ask an agent to access, such as local servers or APIs."
   target:
     - target: dmg
@@ -116,6 +119,8 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extraResources:
+    - from: vendor/codex/darwin-${arch}
+      to: codex/darwin-${arch}
     # Thin core SDK (sdk.mjs + types). ~4 MB — present on every platform.
     - from: node_modules/@anthropic-ai/claude-agent-sdk
       to: app/node_modules/@anthropic-ai/claude-agent-sdk
@@ -198,6 +203,8 @@ win:
     - "!dist/resources/{bridge-mcp-server,session-mcp-server,pi-agent-server}{,/**/*}"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
+    - from: vendor/codex/win32-${arch}
+      to: codex/win32-${arch}
     - from: node_modules/@anthropic-ai/claude-agent-sdk
       to: app/node_modules/@anthropic-ai/claude-agent-sdk
     - from: node_modules/@anthropic-ai/claude-agent-sdk-binary
@@ -233,8 +240,8 @@ nsis:
   # The artifact hook builds a sidecar blockmap for installer download updates.
   useZip: true
   differentialPackage: false
-  # Follow the operating-system language for installer chrome. The installed
-  # product/shortcut name comes from the localized productName above.
+  # Follow the operating-system language for installer chrome while retaining
+  # the stable TokenBird package identity.
   installerLanguages:
     - en_US
     - zh_CN
@@ -258,6 +265,8 @@ linux:
         - x64
   artifactName: "TokenBird-${arch}.${ext}"
   extraResources:
+    - from: vendor/codex/linux-${arch}
+      to: codex/linux-${arch}
     - from: node_modules/@anthropic-ai/claude-agent-sdk
       to: app/node_modules/@anthropic-ai/claude-agent-sdk
     - from: node_modules/@anthropic-ai/claude-agent-sdk-binary

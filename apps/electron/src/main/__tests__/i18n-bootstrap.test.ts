@@ -40,6 +40,32 @@ function runScript(configDir: string, script: string): RunResult {
 }
 
 describe('main-process i18n bootstrap', () => {
+  it('uses the saved desktop language before browser detection and renders localized mode labels', () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'i18n-bootstrap-'))
+    try {
+      const r = runScript(configDir, `
+        import LanguageDetector from 'i18next-browser-languagedetector';
+        import { setupI18n } from '@tokenbird/shared/i18n';
+        import { setPersistedUiLanguage, getPersistedUiLanguage } from '@tokenbird/shared/config';
+        Object.defineProperty(globalThis, 'navigator', { value: { languages: ['en-US'] } });
+        setPersistedUiLanguage('zh-Hans');
+        const i18n = setupI18n([LanguageDetector], getPersistedUiLanguage());
+        const modes = ['agent', 'canvas', 'video', 'superAgent', 'switcher'];
+        console.log(JSON.stringify({
+          language: i18n.resolvedLanguage,
+          labels: modes.map(mode => i18n.t('studio.mode.' + mode)),
+        }));
+      `)
+      expect(r.exitCode).toBe(0)
+      expect(JSON.parse(r.stdout)).toEqual({
+        language: 'zh-Hans',
+        labels: ['智能体', '绘画', '视频制作', '超级智能体', '功能切换'],
+      })
+    } finally {
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
   it('hydrates main i18n from persisted uiLanguage', () => {
     const configDir = mkdtempSync(join(tmpdir(), 'i18n-bootstrap-'))
     try {

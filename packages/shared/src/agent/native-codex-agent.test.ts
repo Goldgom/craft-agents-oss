@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setSessionExecutionPolicy, clearSessionExecutionPolicy } from './core/session-execution-policy.ts';
 import * as preferences from '../config/preferences.ts';
-import { COMPACT_AGENT } from '../agents/types.ts';
 
 function createAgent(overrides: Partial<BackendConfig> = {}): NativeCodexAgent {
   const now = Date.now();
@@ -45,29 +44,26 @@ describe('extractChatGptAccountId', () => {
 });
 
 describe('NativeCodexAgent protocol adaptation', () => {
-  it('refreshes commit attribution on the next turn and reuses an unchanged thread', async () => {
+  it('updates commit attribution in user context without modifying native thread instructions', async () => {
     let enabled = false;
     const preference = spyOn(preferences, 'getCoAuthorPreference').mockImplementation(() => enabled);
-    const calls: Array<{ params: Record<string, unknown> }> = [];
+    const calls: Array<Record<string, unknown>> = [];
     const agent = createAgent();
     const client = {
       request: async (_method: string, params: Record<string, unknown>) => {
-        calls.push({ params });
-        return { thread: { id: `thread-${calls.length}` } };
+        calls.push(params);
+        return { thread: { id: 'thread-1' } };
       },
     } as never;
     try {
       expect(await agent['ensureThread'](client)).toBe('thread-1');
-      expect(String(calls[0]!.params.developerInstructions)).not.toContain('Co-Authored-By:');
-      expect(await agent['ensureThread'](client)).toBe('thread-1');
+      expect(calls[0]).not.toHaveProperty('developerInstructions');
+      expect(calls[0]).not.toHaveProperty('baseInstructions');
+      expect(JSON.stringify(agent['buildUserInput']('hello'))).not.toContain('Co-Authored-By:');
       enabled = true;
-      expect(await agent['ensureThread'](client)).toBe('thread-2');
-      expect(String(calls[1]!.params.developerInstructions)).toContain('Co-Authored-By: TokenBird');
-      enabled = false;
-      expect(await agent['ensureThread'](client)).toBe('thread-3');
-      expect(String(calls[2]!.params.developerInstructions)).not.toContain('Co-Authored-By:');
-      expect(await agent['ensureThread'](client)).toBe('thread-3');
-      expect(calls).toHaveLength(3);
+      expect(await agent['ensureThread'](client)).toBe('thread-1');
+      expect(JSON.stringify(agent['buildUserInput']('hello'))).toContain('Co-Authored-By: TokenBird');
+      expect(calls).toHaveLength(1);
     } finally {
       preference.mockRestore();
       agent.destroy();
@@ -253,7 +249,7 @@ describe('NativeCodexAgent protocol adaptation', () => {
       return { thread: { id: 'configured-thread' } };
     } } as never;
     await agent['ensureThread'](client);
-    expect(params?.config).toEqual({ model_auto_compact_token_limit: 80_000, compact_prompt: COMPACT_AGENT.prompt });
+    expect(params?.config).toEqual({ model_auto_compact_token_limit: 80_000 });
     agent.destroy();
   });
 

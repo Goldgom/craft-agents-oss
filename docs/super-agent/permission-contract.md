@@ -7,7 +7,11 @@
 3. **完全控制是应用权限的总开关。** 开启时不再受能力开关、目录内外限制、数据源白名单、自定义禁止规则、人工审批、行动门、Auto-review 或 Skill 前置条件阻挡。运行中开启时恢复原先可执行的待授权调用；关闭后恢复原有细分配置，不留下临时全权。
 4. **受限模式下审批决定由用户作出。** 自定义禁止规则与独立审查的拒绝意见进入申请说明，交用户决定，不能代替弹窗直接结束工具。批准绑定当前节点、调用 ID、完整参数、路径与策略版本；改参、重放或撤销不能复用。
 
+5. **视频工具沿用同一权限约定。** `video_tool` 的文件读取、写入、FFmpeg 执行和外部生成服务访问不足时，等待用户批准原调用；外部付费生成进入 financial 行动门。完全控制跳过能力、数据源、自定义规则和审查限制。`video-production/SKILL.md` 及其参考文件与其他内置技能一样可独立读取。视频生成服务密钥只通过工作台安全表单配置，不作为模型工具参数。节点在自身模型进程中分析脚本并保存分镜，不再启动额外分析 Agent；宿主通过独立执行上下文禁止节点自动分析，后台任务在真正分析前再次强制检查。模型参数不能放开该约束，前置检查后分镜被其他请求清空也不能间接启动 Agent。取消任务后仍保留同项目运行锁，直到旧执行、子进程与网络清理实际结束，避免新旧任务写回重叠。选定容器的节点不能通过视频服务转到宿主机执行 FFmpeg，可在所选容器中使用 Bash 与 FFmpeg。工作台按钮发起的视频任务明确运行在该工作区所在服务端。
+
 主节点、后台规划、派工协调、执行子节点的职责和相邻通信拓扑及工具协议、每节点模型进程串行、真实可用的连接与凭据、所选容器的实际挂载及网络条件继续按架构执行。完全控制下后台规划与派工协调节点可直接读取目录外资料，仍不获得工作节点的写入、程序执行或额外模型进程工具。
+
+视频任务的取消锁覆盖其执行 Promise、FFmpeg 子进程及下载清理。工作台独立分析会话仍由现有 SessionManager 处理停止；移除结果订阅与取消检查防止旧分析写回，不表示所有模型进程已同步退出。
 
 截图故障的具体回归：`task-orchestration/SKILL.md` 位于安装目录、未在节点 `allowSkills` 中时，主节点、后台规划、派工协调及执行子节点均能读取；不会再返回 `Path is outside the node environment`。
 
@@ -16,6 +20,9 @@
 - `packages/shared/src/agent/__tests__/base-agent-node-references.test.ts`
 - `packages/shared/src/agent/core/__tests__/session-execution-policy.test.ts`
 - `packages/shared/src/agent/core/__tests__/action-gates.test.ts`
+- `packages/shared/src/agent/core/__tests__/video-permissions.test.ts`
+- `packages/server-core/src/services/video/session-tool.test.ts`
+- `packages/server-core/src/services/video/service.test.ts`
 - `packages/server-core/src/sessions/node-policy-permissions.test.ts`
 - `packages/server-core/src/sessions/super-agent-session-settings.test.ts`
 - `apps/electron/src/renderer/pages/super-agent/SuperAgentPermissionDialog.isolated.ts`
@@ -35,3 +42,11 @@
 团队恢复采用保留主要节点进度、通信及任务板并重建执行子节点的方式。`recover-workers` 与彻底重置分开：先提交持久恢复屏障和执行代次，确认旧会话及受管准备操作停止后解除 worker 会话绑定；保留原会话、检查点、任务 ID、执行尝试、已提交协作动作及报告游标。主节点、规划节点和派工协调节点的健康会话保留；被中断的主要节点使用新会话接续已提交工作。恢复沿用当前权限、角色拓扑、连接和真实执行环境，不继承旧调用的一次性批准，不取消用户明确的停止、任务取消和用户阻塞。
 
 新执行代次拒绝旧会话派发操作和提交任务，但可将匹配的迟到终止回执补入原操作归档。未知原生 `Read/Glob/Grep/LS` 只读尝试可登记为 `executionOutcome=interrupted`，表示该尝试已结束，不表示读取成功或任务完成；其他未知副作用及未跟踪进程继续保留相关资源占用。完全控制不跳过执行代次、停止确认、证据对账、通信去重及资源串行要求。工具显示分类不得修改执行工具身份；参数哈希使用版本化规范化，旧回执继续按原规则核对。历史 Bash/Read 哈希仅在原私有日志的调用身份、完整参数及原结果均匹配时修复并审计。回归：`SuperAgentWorkerRecovery.test.ts`、`SuperAgentOperationRecovery.test.ts`、`SuperAgentNodeRecovery.test.ts`、`SuperAgentWorkerRecovery.isolated.ts`。
+
+画布 `canvas_tool action=generate_gif` 沿用原画布客户端通道与工具授权流程：可申请限制等待用户批准原调用，完全控制跳过应用限制；图像编码不调用额外模型、不启动程序或外部服务。导出路径仍通过桌面已有文件保存通道处理，拒绝覆盖现有文件。回归：`canvas-gif-permissions.test.ts`、`canvas-gif-schema.test.ts`、`scripts/test-studio-gif.ts`。
+
+模型自动选择后端时沿用会话和节点的执行策略。Codex 受控会话通过宿主动态工具执行文件与程序操作，关闭原生 Shell、文件编辑与图片读取工具。Claude Code 和 Codex 保留 CLI 自带的系统提示词，应用上下文作为会话消息传入。回归见 `native-codex-policy.isolated.ts` 和 `native-codex-agent.test.ts`。
+
+Auto 根据本回合的模型 ID 和执行主机支持的后端选路，手动选择优先。会话在下一次发送时切换运行时，运行中的回合继续由原进程处理。Android 本地使用 APK 自带的 Pi，远程会话由服务端执行。Claude Messages 网关通过当前连接的密钥使用 Claude Code。
+
+审批响应晚于原操作有效期时，宿主立即以拒绝释放原调用，并持久保存卡片的过期状态。等待用户决策的任务不会触发无进展巡检汇报。

@@ -9,10 +9,14 @@ test('registered schemas survive role filtering for intent handoff, orchestratio
   const names = (role: 'coordinator' | 'orchestrator' | 'worker') => filterSuperAgentTools(tools, role).map(tool => tool.name)
   for (const name of ['super_agent_intent', 'super_agent_deliver', 'super_agent_message']) expect(names('coordinator')).toContain(`mcp__session__${name}`)
   for (const name of ['super_agent_dispatch', 'super_agent_plan', 'super_agent_accept', 'super_agent_resources', 'super_agent_message']) expect(names('orchestrator')).toContain(`mcp__session__${name}`)
-  for (const role of ['coordinator', 'orchestrator'] as const) {
-    for (const name of ['Read', 'Bash', 'mcp__session__browser_tool', 'mcp__session__computer_use', 'mcp__research__search', 'mcp__other__super_agent_intent']) expect(names(role)).not.toContain(name)
-  }
-  for (const name of ['Read', 'Bash', 'mcp__research__search', 'mcp__session__super_agent_task', 'mcp__session__super_agent_resources']) expect(names('worker')).toContain(name)
+  for (const name of ['Read', 'Bash', 'mcp__session__browser_tool', 'mcp__session__computer_use', 'mcp__other__super_agent_intent']) expect(names('coordinator')).not.toContain(name)
+  expect(names('coordinator')).not.toContain('mcp__research__search')
+  expect(names('orchestrator')).toContain('mcp__research__search')
+  for (const name of ['Read', 'Bash', 'mcp__research__search', 'mcp__session__super_agent_task', 'mcp__session__super_agent_resources', 'mcp__session__list_pages', 'mcp__session__create_page']) expect(names('worker')).toContain(name)
+  expect(names('planner')).toContain('mcp__session__list_pages')
+  expect(names('orchestrator')).toContain('mcp__session__get_page')
+  expect(names('planner')).toContain('mcp__research__search')
+  expect(names('orchestrator')).toContain('mcp__research__search')
   for (const name of ['super_agent_intent', 'super_agent_deliver', 'super_agent_dispatch', 'super_agent_accept', 'call_llm', 'spawn_session']) expect(names('worker')).not.toContain(`mcp__session__${name}`)
   if (process.platform === 'win32') expect(names('worker')).toContain('mcp__session__computer_use')
   expect(filterSuperAgentTools(tools)).toBe(tools)

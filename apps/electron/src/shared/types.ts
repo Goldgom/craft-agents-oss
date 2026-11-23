@@ -57,6 +57,13 @@ export interface RemoteWorkspaceInfo {
   slug?: string;
 }
 
+export type RemoteCredentialField = 'token' | 'password' | 'passphrase'
+export type ServerSwitchResult = { success: true } | {
+  success: false
+  needsCredentialRepair?: true
+  missingCredential?: RemoteCredentialField
+}
+
 /** Current server context for the menu-bar server switcher / startup picker. */
 export interface StartupServerContext {
   mode: 'picker' | 'local' | 'remote'
@@ -303,7 +310,7 @@ import type {
 
 export interface ElectronAPI {
   getSuperAgent(workspaceId: string): Promise<import('@tokenbird/shared/super-agent').SuperAgentSnapshot>
-  saveSuperAgent(workspaceId: string, config: import('@tokenbird/shared/super-agent').SuperAgentConfig): Promise<import('@tokenbird/shared/super-agent').SuperAgentSnapshot>
+  saveSuperAgent(workspaceId: string, config: import('@tokenbird/shared/super-agent').SuperAgentConfig, policyConnection?: string): Promise<import('@tokenbird/shared/super-agent').SuperAgentSnapshot>
   superAgentCommand(workspaceId: string, command: import('@tokenbird/shared/super-agent').SuperAgentCommand): Promise<import('@tokenbird/shared/super-agent').SuperAgentSnapshot>
   // Session management
   getSessions(): Promise<Session[]>
@@ -479,12 +486,13 @@ export interface ElectronAPI {
   // ── Startup server location + server switching (direct IPC to main) ────
   /** Sync preload-local flag: 'picker' when the local service was skipped at startup. */
   startupMode?: 'picker' | 'normal'
+  startupUiLanguage?: import('@tokenbird/shared/i18n').LanguageCode
   /** Current server context: local embedded server, thin-client remote server, or picker. */
   getStartupContext(): Promise<StartupServerContext>
   /** Switch the frontend service while retaining running local agents: 'local', 'none', or a remote profile id. */
-  switchServer(target: string): Promise<{ success: boolean }>
+  switchServer(target: string): Promise<ServerSwitchResult>
   /** Alias for switchServer — used by the startup server picker page. */
-  selectStartupServer(target: string): Promise<{ success: boolean; needsCredentialRepair?: boolean }>
+  selectStartupServer(target: string): Promise<ServerSwitchResult>
   /** Persisted startup server location preference ('local' | 'none' | profileId). */
   getStartupLocation(): Promise<string>
   setStartupLocation(value: string): Promise<{ success: boolean }>
@@ -560,6 +568,7 @@ export interface ElectronAPI {
   startTokenNestOAuth(connectionSlug?: string): Promise<{ success: boolean; error?: string }>
   /** Open the wallet in an isolated app window; resolves when the window closes. */
   openTokenNestRecharge(url: string, connectionSlug?: string): Promise<void>
+  tokenNestVoice(action: 'asr' | 'tts', payload: string, connectionSlug?: string): Promise<string>
   getTokenNestRechargeUrl(connectionSlug: string): Promise<{ url: string; requiresWebsiteLogin: boolean }>
   checkTokenNestAuth(): Promise<import('@tokenbird/shared/auth').TokenNestAuthorizationIssue[]>
 
@@ -874,6 +883,7 @@ export interface ElectronAPI {
   exportAgentProfile(workspaceId?: string): Promise<unknown>
   importAgentProfile(input: string, workspaceId?: string): Promise<unknown>
   onAgentPluginsChanged(callback: () => void): () => void
+  executeVideo(input: import('@tokenbird/shared/video').VideoExecuteRequest): Promise<unknown>
   generateStudioImage(input: { connectionSlug: string; model: string; prompt: string; channelGroup?: string; imageBase64?: string; maskBase64?: string; size?: string; count?: number; transparentBackground?: boolean }): Promise<{ imageBase64: string; mimeType: string; channelGroup?: string; images: Array<{ imageBase64: string; mimeType: string }> }>
   assistStudioCanvas(input: { connectionSlug: string; model: string; channelGroup?: string; sessionId: string; sessionTitle: string; question: string; imageBase64?: string; selection?: { x: number; y: number; width: number; height: number }; priorQuestions?: string[]; history?: Array<{ role: 'user' | 'assistant'; text: string }>; thinkingLevel?: 'auto' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }): Promise<{ reply: string; operation: 'none' | 'generate' | 'inpaint' | 'outpaint' | 'adjust'; prompt?: string; adjustments?: { brightness?: number; contrast?: number; saturation?: number; hue?: number; temperature?: number; blur?: number; style?: 'none' | 'grayscale' | 'sepia' | 'vintage' | 'noir' } }>
   onStudioCanvasRequest(handler: (request: Record<string, unknown>) => Promise<unknown>): () => void

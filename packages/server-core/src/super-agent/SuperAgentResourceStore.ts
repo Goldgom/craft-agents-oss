@@ -6,9 +6,33 @@ import { getCredentialManager, type CredentialManager, type CredentialId } from 
 import { validateNativeCredentialChanges } from '@tokenbird/shared/credentials/native-validation'
 import { loadWorkspaceSources, saveSourceConfig, deleteSource, markSourceAuthenticated, type FolderSourceConfig } from '@tokenbird/shared/sources'
 import { validateSourceConfig } from '@tokenbird/shared/config/validators'
+import { AutomationMatcherSchema } from '@tokenbird/shared/automations/schemas'
 import { validateAutomationsConfig } from '@tokenbird/shared/automations/validation'
 import { superAgentResourceScope } from '@tokenbird/shared/super-agent/resource-scope'
-import { appendAutomationHistoryEntry, executeScriptAction, executeWebhookRequest, buildScriptEnv, type AutomationsConfig } from '@tokenbird/shared/automations'
+import { appendAutomationHistoryEntry, type AutomationsConfig } from '@tokenbird/shared/automations'
+
+export function superAgentSchedulesPath(workspaceRoot: string): string {
+  return join(workspaceRoot, 'super-agent', 'schedules')
+}
+
+const scheduleEdit = z.union([
+  z.object({ id: z.string().min(1).max(200), matcher: AutomationMatcherSchema }).strict(),
+  z.object({ id: z.string().min(1).max(200), enabled: z.boolean() }).strict(),
+  z.object({ id: z.string().min(1).max(200), remove: z.literal(true) }).strict(),
+])
+
+function validateTeamSchedules(value: unknown): AutomationsConfig {
+  const result = validateAutomationsConfig(value)
+  if (!result.valid || !result.config) throw new Error(result.errors.join('\n'))
+  const config = result.config
+  const rules = config.automations.SchedulerTick ?? []
+  if (Object.keys(config.automations).some(event => event !== 'SchedulerTick') ||
+      rules.some(rule => !rule.id || !rule.cron || rule.actions.some(action => action.type !== 'prompt')) ||
+      new Set(rules.map(rule => rule.id)).size !== rules.length) {
+    throw new Error('Team schedules require unique IDs, Cron expressions and Prompt actions')
+  }
+  return config
+}
 
 const slugSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,199}$/)
 
@@ -31,19 +55,23 @@ export class SuperAgentResourceStore {
 
   async initialize(workspaceRoot: string) {
     const scope = superAgentResourceScope(workspaceRoot)
-    await mkdir(scope.rootPath, { recursive: true })
+    await mkdir(superAgentSchedulesPath(scope.rootPath), { recursive: true })
     return scope
   }
 
-  async access(workspaceId: string, workspaceRoot: string, operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'save-credentials' | 'test-automation' | 'replay-automation', value?: unknown): Promise<unknown> {
+  async access(workspaceId: string, workspaceRoot: string, operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'update-schedule' | 'save-credentials' | 'test-automation' | 'replay-automation', value?: unknown): Promise<unknown> {
+    if (operation === 'test-automation' || operation === 'replay-automation') {
+      const { rootPath } = await this.initialize(workspaceRoot)
+      const executionResults = await this.runAutomation(workspaceId, superAgentSchedulesPath(rootPath), value)
+      return { ...await this.snapshot(workspaceId, workspaceRoot), executionResults }
+    }
     const previous = this.locks.get(workspaceRoot) ?? Promise.resolve()
     const next = previous.catch(() => undefined).then(async () => {
       const scope = await this.initialize(workspaceRoot)
+      const schedulingRoot = superAgentSchedulesPath(scope.rootPath)
       let encryptedExport: unknown
       if (operation === 'export') encryptedExport = await this.export(workspaceId, workspaceRoot, value)
       if (operation === 'import') await this.import(workspaceId, workspaceRoot, value)
-      let executionResults: unknown[] | undefined
-      if (operation === 'test-automation' || operation === 'replay-automation') executionResults = await this.runAutomation(workspaceId, scope.rootPath, value)
       if (operation === 'save-sources') {
         const request = z.object({ configs: z.array(z.unknown()).max(100), deletedSlugs: z.array(slugSchema).max(100).default([]) }).strict().parse(value)
         for (const config of request.configs) {
@@ -55,9 +83,25 @@ export class SuperAgentResourceStore {
         for (const slug of request.deletedSlugs) deleteSource(scope.rootPath, slug)
       }
       if (operation === 'save-automations') {
-        const validation = validateAutomationsConfig(value)
-        if (!validation.valid || !validation.config) throw new Error(validation.errors.join('\n'))
-        await atomicJson(join(scope.rootPath, 'automations.json'), validation.config)
+        await atomicJson(join(schedulingRoot, 'automations.json'), validateTeamSchedules(value))
+      }
+      if (operation === 'update-schedule') {
+        const request = scheduleEdit.parse(value)
+        const path = join(schedulingRoot, 'automations.json')
+        const config = validateTeamSchedules(await readJson(path, { automations: {} }))
+        const rules = config.automations.SchedulerTick ??= []
+        const index = rules.findIndex(rule => rule.id === request.id)
+        if ('matcher' in request) {
+          const incoming = validateTeamSchedules({ automations: { SchedulerTick: [{ ...request.matcher, id: request.id }] } })
+          const matcher = incoming.automations.SchedulerTick![0]!
+          if (index < 0) rules.push(matcher)
+          else rules[index] = matcher
+        } else {
+          if (index < 0) throw new Error('Schedule no longer exists')
+          if ('remove' in request) rules.splice(index, 1)
+          else rules[index] = { ...rules[index]!, enabled: request.enabled }
+        }
+        await atomicJson(path, validateTeamSchedules(config))
       }
       if (operation === 'save-credentials') {
         const changes = validateNativeCredentialChanges(value)
@@ -79,7 +123,7 @@ export class SuperAgentResourceStore {
           }
         }
       }
-      return { ...await this.snapshot(workspaceId, workspaceRoot), executionResults, encryptedExport }
+      return { ...await this.snapshot(workspaceId, workspaceRoot), encryptedExport }
     })
     this.locks.set(workspaceRoot, next)
     try { return await next } finally { if (this.locks.get(workspaceRoot) === next) this.locks.delete(workspaceRoot) }
@@ -96,8 +140,8 @@ export class SuperAgentResourceStore {
       Promise.all((await this.manager.list({ workspaceId, type: 'saved_credential' })).map(metadata)),
     ])
     return { credentialWorkspaceId: scope.credentialWorkspaceId, savedCredentialWorkspaceId: workspaceId, sources: loadWorkspaceSources(scope.rootPath), credentials,
-      automations: await readJson(join(scope.rootPath, 'automations.json'), { automations: {} }) as AutomationsConfig,
-      history: (await readFile(join(scope.rootPath, 'automations-history.jsonl'), 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return ''; throw error })).trim().split('\n').filter(Boolean).slice(-100).map(line => JSON.parse(line)),
+      automations: await readJson(join(superAgentSchedulesPath(scope.rootPath), 'automations.json'), { automations: {} }) as AutomationsConfig,
+      history: (await readFile(join(superAgentSchedulesPath(scope.rootPath), 'automations-history.jsonl'), 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return ''; throw error })).trim().split('\n').filter(Boolean).slice(-100).map(line => JSON.parse(line)),
       imports: await readJson(join(scope.rootPath, 'imports.json'), []),
       availableImports: { sources: loadWorkspaceSources(workspaceRoot).map(source => ({ slug: source.config.slug, name: source.config.name })), credentials: importCredentials,
         automations: await readJson(join(workspaceRoot, 'automations.json'), { automations: {} }) as AutomationsConfig } }
@@ -113,18 +157,9 @@ export class SuperAgentResourceStore {
       const started = Date.now()
       let ok = true, result: unknown
       try {
-        if (action.type === 'prompt') {
-          if (!this.onPrompt) throw new Error('Automation prompt execution is unavailable')
-          await this.onPrompt(workspaceId, action.prompt, id, randomUUID())
-          result = { queued: true, type: 'prompt' }
-        } else if (action.type === 'webhook') {
-          const response = await executeWebhookRequest(action)
-          ok = response.success; result = response
-        } else {
-          const response = await executeScriptAction({ ...action, timeoutMs: Math.min(action.timeoutMs ?? 25000, 25000) },
-            { workspaceRootPath: rootPath, env: buildScriptEnv('SchedulerTick', { workspaceId, timestamp: started }, { workspaceRootPath: rootPath }) })
-          ok = response.success; result = response
-        }
+        if (action.type !== 'prompt' || !this.onPrompt) throw new Error('Team schedule prompt execution is unavailable')
+        await this.onPrompt(workspaceId, action.prompt, id, randomUUID())
+        result = { queued: true, type: 'prompt' }
       } catch (error) { ok = false; result = { error: error instanceof Error ? error.message : String(error) } }
       results.push({ ok, type: action.type, result, durationMs: Date.now() - started })
       await appendAutomationHistoryEntry(rootPath, { id, ts: started, ok, ...(action.type === 'prompt' ? { prompt: action.prompt } : {}), ...(!ok ? { error: JSON.stringify(result) } : {}) })
@@ -142,7 +177,7 @@ export class SuperAgentResourceStore {
       if (credential) credentials.push({ op: 'upsert', id, credential })
     }
     const data = { version: 1, sources: loadWorkspaceSources(workspaceRoot).map(source => source.config),
-      automations: await readJson(join(workspaceRoot, 'automations.json'), { automations: {} }), credentials }
+      automations: await readJson(join(superAgentSchedulesPath(workspaceRoot), 'automations.json'), { automations: {} }), credentials }
     const salt = randomBytes(16), iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', scryptSync(password, salt, 32), iv)
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify(data), 'utf8'), cipher.final()])
@@ -173,10 +208,7 @@ export class SuperAgentResourceStore {
     }
     const credentials = bundle.credentials.length ? validateNativeCredentialChanges(bundle.credentials) : []
     for (const change of credentials) if (!['saved_credential', 'source_apikey', 'source_bearer', 'source_basic', 'source_oauth'].includes(change.id.type) || change.id.workspaceId !== (change.id.type === 'saved_credential' ? workspaceId : superAgentResourceScope(workspaceRoot).credentialWorkspaceId)) throw new Error('Credential is outside the shared workspace')
-    if (bundle.automations !== undefined) {
-      const validation = validateAutomationsConfig(bundle.automations)
-      if (!validation.valid) throw new Error(validation.errors.join('\n'))
-    }
+    const schedules = bundle.automations === undefined ? undefined : validateTeamSchedules(bundle.automations)
     const knownSources = new Set([...loadWorkspaceSources(workspaceRoot).map(source => source.config.slug), ...bundle.sources.map(source => (source as FolderSourceConfig).slug)])
     const prepared = []
     for (const change of credentials) {
@@ -192,9 +224,9 @@ export class SuperAgentResourceStore {
       prepared.push({ ...change, credential })
     }
     for (const config of bundle.sources) saveSourceConfig(workspaceRoot, config as FolderSourceConfig)
-    if (bundle.automations !== undefined) {
-      const validation = validateAutomationsConfig(bundle.automations)
-      await atomicJson(join(workspaceRoot, 'automations.json'), validation.config)
+    if (schedules) {
+      const { rootPath } = await this.initialize(workspaceRoot)
+      await atomicJson(join(superAgentSchedulesPath(rootPath), 'automations.json'), schedules)
     }
     for (const change of prepared) {
       if (change.op === 'delete') await this.manager.delete(change.id)

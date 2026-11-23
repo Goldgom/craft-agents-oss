@@ -133,7 +133,7 @@ jobs:
       - name: Validate, upload, verify and publish GitCode Release
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          GITCODE_REPOSITORY: ${{ vars.GITCODE_REPOSITORY || 'Goldgom/token-bird' }}
+          GITCODE_REPOSITORY: ${{ vars.GITCODE_REPOSITORY || 'tokennest/TokenBird' }}
         run: bun run scripts/gitcode-release.ts --tag "$RELEASE_TAG" --input dist/release-input
       - uses: actions/upload-artifact@v4
         if: always()

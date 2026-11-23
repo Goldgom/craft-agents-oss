@@ -56,7 +56,7 @@ import { isMac } from '@/lib/platform'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
 import { ImageSupportWarningBanner } from './ImageSupportWarningBanner'
-import { ANTHROPIC_MODELS, getModelShortName, getModelDisplayName, getModelContextWindow, type ModelDefinition } from '@config/models'
+import { ANTHROPIC_MODELS, getModelDisplayName, getModelContextWindow, type ModelDefinition } from '@config/models'
 import {
   resolveEffectiveConnectionSlug,
   isCompatProvider,
@@ -92,9 +92,13 @@ import { SftpToolbarButton } from './SftpToolbarButton'
 import {
   formatTokenCount,
   getAgentModelsForConnection,
+  getPickerModelName,
   groupConnectionsByProvider,
+  groupPickerConnectionModels,
+  groupPickerModels,
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
+import { ModelPickerGroups, ModelPickerSearch } from './ModelPickerGroups'
 import { useModelVisionToggle } from './useModelVisionToggle'
 import { ModelPeakValleyBadge } from './ModelPeakValleyBadge'
 
@@ -230,6 +234,8 @@ export interface FreeFormInputProps {
    * `enableCompactModelPicker`.
    */
   compactMode?: boolean
+  voiceInputControl?: React.ReactNode
+  voiceConversationControl?: React.ReactNode
   /**
    * When `compactMode` is true, render the compact (drawer-based) model
    * selector next to the permission-mode pill. Defaults to false so that
@@ -305,6 +311,8 @@ export function FreeFormInput({
   onFollowUpClick,
   onFollowUpIndexClick,
   compactMode = false,
+  voiceInputControl,
+  voiceConversationControl,
   enableCompactModelPicker = false,
   currentConnection,
   onConnectionChange,
@@ -573,6 +581,12 @@ export function FreeFormInput({
   const [isFocused, setIsFocused] = React.useState(false)
   const [inputMaxHeight, setInputMaxHeight] = React.useState(540)
   const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
+  const [modelQuery, setModelQuery] = React.useState('')
+  const searchingModels = modelQuery.trim().length > 0
+  const modelConnectionGroups = React.useMemo(
+    () => modelDropdownOpen && pickerMode === 'switcher' ? groupPickerConnectionModels(connectionsByProvider, modelQuery) : [],
+    [modelDropdownOpen, pickerMode, connectionsByProvider, modelQuery],
+  )
 
   // Input settings (loaded from config)
   const [autoCapitalisation, setAutoCapitalisation] = React.useState(true)
@@ -1867,6 +1881,7 @@ export function FreeFormInput({
               onPermissionModeChange={onPermissionModeChange}
             />
           )}
+          {voiceConversationControl}
           {enableCompactModelPicker && (
             <CompactModelSelector
               currentModel={currentModel}
@@ -2121,7 +2136,10 @@ export function FreeFormInput({
           )}>
           {/* 5. Model/Connection Selector - Hidden in compact mode (EditPopover embedding) */}
           {!compactMode && (
-          <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
+          <DropdownMenu open={modelDropdownOpen} onOpenChange={open => {
+            setModelDropdownOpen(open)
+            if (!open) setModelQuery('')
+          }}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
@@ -2153,7 +2171,24 @@ export function FreeFormInput({
                 {t('common.model')}
               </TooltipContent>
             </Tooltip>
-            <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[260px]">
+            <StyledDropdownMenuContent
+              side="top"
+              align="end"
+              sideOffset={8}
+              className="min-w-[260px]"
+              onKeyDown={event => {
+                if (event.key !== 'Tab' || event.target === event.currentTarget) return
+                const target = event.target as HTMLElement
+                if (target.closest('[role="menu"]') !== event.currentTarget) return
+                const search = event.currentTarget.querySelector<HTMLInputElement>('input[type="search"]')
+                if (!search) return
+                event.preventDefault()
+                search.focus({ preventScroll: true })
+              }}
+            >
+              {(pickerMode === 'flat' || pickerMode === 'switcher') && (
+                <ModelPickerSearch query={modelQuery} setQuery={setModelQuery} menu />
+              )}
               {/* Connection unavailable message */}
               {pickerMode === 'unavailable' ? (
                 <div className="flex flex-col items-center justify-center py-6 px-4 text-center">
@@ -2227,16 +2262,105 @@ export function FreeFormInput({
                   )
                 })()
               ) : pickerMode === 'switcher' ? (
-                /* Hierarchical view: Provider → Connection → Models (empty session with multiple connections — lets the user switch BEFORE the first message locks the connection) */
-                connectionsByProvider.map(([providerName, connections], index) => (
+                /* Empty sessions can switch connections until the first message locks the connection. */
+                modelConnectionGroups.length === 0 && searchingModels ? (
+                  <ModelPickerGroups groups={[]} searching renderModel={() => null} />
+                ) : modelConnectionGroups.map(({ provider: providerName, entries }, index) => (
                   <React.Fragment key={providerName}>
                     {/* Provider group label */}
                     <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none">
                       {providerName}
                     </div>
-                    {connections.map((conn) => {
+                    {entries.map(({ connection: conn, groups }) => {
                       const isCurrentConnection = effectiveConnection === conn.slug
                       const isAuthenticated = conn.isAuthenticated
+                      const modelGroups = isAuthenticated && (
+                        <ModelPickerGroups
+                          groups={groups}
+                          currentModel={isCurrentConnection ? connectionDefaultModel ?? currentModel : undefined}
+                          searching={searchingModels}
+                          menu
+                          renderModel={model => {
+                            const modelId = typeof model === 'string' ? model : model.id
+                            const modelName = getPickerModelName(model)
+                            const isSelectedModel = isCurrentConnection && (connectionDefaultModel ?? currentModel) === modelId
+                            const showVisionToggle = isCompatProvider(conn.providerType)
+                            const visionOn = showVisionToggle && modelSupportsImages(conn, modelId)
+                            return (
+                              <StyledDropdownMenuItem
+                                key={modelId}
+                                onSelect={() => {
+                                  // If selecting a different connection, update both connection and model
+                                  if (!isCurrentConnection && onConnectionChange) {
+                                    onConnectionChange(conn.slug)
+                                  }
+                                  // Always pass connection with model for proper persistence
+                                  onModelChange(modelId, conn.slug)
+                                }}
+                                className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="font-medium text-sm truncate">{modelName}</span>
+                                  <ModelPeakValleyBadge connection={conn} modelId={modelId} />
+                                </div>
+                                <div className="flex items-center gap-1 ml-3 shrink-0">
+                                  {showVisionToggle && (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span
+                                          role="button"
+                                          tabIndex={0}
+                                          aria-label={visionOn
+                                            ? t('chat.modelPicker.supportsImagesOn')
+                                            : t('chat.modelPicker.supportsImagesOff')}
+                                          className="inline-flex items-center justify-center p-1 rounded hover:bg-foreground/5 cursor-pointer"
+                                          onClick={(e) => {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            handleToggleModelVision(conn.slug, modelId, !visionOn)
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault()
+                                              e.stopPropagation()
+                                              handleToggleModelVision(conn.slug, modelId, !visionOn)
+                                            }
+                                          }}
+                                        >
+                                          <ImageIcon className={cn(
+                                            "h-3.5 w-3.5",
+                                            visionOn ? "text-foreground/70" : "text-foreground/30"
+                                          )} />
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        {visionOn
+                                          ? t('chat.modelPicker.supportsImagesOn')
+                                          : t('chat.modelPicker.supportsImagesOff')}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  )}
+                                  {isSelectedModel && (
+                                    <Check className="h-3 w-3 text-foreground" />
+                                  )}
+                                </div>
+                              </StyledDropdownMenuItem>
+                            )
+                          }}
+                        />
+                      )
+                      if (searchingModels || (isCurrentConnection && isAuthenticated)) {
+                        return (
+                          <div key={conn.slug}>
+                            <div className="flex items-center gap-1.5 px-2 py-1.5 text-sm font-medium">
+                              <ConnectionIcon connection={conn} size={14} />
+                              {conn.name}
+                              {isCurrentConnection && <Check className="h-3 w-3 text-foreground" />}
+                            </div>
+                            {modelGroups}
+                          </div>
+                        )
+                      }
                       return (
                         <DropdownMenuSub key={conn.slug}>
                           <StyledDropdownMenuSubTrigger
@@ -2259,82 +2383,13 @@ export function FreeFormInput({
                           </StyledDropdownMenuSubTrigger>
                           {isAuthenticated && (
                             <StyledDropdownMenuSubContent className="min-w-[220px]">
-                              {/* Show models for this connection - use provider-specific models as fallback */}
-                              {getAgentModelsForConnection(conn).map((model) => {
-                                const modelId = typeof model === 'string' ? model : model.id
-                                const modelName = typeof model === 'string'
-                                  ? stripPiPrefixForDisplay(getModelShortName(model))
-                                  : (model.name ?? stripPiPrefixForDisplay(model.id))
-                                const isSelectedModel = isCurrentConnection && currentModel === modelId
-                                const showVisionToggle = isCompatProvider(conn.providerType)
-                                const visionOn = showVisionToggle && modelSupportsImages(conn, modelId)
-                                return (
-                                  <StyledDropdownMenuItem
-                                    key={modelId}
-                                    onSelect={() => {
-                                      // If selecting a different connection, update both connection and model
-                                      if (!isCurrentConnection && onConnectionChange) {
-                                        onConnectionChange(conn.slug)
-                                      }
-                                      // Always pass connection with model for proper persistence
-                                      onModelChange(modelId, conn.slug)
-                                    }}
-                                    className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
-                                  >
-                                    <div className="flex items-center gap-1.5 min-w-0">
-                                      <span className="font-medium text-sm truncate">{modelName}</span>
-                                      <ModelPeakValleyBadge connection={conn} modelId={modelId} />
-                                    </div>
-                                    <div className="flex items-center gap-1 ml-3 shrink-0">
-                                      {showVisionToggle && (
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <span
-                                              role="button"
-                                              tabIndex={0}
-                                              aria-label={visionOn
-                                                ? t('chat.modelPicker.supportsImagesOn')
-                                                : t('chat.modelPicker.supportsImagesOff')}
-                                              className="inline-flex items-center justify-center p-1 rounded hover:bg-foreground/5 cursor-pointer"
-                                              onClick={(e) => {
-                                                e.preventDefault()
-                                                e.stopPropagation()
-                                                handleToggleModelVision(conn.slug, modelId, !visionOn)
-                                              }}
-                                              onKeyDown={(e) => {
-                                                if (e.key === 'Enter' || e.key === ' ') {
-                                                  e.preventDefault()
-                                                  e.stopPropagation()
-                                                  handleToggleModelVision(conn.slug, modelId, !visionOn)
-                                                }
-                                              }}
-                                            >
-                                              <ImageIcon className={cn(
-                                                "h-3.5 w-3.5",
-                                                visionOn ? "text-foreground/70" : "text-foreground/30"
-                                              )} />
-                                            </span>
-                                          </TooltipTrigger>
-                                          <TooltipContent>
-                                            {visionOn
-                                              ? t('chat.modelPicker.supportsImagesOn')
-                                              : t('chat.modelPicker.supportsImagesOff')}
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      )}
-                                      {isSelectedModel && (
-                                        <Check className="h-3 w-3 text-foreground" />
-                                      )}
-                                    </div>
-                                  </StyledDropdownMenuItem>
-                                )
-                              })}
+                              {modelGroups}
                             </StyledDropdownMenuSubContent>
                           )}
                         </DropdownMenuSub>
                       )
                     })}
-                    {index < connectionsByProvider.length - 1 && (
+                    {index < modelConnectionGroups.length - 1 && (
                       <StyledDropdownMenuSeparator className="my-1" />
                     )}
                   </React.Fragment>
@@ -2351,83 +2406,86 @@ export function FreeFormInput({
                       <StyledDropdownMenuSeparator className="my-1" />
                     </>
                   )}
-                  {/* Model options based on effective connection's provider type */}
-                  {availableModels.map((model) => {
-                    const modelId = typeof model === 'string' ? model : model.id
-                    const modelName = typeof model === 'string'
-                      ? stripPiPrefixForDisplay(getModelShortName(model))
-                      : (model.name ?? stripPiPrefixForDisplay(model.id))
-                    const isSelected = currentModel === modelId
-                    const descriptionKey = typeof model !== 'string' && 'descriptionKey' in model ? (model.descriptionKey as string) : undefined
-                    const description = descriptionKey ? t(descriptionKey) : (typeof model !== 'string' && 'description' in model ? (model.description as string) : '')
-                    const showVisionToggle =
-                      !!effectiveConnectionDetails && isCompatProvider(effectiveConnectionDetails.providerType)
-                    const visionOn = showVisionToggle && modelSupportsImages(effectiveConnectionDetails!, modelId)
-                    return (
-                      <StyledDropdownMenuItem
-                        key={modelId}
-                        onSelect={() => onModelChange(modelId, effectiveConnection)}
-                        className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
-                      >
-                        <div className="text-left">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="font-medium text-sm truncate">{modelName}</span>
-                            <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={modelId} />
+                  <ModelPickerGroups
+                    groups={groupPickerModels(availableModels, modelQuery)}
+                    currentModel={connectionDefaultModel ?? currentModel}
+                    searching={searchingModels}
+                    menu
+                    renderModel={model => {
+                      const modelId = typeof model === 'string' ? model : model.id
+                      const modelName = getPickerModelName(model)
+                      const isSelected = currentModel === modelId
+                      const descriptionKey = typeof model !== 'string' && 'descriptionKey' in model ? (model.descriptionKey as string) : undefined
+                      const description = descriptionKey ? t(descriptionKey) : (typeof model !== 'string' && 'description' in model ? (model.description as string) : '')
+                      const showVisionToggle =
+                        !!effectiveConnectionDetails && isCompatProvider(effectiveConnectionDetails.providerType)
+                      const visionOn = showVisionToggle && modelSupportsImages(effectiveConnectionDetails!, modelId)
+                      return (
+                        <StyledDropdownMenuItem
+                          key={modelId}
+                          onSelect={() => onModelChange(modelId, effectiveConnection)}
+                          className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                        >
+                          <div className="text-left">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="font-medium text-sm truncate">{modelName}</span>
+                              <ModelPeakValleyBadge connection={effectiveConnectionDetails} modelId={modelId} />
+                            </div>
+                            {description && (
+                              <div className="text-xs text-muted-foreground">{description}</div>
+                            )}
                           </div>
-                          {description && (
-                            <div className="text-xs text-muted-foreground">{description}</div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1 ml-3 shrink-0">
-                          {showVisionToggle && effectiveConnectionDetails && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span
-                                  role="button"
-                                  tabIndex={0}
-                                  aria-label={visionOn
-                                    ? t('chat.modelPicker.supportsImagesOn')
-                                    : t('chat.modelPicker.supportsImagesOff')}
-                                  className="inline-flex items-center justify-center p-1 rounded hover:bg-foreground/5 cursor-pointer"
-                                  onClick={(e) => {
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    handleToggleModelVision(effectiveConnectionDetails.slug, modelId, !visionOn)
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' || e.key === ' ') {
+                          <div className="flex items-center gap-1 ml-3 shrink-0">
+                            {showVisionToggle && effectiveConnectionDetails && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={visionOn
+                                      ? t('chat.modelPicker.supportsImagesOn')
+                                      : t('chat.modelPicker.supportsImagesOff')}
+                                    className="inline-flex items-center justify-center p-1 rounded hover:bg-foreground/5 cursor-pointer"
+                                    onClick={(e) => {
                                       e.preventDefault()
                                       e.stopPropagation()
                                       handleToggleModelVision(effectiveConnectionDetails.slug, modelId, !visionOn)
-                                    }
-                                  }}
-                                >
-                                  <ImageIcon className={cn(
-                                    "h-3.5 w-3.5",
-                                    visionOn ? "text-foreground/70" : "text-foreground/30"
-                                  )} />
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {visionOn
-                                  ? t('chat.modelPicker.supportsImagesOn')
-                                  : t('chat.modelPicker.supportsImagesOff')}
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                          {isSelected && (
-                            <Check className="h-3 w-3 text-foreground" />
-                          )}
-                        </div>
-                      </StyledDropdownMenuItem>
-                    )
-                  })}
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                        handleToggleModelVision(effectiveConnectionDetails.slug, modelId, !visionOn)
+                                      }
+                                    }}
+                                  >
+                                    <ImageIcon className={cn(
+                                      "h-3.5 w-3.5",
+                                      visionOn ? "text-foreground/70" : "text-foreground/30"
+                                    )} />
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {visionOn
+                                    ? t('chat.modelPicker.supportsImagesOn')
+                                    : t('chat.modelPicker.supportsImagesOff')}
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                            {isSelected && (
+                              <Check className="h-3 w-3 text-foreground" />
+                            )}
+                          </div>
+                        </StyledDropdownMenuItem>
+                      )
+                    }}
+                  />
                 </>
               )}
 
               {/* Thinking level selector — only shown when thinking levels are available
                   (Claude supports extended thinking, OpenAI backends may not) */}
-              {availableThinkingLevels.length > 0 && (
+              {!searchingModels && availableThinkingLevels.length > 0 && (
                 <>
                   <StyledDropdownMenuSeparator className="my-1" />
 
@@ -2463,7 +2521,7 @@ export function FreeFormInput({
               )}
 
               {/* Context usage footer - only show when we have token data */}
-              {contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
+              {!searchingModels && contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
                 <>
                   <StyledDropdownMenuSeparator className="my-1" />
                   <div className="px-2 py-1.5 select-none">
@@ -2541,6 +2599,8 @@ export function FreeFormInput({
               </Tooltip>
             )
           })()}
+
+          {voiceInputControl}
 
           {/* 6. Send/Stop Button - Always show stop when processing */}
           {isProcessing ? (

@@ -15,12 +15,13 @@ const list = z.array(slug).max(100)
 const skillSlug = slug.refine(value => !/[\\/:\0]/.test(value) && value !== '.' && value !== '..', 'Skill must be a directory slug')
 
 const ConfigSchema = z.object({
+  tokenNestPolicy: z.object({ connectionSlug: slug }).strict().optional(),
   version: z.literal(1),
   architecture: z.literal('dynamic').optional(),
   roleTopologyVersion: z.literal(2).optional(),
   maxConcurrentSubagents: z.number().int().min(1).max(30).optional(),
   reportCheckSeconds: z.number().int().min(1).max(3600).optional(),
-  modelPool: z.array(SuperAgentModelEntrySchema).min(1).max(100).optional(),
+  modelPool: z.array(SuperAgentModelEntrySchema).min(1).max(1000).optional(),
   name,
   avatar,
   nodes: z.array(z.object({
@@ -130,7 +131,7 @@ const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('reset'), confirmed: z.literal(true), preserveConfig: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('environment-check'), config: ConfigSchema }).strict(),
   z.object({ type: z.literal('chat'), text, attachments: z.array(z.object({ name: z.string().min(1).max(255), mimeType: z.string().max(200), text: z.string().max(20_000_000).optional(), base64: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/).max(28_000_000).optional() }).strict().refine(file => file.text !== undefined || file.base64 !== undefined, 'Attachment content is required')).max(10).optional() }).strict(),
-  z.object({ type: z.literal('resources'), operation: z.enum(['get', 'export', 'import', 'save-sources', 'save-automations', 'save-credentials', 'test-automation', 'replay-automation']), value: z.unknown().optional() }).strict(),
+  z.object({ type: z.literal('resources'), operation: z.enum(['get', 'export', 'import', 'save-sources', 'save-automations', 'update-schedule', 'save-credentials', 'test-automation', 'replay-automation']), value: z.unknown().optional() }).strict(),
   z.object({ type: z.literal('automation-work'), text, automationId: slug, runId: slug }).strict(),
   z.object({ type: z.literal('task'), planRevision: z.number().int().min(1).optional(), goalRevision: z.number().int().min(1).optional(), id: id.optional(), title: name, instructions: text, nodeId: id.optional(), planId: id.optional(),
     modelEntryId: id.optional(),

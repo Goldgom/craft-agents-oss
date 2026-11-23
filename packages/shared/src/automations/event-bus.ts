@@ -54,6 +54,8 @@ export interface SessionStatusChangePayload extends BaseEventPayload {
 
 /** Scheduler tick payload */
 export interface SchedulerTickPayload extends BaseEventPayload {
+  /** True for a persisted scheduler occurrence. */
+  scheduled?: true;
   localTime: string;
   utcTime: string;
 }
@@ -181,28 +183,30 @@ export class WorkspaceEventBus implements EventBus {
    * Emit an event to all registered handlers.
    * Handlers are called in parallel, errors are caught and logged.
    */
-  async emit<T extends AutomationEvent>(event: T, payload: EventPayloadMap[T]): Promise<void> {
+  async emit<T extends AutomationEvent>(event: T, payload: EventPayloadMap[T], scheduled = false): Promise<void> {
     if (this.disposed) {
       log.warn(`[EventBus] Attempted to emit after disposal: ${event}`);
       return;
     }
 
-    // Rate limiting: prevent runaway event loops (sync and async)
-    const now = Date.now();
-    const rateWindow = this.rateCounts.get(event) ?? { count: 0, windowStart: now };
-    if (now - rateWindow.windowStart >= RATE_WINDOW_MS) {
-      rateWindow.count = 0;
-      rateWindow.windowStart = now;
+    // The scheduler already serializes minute delivery, including catch-up.
+    if (!scheduled) {
+      const now = Date.now();
+      const rateWindow = this.rateCounts.get(event) ?? { count: 0, windowStart: now };
+      if (now - rateWindow.windowStart >= RATE_WINDOW_MS) {
+        rateWindow.count = 0;
+        rateWindow.windowStart = now;
+      }
+      const limit = getRateLimit(event);
+      if (rateWindow.count >= limit) {
+        log.warn(
+          `[EventBus] Rate limit: ${event} fired ${rateWindow.count} times in ${Math.round((now - rateWindow.windowStart) / 1000)}s (limit: ${limit}/min), dropping`
+        );
+        return;
+      }
+      rateWindow.count++;
+      this.rateCounts.set(event, rateWindow);
     }
-    const limit = getRateLimit(event);
-    if (rateWindow.count >= limit) {
-      log.warn(
-        `[EventBus] Rate limit: ${event} fired ${rateWindow.count} times in ${Math.round((now - rateWindow.windowStart) / 1000)}s (limit: ${limit}/min), dropping`
-      );
-      return;
-    }
-    rateWindow.count++;
-    this.rateCounts.set(event, rateWindow);
 
     log.debug(`[EventBus] Emitting: ${event}`);
 
@@ -216,6 +220,7 @@ export class WorkspaceEventBus implements EventBus {
         await handler(payload);
       } catch (error) {
         log.error(`[EventBus] Handler error for ${event}:`, error);
+        if (scheduled) throw error;
       }
     });
 
@@ -225,11 +230,14 @@ export class WorkspaceEventBus implements EventBus {
         await handler(event, payload as BaseEventPayload);
       } catch (error) {
         log.error(`[EventBus] Any-handler error for ${event}:`, error);
+        if (scheduled) throw error;
       }
     });
 
     // Wait for all handlers to complete
-    await Promise.all([...eventPromises, ...anyPromises]);
+    const results = await Promise.allSettled([...eventPromises, ...anyPromises]);
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure) throw failure.reason;
 
     log.debug(`[EventBus] Emitted: ${event} (${eventHandlers.size} handlers, ${anyHandlersCopy.size} any-handlers)`);
   }

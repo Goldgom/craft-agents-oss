@@ -174,7 +174,7 @@ Use `SchedulerTick` for calendar-based recurring work. TokenBird evaluates its m
 }
 ```
 
-Choose cron for a known calendar time. Choose `HostedScriptTick` when the task depends on a computed condition or external state. Scheduled and script-monitor prompts always run as new sessions, so name the automation and prompt clearly enough for their output to stand on its own.
+Choose cron for a known calendar time. Choose `HostedScriptTick` when the task depends on a computed condition or external state. Each scheduled prompt opens a new child session under its automation's parent conversation. Set the matcher’s optional `parentSessionId` to use an existing top-level conversation in the same workspace. Script-monitor prompts open new sessions of their own.
 
 ### Agent Events (passed to Claude SDK)
 

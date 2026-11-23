@@ -1,6 +1,6 @@
 import semver from 'semver'
 
-const DEFAULT_REPOSITORY = 'Goldgom/token-bird'
+const DEFAULT_REPOSITORY = 'tokennest/TokenBird'
 
 interface GitCodeAsset {
   name: string

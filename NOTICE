@@ -25,3 +25,10 @@ Commercial Terms of Service: https://www.anthropic.com/legal/commercial-terms
 
 Third-party dependencies are listed in package.json files and are subject
 to their respective licenses.
+
+---
+
+Bundled Codex CLI
+Developed by OpenAI.
+https://github.com/openai/codex
+Licensed under the Apache License, Version 2.0.

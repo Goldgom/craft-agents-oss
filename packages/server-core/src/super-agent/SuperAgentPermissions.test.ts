@@ -157,6 +157,29 @@ describe('Super Agent shared permission management', () => {
     expect((await team.service.get('alpha')).state.permissionGrants ?? []).toEqual([])
   })
 
+  test('a worker awaiting approval is not reported as stalled and resumes the original invocation', async () => {
+    const team = await permissionTeam()
+    await team.service.command('alpha', { type: 'continuous-work', enabled: true })
+    const request = await requestOperation(team, 'waiting', 'worker', { ...team.scope, expiresAt: team.now() + 3_600_000 })
+    team.advance(20 * 60_000); await team.service.tick()
+    const worker = (await team.service.get('alpha')).state.tasks.find(task => task.nodeId === 'worker')!
+    expect(worker.stallNotifiedAt).toBeUndefined()
+    expect(team.host.pendingPermissions.has('waiting')).toBe(true)
+    await team.service.command('alpha', { type: 'permission-response', requestId: 'waiting', allowed: true })
+    expect(await request.result).toBe(true)
+    expect(team.host.sends.filter(send => send.sessionId === team.sessions.worker)).toHaveLength(1)
+  })
+
+  test('approval arriving after expiry releases the original waiter before the next heartbeat', async () => {
+    const team = await permissionTeam()
+    const { result } = await requestOperation(team, 'late-click')
+    team.advance(600_001)
+    await expect(team.service.command('alpha', { type: 'permission-response', requestId: 'late-click', allowed: true })).rejects.toThrow('expired')
+    expect(await result).toBe(false)
+    expect(team.host.permissionResponses.filter(response => response.requestId === 'late-click')).toHaveLength(1)
+    expect((await team.service.get('alpha')).permissionRequests!.find(request => request.id === 'late-click')?.status).toBe('expired')
+  })
+
   test('expired requests cannot create or reuse a shared permission', async () => {
     const team = await permissionTeam()
     await shareOperation(team)

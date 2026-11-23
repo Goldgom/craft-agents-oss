@@ -6,6 +6,9 @@
 import { COLLABORATION_RELAY_RPC } from './collaboration-relay'
 
 export const RPC_CHANNELS = {
+  video: {
+    EXECUTE: 'video:execute',
+  },
   cloud: {
     GET_CONFIG: 'cloud:getConfig',
     SET_CONFIG: 'cloud:setConfig',
@@ -298,6 +301,7 @@ export const RPC_CHANNELS = {
     CANCEL_OAUTH: 'tokennest:cancelOAuth',
     CHECK_AUTH: 'tokennest:checkAuth',
     GET_USAGE: 'tokennest:getUsage',
+    VOICE: 'tokennest:voice',
     GET_RECHARGE_URL: 'tokennest:getRechargeUrl',
   },
   copilot: {

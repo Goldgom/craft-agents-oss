@@ -17,8 +17,9 @@ export function registerSuperAgentHandlers(server: RpcServer, deps: HandlerDeps)
     assertSuperAgentWorkspace(ctx, workspaceId)
     return service.get(workspaceId)
   })
-  server.handle(RPC_CHANNELS.superAgent.SAVE, async (ctx, workspaceId: string, config: SuperAgentConfig) => {
+  server.handle(RPC_CHANNELS.superAgent.SAVE, async (ctx, workspaceId: string, config: SuperAgentConfig, policyConnection?: string) => {
     assertSuperAgentWorkspace(ctx, workspaceId)
+    if (policyConnection) return service.configureFromTokenNest(workspaceId, config, policyConnection)
     return service.save(workspaceId, config)
   })
   server.handle(RPC_CHANNELS.superAgent.COMMAND, async (ctx, workspaceId: string, command: SuperAgentCommand) => {

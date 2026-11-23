@@ -228,6 +228,28 @@ test('a real host process exits after a write; recovery preserves its effect and
   } finally { await service.cleanup() }
 }, 30_000)
 
+test('unresponsive recovery inspection releases the attempt and retries without overlapping workers', async () => {
+  const f = await superAgentFixture()
+  await f.service.save('alpha', f.config)
+  const original = await start(f)
+  const getSession = f.host.getSession.bind(f.host)
+  let probe = true
+  f.host.getSession = id => {
+    if (probe && id === original) { probe = false; return new Promise(() => {}) }
+    return getSession(id)
+  }
+  const blocked = await f.service.command('alpha', { type: 'recover-workers', requestId: 'host-timeout' })
+  expect(blocked.recovery).toMatchObject({ id: 'host-timeout', phase: 'blocked', attempts: 1 })
+  expect(f.host.cancelled).not.toContain(original)
+  expect(f.host.sends).toHaveLength(1)
+  f.advance(6000); await f.service.tick()
+  const resumed = await until(() => f.service.get('alpha'), s => s.recovery?.phase === 'ready'
+    && s.state.tasks.some(t => t.id === 'job' && t.sessionId !== original && t.status === 'running'))
+  expect(resumed.recovery?.attempts).toBe(2)
+  expect(f.host.cancelled).toContain(original)
+  expect(resumed.state.tasks).toHaveLength(1)
+}, 30_000)
+
 test('a blocked recovery persists its identity and attempts across host restart', async () => {
   const f = await superAgentFixture()
   await f.service.save('alpha', f.config)

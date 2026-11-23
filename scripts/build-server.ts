@@ -64,6 +64,7 @@ import {
   getUvDownloadName,
 } from './build/common';
 import { createServerArchive } from './build/server-archive';
+import { downloadFfmpeg, FFMPEG_ASSETS, ffmpegBundleIsValid } from './build/ffmpeg';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -273,6 +274,28 @@ async function downloadUvForServer(config: ServerBuildConfig): Promise<void> {
   copyFileSync(electronUvPath, uvDest);
   if (process.platform !== 'win32') await $`chmod +x ${uvDest}`.quiet();
   console.log(`  uv binary installed (${(lstatSync(uvDest).size / 1024 / 1024).toFixed(1)} MB)`);
+}
+
+async function downloadFfmpegForServer(config: ServerBuildConfig): Promise<void> {
+  const key = `${config.platform}-${config.arch}`;
+  const source = join(config.electronDir, 'resources', 'bin', key);
+  if (config.skipDownload) {
+    const pinned = FFMPEG_ASSETS[key as keyof typeof FFMPEG_ASSETS];
+    if (!pinned || !ffmpegBundleIsValid(source, pinned.sha256)) {
+      throw new Error(`--skip-download: a checksum-verified FFmpeg/FFprobe bundle must be pre-seeded at ${source}`);
+    }
+    console.log(`  FFmpeg bundle validated offline at ${source}`);
+  } else {
+    await downloadFfmpeg({ ...config, upload: false, uploadLatest: false, uploadScript: false });
+  }
+  const target = join(config.outputDir, 'resources', 'bin', key);
+  mkdirSync(target, { recursive: true });
+  const suffix = config.platform === 'win32' ? '.exe' : '';
+  for (const binary of [`ffmpeg${suffix}`, `ffprobe${suffix}`, '.ffmpeg-build.json']) {
+    if (existsSync(join(source, binary))) copyFileSync(join(source, binary), join(target, binary));
+  }
+  cpSync(join(source, 'ffmpeg-licenses'), join(target, 'ffmpeg-licenses'), { recursive: true });
+  if (config.platform !== 'win32') for (const binary of ['ffmpeg', 'ffprobe']) chmodSync(join(target, binary), 0o755);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +542,8 @@ function copyProductionDeps(config: ServerBuildConfig): void {
     ...(platform === 'win32' ? [] : [`@img/sharp-libvips-${platform}-${arch}`]),
     '@img/colour',
     sdkPlatformPkg,
+    '@openai/codex',
+    `@openai/codex-${platform}-${arch}`,
     '@vscode/ripgrep',
   ];
 
@@ -559,6 +584,8 @@ function copyMinimalRuntimeDeps(config: ServerBuildConfig): void {
     `@img/sharp-${platform}-${arch}`,
     ...(platform === 'win32' ? [] : [`@img/sharp-libvips-${platform}-${arch}`]),
     sdkPlatformPkg,
+    '@openai/codex',
+    `@openai/codex-${platform}-${arch}`,
     '@vscode/ripgrep',
   ];
 
@@ -580,10 +607,12 @@ async function ensureCrossPlatformNativeDeps(config: ServerBuildConfig): Promise
 
   const rootPackage = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'));
   const sharpPackage = JSON.parse(readFileSync(join(rootDir, 'node_modules', 'sharp', 'package.json'), 'utf8'));
+  const codexPlatformPkg = `@openai/codex-${platform}-${arch}`;
   const nativeDeps = [
     `@img/sharp-${platform}-${arch}`,
     ...(platform === 'win32' ? [] : [`@img/sharp-libvips-${platform}-${arch}`]),
     `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`,
+    codexPlatformPkg,
   ];
   const destModules = join(outputDir, 'node_modules');
   const cacheDir = join(rootDir, '.build', 'native-packages');
@@ -592,18 +621,20 @@ async function ensureCrossPlatformNativeDeps(config: ServerBuildConfig): Promise
   for (const dep of nativeDeps) {
     const destination = join(destModules, dep);
     if (existsSync(destination) && !config.forceDownload) continue;
-    const version = rootPackage.optionalDependencies?.[dep]
+    const archivePackage = dep === codexPlatformPkg ? '@openai/codex' : dep;
+    const version = (dep === codexPlatformPkg ? `${rootPackage.dependencies['@openai/codex']}-${platform}-${arch}` : undefined)
+      ?? rootPackage.optionalDependencies?.[dep]
       ?? sharpPackage.optionalDependencies?.[dep]
       ?? (dep.startsWith('@anthropic-ai/') ? rootPackage.dependencies['@anthropic-ai/claude-agent-sdk'] : undefined);
     if (!version) throw new Error(`No pinned version found for cross-platform dependency ${dep}`);
 
-    const expectedArchive = join(cacheDir, `${dep.slice(1).replace('/', '-')}-${version}.tgz`);
+    const expectedArchive = join(cacheDir, `${archivePackage.slice(1).replace('/', '-')}-${version}.tgz`);
     let archive = expectedArchive;
     if (config.forceDownload || !existsSync(expectedArchive)) {
       console.log(`  Fetching ${dep}@${version} for ${platform}-${arch}...`);
       const packOutput = config.forceDownload
-        ? await $`npm pack ${`${dep}@${version}`} --json --force --prefer-online --pack-destination ${cacheDir}`.cwd(rootDir).text()
-        : await $`npm pack ${`${dep}@${version}`} --json --pack-destination ${cacheDir}`.cwd(rootDir).text();
+        ? await $`npm pack ${`${archivePackage}@${version}`} --json --force --prefer-online --pack-destination ${cacheDir}`.cwd(rootDir).text()
+        : await $`npm pack ${`${archivePackage}@${version}`} --json --pack-destination ${cacheDir}`.cwd(rootDir).text();
       const [{ filename }] = JSON.parse(packOutput) as Array<{ filename: string }>;
       archive = join(cacheDir, filename);
     } else {
@@ -1160,6 +1191,7 @@ async function main(): Promise<void> {
   } else {
     console.log(`\n[3/8] Downloading uv ${UV_VERSION}...`);
     await downloadUvForServer(config);
+    await downloadFfmpegForServer(config);
   }
 
   // Step 4: Build MCP servers

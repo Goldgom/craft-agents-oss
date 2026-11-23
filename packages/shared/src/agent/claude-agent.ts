@@ -25,6 +25,7 @@ import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, ge
 import { getValidClaudeOAuthToken } from '../auth/state.ts';
 import {
   clearClaudeBedrockRoutingEnvVars,
+  isClaudeMessagesGateway,
   resolveAuthEnvVars,
 } from '../config/llm-connections.ts';
 import type { McpClientPool } from '../mcp/mcp-pool.ts';
@@ -984,6 +985,33 @@ export class ClaudeAgent extends BaseAgent {
       return { authInjected: false, authWarning: `Connection not found: ${slug}`, authWarningLevel: 'error' };
     }
 
+    if (isClaudeMessagesGateway(connection)) {
+      let endpoint: URL;
+      try {
+        endpoint = new URL(connection.baseUrl!);
+      } catch {
+        throw new Error('Claude Messages connection requires a valid base URL');
+      }
+      if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
+        throw new Error('Claude Messages base URL must use HTTP or HTTPS and contain no credentials');
+      }
+      endpoint.pathname = endpoint.pathname.replace(/\/v1\/?$/, '').replace(/\/$/, '');
+      endpoint.search = '';
+      endpoint.hash = '';
+
+      const apiKey = await getCredentialManager().getLlmApiKey(slug);
+      if (!apiKey) throw new Error(`No API key found for Claude Messages connection: ${slug}`);
+      const envVars = {
+        ANTHROPIC_API_KEY: apiKey,
+        ANTHROPIC_BASE_URL: endpoint.href.replace(/\/$/, ''),
+        ANTHROPIC_AUTH_TOKEN: '',
+        CLAUDE_CODE_OAUTH_TOKEN: '',
+      };
+      this.config.envOverrides = { ...this.config.envOverrides, ...envVars };
+      await this.captureInjectedCredentialState(envVars, credentialGeneration);
+      return { authInjected: true };
+    }
+
     // Clear all auth env vars first for clean state.
     // Claude subprocesses must never inherit Bedrock-routing toggles from a
     // previous connection or parent process environment.
@@ -1278,7 +1306,7 @@ export class ClaudeAgent extends BaseAgent {
           tools: miniConfig.tools,
           mcpServers: miniConfig.mcpServerKeys,
           thinking: 'disabled',
-          systemPrompt: 'lean (no Claude Code preset)',
+          systemPrompt: 'Claude Code preset',
         });
       }
 
@@ -1366,43 +1394,7 @@ export class ClaudeAgent extends BaseAgent {
         // - anthropic_compat/custom endpoints fall back to token budgets
         // - non-Claude models disable thinking entirely
         ...thinkingOptions,
-        // System prompt configuration:
-        // - Mini agents: Use custom (lean) system prompt without Claude Code preset
-        // - Normal agents: Append to Claude Code's system prompt (recommended by docs)
-        systemPrompt: miniConfig.enabled
-          ? `${this.getMiniSystemPrompt()}\n\n# Compact instructions\n${COMPACTION_TARGET_INSTRUCTIONS}`
-          : this.config.modelPromptSettings?.lightweight
-            ? getSystemPrompt(
-              this.pinnedPreferencesPrompt ?? undefined,
-              this.config.debugMode,
-              this.workspaceRootPath,
-              this.config.session?.workingDirectory,
-              undefined, // preset
-              'Claude Code',
-              this.pinnedIncludeCoAuthoredBy ?? undefined,
-              this.pinnedProjectContext ?? undefined,
-              this.config.agentPrompt,
-              this.config.modelPromptSettings,
-              this.config.agentRuntime,
-            ) + `\n\n# Compact instructions\n${COMPACTION_TARGET_INSTRUCTIONS}`
-            : {
-              type: 'preset' as const,
-              preset: 'claude_code' as const,
-              // Working directory included for monorepo context file discovery
-              append: getSystemPrompt(
-                this.pinnedPreferencesPrompt ?? undefined,
-                this.config.debugMode,
-                this.workspaceRootPath,
-                this.config.session?.workingDirectory,
-                undefined, // preset
-                undefined, // backendName
-                this.pinnedIncludeCoAuthoredBy ?? undefined,
-                this.pinnedProjectContext ?? undefined,
-                this.config.agentPrompt,
-                this.config.modelPromptSettings,
-                this.config.agentRuntime,
-              ) + `\n\n# Compact instructions\n${COMPACTION_TARGET_INSTRUCTIONS}`,
-            },
+        systemPrompt: { type: 'preset', preset: 'claude_code' },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.
         // This ensures SDK can always find session transcripts regardless of workingDirectory changes.
         // Note: workingDirectory is still used for context injection and shown to the agent.
@@ -2618,13 +2610,34 @@ This is a branched conversation. All prior messages in this conversation are par
   // buildRecoveryContext() is now inherited from BaseAgent
   // formatWorkspaceCapabilities() is now in PromptBuilder
 
+  private buildTokenBirdContext(): string {
+    const context = this.isMiniAgent()
+      ? this.getMiniSystemPrompt()
+      : getSystemPrompt(
+        this.pinnedPreferencesPrompt ?? undefined,
+        this.config.debugMode,
+        this.workspaceRootPath,
+        this.config.session?.workingDirectory,
+        undefined,
+        'Claude Code',
+        this.pinnedIncludeCoAuthoredBy ?? undefined,
+        this.pinnedProjectContext ?? undefined,
+        this.config.agentPrompt,
+        this.config.modelPromptSettings,
+        this.config.agentRuntime,
+      );
+    return `<tokenbird_context>
+${context}
+</tokenbird_context>`;
+  }
+
   /**
    * Build a simple text prompt with embedded text file contents (for text-only messages)
    * Prepends date/time context for prompt caching optimization (keeps system prompt static)
    * Injects session state (including mode state) for every message
    */
   private buildTextPrompt(text: string, attachments?: FileAttachment[]): string {
-    const parts: string[] = [];
+    const parts: string[] = [this.buildTokenBirdContext()];
 
     // Add context parts using centralized PromptBuilder
     // This includes: date/time, session state (with plansFolderPath),
@@ -2670,7 +2683,7 @@ This is a branched conversation. All prior messages in this conversation are par
    * Injects session state (including mode state) for every message
    */
   private buildSDKUserMessage(text: string, attachments?: FileAttachment[]): SDKUserMessage {
-    const contentBlocks: ContentBlockParam[] = [];
+    const contentBlocks: ContentBlockParam[] = [{ type: 'text', text: this.buildTokenBirdContext() }];
 
     // Add context parts using centralized PromptBuilder
     // This includes: date/time, session state (with plansFolderPath),
@@ -3205,7 +3218,7 @@ This is a branched conversation. All prior messages in this conversation are par
 
   /**
    * Run a simple text completion using Claude SDK.
-   * No tools, empty system prompt - just text in → text out.
+   * Keeps the Claude Code preset and passes the completion instruction as user input.
    * Uses the same auth infrastructure as the main agent.
    */
   async runMiniCompletion(prompt: string): Promise<string | null> {
@@ -3219,12 +3232,14 @@ This is a branched conversation. All prior messages in this conversation are par
       spawnClaudeCodeProcess: (spawnOptions: SpawnOptions) => this.spawnClaudeCodeProcess(spawnOptions),
       model,
       maxTurns: 1,
-      systemPrompt: 'Reply with ONLY the requested text. No explanation.', // Minimal - no Claude Code preset
+      tools: [],
+      settingSources: [],
+      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const },
       thinking: { type: 'disabled' as const },
     };
 
     let result = '';
-    for await (const msg of query({ prompt, options })) {
+    for await (const msg of query({ prompt: `Reply with ONLY the requested text. No explanation.\n\n${prompt}`, options })) {
       if (msg.type === 'assistant') {
         for (const block of msg.message.content) {
           if (block.type === 'text') {
@@ -3355,7 +3370,7 @@ This is a branched conversation. All prior messages in this conversation are par
       tools: [],
       mcpServers: {},
       settingSources: [],
-      systemPrompt: request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.',
+      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const },
       ...(request.maxTokens ? { maxTokens: request.maxTokens } : {}),
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
       ...(request.outputSchema ? {
@@ -3364,7 +3379,7 @@ This is a branched conversation. All prior messages in this conversation are par
     };
 
     return consumeLlmQueryMessages(
-      query({ prompt: request.prompt, options }),
+      query({ prompt: `${request.systemPrompt ?? 'Reply with ONLY the requested text. No explanation.'}\n\n${request.prompt}`, options }),
       (msg) => this.debug(msg),
     );
   }

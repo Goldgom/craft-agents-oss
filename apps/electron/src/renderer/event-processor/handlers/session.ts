@@ -124,6 +124,14 @@ export function handleError(
 ): ProcessResult {
   const session = clearRetryStatus(state.session)
 
+  // A provider/runtime error can arrive after the server has already
+  // published `complete` for the turn that produced it.  The server drops
+  // that late event, but a reconnecting renderer can still observe it.  Do
+  // not append a second error card after a terminal turn state.
+  if (!session.isProcessing) {
+    return { state: { session, streaming: null }, effects: [] }
+  }
+
   // Fail-safe: Mark any running tools as failed
   const messagesWithFailedTools = session.messages.map(m =>
     m.role === 'tool' && m.toolResult === undefined && m.toolStatus !== 'completed' && m.toolStatus !== 'error'
@@ -160,6 +168,13 @@ export function handleTypedError(
   event: TypedErrorEvent
 ): ProcessResult {
   const session = clearRetryStatus(state.session)
+
+  // Ignore errors that belong to a turn already closed by `complete` or
+  // `interrupted`.  Without this guard a delayed provider event renders an
+  // unrelated "Unknown error" card beneath a valid assistant response.
+  if (!session.isProcessing) {
+    return { state: { session, streaming: null }, effects: [] }
+  }
 
   // Fail-safe: Mark any running tools as failed
   const messagesWithFailedTools = session.messages.map(m =>
@@ -571,6 +586,7 @@ export function handleUserMessage(
   const existingIndex = session.messages.findIndex(m =>
     m.role === 'user' && (
       m.id === message.id ||
+      m.backendMessageId === message.id ||
       (event.optimisticMessageId && m.id === event.optimisticMessageId) ||
       (m.content === message.content && Math.abs(m.timestamp - message.timestamp) < 5000)
     )
@@ -599,16 +615,16 @@ export function handleUserMessage(
     // timestamp on the processing transition; otherwise the already-mounted
     // optimistic bubble keeps its queue-time timestamp until the session reloads.
     //
-    // We deliberately do NOT swap `m.id` to the backend's canonical id here.
+    // Keep the UI id stable and retain the canonical id for history operations.
     // ChatDisplay's `getTurnKey` keys user-message bubbles by id, and a swap
     // would unmount/remount the UserMessageBubble — wiping its local timer
     // state and dropping the queued chip mid-flight. The canonical backend
-    // id is irrelevant to subsequent events: they all use
-    // `event.optimisticMessageId` for routing (see the findIndex above).
+    // id is required by branch/edit requests, which address persisted messages.
     updatedMessages = session.messages.map((m, i) => {
       if (i === existingIndex) {
         return {
           ...m,
+          backendMessageId: message.id,
           ...(status === 'processing' ? { timestamp: message.timestamp } : {}),
           isPending: false,
           isQueued: status === 'queued',

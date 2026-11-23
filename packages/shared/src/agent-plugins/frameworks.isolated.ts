@@ -40,6 +40,23 @@ test('catalog shows supported frameworks and editable locations without transpor
   expect(frameworkFeatureOptions(catalog.frameworks.find(item => item.id === 'codex')!, 'files')).toEqual(['native', 'host', 'disabled']);
 });
 
+test('Antigravity requires an explicit credential-isolated Google connection', async () => {
+  const { getCompatibleAgentRuntimes, resolveAgentRuntime } = await import('../config/llm-connections.ts');
+  const { getAgentPluginManifest } = await import('./storage.ts');
+  const entry = getBackendFrameworkCatalog().frameworks.find(item => item.id === 'plugin:antigravity')!;
+  expect(entry.enabled).toBe(false);
+  saveBackendFrameworkConfiguration({ ...entry.configuration, executablePath: process.execPath });
+  const manifest = getAgentPluginManifest('plugin:antigravity');
+  expect(manifest.useConnectionCredentials).toBe(false);
+  expect(manifest.transport.args).toEqual(['tokenbird:bridge:antigravity', process.execPath]);
+  const google = { providerType: 'pi' as const, piAuthProvider: 'google', authType: 'none' as const, defaultModel: 'gemini-test' };
+  expect(getCompatibleAgentRuntimes(google)).toContain('plugin:antigravity');
+  expect(resolveAgentRuntime(google)).toBe('pi');
+  expect(resolveAgentRuntime({ ...google, agentRuntime: 'plugin:antigravity' })).toBe('plugin:antigravity');
+  expect(getCompatibleAgentRuntimes({ ...google, authType: 'api_key' })).not.toContain('plugin:antigravity');
+  expect(getCompatibleAgentRuntimes({ ...google, baseUrl: 'https://example.invalid' })).not.toContain('plugin:antigravity');
+});
+
 test('Claude native plugin settings validate directories, persist and stay disabled for supervised nodes', () => {
   const configuration = defaultFrameworkConfiguration(getBackendFrameworkCatalog().frameworks.find(item => item.id === 'claude-code')!);
   const plugin = join(root, 'claude-plugin');

@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { createWriteStream, existsSync, realpathSync } from 'node:fs';
 import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { delimiter, dirname, join, resolve, sep } from 'node:path';
 import type { BackendHostRuntimeContext } from '../agent/backend/types.ts';
 import { getConfigDir } from '../config/paths.ts';
@@ -17,7 +19,7 @@ export const FRAMEWORK_INSTALL_VERSIONS = {
   codex: MANAGED_CODEX_VERSION, claude: '0.3.258', pi: '0.85.1', python: '3.14.7', uv: '0.13.0',
   dsh: '0.1.5rc1', hermes: 'dce1e9b37581dd62e480a9064dc04a709c2940d3',
 } as const;
-const supported = new Set<AgentPluginRuntime>(['codex', 'pi', 'claude-code', 'plugin:hermes', 'plugin:dsh']);
+const supported = new Set<AgentPluginRuntime>(['codex', 'pi', 'claude-code', 'plugin:hermes', 'plugin:dsh', 'plugin:antigravity']);
 interface InstallJob { controller: AbortController; progress: FrameworkInstallProgress; promise: Promise<BackendFrameworkInstallResult>; }
 const jobs = new Map<AgentPluginRuntime, InstallJob>();
 const rootDirectory = () => join(getConfigDir(), 'runtime', 'frameworks');
@@ -133,6 +135,50 @@ function nativePackageBinary(directory: string, id: 'codex' | 'claude-code'): st
   return result;
 }
 
+async function installAntigravityWindows(directory: string, signal: AbortSignal): Promise<string> {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+  const manifestResponse = await fetch(
+    `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/windows_${arch}.json`,
+    { signal, redirect: 'error' },
+  );
+  if (!manifestResponse.ok) throw new Error(`Google Antigravity manifest returned HTTP ${manifestResponse.status}`);
+  const manifest = await manifestResponse.json() as { url?: string; sha512?: string };
+  if (!manifest.url || !manifest.sha512 || !/^[a-f0-9]{128}$/i.test(manifest.sha512)) throw new Error('Invalid Google Antigravity manifest');
+  const url = new URL(manifest.url);
+  if (url.origin !== 'https://storage.googleapis.com' || !url.pathname.startsWith('/antigravity-public/antigravity-cli/')) {
+    throw new Error('Unexpected Google Antigravity download location');
+  }
+  const response = await fetch(url, { signal, redirect: 'error' });
+  const body = response.body;
+  if (!response.ok || !body) throw new Error(`Google Antigravity download returned HTTP ${response.status}`);
+  const executable = join(directory, 'agy.exe');
+  const hash = createHash('sha512');
+  let bytes = 0;
+  const reader = body.getReader();
+  async function* download() {
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) return;
+        yield Buffer.from(chunk.value);
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  await pipeline(Readable.from(download()),
+    new Transform({ transform(chunk: Buffer, _encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > 512 * 1024 * 1024) { callback(new Error('Google Antigravity binary is too large')); return; }
+      hash.update(chunk);
+      callback(null, chunk);
+    } }),
+    createWriteStream(executable, { flags: 'wx' }), { signal });
+  if (hash.digest('hex') !== manifest.sha512.toLowerCase()) throw new Error('Google Antigravity SHA-512 verification failed');
+  return executable;
+}
+
 export function describeFrameworkInstallation(entry: BackendFrameworkEntry): BackendFrameworkEntry {
   const executable = entry.configuration.executablePath || entry.detectedLocation?.executablePath
     || (entry.id === 'codex' ? getNativeCodexStatus().path : undefined);
@@ -141,7 +187,7 @@ export function describeFrameworkInstallation(entry: BackendFrameworkEntry): Bac
     && (entry.id !== 'pi' || existsSync(entry.configuration.entrypointPath || entry.detectedLocation?.entrypointPath || ''))
     && (entry.id !== 'plugin:hermes' || existsSync(join(project, 'run_agent.py')));
   return { ...entry, installation: { available, managed: !!executable && resolve(executable).startsWith(rootDirectory() + sep),
-    installable: supported.has(entry.id) && ['win32', 'darwin', 'linux'].includes(process.platform) && ['x64', 'arm64'].includes(process.arch),
+    installable: supported.has(entry.id) && (entry.id !== 'plugin:antigravity' || process.platform === 'win32') && ['win32', 'darwin', 'linux'].includes(process.platform) && ['x64', 'arm64'].includes(process.arch),
     progress: jobs.get(entry.id)?.progress } };
 }
 export function cancelBackendFrameworkInstall(id: AgentPluginRuntime): void { jobs.get(id)?.controller.abort(); }
@@ -151,6 +197,9 @@ export function installBackendFramework(id: AgentPluginRuntime, host: BackendHos
   onProgress: (progress: FrameworkInstallProgress) => void = () => {}, source: FrameworkDownloadSource = 'official'): Promise<BackendFrameworkInstallResult> {
   const active = jobs.get(id); if (active) return active.promise;
   if (!supported.has(id)) return Promise.resolve({ success: false, error: 'This framework has no bundled installation recipe' });
+  if (id === 'plugin:antigravity' && (process.platform !== 'win32' || source !== 'official')) {
+    return Promise.resolve({ success: false, error: 'Use the official Antigravity download on Windows, or configure an existing agy executable' });
+  }
   if (!['official', 'mirror'].includes(source)) return Promise.resolve({ success: false, error: 'Unknown framework download source' });
   const controller = new AbortController();
   const job: InstallJob = { controller, progress: { id, phase: 'preparing' }, promise: undefined! };
@@ -172,7 +221,9 @@ export function installBackendFramework(id: AgentPluginRuntime, host: BackendHos
       await mkdir(env.HOME!, { recursive: true }); await writeFile(env.GIT_CONFIG_GLOBAL!, ''); await writeFile(env.NPM_CONFIG_USERCONFIG!, '');
       let configuration: BackendFrameworkConfiguration = { ...entry.configuration, downloadSource: source, executablePath: '', entrypointPath: '', projectPath: '' };
       advance('downloading');
-      if (id === 'codex' || id === 'claude-code') {
+      if (id === 'plugin:antigravity') {
+        configuration.executablePath = await installAntigravityWindows(directory, controller.signal);
+      } else if (id === 'codex' || id === 'claude-code') {
         await nodePackage(host, directory, id === 'codex' ? `@openai/codex@${FRAMEWORK_INSTALL_VERSIONS.codex}` : `@anthropic-ai/claude-agent-sdk@${FRAMEWORK_INSTALL_VERSIONS.claude}`, env, controller.signal);
         configuration.executablePath = nativePackageBinary(directory, id);
       } else if (id === 'pi') {

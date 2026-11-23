@@ -18,6 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { RemoteServerCredentialRepair, type RemoteServerRepairTarget } from '../RemoteServerCredentialRepair'
 import type { RemoteServerProfileInfo, StartupServerContext } from '../../../shared/types'
 
 export function ServerSwitcher() {
@@ -25,6 +26,7 @@ export function ServerSwitcher() {
   const [context, setContext] = useState<StartupServerContext | null>(null)
   const [profiles, setProfiles] = useState<RemoteServerProfileInfo[]>([])
   const [switching, setSwitching] = useState(false)
+  const [repairing, setRepairing] = useState<RemoteServerRepairTarget | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -47,14 +49,20 @@ export function ServerSwitcher() {
     setSwitching(true)
     try {
       // Main reloads the frontend and keeps any running local agents alive.
-      await window.electronAPI.switchServer(target)
+      const result = await window.electronAPI.switchServer(target)
+      if (!result.success) {
+        const profile = profiles.find(item => item.id === target)
+        if (result.needsCredentialRepair && profile) setRepairing({ profile, missingCredential: result.missingCredential })
+        else toast.error(t('serverSwitcher.switchFailed'))
+        setSwitching(false)
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('serverSwitcher.switchFailed'))
       setSwitching(false)
     }
   }
 
-  return (
+  return <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -104,5 +112,11 @@ export function ServerSwitcher() {
         )}
       </DropdownMenuContent>
     </DropdownMenu>
-  )
+    <RemoteServerCredentialRepair profile={repairing?.profile ?? null} missingCredential={repairing?.missingCredential}
+      onClose={() => setRepairing(null)} onSaved={saved => {
+        setProfiles(previous => previous.map(profile => profile.id === saved.id ? saved : profile))
+        setRepairing(null)
+        toast.success(t('serverPicker.repairSaved'))
+      }} />
+  </>
 }

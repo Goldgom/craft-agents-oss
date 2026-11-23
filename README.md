@@ -101,7 +101,7 @@ Pages 是保存在工作区中的 HTML 页面，适合报告、交互说明、�
 - 画笔、橡皮、文字、形状、渐变，以及变换、裁剪和对齐。
 - 色彩调整、滤镜、像素化、曝光笔、克隆和修复等局部编辑工具。
 - 通过配置的图片连接进行生成、局部重绘、扩图与透明主体生成。
-- 支持项目保存和 PNG / JPEG / WebP 导出；另有思维导图编辑入口。
+- 支持项目保存和 PNG / JPEG / WebP 导出。
 
 详见 [画布修图功能](docs/canvas-retouch.md)。AI 图片能力取决于所选模型与连接，图像生成通常单独计费。
 
@@ -145,7 +145,7 @@ Windows PowerShell：
 irm https://openai.goldgom.top/tokenbird/install-app.ps1 | iex
 ```
 
-也可查看 [GitCode 发布页](https://gitcode.com/Goldgom/token-bird/releases)。只下载与你的平台、架构相符的产物。
+也可查看 [GitCode 发布页](https://gitcode.com/tokennest/TokenBird/releases)。只下载与你的平台、架构相符的产物。
 
 > 上述命令会下载并执行安装脚本。请先确认域名和脚本内容可信；也可以先保存脚本、检查后再运行。模型服务费用由所选供应商或账户收取。
 
@@ -229,7 +229,7 @@ bun install
 bun run electron:dev
 ```
 
-国内镜像：[GitCode / Goldgom / token-bird](https://gitcode.com/Goldgom/token-bird)。仓库地址保留历史名称，应用品牌为 TokenBird / 词元鸟。
+国内镜像：[GitCode / tokennest / TokenBird](https://gitcode.com/tokennest/TokenBird)。应用品牌为 TokenBird / 词元鸟。
 
 | 命令 | 作用 |
 | --- | --- |

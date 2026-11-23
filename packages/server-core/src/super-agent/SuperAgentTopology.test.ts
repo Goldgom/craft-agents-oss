@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { canSuperAgentCommunicate, rebuildSuperAgentConfig, withSuperAgentPlanner, loadSuperAgentDocument, saveSuperAgentDocument } from '@tokenbird/shared/super-agent'
 import { appendSuperAgentReport, readSuperAgentArea } from './SuperAgentDynamic'
@@ -72,6 +72,63 @@ test('raw request and attachment references reach planning losslessly; main owns
   expect(await readFile(join(f.workingDirectory, refs[0]!.path), 'utf8')).toBe('attachment private body')
   await expect(f.service.callNodeActionTool('alpha', planner, 'super_agent_dispatch', { requestId: 'no-dispatch', title: 'Wrong', instructions: 'No' })).rejects.toThrow('Only the coordinator')
 })
+
+test('verified dynamic goal reaches the user and idle heartbeats start no further model turns', async () => {
+  const f = await fixture()
+  await f.service.command('alpha', { type: 'continuous-work', enabled: true })
+  const { planner } = await submit(f)
+  const goal = await plan(f, planner)
+  f.host.complete(planner, '')
+  const dispatcher = await working(f, 'orchestrator')
+  expect((await dispatch(f, dispatcher, goal.id)).receipt.status).toBe('applied')
+  f.host.complete(dispatcher, '')
+  const worker = await working(f, 'worker')
+  const task = (await f.service.get('alpha')).state.tasks[0]!
+  const path = join(f.workingDirectory, 'result.txt')
+  await writeFile(path, 'Verified result')
+  await f.service.updateNodeTask('alpha', worker, { action: 'artifact', taskId: task.id, id: 'result', path: 'result.txt', description: 'Verified output' })
+  await f.service.callNodeActionTool('alpha', worker, 'super_agent_report', { requestId: 'checked', artifactIds: ['result'], kind: 'final', content: 'Self-check passed' })
+  f.host.complete(worker, '')
+  const reviewer = await working(f, 'orchestrator')
+  const report = (await f.service.get('alpha')).state.reports!.find(item => item.nodeId === task.nodeId)!
+  await f.service.callNodeActionTool('alpha', reviewer, 'super_agent_accept', { requestId: 'accept', taskId: task.id, evidenceTaskId: task.id, status: 'accepted', note: 'Checked result' })
+  await f.service.callNodeActionTool('alpha', reviewer, 'super_agent_report', { requestId: 'verified', artifactIds: ['result'], kind: 'stage', taskId: task.id, sourceReportIds: [report.id], content: 'Verified result' })
+  f.host.complete(reviewer, '')
+  const planning = await working(f, 'planner')
+  const state = (await f.service.get('alpha')).state
+  // Artifact registration can wake dispatch before the worker's final report.
+  // Consume the separately pinned completion batch while planning closes the goal.
+  const pending = (await loadSuperAgentDocument(join(f.root, 'alpha'))).pendingTurns
+  if (pending.some(turn => turn.nodeId === task.parentNodeId)) {
+    const remaining = await working(f, 'orchestrator')
+    await f.service.callNodeActionTool('alpha', remaining, 'super_agent_finish_turn', { requestId: 'consumed', note: 'Worker evidence already reviewed' })
+    f.host.complete(remaining, '')
+  }
+  const current = state.plans[0]!
+  const closed = await f.service.callNodeActionTool('alpha', planning, 'super_agent_plan', { requestId: 'close', id: current.id, goalId: goal.id, title: current.title, instructions: current.instructions,
+    status: 'completed', priority: current.priority, note: 'Verified', expectedRevision: current.revision })
+  expect(closed.receipt.status).toBe('applied')
+  const evidence = state.reports!.find(item => item.nodeId === task.parentNodeId)!
+  await f.service.callNodeActionTool('alpha', planning, 'super_agent_report', { requestId: 'to-user', artifactIds: ['result'], kind: 'final', sourceReportIds: [evidence.id], content: 'Verified result' })
+  f.host.complete(planning, '')
+  f.advance(6000); await f.service.tick()
+  const interaction = await working(f, 'coordinator')
+  await f.service.callNodeActionTool('alpha', interaction, 'super_agent_deliver', { requestId: 'done', reply: 'Verified result', delivery: { kind: 'final', artifactIds: ['result'] } })
+  f.host.complete(interaction, '')
+  const snapshot = await until(() => f.service.get('alpha'), s => s.state.messages.some(m => m.body === 'Verified result' && m.delivery?.kind === 'final'))
+  expect(snapshot.state.intents![0]!.status).toBe('delivered')
+  const delivered = snapshot.state.messages.find(m => m.delivery?.kind === 'final')!.delivery!
+  expect(delivered.artifacts.map(a => a.path)).toEqual([path])
+  expect(await readFile(path, 'utf8')).toBe('Verified result')
+  await until(() => f.service.get('alpha'), s => s.state.nodes.every(n => n.status === 'idle'))
+  const sends = f.host.sends.length
+  for (let i = 0; i < 3; i++) { f.advance(86_400_000); await f.service.tick() }
+  expect((await loadSuperAgentDocument(join(f.root, 'alpha'))).pendingTurns).toHaveLength(0)
+  expect(f.host.sends).toHaveLength(sends)
+  await f.service.command('alpha', { type: 'chat', text: 'New authorized work' })
+  await working(f, 'coordinator')
+  expect(f.host.sends).toHaveLength(sends + 1)
+}, 30_000)
 
 test('host routes execution progress to dispatch, stages to planning and only planning reports to main', async () => {
   const f = await fixture()

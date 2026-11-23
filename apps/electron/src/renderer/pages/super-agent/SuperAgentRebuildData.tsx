@@ -57,7 +57,7 @@ export function SuperAgentScopedResources({ workspaceId, onCommand, onSources, i
       const result = await onCommand({ type: 'resources', operation, value })
       const next = result.resources as ResourceData
       setData(next); onSources(next.sources)
-      if (!automationEditor || operation === 'import') setAutomationEditor(JSON.stringify(next.automations, null, 2))
+      if (!automationEditor || operation === 'import' || operation === 'update-schedule' || operation === 'save-automations') setAutomationEditor(JSON.stringify(next.automations, null, 2))
       return next
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); throw error } finally { setBusy(false) }
   }
@@ -71,7 +71,7 @@ export function SuperAgentScopedResources({ workspaceId, onCommand, onSources, i
       createdAt: Date.now(), updatedAt: Date.now(), ...(type === 'mcp' ? { mcp: { transport: 'http', url: 'https://example.com/mcp', authType: 'none' } } : type === 'api' ? { api: { baseUrl: 'https://example.com', authType: 'none' } } : { local: { path: '' } }) }, null, 2))
   }
   return <div className="h-full overflow-y-auto"><div className="mx-auto max-w-4xl space-y-5 p-6">
-    <h2 className="font-semibold">{tr('共享资源库', 'Shared resources')}</h2><p className="text-xs text-muted-foreground">{tr('数据源、凭据和自动化由本工作区所有智能体共享，修改会同步生效。', 'Sources, credentials and automations are shared by all agents in this workspace.')}</p>
+    <h2 className="font-semibold">{tr('共享资源库', 'Shared resources')}</h2><p className="text-xs text-muted-foreground">{tr('数据源和凭据由工作区共享。定时任务由当前超级智能体团队执行。', 'Sources and credentials are shared across the workspace. Schedules run through this Super Agent team.')}</p>
     <div className="flex flex-wrap gap-2">{(['sources', 'credentials', 'automations', 'import'] as const).map(key => <Button key={key} variant={key === tab ? 'default' : 'outline'} onClick={() => setTab(key)}>{({ sources: tr('数据源', 'Sources'), credentials: tr('凭据库', 'Credentials'), automations: tr('自动化', 'Automations'), import: tr('导入 / 导出', 'Import / Export') })[key]}</Button>)}<Button variant="ghost" disabled={busy} onClick={() => void run('get').catch(() => {})}>{tr('刷新', 'Refresh')}</Button></div>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {!data ? <p className="text-sm text-muted-foreground">{tr('正在加载…', 'Loading…')}</p> : <fieldset disabled={busy} className="min-w-0 space-y-5">
@@ -106,11 +106,16 @@ export function SuperAgentScopedResources({ workspaceId, onCommand, onSources, i
             setAutomationEditor(JSON.stringify(config, null, 2))
           } catch (error) { setError(String(error)) }
         }}>{tr('添加定时任务', 'Add schedule')}</Button>
+        {(data.availableImports.automations.automations.SchedulerTick ?? []).filter(matcher => matcher.id && matcher.actions.every(action => action.type === 'prompt') && !data.automations.automations.SchedulerTick?.some(rule => rule.id === matcher.id)).map(matcher =>
+          <Button key={matcher.id} variant="outline" onClick={() => {
+            void run('update-schedule', { id: matcher.id, matcher: { ...matcher, parentSessionId: undefined, enabled: false } }).catch(() => {})
+          }}>{tr('复制普通定时任务（停用）', 'Copy ordinary schedule (disabled)')} · {matcher.name ?? matcher.id}</Button>
+        )}
         <textarea aria-label={tr('自动化配置', 'Automation configuration')} className={textareaClass + ' min-h-80 font-mono text-xs'} value={automationEditor} onChange={event => setAutomationEditor(event.target.value)} />
         <Button onClick={() => { try { void run('save-automations', JSON.parse(automationEditor)).catch(() => {}) } catch (error) { setError(String(error)) } }}>{tr('保存自动化', 'Save automations')}</Button>
         {Object.entries(data.automations.automations).flatMap(([event, matchers]) => matchers.map((matcher, index) => <div key={matcher.id ?? `${event}-${index}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3"><span className="text-sm">{matcher.name ?? matcher.id} · {event} · {matcher.enabled === false ? tr('停用', 'Disabled') : tr('启用', 'Enabled')}</span><div className="flex gap-2">{(['test-automation', 'replay-automation'] as const).map(operation => <Button key={operation} size="sm" variant="outline" disabled={!matcher.id} onClick={() => void run(operation, { id: matcher.id }).catch(() => {})}>{operation === 'test-automation' ? tr('测试执行', 'Test run') : tr('重放', 'Replay')}</Button>)}</div></div>))}
         {!!data.executionResults?.length && <pre className="overflow-x-auto rounded-lg bg-foreground/5 p-3 text-xs">{JSON.stringify(data.executionResults, null, 2)}</pre>}
-        <h3 className="text-sm font-semibold">{tr('运行历史', 'Run history')}</h3>{[...data.history].reverse().map((entry, index) => <p key={`${entry.ts}-${index}`} className="break-all text-xs">{new Date(entry.ts).toLocaleString()} · {entry.id} · {entry.ok ? 'OK' : entry.error}</p>)}
+        <h3 className="text-sm font-semibold">{tr('运行历史', 'Run history')}</h3>{[...data.history].reverse().map((entry, index) => <p key={`${entry.ts}-${index}`} className="break-all text-xs">{new Date(entry.ts).toLocaleString()} · {entry.id} · {entry.ok ? tr('已提交团队', 'Submitted to team') : entry.error}</p>)}
       </>}
       {tab === 'import' && <>
         <p className="text-sm text-muted-foreground">{tr('导出数据源和自动化配置。凭据密钥不会导出；导入凭据时请使用写入格式。', 'Export source and automation configuration. Credential secrets are omitted; credentials can be imported as write-only changes.')}</p>

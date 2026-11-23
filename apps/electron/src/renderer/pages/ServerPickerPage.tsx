@@ -16,14 +16,14 @@ import { useTranslation } from 'react-i18next'
 import { Cloud, HardDrive, Loader2, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import type { RemoteServerProfileInfo } from '../../shared/types'
-import { RemoteServerCredentialRepair } from '../components/RemoteServerCredentialRepair'
+import { RemoteServerCredentialRepair, type RemoteServerRepairTarget } from '../components/RemoteServerCredentialRepair'
 
 export default function ServerPickerPage() {
   const { t } = useTranslation()
   const [profiles, setProfiles] = useState<RemoteServerProfileInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState<string | null>(null)
-  const [repairing, setRepairing] = useState<RemoteServerProfileInfo | null>(null)
+  const [repairing, setRepairing] = useState<RemoteServerRepairTarget | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -43,7 +43,7 @@ export default function ServerPickerPage() {
       const result = await window.electronAPI.selectStartupServer(target)
       if (!result.success) {
         const profile = profiles.find(item => item.id === target)
-        if (result.needsCredentialRepair && profile) setRepairing(profile)
+        if (result.needsCredentialRepair && profile) setRepairing({ profile, missingCredential: result.missingCredential })
         else toast.error(t('serverPicker.startFailed'))
         setStarting(null)
       }
@@ -110,7 +110,7 @@ export default function ServerPickerPage() {
                   subtitle={profile.url}
                   onSelect={selectServer}
                 />
-                <button type="button" disabled={starting !== null} onClick={() => setRepairing(profile)}
+                <button type="button" disabled={starting !== null} onClick={() => setRepairing({ profile })}
                   aria-label={`${t('serverPicker.repairAction')}: ${profile.name}`}
                   title={t('serverPicker.repairAction')}
                   className="shrink-0 rounded-lg p-2 hover:bg-foreground/5 disabled:opacity-60">
@@ -125,7 +125,7 @@ export default function ServerPickerPage() {
           )}
         </div>
       </div>
-      <RemoteServerCredentialRepair profile={repairing} onClose={() => setRepairing(null)} onSaved={saved => {
+      <RemoteServerCredentialRepair profile={repairing?.profile ?? null} missingCredential={repairing?.missingCredential} onClose={() => setRepairing(null)} onSaved={saved => {
         setProfiles(previous => previous.map(profile => profile.id === saved.id ? saved : profile))
         setRepairing(null)
         toast.success(t('serverPicker.repairSaved'))

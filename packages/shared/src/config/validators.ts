@@ -86,7 +86,7 @@ const LlmConnectionSchema = z.object({
   slug: z.string().min(1),
   name: z.string().min(1),
   providerType: LlmProviderTypeSchema,
-  agentRuntime: z.enum(['pi', 'codex', 'claude-code']).optional(),
+  agentRuntime: z.union([z.enum(['auto', 'pi', 'codex', 'claude-code']), z.string().regex(/^plugin:[a-z0-9][a-z0-9-]{0,63}$/)]).optional(),
   authType: LlmAuthTypeSchema,
   baseUrl: z.string().optional(),
   models: z.array(z.union([z.string(), z.object({ id: z.string() }).passthrough()])).optional(),

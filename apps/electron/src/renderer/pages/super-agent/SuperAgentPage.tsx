@@ -186,7 +186,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings }: Supe
       setBusy(false)
     }
   }
-  const save = (config: SuperAgentConfig) => mutate(workspaceId => window.electronAPI.saveSuperAgent(workspaceId, withExecuteMode(config)))
+  const save = (config: SuperAgentConfig, policyConnection?: string) => mutate(workspaceId => window.electronAPI.saveSuperAgent(workspaceId, withExecuteMode(config), policyConnection))
   const command = (value: SuperAgentCommand) => mutate(workspaceId => window.electronAPI.superAgentCommand(workspaceId, value))
   const config = snapshot?.config
   const coordinator = config?.nodes.find(node => node.role === 'coordinator')
@@ -229,7 +229,7 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings }: Supe
       : loading ? <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{text('loading')}</div>
         : !snapshot ? <PageNotice icon={Bot} title={text('loadFailed')} description={error}><Button variant="outline" size="sm" onClick={() => { setError(''); setLoading(true); void refresh() }}>{text('retry')}</Button></PageNotice>
           : !config ? <div className="min-h-0 flex-1"><SuperAgentRebuildSettings connections={llmConnections} defaultConnection={workspaceDefaultLlmConnection}
-            onSave={async value => { await save(value) }} onOpenAiSettings={onOpenAiSettings} /></div>
+            onSave={async (value, slug) => { const next = await save(value, slug); return next.config ?? value }} onOpenAiSettings={onOpenAiSettings} /></div>
             : <>
               {!snapshot.environment.available && <div role="status" className="flex shrink-0 items-start gap-2 border-b border-amber-500/15 bg-amber-500/8 px-5 py-3 text-xs leading-5 text-amber-700 dark:text-amber-400"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" /><p>{snapshot.environment.detail}</p></div>}
               <SuperAgentWorkerRecovery recovery={snapshot.recovery} suspended={snapshot.recoverySuspended} busy={busy} onCommand={command} />
@@ -259,8 +259,8 @@ export default function SuperAgentPage({ active = true, onOpenAiSettings }: Supe
                     {['resources', 'sources', 'automations', 'import'].includes(settingsSection) && <SuperAgentScopedResources key={activeWorkspaceId + ':' + settingsSection} initialTab={settingsSection === 'resources' ? 'sources' : settingsSection as 'sources' | 'credentials' | 'automations' | 'import'} workspaceId={activeWorkspaceId!} onCommand={command} onSources={next => { if (workspaceRef.current === activeWorkspaceId) setSources(next) }} />}
                     {(settingsSection === 'archiveLibrary' || settingsSection === 'memoryLibrary') && <SuperAgentLibrary key={activeWorkspaceId + ':' + settingsSection} library={settingsSection === 'archiveLibrary' ? 'archive' : 'memory'} snapshot={snapshot} onCommand={async value => { await command(value) }} />}
                     {settingsSection === 'scripts' && <SuperAgentScripts snapshot={snapshot as SuperAgentSnapshot & { config: SuperAgentConfig }} onSave={async value => { await save(value) }} onCommand={async value => { await command(value) }} />}
-                    {settingsSection === 'settings' && <SuperAgentRebuildSettings key={activeWorkspaceId!} config={config} connections={llmConnections}
-                      onSave={async value => { await save(value) }} onOpenAiSettings={onOpenAiSettings}
+                    {settingsSection === 'settings' && <SuperAgentRebuildSettings key={activeWorkspaceId!} config={config} policySyncError={snapshot.policySyncError} connections={llmConnections}
+                      onSave={async (value, slug) => { const next = await save(value, slug); return next.config ?? value }} onOpenAiSettings={onOpenAiSettings}
                       onReset={async () => { await command({ type: 'reset', confirmed: true }); setView('home') }} />}
                   </div>
                 </div>}

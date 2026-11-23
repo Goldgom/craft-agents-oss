@@ -414,3 +414,31 @@ describe('TokenNest OAuth RPC handlers', () => {
     expect(requests.some(path => path.endsWith('/balance'))).toBe(false)
   })
 })
+
+describe('TokenNest voice tools', () => {
+  it('posts the selected group and exchanges WAV bytes and transcript text', async () => {
+    const account: config.LlmConnection = { slug: 'speech', name: 'Speech', authType: 'oauth', oauthProvider: 'tokennest', providerType: 'pi_compat', channelGroup: 'default', createdAt: 1 }
+    stubStorage(account)
+    spyOn(config, 'getLlmConnections').mockReturnValue([account])
+    const { context, getHandler } = createHarness()
+    const voice = getHandler(RPC_CHANNELS.tokennest.VOICE)
+    const calls: string[] = []
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(String(url))
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer stored-access-token')
+      expect(new Headers(init?.headers).get('X-TokenNest-Group')).toBe('default')
+      const body = JSON.parse(String(init?.body))
+      if (String(url).endsWith('/tts')) {
+        expect(body).toEqual({ text: 'hello', format: 'wav', filter_markdown: true })
+        return new Response('RIFF', { headers: { 'content-type': 'audio/wav' } })
+      }
+      expect(body).toEqual({ audio_data: 'UklGRg==', filename: 'recording.wav' })
+      return Response.json({ text: ' hello ', duration_ms: 400 })
+    }) as unknown as typeof fetch
+    expect(await voice(context, 'tts', 'hello', 'speech')).toBe('UklGRg==')
+    expect(await voice(context, 'asr', 'UklGRg==', 'speech')).toBe('hello')
+    await expect(voice(context, 'bogus', 'hello')).rejects.toThrow()
+    await expect(voice(context, 'asr', 'not base64')).rejects.toThrow()
+    expect(calls.map(url => new URL(url).pathname)).toEqual(['/v1/tools/tts', '/v1/tools/asr'])
+  })
+})

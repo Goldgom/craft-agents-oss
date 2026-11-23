@@ -196,7 +196,7 @@ export function createWebApi(options: WebApiOptions): {
     }
     if (input.action === 'open_project' && typeof input.projectPath === 'string') input.projectText = await baseApi.readFile(input.projectPath)
     const result = await canvasHandler(input) as Record<string, unknown>
-    if (['export_image', 'export_png', 'export_selection_mask', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
+    if (['generate_gif', 'export_image', 'export_png', 'export_selection_mask', 'save_project', 'download_history', 'download_candidate'].includes(String(input.action)) && typeof result?.base64 === 'string') {
       const info = canvasExportInfo(input)
       const name = typeof input.outputPath === 'string' ? input.outputPath.split(/[\\/]/).pop()! : `TokenBird-canvas.${info.extension}`
       const bytes = Uint8Array.from(atob(result.base64), char => char.charCodeAt(0))
@@ -249,7 +249,6 @@ export function createWebApi(options: WebApiOptions): {
     openFileDialog: () => webFilePicker(),
     getFilePath: () => null, // browser File bytes are handled by the attachment input
     openFolderDialog: () => pickServerDirectory(),
-    pickStudioMindMapDirectory: pickServerDirectory,
     readFile: (path, options) => getPickedFile(path)?.text() ?? baseApi.readFile(path, options),
     readFileBinary: async (path, options) => getPickedFile(path) ? new Uint8Array(await getPickedFile(path)!.arrayBuffer()) : baseApi.readFileBinary(path, options),
     readFileAttachment: path => getPickedFile(path) ? pickedAttachment(path) : baseApi.readFileAttachment(path),

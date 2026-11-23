@@ -167,6 +167,7 @@ const HostedScriptPermissionsSchema = z.object({
 }).strict();
 
 export const AutomationMatcherSchema = z.object({
+  parentSessionId: z.string().min(1).optional(),
   id: z.string().optional(),
   name: z.string().optional(),
   matcher: z.string().optional(),

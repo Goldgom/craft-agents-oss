@@ -84,6 +84,11 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
+  Object.defineProperty(context, 'videoToolFn', {
+    get() { return getSessionScopedToolCallbacks(sessionId)?.videoToolFn; },
+    configurable: true, enumerable: true,
+  });
+
   Object.defineProperty(context, 'requestClientFilesFn', {
     get() { return getSessionScopedToolCallbacks(sessionId)?.requestClientFilesFn; },
     configurable: true, enumerable: true,

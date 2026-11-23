@@ -10,6 +10,12 @@ describe('subagent conversation presentation', () => {
     expect(conversationListSessions(items)).toEqual([items[0]!])
     expect(conversationSearchResults(items, new Map([['child', { matchCount: 1, snippet: 'saved result' }]])).get('main')?.subagentMatchCount).toBe(1)
   })
+  it('keeps completed scheduled runs in the parent activity without making a separate list row', () => {
+    const parent = session('parent', { lastMessageAt: 1 })
+    const run = session('run', { parentSessionId: parent.id, triggeredBy: { event: 'SchedulerTick' }, sessionStatus: 'done', hasUnread: true, lastMessageAt: 5 })
+    expect(conversationListSessions([run, parent])).toEqual([{ ...parent, lastMessageAt: 5, hasUnread: true, isProcessing: false }])
+  })
+
   it('keeps one parent row with live child activity and unread state without changing canonical metadata', () => {
     const parent = session('main', { name: 'Main', lastMessageAt: 1 })
     const child = session('child', { parentSessionId: 'main', isProcessing: true, lastMessageAt: 5, hasUnread: true })

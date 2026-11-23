@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import * as ContextMenu from '@radix-ui/react-context-menu'
-import { ChevronLeft, ChevronRight, Copy } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Volume2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { usePlatform } from '../../context/PlatformContext'
 
@@ -13,8 +13,9 @@ export function messageCopyText(root: HTMLElement, selection: Selection | null, 
   return range.intersectsNode(root) ? selection.toString() || fallback : fallback
 }
 
-export function MessageHistoryActions({ content, children, onEdit, editDisabled, branchCount = 0, branches, currentSessionId, onSelectBranch }: {
+export function MessageHistoryActions({ content, children, onRead, onEdit, editDisabled, branchCount = 0, branches, currentSessionId, onSelectBranch }: {
   content: string
+  onRead?: (text: string) => void
   children: ReactNode
   onEdit?: (content: string) => Promise<void>
   editDisabled?: boolean
@@ -107,6 +108,9 @@ export function MessageHistoryActions({ content, children, onEdit, editDisabled,
       <ContextMenu.Portal>
         <ContextMenu.Content className="popover-styled z-dropdown min-w-40 p-1" onCloseAutoFocus={event => event.preventDefault()}>
           <ContextMenu.Item className={itemClass} onSelect={() => { void copy() }}><Copy className="size-3.5" />{t('common.copy')}</ContextMenu.Item>
+          {onRead && content.trim() && <ContextMenu.Item className={itemClass} onSelect={() => onRead(copyRef.current)}>
+            <Volume2 className="size-3.5" />{t('voice.read')}
+          </ContextMenu.Item>}
           {branchCount >= 10 && <div className="px-2 py-1 text-xs text-muted-foreground">{t('chat.history.branchLimit')}</div>}
         </ContextMenu.Content>
       </ContextMenu.Portal>

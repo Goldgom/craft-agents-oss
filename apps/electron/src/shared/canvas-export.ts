@@ -1,5 +1,6 @@
 /** File metadata shared by desktop and browser canvas export bridges. */
 export function canvasExportInfo(input: Record<string, unknown>): { mime: string; extension: string; extensions: string[] } {
+  if (input.action === 'generate_gif') return { mime: 'image/gif', extension: 'gif', extensions: ['.gif'] }
   if (input.action === 'save_project') return { mime: 'application/json', extension: 'tbcanvas', extensions: ['.tbcanvas'] }
   if (input.action !== 'export_image') return { mime: 'image/png', extension: 'png', extensions: ['.png'] }
   const format = input.format ?? 'png'

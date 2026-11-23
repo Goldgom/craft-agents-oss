@@ -1,6 +1,6 @@
 {
   "name": "@tokenbird/server",
-  "version": "26.11.6",
+  "version": "26.11.23",
   "description": "Standalone headless TokenBird server (Bun runtime)",
   "type": "module",
   "main": "src/index.ts",

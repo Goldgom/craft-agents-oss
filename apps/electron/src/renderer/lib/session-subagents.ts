@@ -25,7 +25,8 @@ export function conversationListSessions(items: SessionMeta[]): SessionMeta[] {
   const groups = new Map<string, SessionMeta[]>()
   for (const item of visible) {
     const root = sessionConversationId(item, byId)
-    if (root !== item.id && isFinishedSubagent(item)) continue
+    if (item.triggeredBy?.event === 'SchedulerTick' && item.parentSessionId && root === item.id) continue
+    if (root !== item.id && item.triggeredBy?.event !== 'SchedulerTick' && isFinishedSubagent(item)) continue
     const group = groups.get(root) ?? []
     group.push(item)
     groups.set(root, group)
@@ -37,7 +38,7 @@ export function conversationListSessions(items: SessionMeta[]): SessionMeta[] {
       ...root,
       hasUnread: group.some(item => item.hasUnread),
       isProcessing: group.some(item => item.isProcessing),
-      lastMessageAt: Math.max(...group.map(item => item.lastMessageAt ?? item.createdAt ?? 0)),
+      lastMessageAt: group.reduce((latest, item) => Math.max(latest, item.lastMessageAt ?? item.createdAt ?? 0), 0),
     }
   })
 }

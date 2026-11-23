@@ -3,7 +3,75 @@ import {
   isLocalConnection,
   type LlmConnection,
 } from '@config/llm-connections'
-import { ANTHROPIC_MODELS, type ModelDefinition } from '@config/models'
+import { ANTHROPIC_MODELS, getModelShortName, type ModelDefinition } from '@config/models'
+
+type PickerModel = ModelDefinition | string
+
+const modelSources: ReadonlyArray<readonly [string, RegExp]> = [
+  ['OpenAI', /^(?:openai|gpt|chatgpt|codex)(?=$|[\W_\d])|^o\d+(?=$|[\W_])/i],
+  ['Anthropic', /^(?:anthropic|claude|opus|sonnet|haiku)(?=$|[\W_\d])/i],
+  ['Google AI', /^(?:google|gemini|gemma)(?=$|[\W_\d])/i],
+  ['DeepSeek', /^deep[ -]?seek(?=$|[\W_\d])/i],
+  ['Alibaba', /^(?:alibaba|qwen|qwq|tongyi|通义千问)(?=$|[\W_\d])/i],
+  ['MiniMax', /^minimax(?=$|[\W_\d])/i],
+  ['Zhipu AI', /^(?:zhipu|z-ai|glm|chatglm)(?=$|[\W_\d])/i],
+  ['Moonshot AI', /^(?:moonshot|kimi)(?=$|[\W_\d])/i],
+  ['xAI', /^(?:xai|grok)(?=$|[\W_\d])/i],
+  ['Meta', /^(?:meta|llama)(?=$|[\W_\d])/i],
+  ['Mistral AI', /^(?:mistral|mixtral|codestral|devstral|magistral|pixtral)(?=$|[\W_\d])/i],
+  ['ByteDance', /^(?:bytedance|doubao|豆包|seedream|seedance)(?=$|[\W_\d])/i],
+  ['Cohere', /^(?:cohere|command-r)(?=$|[\W_\d])/i],
+  ['Perplexity', /^perplexity(?=$|[\W_\d])/i],
+]
+
+export function getPickerModelName(model: PickerModel): string {
+  return typeof model === 'string'
+    ? stripPiPrefixForDisplay(getModelShortName(model))
+    : (model.name ?? stripPiPrefixForDisplay(model.id))
+}
+
+export function groupPickerModels(models: readonly PickerModel[], query: string) {
+  const groups = new Map<string, PickerModel[]>()
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  for (const model of models) {
+    const id = typeof model === 'string' ? model : model.id
+    const name = getPickerModelName(model)
+    const parts = stripPiPrefixForDisplay(id).split('/')
+    // Prefer the model ID and its namespace over an editable display alias.
+    const modelId = (parts.pop() ?? '').replace(/^(?:us|eu|apac|global)\./i, '')
+    let source = 'other'
+    for (const label of [modelId, ...parts.reverse(), name, typeof model === 'string' ? '' : model.provider]) {
+      const match = modelSources.find(([, pattern]) => pattern.test(label))
+      if (match) {
+        source = match[0]
+        break
+      }
+    }
+    const searchText = `${id} ${name} ${source}`.toLowerCase()
+    if (!terms.every(term => searchText.includes(term))) continue
+    const group = groups.get(source)
+    if (group) group.push(model)
+    else groups.set(source, [model])
+  }
+  // Preserve the connection's ordering within each group and put unknown models last.
+  return [...modelSources.map(([source]) => source), 'other'].flatMap(source => {
+    const models = groups.get(source)
+    return models ? [{ source, models }] : []
+  })
+}
+
+export function groupPickerConnectionModels<T extends LlmConnection & { isAuthenticated: boolean }>(
+  providers: ReadonlyArray<[string, T[]]>,
+  query: string,
+) {
+  return providers.flatMap(([provider, connections]) => {
+    const entries = connections.flatMap(connection => {
+      const groups = connection.isAuthenticated ? groupPickerModels(getAgentModelsForConnection(connection), query) : []
+      return !query.trim() || groups.length ? [{ connection, groups }] : []
+    })
+    return entries.length ? [{ provider, entries }] : []
+  })
+}
 
 /** Keep image generation in Studio while respecting an OAuth connection's active group. */
 export function getAgentModelsForConnection(connection: LlmConnection): Array<ModelDefinition | string> {

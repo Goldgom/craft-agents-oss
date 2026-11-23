@@ -261,6 +261,8 @@ export interface Message {
   /** Durable inbox identity, persisted atomically with the accepted message. */
   relayDelivery?: RelayMessageIdentity;
   id: string;
+  /** Renderer-only canonical ID confirmed by the server; id stays stable for UI state. */
+  backendMessageId?: string;
   role: MessageRole;
   content: string;
   timestamp: number;

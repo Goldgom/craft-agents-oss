@@ -106,9 +106,10 @@ export interface SuperAgentSessionHost {
 }
 
 export interface SuperAgentServiceDeps {
+  loadTokenNestPolicy?: (workspaceId: string, config: SuperAgentConfig, slug: string) => Promise<SuperAgentConfig>
   archiveBoard?: SuperAgentBoardArchiveWriter
   rebuildArchitecture?: boolean
-  accessResources?: (workspaceId: string, operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'save-credentials' | 'test-automation' | 'replay-automation', value?: unknown) => Promise<unknown>
+  accessResources?: (workspaceId: string, operation: 'get' | 'export' | 'import' | 'save-sources' | 'save-automations' | 'update-schedule' | 'save-credentials' | 'test-automation' | 'replay-automation', value?: unknown) => Promise<unknown>
   host: SuperAgentSessionHost
   rootForWorkspace: (workspaceId: string) => string
   /** Verify configured provider/models/sources using the existing settings catalogs. */
@@ -282,6 +283,23 @@ export class SuperAgentService {
 
   private settingsRevision(config: SuperAgentConfig | null | undefined): string {
     return createHash('sha256').update(JSON.stringify(config ?? null)).digest('hex')
+  }
+
+  private readonly policySyncErrors = new Map<string, string>()
+  private readonly policyChecks = new Map<string, number>()
+
+  async configureFromTokenNest(workspaceId: string, draft: SuperAgentConfig, slug: string) {
+    if (!this.deps.loadTokenNestPolicy) throw new Error('TokenNest policy service unavailable')
+    const base = await this.serial(workspaceId, async () => {
+      const document = await this.load(workspaceId)
+      const current = document.pendingConfig ?? document.config
+      return { config: structuredClone(current ?? draft), revision: this.settingsRevision(current) }
+    })
+    const next = await this.deps.loadTokenNestPolicy(workspaceId, rebuildSuperAgentConfig(base.config), slug)
+    this.policySyncErrors.delete(workspaceId)
+    const result = await this.save(workspaceId, next, base.revision)
+    this.policyChecks.set(workspaceId, this.now() + 6 * 60 * 60_000)
+    return result
   }
 
   private readonly applyingSettings = new Set<string>()
@@ -1296,6 +1314,8 @@ export class SuperAgentService {
       }
       markArtifactStale(document, artifact.id); changed = true
     }
+    const approvalTasks = new Set(Array.from(this.permissions.get(workspaceId)?.values() ?? [])
+      .filter(request => request.status === 'pending').map(request => request.taskId))
     if (document.config!.continuousWork) for (const task of document.state.tasks) {
       if (task.phase === 'waiting' && task.status === 'queued' && task.waiting) {
         const condition = task.waiting.condition
@@ -1306,7 +1326,7 @@ export class SuperAgentService {
         if (ready) try { if (this.resumeTask(document, task.id)) changed = true } catch { /* Unknown effects and active processes must be reconciled first. */ }
       }
       const since = task.lastProgressAt ?? task.startedAt ?? this.now()
-      if (task.status === 'running' && !task.stallNotifiedAt && this.now() - since >= (document.config!.execution?.stallMinutes ?? 15) * 60_000) {
+      if (task.status === 'running' && !approvalTasks.has(task.id) && !task.stallNotifiedAt && this.now() - since >= (document.config!.execution?.stallMinutes ?? 15) * 60_000) {
         task.stallNotifiedAt = this.now(); changed = true
         ;(document.state.metrics ??= emptyContinuityMetrics()).stalls++
         this.enqueuePlannerSummary(document, `Task ${task.id} has no verified progress since ${since}. Check its live tool/process state, checkpoint and blocker; do not duplicate active execution or cancel long-running work merely because it is quiet.`)
@@ -1391,6 +1411,21 @@ export class SuperAgentService {
       const document = this.documents.get(workspaceId)!
       if (!document.config || this.resetting.has(workspaceId)) return
       if (document.workerRecovery && document.workerRecovery.phase !== 'ready') { this.schedule(workspaceId); return }
+      const base = document.pendingConfig ?? document.config
+      const subscription = base.tokenNestPolicy
+      if (subscription && this.deps.loadTokenNestPolicy && this.now() >= (this.policyChecks.get(workspaceId) ?? 0)) {
+        const revision = this.settingsRevision(base)
+        this.policyChecks.set(workspaceId, Infinity)
+        void this.deps.loadTokenNestPolicy(workspaceId, structuredClone(base), subscription.connectionSlug)
+          .then(async next => {
+            if (!this.closed && this.settingsRevision(validateSuperAgentConfig(next)) !== revision) await this.save(workspaceId, next, revision)
+            this.policySyncErrors.delete(workspaceId)
+            this.policyChecks.set(workspaceId, this.now() + 6 * 60 * 60_000)
+          }).catch(error => {
+            this.policySyncErrors.set(workspaceId, error instanceof Error ? error.message : String(error))
+            this.policyChecks.set(workspaceId, this.now() + 15 * 60_000)
+          })
+      }
       // Host housekeeping is independent of model health, task recovery and idle inspections.
       if (scanContinuity && await this.maintainBoard(workspaceId, document)) await this.commit(workspaceId, document)
       if (this.expirePermissionDeadlines(workspaceId, document)) await this.commit(workspaceId, document)
@@ -1643,6 +1678,16 @@ export class SuperAgentService {
       }
       return
     }
+    // Explicitly settled goals need no model inspection. Notifications, recovery and
+    // scheduled scripts have separate host paths and continue to process new evidence.
+    const goals = document.state.intents ?? []
+    if (goals.length && goals.every(goal => goal.status === 'delivered' || goal.status === 'cancelled')
+      && !(document.state.requests ?? []).some(request => !goals.some(goal => goal.sourceRequestId === request.id))
+      && document.state.plans.every(plan => plan.status === 'completed' || plan.status === 'cancelled')
+      && document.state.tasks.every(task => task.status === 'cancelled' || superAgentDependencySatisfied(task))
+      && !document.pendingTurns.length && !document.failedTurns?.length
+      && !document.state.operations?.some(operation => ['prepared', 'running', 'unknown'].includes(operation.status))
+      && !document.state.scripts.some(script => script.resultPending)) return
     // Session state is authoritative even if a turn was cancelled or opened elsewhere.
     const sessions = await Promise.all(document.state.nodes.filter(node => node.sessionId).map(node => this.deps.host.getSession(node.sessionId!)))
     if (sessions.some(session => session?.isProcessing)) {
@@ -2066,8 +2111,12 @@ export class SuperAgentService {
     const turn = document.pendingTurns.find(turn => turn.nodeId === request.nodeId && turn.startedAt != null && turn.taskId === request.taskId)
     const session = await this.deps.host.getSession(request.sessionId)
     const deadline = this.permissionDeadlines.get(workspaceId)?.get(requestId)
-    if (runtime?.sessionId !== request.sessionId || !turn || !session?.isProcessing || session.workspaceId !== workspaceId || (deadline != null && deadline <= this.now())) {
+    const originalCallActive = runtime?.sessionId === request.sessionId && turn != null && session?.isProcessing && session.workspaceId === workspaceId
+    if (!originalCallActive || (deadline != null && deadline <= this.now())) {
+      // Release only the original live waiter when a UI response beats the expiry scan.
+      if (originalCallActive) this.deps.host.respondToPermission?.(request.sessionId, request.id, false, false)
       this.resolvePermission(workspaceId, document, request, 'expired')
+      await this.commit(workspaceId, document)
       throw new Error('The original operation has expired or its node session is no longer active')
     }
     if (!this.deps.host.respondToPermission) throw new Error('This host cannot respond to node permission requests')
@@ -2089,7 +2138,10 @@ export class SuperAgentService {
     }
     const delivered = this.deps.host.respondToPermission(request.sessionId, requestId, allowed, false)
     this.resolvePermission(workspaceId, document, request, delivered ? allowed ? 'approved' : 'denied' : 'expired')
-    if (!delivered) throw new Error('The original operation is no longer waiting for permission')
+    if (!delivered) {
+      await this.commit(workspaceId, document)
+      throw new Error('The original operation is no longer waiting for permission')
+    }
   }
 
   private preparationHealth(workspaceId: string, document: SuperAgentDocument, nodeId?: string) {
@@ -2315,12 +2367,16 @@ export class SuperAgentService {
         await this.commit(workspaceId, document)
       })
       for (const [key, preparation] of this.preparations) if (key.startsWith(`${workspaceId}:`)) preparation.controller.abort(new Error('Execution instance retired by recovery'))
-      // Confirm ownership before cancellation; never touch another workspace's process.
+      // A disconnected host can stall either inspection as well as cancellation.
+      // Leave the old execution in place until an entire ownership/stop check succeeds.
       for (const item of recovery.sessions) {
-        const session = await this.deps.host.getSession(item.sessionId)
+        const deadline = AbortSignal.timeout(10_000)
+        const session = await awaitSuperAgentPreparation(this.deps.host.getSession(item.sessionId), deadline)
         if (session && session.workspaceId !== workspaceId) throw new Error('Recovery session belongs to another workspace')
-        if (session?.isProcessing) await awaitSuperAgentPreparation(this.deps.host.cancelProcessing(item.sessionId, true), AbortSignal.timeout(10_000))
-        if ((await this.deps.host.getSession(item.sessionId))?.isProcessing) throw new Error(`Previous execution is still active: ${item.sessionId}`)
+        if (session?.isProcessing) await awaitSuperAgentPreparation(this.deps.host.cancelProcessing(item.sessionId, true), deadline)
+        const stopped = await awaitSuperAgentPreparation(this.deps.host.getSession(item.sessionId), deadline)
+        if (stopped && stopped.workspaceId !== workspaceId) throw new Error('Recovery session belongs to another workspace')
+        if (stopped?.isProcessing) throw new Error(`Previous execution is still active: ${item.sessionId}`)
       }
       const dispatches = [...this.dispatches.values()].filter(item => item.workspaceId === workspaceId).map(item => item.promise)
       await awaitSuperAgentPreparation(Promise.allSettled(dispatches), AbortSignal.timeout(10_000))
@@ -3112,15 +3168,18 @@ export class SuperAgentService {
       title: input.title, instructions: input.instructions, status: input.status, priority: input.priority, note: input.note.slice(0, 4_000), blocker, revision: (current?.revision ?? 0) + 1, ...(hasPlanningTopology(document.config) ? { contractRevision: keepContract && current ? current.contractRevision ?? current.revision : (current?.revision ?? 0) + 1 } : {}), updatedBy: actor, updatedAt: this.now() }
     if (current) Object.assign(current, item)
     else document.state.plans.push(item)
-    if (!preserveContract) {
-      this.invalidateQueuedContracts(document)
-      recordSuperAgentEvent(document, 'work', actor, this.now(), item.id)
-    }
+    if (!preserveContract) this.invalidateQueuedContracts(document)
     if (goal && item.status === 'completed') {
       const plans = document.state.plans.filter(plan => plan.goalId === goal.id)
       const completed = document.state.tasks.filter(task => task.goalId === goal.id && task.goalRevision === (goal.revision ?? 1) && superAgentDependencySatisfied(task))
       const covered = new Set(completed.flatMap(task => task.goalCriteria ?? []))
       if (plans.every(plan => plan.status === 'completed' && plan.goalRevision === (goal.revision ?? 1)) && goal.acceptanceCriteria.every((_, index) => covered.has(index))) goal.status = 'delivered'
+    }
+    // Closing a fully covered goal leaves nothing to dispatch. The planner's
+    // report still follows the normal inbox route to the interaction node.
+    if (!preserveContract && !(item.status === 'completed' && goal?.status === 'delivered'
+      && hasPlanningTopology(document.config) && document.config?.nodes.some(node => node.id === actor && node.role === 'planner'))) {
+      recordSuperAgentEvent(document, 'work', actor, this.now(), item.id)
     }
   }
 
@@ -4516,6 +4575,7 @@ export class SuperAgentService {
     const recovery = document.workerRecovery
     const summary = recovery ? (({ sessions: _sessions, turns: _turns, failedTurnIds: _failed, ...value }) => value)(recovery) : undefined
     return structuredClone({ config: document.pendingConfig ?? document.config, state: document.state, recovery: summary,
+      policySyncError: (document.pendingConfig ?? document.config)?.tokenNestPolicy ? this.policySyncErrors.get(workspaceId) : undefined,
       inspectionPending: document.pendingTurns.some(turn => turn.kind === 'inspection' && !turn.backgroundInspection),
       interactionPending: document.pendingTurns.some(turn => turn.nodeId === document.config?.nodes.find(node => node.role === 'coordinator')?.id),
       recoverySuspended: document.recoverySuspended === true,

@@ -26,7 +26,10 @@ class Router(Executor):
         if sum(n["role"] == "coordinator" for n in self.nodes) != 1:
             await ctx.yield_output({"error": "A team requires exactly one coordinator"})
             return
-        if any(n["role"] not in ["coordinator", "orchestrator", "worker"] for n in self.nodes) or sum(n["role"] == "orchestrator" for n in self.nodes) > 1:
+        roles = [n["role"] for n in self.nodes]
+        if (any(role not in ("coordinator", "planner", "orchestrator", "worker") for role in roles)
+                or roles.count("orchestrator") > 1 or roles.count("planner") > 1
+                or ("planner" in roles and "orchestrator" not in roles)):
             await ctx.yield_output({"error": "Invalid orchestration topology"})
             return
         node = next((n for n in self.nodes if n["id"] == self.target), None)

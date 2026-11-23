@@ -35,6 +35,7 @@ import {
   SettingsToggle,
 } from '@/components/settings'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
+import { RemoteServerCredentialRepair, type RemoteServerRepairTarget } from '@/components/RemoteServerCredentialRepair'
 import type { RemoteServerProfileInfo } from '../../../shared/types'
 
 export const meta: DetailsPageMeta = {
@@ -67,6 +68,7 @@ export default function RemoteServersPage() {
 
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testingSftpId, setTestingSftpId] = useState<string | null>(null)
+  const [repairing, setRepairing] = useState<RemoteServerRepairTarget | null>(null)
   const [switchingId, setSwitchingId] = useState<string | null>(null)
   const [transferProfile, setTransferProfile] = useState<RemoteServerProfileInfo | null>(null)
   const [transferDirection, setTransferDirection] = useState<'upload' | 'download'>('upload')
@@ -229,7 +231,11 @@ export default function RemoteServersPage() {
     if (switchingId) return
     setSwitchingId(profile.id)
     try {
-      await window.electronAPI.switchServer(profile.id)
+      const result = await window.electronAPI.switchServer(profile.id)
+      if (!result.success) {
+        if (result.needsCredentialRepair) setRepairing({ profile, missingCredential: result.missingCredential })
+        else toast.error(t('serverSwitcher.switchFailed'))
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('serverSwitcher.switchFailed'))
     } finally {
@@ -431,6 +437,12 @@ export default function RemoteServersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <RemoteServerCredentialRepair profile={repairing?.profile ?? null} missingCredential={repairing?.missingCredential}
+        onClose={() => setRepairing(null)} onSaved={saved => {
+          setProfiles(previous => previous.map(profile => profile.id === saved.id ? saved : profile))
+          setRepairing(null)
+          toast.success(t('serverPicker.repairSaved'))
+        }} />
     </div>
   )
 }

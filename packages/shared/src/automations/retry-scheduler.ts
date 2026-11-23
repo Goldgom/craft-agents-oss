@@ -12,7 +12,8 @@
  * entry is written. Queue entries survive app restarts.
  */
 
-import { readFile, writeFile, appendFile } from 'fs/promises';
+import { readFile, writeFile, appendFile, rename, unlink } from 'fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'path';
 import { createLogger } from '../utils/debug.ts';
 import { executeWebhookRequest, createWebhookHistoryEntry } from './webhook-utils.ts';
@@ -68,7 +69,15 @@ export interface RetrySchedulerOptions {
 export class RetryScheduler {
   private readonly workspaceRootPath: string;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private initialTimer: ReturnType<typeof setTimeout> | null = null;
   private processing = false;
+  private fileMutation: Promise<unknown> = Promise.resolve();
+
+  private mutateQueue<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.fileMutation.then(operation, operation);
+    this.fileMutation = next;
+    return next;
+  }
 
   constructor(options: RetrySchedulerOptions) {
     this.workspaceRootPath = options.workspaceRootPath;
@@ -82,13 +91,15 @@ export class RetryScheduler {
     this.timer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
     log.debug('[RetryScheduler] Started');
     // Run an initial tick after a short delay (don't block startup)
-    setTimeout(() => this.tick(), 5_000);
+    this.initialTimer = setTimeout(() => { this.initialTimer = null; void this.tick(); }, 5_000);
   }
 
   /**
    * Stop the scheduler and clean up.
    */
   dispose(): void {
+    if (this.initialTimer) clearTimeout(this.initialTimer);
+    this.initialTimer = null;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -118,7 +129,7 @@ export class RetryScheduler {
     };
 
     const queuePath = join(this.workspaceRootPath, AUTOMATIONS_RETRY_QUEUE_FILE);
-    await appendFile(queuePath, JSON.stringify(entry) + '\n', 'utf-8');
+    await this.mutateQueue(() => appendFile(queuePath, JSON.stringify(entry) + '\n', { encoding: 'utf8', flush: true }));
     log.debug(`[RetryScheduler] Enqueued ${entry.id} — next retry in ${DEFERRED_DELAYS_MS[0]! / 60_000}m`);
   }
 
@@ -135,7 +146,7 @@ export class RetryScheduler {
       // Read queue
       let raw: string;
       try {
-        raw = await readFile(queuePath, 'utf-8');
+        raw = await this.mutateQueue(() => readFile(queuePath, 'utf-8'));
       } catch {
         // No queue file — nothing to do
         return;
@@ -230,13 +241,20 @@ export class RetryScheduler {
         }
       }
 
-      // Rewrite queue file with remaining entries
-      if (remaining.length === 0) {
-        await writeFile(queuePath, '', 'utf-8');
-      } else {
-        const content = remaining.map(e => JSON.stringify(e)).join('\n') + '\n';
-        await writeFile(queuePath, content, 'utf-8');
-      }
+      await this.mutateQueue(async () => {
+        const latest = await readFile(queuePath, 'utf-8');
+        if (!latest.startsWith(raw)) throw new Error('Retry queue changed during processing');
+        // Entries appended during a network request belong to the next pass.
+        const newEntries = latest.slice(raw.length);
+        const lines = remaining.map(entry => JSON.stringify(entry) + '\n').join('');
+        const temp = `${queuePath}.${randomUUID()}.tmp`;
+        try {
+          await writeFile(temp, lines + newEntries, { flag: 'wx', mode: 0o600, flush: true });
+          await rename(temp, queuePath);
+        } finally {
+          await unlink(temp).catch(() => undefined);
+        }
+      });
     } catch (err) {
       log.debug(`[RetryScheduler] Tick error: ${err}`);
     } finally {

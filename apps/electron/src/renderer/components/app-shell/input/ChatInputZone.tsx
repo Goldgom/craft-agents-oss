@@ -12,6 +12,7 @@ import { InputErrorBoundary } from './InputErrorBoundary'
 interface ChatInputZoneProps {
   compactMode?: boolean
   showOptionBadges?: boolean
+  conversationControl?: React.ReactNode
   permissionMode?: PermissionMode
   onPermissionModeChange?: (mode: PermissionMode) => void
   tasks?: BackgroundTask[]
@@ -32,6 +33,7 @@ interface ChatInputZoneProps {
 export function ChatInputZone({
   compactMode = false,
   showOptionBadges,
+  conversationControl,
   permissionMode = 'ask',
   onPermissionModeChange,
   tasks = [],
@@ -80,6 +82,7 @@ export function ChatInputZone({
         <ActiveOptionBadges
           permissionMode={permissionMode}
           onPermissionModeChange={onPermissionModeChange}
+          conversationControl={conversationControl}
           tasks={tasks}
           sessionId={sessionId}
           sessionFolderPath={sessionFolderPath}

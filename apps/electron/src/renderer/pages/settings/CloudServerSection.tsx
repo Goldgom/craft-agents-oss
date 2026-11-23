@@ -5,6 +5,7 @@ import type { CloudConfig, CloudDevice, CloudShare, CloudStatus } from '@tokenbi
 import { DEFAULT_CLOUD_URL } from '@tokenbird/shared/cloud'
 import { SettingsSection, SettingsCard, SettingsInputRow, SettingsToggle, SettingsRow } from '@/components/settings'
 import { Button } from '@/components/ui/button'
+import { RemoteServerCredentialRepair, type RemoteServerRepairTarget } from '@/components/RemoteServerCredentialRepair'
 
 export function CloudServerSection() {
   const { t } = useTranslation()
@@ -14,6 +15,7 @@ export function CloudServerSection() {
   const [devices, setDevices] = useState<CloudDevice[]>([])
   const [shares, setShares] = useState<CloudShare[]>([])
   const [busy, setBusy] = useState(false)
+  const [repairing, setRepairing] = useState<RemoteServerRepairTarget | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     let active = true
@@ -66,7 +68,11 @@ export function CloudServerSection() {
           const grant = await window.electronAPI.connectCloudDevice(device.id)
           const existing = (await window.electronAPI.getRemoteServers()).find(p => p.url === grant.url)
           const profile = await window.electronAPI.saveRemoteServer({ id: existing?.id, name: device.name, url: grant.url, token: grant.token })
-          await window.electronAPI.switchServer(profile.id)
+          const result = await window.electronAPI.switchServer(profile.id)
+          if (!result.success) {
+            if (result.needsCredentialRepair) setRepairing({ profile, missingCredential: result.missingCredential })
+            else setError(t('serverSwitcher.switchFailed'))
+          }
         })}>{t('cloud.connect')}</Button>
       </div>
     </SettingsRow>)}</SettingsCard>}
@@ -76,5 +82,10 @@ export function CloudServerSection() {
         <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => { await window.electronAPI.revokeCloudShare(share.id); await refresh() })}>{t('cloud.revoke')}</Button>
       </div>
     </SettingsRow>)}</SettingsCard>}
+    <RemoteServerCredentialRepair profile={repairing?.profile ?? null} missingCredential={repairing?.missingCredential}
+      onClose={() => setRepairing(null)} onSaved={() => {
+        setRepairing(null)
+        toast.success(t('serverPicker.repairSaved'))
+      }} />
   </SettingsSection>
 }

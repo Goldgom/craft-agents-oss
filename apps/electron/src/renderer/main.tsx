@@ -16,24 +16,13 @@ import LanguageDetector from 'i18next-browser-languagedetector'
 import './index.css'
 
 // Initialize i18n before any React rendering
-setupI18n([LanguageDetector, initReactI18next])
+const startupUiLanguage = window.electronAPI?.startupUiLanguage
+setupI18n([LanguageDetector, initReactI18next], startupUiLanguage)
 
-// One-shot bootstrap: ensure the main process's i18n + preferences.json learn
-// the language we just restored from localStorage. The main-process IPC handler
-// validates the code and persists idempotently, so this is safe to run on every
-// renderer startup. Without this push, a freshly-installed (or freshly-upgraded)
-// app would still generate titles in English until the user manually re-picks
-// the language in Appearance.
+// Seed the native preference from browser detection only when no saved
+// preference exists yet, such as on the first launch after an upgrade.
 const resolvedLanguage = i18n.resolvedLanguage
-// Diagnostic: console-log the bootstrap push so it shows up in DevTools and
-// (via captureConsoleIntegration) in Sentry, alongside the main-process
-// [i18n] startup hydration log. If these two diverge, the renderer's
-// localStorage isn't tracking the user's Appearance selection.
-console.info('[i18n] renderer bootstrap push', {
-  resolvedLanguage: resolvedLanguage ?? null,
-  localStorageI18nextLng: typeof window !== 'undefined' ? window.localStorage?.getItem('i18nextLng') : null,
-})
-if (resolvedLanguage) {
+if (!startupUiLanguage && resolvedLanguage) {
   void window.electronAPI?.changeLanguage?.(resolvedLanguage)
 }
 

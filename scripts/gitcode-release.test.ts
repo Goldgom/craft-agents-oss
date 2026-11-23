@@ -47,7 +47,7 @@ function mockApi(artifacts: Artifact[], configuration: {
     assets: [] as Array<{ name: string; type: string; browser_download_url: string }> }
   let exists = !!configuration.existing
   const attach = (name: string) => release.assets.push({ name, type: 'attach',
-    browser_download_url: `https://gitcode.com/Goldgom/token-bird/releases/download/${version}/${name}` })
+    browser_download_url: `https://gitcode.com/tokennest/TokenBird/releases/download/${version}/${name}` })
   if (configuration.existing) artifacts.forEach(artifact => attach(artifact.name))
   const request = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -113,10 +113,10 @@ describe('GitCode binary publication', () => {
     const { input, output } = fixture()
     const artifacts = await prepareArtifacts(input, output, version)
     const { request, mutations } = mockApi(artifacts)
-    await publishRelease({ repository: 'Goldgom/token-bird', token: 'test-token', tag: version, commit, body: 'Notes', artifacts }, request)
-    expect(mutations[0]).toBe('POST /api/v5/repos/Goldgom/token-bird/releases')
+    await publishRelease({ repository: 'tokennest/TokenBird', token: 'test-token', tag: version, commit, body: 'Notes', artifacts }, request)
+    expect(mutations[0]).toBe('POST /api/v5/repos/tokennest/TokenBird/releases')
     expect(mutations.filter(value => value.startsWith('PUT'))).toHaveLength(artifacts.length)
-    expect(mutations.at(-1)).toBe(`PATCH /api/v5/repos/Goldgom/token-bird/releases/${version}`)
+    expect(mutations.at(-1)).toBe(`PATCH /api/v5/repos/tokennest/TokenBird/releases/${version}`)
   })
 
   for (const [name, configuration, expected] of [
@@ -129,7 +129,7 @@ describe('GitCode binary publication', () => {
       const { input, output } = fixture()
       const artifacts = await prepareArtifacts(input, output, version)
       const { request, mutations } = mockApi(artifacts, configuration)
-      await expect(publishRelease({ repository: 'Goldgom/token-bird', token: 'test-token', tag: version, commit, body: 'Notes', artifacts }, request)).rejects.toThrow(expected)
+      await expect(publishRelease({ repository: 'tokennest/TokenBird', token: 'test-token', tag: version, commit, body: 'Notes', artifacts }, request)).rejects.toThrow(expected)
       expect(mutations.some(value => value.startsWith('PATCH'))).toBe(false)
     })
   }
@@ -138,7 +138,7 @@ describe('GitCode binary publication', () => {
     const { input, output } = fixture()
     const artifacts = await prepareArtifacts(input, output, version)
     const { request, mutations } = mockApi(artifacts, { existing: true, stable: true })
-    await publishRelease({ repository: 'Goldgom/token-bird', token: 'test-token', tag: version, commit, body: 'Notes', artifacts }, request)
+    await publishRelease({ repository: 'tokennest/TokenBird', token: 'test-token', tag: version, commit, body: 'Notes', artifacts }, request)
     expect(mutations).toEqual([])
   })
 })

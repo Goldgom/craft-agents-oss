@@ -3,11 +3,17 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog'
-import type { RemoteServerProfileInfo } from '../../shared/types'
+import type { RemoteCredentialField, RemoteServerProfileInfo } from '../../shared/types'
+
+export interface RemoteServerRepairTarget {
+  profile: RemoteServerProfileInfo
+  missingCredential?: RemoteCredentialField
+}
 
 /** Available before the local server boots; all persistence uses native IPC. */
-export function RemoteServerCredentialRepair({ profile, onClose, onSaved }: {
+export function RemoteServerCredentialRepair({ profile, missingCredential, onClose, onSaved }: {
   profile: RemoteServerProfileInfo | null
+  missingCredential?: RemoteCredentialField
   onClose(): void
   onSaved(profile: RemoteServerProfileInfo): void
 }) {
@@ -16,11 +22,12 @@ export function RemoteServerCredentialRepair({ profile, onClose, onSaved }: {
   const [password, setPassword] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [saving, setSaving] = useState(false)
-  useEffect(() => { setToken(''); setPassword(''); setPassphrase('') }, [profile])
-  const needsPassword = !!profile?.sftp?.hasPassword
-    || !!(profile?.sftp?.enabled && profile.sftp.authMethod === 'password')
-  const needsPassphrase = !!profile?.sftp?.hasPassphrase
-  const canSave = !!profile && (!profile.hasToken || !!token.trim())
+  useEffect(() => { setToken(''); setPassword(''); setPassphrase('') }, [profile, missingCredential])
+  const showToken = !missingCredential || missingCredential === 'token'
+  const needsPassword = missingCredential === 'password' || (!missingCredential && (
+    !!profile?.sftp?.hasPassword || !!(profile?.sftp?.enabled && profile.sftp.authMethod === 'password')))
+  const needsPassphrase = missingCredential === 'passphrase' || (!missingCredential && !!profile?.sftp?.hasPassphrase)
+  const canSave = !!profile && (!showToken || (!missingCredential && !profile.hasToken) || !!token.trim())
     && (!needsPassword || !!password) && (!needsPassphrase || !!passphrase)
   const save = async () => {
     if (!profile || !canSave || saving) return
@@ -28,11 +35,8 @@ export function RemoteServerCredentialRepair({ profile, onClose, onSaved }: {
     try {
       const saved = await window.electronAPI.saveRemoteServer({
         id: profile.id, name: profile.name, url: profile.url, token: token.trim() || undefined,
-        ...(profile.sftp ? { sftp: {
-          enabled: profile.sftp.enabled, host: profile.sftp.host, port: profile.sftp.port,
-          username: profile.sftp.username, authMethod: profile.sftp.authMethod,
-          privateKeyPath: profile.sftp.privateKeyPath, remoteRoot: profile.sftp.remoteRoot,
-          password: password || undefined, passphrase: passphrase || undefined,
+        ...(profile.sftp && (needsPassword || needsPassphrase) ? { sftp: {
+          enabled: profile.sftp.enabled, password: password || undefined, passphrase: passphrase || undefined,
         } } : {}),
       })
       if (!saved?.id) throw new Error('Server credentials were not saved')
@@ -53,11 +57,11 @@ export function RemoteServerCredentialRepair({ profile, onClose, onSaved }: {
     <DialogContent>
       <DialogHeader>
         <DialogTitle>{t('serverPicker.repairTitle')}</DialogTitle>
-        <DialogDescription>{t('serverPicker.repairDescription')}</DialogDescription>
+        <DialogDescription>{t(missingCredential ? 'serverPicker.enterSecret' : 'serverPicker.repairDescription')}</DialogDescription>
       </DialogHeader>
       <form className="space-y-4" onSubmit={event => { event.preventDefault(); void save() }}>
         <p className="break-all text-sm text-foreground/60">{profile?.name} · {profile?.url}</p>
-        {field('repair-server-token', t('settings.remoteServers.tokenLabel'), token, setToken)}
+        {showToken && field('repair-server-token', t('settings.remoteServers.tokenLabel'), token, setToken)}
         {needsPassword && field('repair-sftp-password', t('settings.remoteServers.sftpPassword'), password, setPassword)}
         {needsPassphrase && field('repair-sftp-passphrase', t('settings.remoteServers.sftpPassphrase'), passphrase, setPassphrase)}
         <DialogFooter>
